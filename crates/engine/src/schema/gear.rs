@@ -41,6 +41,8 @@ pub enum RackStandard {
     Iso53D,
     AgmaFullDepth,
     Stub,
+    /// For FDM 3D printing: dedendum 1.3, full root fillet.
+    PrintFdm,
 }
 
 /// How a gear is bored.
@@ -53,6 +55,22 @@ pub enum BoreType {
     DFlat,
     Hex,
     Square,
+}
+
+/// A gear material for the strength rating (representative allowable stresses).
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GearMaterial {
+    SteelNormalized,
+    SteelThroughHardened,
+    SteelCaseHardened,
+    SteelNitrided,
+    CastIron,
+    Bronze,
+    Pom,
+    Pa66,
+    Pla,
+    Petg,
 }
 
 /// A bore through a gear's axis.
@@ -151,8 +169,7 @@ pub struct GearParams {
     #[serde(default)]
     pub spiral_angle: Option<f64>,
     /// Hypoid: the pinion's offset from the ring gear's centre in mm (default 25; 0 makes a
-    /// spiral bevel pair). Too large an offset is reduced to the largest that works, with a
-    /// warning.
+    /// spiral bevel pair). Too large an offset is refused, naming the largest that works.
     #[serde(default)]
     pub offset: Option<f64>,
     /// Ignored (the earlier hypoid builder's face position); kept so older scripts still run.
@@ -162,13 +179,10 @@ pub struct GearParams {
     /// side that makes the pinion's spiral angle the larger).
     #[serde(default)]
     pub hand: Option<SpiralHand>,
-    /// Hypoid: the ring gear's outer pitch diameter in mm, instead of `module`.
+    /// Hypoid: the ring gear's outer pitch diameter in mm, instead of `module` (default 200 with
+    /// 41 teeth). Wins over `module` and `diametral_pitch` when given.
     #[serde(default)]
     pub ring_diameter: Option<f64>,
-    /// Hypoid: the face-milling cutter's radius in mm, which sets the tooth lines' curvature
-    /// (default: a standard cutter near 0.9 × the gear's mean cone distance).
-    #[serde(default)]
-    pub cutter_radius: Option<f64>,
     /// Worm: thread starts (default 1).
     #[serde(default)]
     pub starts: Option<u32>,
@@ -227,6 +241,36 @@ pub struct GearParams {
     /// A name put in front of the bodies' and the timeline group's names.
     #[serde(default)]
     pub name: Option<String>,
+    /// Strength rating: input torque in N·m on the driving member (gear 1, sun, ring of an
+    /// internal set; the worm of a worm set). Wins over `power`. Without a torque or power the
+    /// set is not rated.
+    #[serde(default)]
+    pub torque: Option<f64>,
+    /// Strength rating: input power in kW (needs `speed`).
+    #[serde(default)]
+    pub power: Option<f64>,
+    /// Strength rating: speed of the driving member in rpm.
+    #[serde(default)]
+    pub speed: Option<f64>,
+    /// Strength rating: gear 1's material (default steel_through_hardened).
+    #[serde(default)]
+    pub material: Option<GearMaterial>,
+    /// Strength rating: gear 2's material (mate, planets, internal set's pinion, worm).
+    #[serde(default)]
+    pub material2: Option<GearMaterial>,
+    /// Strength rating: the planetary ring's material (default: as gear 2).
+    #[serde(default)]
+    pub material3: Option<GearMaterial>,
+    /// Strength rating: application factor KA (default 1; 1.25 light, 1.5 moderate, 1.75 heavy
+    /// shocks).
+    #[serde(default)]
+    pub application_factor: Option<f64>,
+    /// Strength rating: required life in hours (default: unlimited).
+    #[serde(default)]
+    pub life_hours: Option<f64>,
+    /// Strength rating: ISO 1328 accuracy grade 5..12 for the dynamic factor (default 7).
+    #[serde(default)]
+    pub accuracy_grade: Option<u8>,
 }
 
 /// One number describing the set.

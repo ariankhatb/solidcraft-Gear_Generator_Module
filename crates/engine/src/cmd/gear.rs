@@ -15,7 +15,8 @@ use super::CommandSpec;
 use super::sketch::{Left, edit_solved, ids_of};
 use super::sketch_import::add_geometry;
 use crate::params::bad;
-use crate::schema::gear::{BoreParams, BoreType, GearFact, GearParams, GearResult, GearType, RackStandard, SpiralHand};
+use crate::schema::gear::{BoreParams, BoreType, GearFact, GearMaterial, GearParams, GearResult, GearType, RackStandard, SpiralHand};
+use solidcraft_gear::strength::Material;
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{EngineError, Result, Session};
 
@@ -30,12 +31,14 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params(
             "type?: spur|helical|herringbone|internal|rack|pair|planetary|bevel|spiral_bevel|hypoid|crossed_helical|worm|cycloidal|cycloidal_drive; \
              module? (mm) | diametral_pitch?; teeth?, teeth2? (mate or planet), ring_teeth?, planets?; pressure_angle?, helix_angle? (deg, sign = hand); \
-             profile_shift?, profile_shift2?; rack?: iso53_a|iso53_b|iso53_c|iso53_d|agma_full_depth|stub, addendum?, dedendum?, root_radius? (coefficients); \
-             backlash? (mm); face_width?; center_distance? (pair: gear 2's shift reaches it); shaft_angle?, spiral_angle? (deg); offset?, ring_diameter?, cutter_radius? (hypoid, mm), hand?: left|right (hypoid pinion); \
+             profile_shift?, profile_shift2?; rack?: iso53_a|iso53_b|iso53_c|iso53_d|agma_full_depth|stub|print_fdm, addendum?, dedendum?, root_radius? (coefficients); \
+             backlash? (mm); face_width?; center_distance? (pair: gear 2's shift reaches it); shaft_angle?, spiral_angle? (deg); offset?, ring_diameter? (hypoid, mm), hand?: left|right (hypoid pinion); \
              starts?, worm_diameter?, worm_length? (worm); rim?; rack_teeth?, rack_height?; pins?, pin_circle?, pin_diameter?, eccentricity? (cycloidal drive); \
              bore?, bore2?: {type?: round|keyway|d_flat|hex|square|none, diameter, key_width?, key_depth?, flat?}; hub_diameter?, hub_length?; holes?, hole_diameter?; \
-             only?: 1|2|3 (one member); origin?: [x,y,z]; name?. Returns bodies, group, facts (diameters, ratio, centre distance, contact ratio, span and over-pins \
-             measurements) and warnings (undercut, pointed teeth, low contact ratio, interference)",
+             only?: 1|2|3 (one member); origin?: [x,y,z]; name?; strength rating: torque? (N·m) | power? (kW), speed? (rpm) on the driver, \
+             material?, material2?, material3?: steel_normalized|steel_through_hardened|steel_case_hardened|steel_nitrided|cast_iron|bronze|pom|pa66|pla|petg, \
+             application_factor?, life_hours?, accuracy_grade? (5..12). Returns bodies, group, facts (diameters, ratio, centre distance, contact ratio, span and over-pins \
+             measurements; with a load: forces, stresses, safety factors SF and SH) and warnings (undercut, pointed teeth, low contact ratio, interference, SF < 1.4, SH < 1)",
         ),
     CommandSpec::new("gear.calculate", "Gear Calculator", crate::checked!("gear.calculate", calculate))
         .noundo()
@@ -62,13 +65,14 @@ const KINDS: [(GearType, Kind); 14] = [
     (GearType::CycloidalDrive, Kind::CycloidalDrive),
 ];
 
-const RACKS: [(RackStandard, &str); 6] = [
+const RACKS: [(RackStandard, &str); 7] = [
     (RackStandard::Iso53A, "iso53_a"),
     (RackStandard::Iso53B, "iso53_b"),
     (RackStandard::Iso53C, "iso53_c"),
     (RackStandard::Iso53D, "iso53_d"),
     (RackStandard::AgmaFullDepth, "agma_full_depth"),
     (RackStandard::Stub, "stub"),
+    (RackStandard::PrintFdm, "print_fdm"),
 ];
 
 const BORES: [(BoreType, BoreKind); 6] = [
@@ -79,6 +83,27 @@ const BORES: [(BoreType, BoreKind); 6] = [
     (BoreType::Hex, BoreKind::Hex),
     (BoreType::Square, BoreKind::Square),
 ];
+
+const MATERIALS: [(GearMaterial, Material); 10] = [
+    (GearMaterial::SteelNormalized, Material::SteelNormalized),
+    (GearMaterial::SteelThroughHardened, Material::SteelThroughHardened),
+    (GearMaterial::SteelCaseHardened, Material::SteelCaseHardened),
+    (GearMaterial::SteelNitrided, Material::SteelNitrided),
+    (GearMaterial::CastIron, Material::CastIron),
+    (GearMaterial::Bronze, Material::Bronze),
+    (GearMaterial::Pom, Material::Pom),
+    (GearMaterial::Pa66, Material::Pa66),
+    (GearMaterial::Pla, Material::Pla),
+    (GearMaterial::Petg, Material::Petg),
+];
+
+fn material_of(m: GearMaterial) -> Material {
+    MATERIALS.iter().find(|(g, _)| *g == m).map(|(_, k)| *k).unwrap_or_default()
+}
+
+fn material_param(m: Material) -> Option<GearMaterial> {
+    MATERIALS.iter().find(|(_, k)| *k == m).map(|(g, _)| *g)
+}
 
 fn bore_of(b: &Option<BoreParams>) -> Bore {
     let Some(b) = b else { return Bore::default() };
@@ -147,7 +172,6 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     set!(spiral_angle, p.spiral_angle);
     set!(offset, p.offset);
     set!(face_start, p.face_start);
-    set!(cutter_radius, p.cutter_radius);
     if let Some(h) = p.hand {
         s.left_hand = h == SpiralHand::Left;
     }
@@ -178,6 +202,33 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     }
     s.bore = bore_of(&p.bore);
     s.bore2 = bore_of(&p.bore2);
+    // Strength rating (the gear crate checks the ranges).
+    let load = &mut s.load;
+    if let Some(v) = p.torque {
+        load.torque = v;
+    }
+    if let Some(v) = p.power {
+        load.power = v;
+    }
+    if let Some(v) = p.speed {
+        load.speed = v;
+    }
+    if let Some(m) = p.material {
+        load.material = material_of(m);
+    }
+    if let Some(m) = p.material2 {
+        load.material2 = material_of(m);
+    }
+    load.material3 = p.material3.map(material_of);
+    if let Some(v) = p.application_factor {
+        load.application_factor = v;
+    }
+    if let Some(v) = p.life_hours {
+        load.life_hours = v;
+    }
+    if let Some(v) = p.accuracy_grade {
+        load.quality = v;
+    }
     let finite = [
         s.module,
         s.pressure_angle,
@@ -191,7 +242,6 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
         s.spiral_angle,
         s.offset,
         s.face_start,
-        s.cutter_radius,
         s.worm_diameter,
         s.worm_length,
         s.rim,
@@ -211,7 +261,7 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     if finite.iter().chain(s.origin.iter()).any(|v| !v.is_finite()) {
         return Err("every number must be finite".into());
     }
-    if [s.backlash, s.center_distance, s.offset, s.cutter_radius, s.worm_diameter, s.worm_length, s.rim, s.rack_height, s.hub_diameter, s.hub_length, s.hole_diameter, s.bore.diameter, s.bore2.diameter]
+    if [s.backlash, s.center_distance, s.offset, s.worm_diameter, s.worm_length, s.rim, s.rack_height, s.hub_diameter, s.hub_length, s.hole_diameter, s.bore.diameter, s.bore2.diameter]
         .iter()
         .any(|v| *v < 0.0)
     {
@@ -263,7 +313,6 @@ pub fn params_of(s: &Spec) -> Value {
         face_start: (s.face_start != 0.0).then_some(s.face_start),
         hand: (s.kind == Kind::Hypoid).then_some(if s.left_hand { SpiralHand::Left } else { SpiralHand::Right }),
         ring_diameter: None,
-        cutter_radius: (s.cutter_radius > 0.0).then_some(s.cutter_radius),
         starts: Some(s.starts),
         worm_diameter: (s.worm_diameter > 0.0).then_some(s.worm_diameter),
         worm_length: (s.worm_length > 0.0).then_some(s.worm_length),
@@ -283,6 +332,15 @@ pub fn params_of(s: &Spec) -> Value {
         only: (s.only > 0).then_some(s.only),
         origin: (s.origin != [0.0; 3]).then_some(s.origin),
         name: (!s.name.is_empty()).then(|| s.name.clone()),
+        torque: (s.load.torque > 0.0).then_some(s.load.torque),
+        power: (s.load.power > 0.0).then_some(s.load.power),
+        speed: (s.load.speed > 0.0).then_some(s.load.speed),
+        material: material_param(s.load.material),
+        material2: material_param(s.load.material2),
+        material3: s.load.material3.and_then(material_param),
+        application_factor: (s.load.application_factor != 1.0).then_some(s.load.application_factor),
+        life_hours: (s.load.life_hours > 0.0).then_some(s.load.life_hours),
+        accuracy_grade: (s.load.quality != 7).then_some(s.load.quality),
     };
     serde_json::to_value(p).map(strip_nulls).unwrap_or(Value::Null)
 }
@@ -532,6 +590,28 @@ fn build_body(s: &mut Session, body: &Body, features: &mut Vec<u64>, warnings: &
                     }
                     Err(e) => return Err(e),
                 }
+            }
+            Step::Taper { outline, z0, height, twist, scale, op } if twist.abs() <= 1e-12 => {
+                // Straight: a loft between the two ends builds faster than a scaled sweep.
+                let mut ids = Vec::new();
+                for (k, (o, h)) in [(outline.clone(), *z0), (outline.scaled(*scale), z0 + height)].iter().enumerate() {
+                    let mut g = Vec::new();
+                    geometry(o, &mut g);
+                    ids.push(json!({"sketch": sketch_with(s, &format!("{label} section {}", k + 1), f.world([0.0, 0.0, *h]), x, y, &g, features)?}));
+                }
+                s.execute("solid.loft", &merge(json!({"sections": ids}), feature_params(*op, &name, &body.name)))?
+            }
+            Step::Taper { outline, z0, height, twist, scale, op } => {
+                let mut g = Vec::new();
+                geometry(outline, &mut g);
+                let id = sketch_with(s, &format!("{label} profile"), f.world([0.0, 0.0, *z0]), x, y, &g, features)?;
+                let path = sketch_with(s, &format!("{label} path"), f.world([0.0, 0.0, *z0]), z, x, &[Geom2::Line(Vec2::new(0.0, 0.0), Vec2::new(*height, 0.0))], features)?;
+                let curve = first_curve(s, path)?;
+                let mut p = json!({"sketch": id, "path_sketch": path, "path": [curve], "scale": scale});
+                if twist.abs() > 1e-12 {
+                    p["twist"] = json!(format!("{} deg", twist.to_degrees()));
+                }
+                s.execute("solid.sweep", &merge(p, feature_params(*op, &name, &body.name)))?
             }
             Step::Loft { sections, op } => {
                 // All the sections, then (if the kernel refuses them) every other one, then the

@@ -90,6 +90,7 @@ fn every_kind_plans() {
                         assert!(!region.outer.is_empty());
                     }
                     Step::Loft { sections, .. } => assert!(sections.len() >= 2),
+                    Step::Taper { height, scale, .. } => assert!(*height > 0.0 && *scale > 0.0),
                     Step::Revolve { profile, .. } => assert!(profile.len() >= 3),
                     Step::Coil { section, pitch, .. } => assert!(section.len() >= 3 && *pitch > 0.0),
                 }
@@ -110,13 +111,15 @@ fn planetary_planets_mesh_with_the_ring() {
 }
 
 #[test]
-fn bevel_sections_shrink_towards_the_apex() {
+fn bevel_teeth_shrink_towards_the_apex() {
     let s = Spec::defaults_for(Kind::Bevel);
     let p = plan(&s).unwrap();
-    let Step::Loft { sections, .. } = &p.bodies[0].steps[0] else { panic!() };
-    let (a, b) = (&sections[0], &sections[sections.len() - 1]);
-    assert!(b.1 > a.1);
-    assert!(b.0.max_radius() < a.0.max_radius());
+    let Step::Taper { height, scale, twist, .. } = &p.bodies[0].steps[0] else { panic!() };
+    assert!(*height > 0.0 && *scale < 1.0 && *scale > 0.3 && twist.abs() < 1e-12);
+    let s = Spec::defaults_for(Kind::SpiralBevel);
+    let p = plan(&s).unwrap();
+    let Step::Taper { twist, .. } = &p.bodies[0].steps[0] else { panic!() };
+    assert!(twist.abs() > 0.01);
 }
 
 #[test]

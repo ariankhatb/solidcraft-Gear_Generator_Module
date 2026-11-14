@@ -84,11 +84,10 @@ fn every_type_builds() {
 #[test]
 fn hypoid_parameters_reach_the_spec() {
     let p: crate::schema::gear::GearParams =
-        serde_json::from_value(json!({"type": "hypoid", "ring_diameter": 200, "teeth2": 40, "hand": "right", "cutter_radius": 80, "offset": 0})).unwrap();
+        serde_json::from_value(json!({"type": "hypoid", "ring_diameter": 200, "teeth2": 40, "hand": "right", "offset": 0})).unwrap();
     let s = crate::gear_spec_of(&p).unwrap();
     assert!((s.module - 5.0).abs() < 1e-12);
     assert!(!s.left_hand);
-    assert_eq!(s.cutter_radius, 80.0);
     assert_eq!(s.offset, 0.0);
     // Zero offset survives the round trip (it is not the hypoid's default).
     let back: crate::schema::gear::GearParams = serde_json::from_value(crate::gear_params_of(&s)).unwrap();

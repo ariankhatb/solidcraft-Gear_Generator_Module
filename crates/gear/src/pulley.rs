@@ -4,8 +4,9 @@
 //! The groove forms are approximations from published belt dimensions, not the makers' pulley
 //! drawings: GT2 and HTD are proprietary curvilinear profiles, modelled from the belt tooth's
 //! published radii (tip R3, flank R2 centred on the land line, land fillet R1, height h); T
-//! series from the DIN 7721 belt tooth (40° flanks); MXL and XL from the RMA/ISO 5294 generated
-//! groove table for a single tooth count. Each groove is laid out straight and wrapped onto the
+//! series from the DIN 7721 belt tooth (40° flanks), with the outside diameters of makers'
+//! pulley tables (pitch Ø − 0.52, 0.86 and 1.86 mm for T2.5, T5 and T10); MXL and XL from the
+//! RMA/ISO 5294 generated groove table for a single tooth count. Each groove is laid out straight and wrapped onto the
 //! outside circle (arc length kept at the outside diameter).
 
 use std::f64::consts::{PI, TAU};
@@ -52,9 +53,9 @@ pub const BELTS: &[Belt] = &[
     Belt { id: "htd_3m", label: "HTD 3M", pitch: 3.0, pld: 0.381, groove: curvy(1.17, 0.86, 1.8, 0.25), widths: &[9.0, 6.0, 15.0] },
     Belt { id: "htd_5m", label: "HTD 5M", pitch: 5.0, pld: 0.5715, groove: curvy(2.06, 1.49, 3.0, 0.43), widths: &[15.0, 9.0, 25.0] },
     Belt { id: "htd_8m", label: "HTD 8M", pitch: 8.0, pld: 0.686, groove: curvy(3.38, 2.5, 5.0, 0.64), widths: &[20.0, 30.0, 50.0] },
-    Belt { id: "t2_5", label: "T2.5", pitch: 2.5, pld: 0.3, groove: trap(0.99, 0.75, 20.0, 0.2, 0.3), widths: &[6.0, 4.0, 10.0] },
-    Belt { id: "t5", label: "T5", pitch: 5.0, pld: 0.5, groove: trap(1.78, 1.25, 20.0, 0.4, 0.6), widths: &[10.0, 16.0, 25.0] },
-    Belt { id: "t10", label: "T10", pitch: 10.0, pld: 1.0, groove: trap(3.48, 2.6, 20.0, 0.6, 1.0), widths: &[16.0, 25.0, 32.0] },
+    Belt { id: "t2_5", label: "T2.5", pitch: 2.5, pld: 0.26, groove: trap(0.99, 0.75, 20.0, 0.2, 0.3), widths: &[6.0, 4.0, 10.0] },
+    Belt { id: "t5", label: "T5", pitch: 5.0, pld: 0.43, groove: trap(1.78, 1.25, 20.0, 0.4, 0.6), widths: &[10.0, 16.0, 25.0] },
+    Belt { id: "t10", label: "T10", pitch: 10.0, pld: 0.93, groove: trap(3.48, 2.6, 20.0, 0.6, 1.0), widths: &[16.0, 25.0, 32.0] },
     Belt { id: "mxl", label: "MXL (0.08 in)", pitch: 2.032, pld: 0.254, groove: trap(0.84, 0.69, 20.0, 0.25, 0.13), widths: &[6.35, 3.18, 4.83] },
     Belt { id: "xl", label: "XL (1/5 in)", pitch: 5.08, pld: 0.254, groove: trap(1.32, 1.65, 25.0, 0.41, 0.64), widths: &[9.53, 6.35, 7.94] },
 ];

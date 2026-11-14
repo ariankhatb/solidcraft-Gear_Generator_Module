@@ -112,21 +112,24 @@ impl EllipticPair {
         let m = self.module;
         let (ha, hf) = (self.addendum * m, self.dedendum * m);
         let tan = self.pressure_angle.tan();
-        // Rays from the pivot.
-        let rays = (self.teeth.max(3) as usize) * 48;
+        // Rays from the pivot, and positions of the cutter, per tooth (fewer for many teeth, whose
+        // flanks are nearly straight).
+        let (rays_per_tooth, steps_per_tooth) = if self.teeth <= 80 { (48, 32) } else { (32, 16) };
+        let rays = (self.teeth.max(3) as usize) * rays_per_tooth;
         let ray_angle = |k: usize| TAU * k as f64 / rays as f64;
         // The tip curve: the pitch radius along each ray plus the addendum.
+        // The curve point whose polar angle is nearest (the curves are star-shaped).
+        let mut by_angle: Vec<(f64, f64)> = curve.iter().map(|q| (q.angle().rem_euclid(TAU), q.len())).collect();
+        by_angle.sort_by(|a, b| a.0.total_cmp(&b.0));
         let pitch_r = |ang: f64| -> f64 {
-            // The curve point whose polar angle is nearest (the curves are star-shaped).
-            let mut best = (f64::MAX, 0.0);
-            for q in curve {
-                let d = (q.angle() - ang).rem_euclid(TAU);
-                let d = d.min(TAU - d);
-                if d < best.0 {
-                    best = (d, q.len());
-                }
-            }
-            best.1
+            let a = ang.rem_euclid(TAU);
+            let i = by_angle.partition_point(|q| q.0 < a);
+            let (lo, hi) = (by_angle[(i + n - 1) % n], by_angle[i % n]);
+            let off = |q: (f64, f64)| {
+                let d = (q.0 - a).rem_euclid(TAU);
+                d.min(TAU - d)
+            };
+            if off(lo) < off(hi) { lo.1 } else { hi.1 }
         };
         let mut out: Vec<f64> = (0..rays).map(|k| pitch_r(ray_angle(k)) + ha).collect();
         // Points and frames along the curve.
@@ -141,7 +144,6 @@ impl EllipticPair {
             let t = (q1 - q0).norm();
             (q0.lerp(q1, (sv - s[i]) / seg), t)
         };
-        let steps_per_tooth = 32;
         let total_steps = self.teeth.max(3) as usize * steps_per_tooth;
         let backlash = self.backlash / 2.0;
         for j in 0..total_steps {

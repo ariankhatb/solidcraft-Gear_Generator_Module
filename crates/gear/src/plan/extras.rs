@@ -5,7 +5,7 @@ use std::f64::consts::{PI, TAU};
 
 use super::{Body, Frame, Op, Plan, PreviewGear, Spec, Step, Unit, hub_steps, mm, name, tooth_warnings, wanted, with_bore};
 use crate::face_gear::FaceGear;
-use crate::geom::{Outline, Region, Seg, V2};
+use crate::geom::{Outline, Region, V2};
 use crate::involute::external_outline;
 use crate::pulley::{BELTS, Belt, Pulley, belt_by_id};
 use crate::spline::{Spline, SplineStandard};
@@ -76,8 +76,37 @@ pub(super) fn check(s: &Spec) -> Result<(), String> {
             if s.teeth < 6 {
                 return Err("a spline needs at least 6 teeth".into());
             }
-            if s.spline_diameter < 0.0 {
+            if !(s.spline_diameter.is_finite() && s.spline_diameter >= 0.0) {
                 return Err("the reference diameter must not be negative".into());
+            }
+            if !(20.0..=45.0).contains(&s.pressure_angle) {
+                return Err("a spline's pressure angle must be between 20° and 45° (30° is standard; ANSI B92.1 also has 37.5° and 45°)".into());
+            }
+            if s.backlash >= PI * s.module / 8.0 {
+                return Err(format!("the clearance must be under an eighth of the pitch ({} mm)", mm(PI * s.module / 8.0)));
+            }
+            let sp = spline_of(s);
+            let x = sp.shift();
+            if !(-0.5..=1.0).contains(&x) {
+                return Err(format!(
+                    "a reference diameter of {} mm puts the profile shift at {}: for {} teeth of module {} use {} to {} mm",
+                    mm(s.spline_diameter),
+                    mm(x),
+                    s.teeth,
+                    mm(s.module),
+                    mm(s.module * (f64::from(s.teeth) + 1.0)),
+                    mm(s.module * (f64::from(s.teeth) + 2.0))
+                ));
+            }
+            // The cutter that makes the shaft's teeth must have a tip.
+            let rack = sp.rack();
+            if PI / 4.0 - rack.dedendum * sp.pressure_angle.tan() < 0.01 {
+                return Err(format!(
+                    "at {}° the shaft's {} root is too deep for its cutter to have a tip: use a {}smaller pressure angle",
+                    mm(s.pressure_angle),
+                    if s.fillet_root { "fillet" } else { "flat" },
+                    if s.fillet_root { "flat root or a " } else { "" }
+                ));
             }
         }
         Kind::Elliptical => {
@@ -122,9 +151,8 @@ pub(super) fn sprocket(s: &Spec, p: &mut Plan) {
         p.fact(format!("{pre}pitch diameter"), sp.pitch_diameter(), Unit::Mm);
         p.fact(format!("{pre}tip diameter (middle of {}…{})", mm(lo), mm(hi)), 2.0 * t.ra, Unit::Mm);
         p.fact(format!("{pre}root diameter"), sp.root_diameter(), Unit::Mm);
-        if !z.is_multiple_of(2) {
-            p.fact(format!("{pre}caliper diameter (odd teeth)"), sp.caliper_diameter(), Unit::Mm);
-        }
+        let how = if z.is_multiple_of(2) { "over opposite roots" } else { "odd teeth: over the nearest opposite roots" };
+        p.fact(format!("{pre}caliper diameter ({how})"), sp.caliper_diameter(), Unit::Mm);
         p.fact(format!("{pre}roller seating radius"), sp.seating_radius(), Unit::Mm);
         p.fact(format!("{pre}roller seating angle"), sp.seating_angle().to_degrees(), Unit::Deg);
         p.fact(format!("{pre}tooth flank radius"), sp.flank_radius(), Unit::Mm);
@@ -141,17 +169,24 @@ pub(super) fn sprocket(s: &Spec, p: &mut Plan) {
         if s.hub_diameter > dg && s.hub_length > 0.0 {
             p.warn(format!("{who}: a hub over Ø{} fouls the chain's plates", mm(dg)));
         }
-        let mut steps =
-            vec![Step::Prism { region: Region { outer: vec![t.outline.clone()], holes: vec![] }, z0: 0.0, height: width, twist: 0.0, op: Op::New }];
-        for i in 1..strands {
-            let gap = pt - bf1;
-            if gap > 1e-6 {
-                let ring = Region { outer: vec![Outline::circle(V2::ZERO, t.ra + pitch)], holes: vec![Outline::circle(V2::ZERO, dg / 2.0)] };
-                steps.push(Step::Prism { region: ring, z0: f64::from(i - 1) * pt + bf1, height: gap, twist: 0.0, op: Op::Cut });
+        // One toothed disc a strand, joined by a core that clears the chain's plates.
+        let teeth = Region { outer: vec![t.outline.clone()], holes: vec![] };
+        let gap = pt - bf1;
+        let core = (dg / 2.0).max(0.35 * t.r_min);
+        if strands > 1 && gap > 1e-6 && core > dg / 2.0 + 1e-9 {
+            p.warn(format!("{who}: too few teeth to leave a core between the strands that clears the chain's plates"));
+        }
+        let mut steps = vec![Step::Prism { region: teeth.clone(), z0: 0.0, height: if gap > 1e-6 { bf1 } else { width }, twist: 0.0, op: Op::New }];
+        if gap > 1e-6 {
+            for i in 1..strands {
+                let z0 = f64::from(i) * pt;
+                let disc = Region { outer: vec![Outline::circle(V2::ZERO, core)], holes: vec![] };
+                steps.push(Step::Prism { region: disc, z0: z0 - gap, height: gap, twist: 0.0, op: Op::Join });
+                steps.push(Step::Prism { region: teeth.clone(), z0, height: bf1, twist: 0.0, op: Op::Join });
             }
         }
         if s.side_chamfer {
-            steps.push(Step::Revolve { profile: chamfer_profile(pitch, t.ra, bf1, strands, pt, dg / 2.0), op: Op::Intersect });
+            steps.push(Step::Revolve { profile: chamfer_profile(pitch, t.ra, bf1, strands, pt, core), op: Op::Intersect });
         }
         hub_steps(&sm, bore, t.r_min, width, &mut steps, p, who);
         (steps, t.outline, sp.pitch_diameter() / 2.0)
@@ -175,6 +210,7 @@ pub(super) fn sprocket(s: &Spec, p: &mut Plan) {
             slide: 0.0,
             pitch_radius: r1,
             period: 0.0,
+            orbit: 0.0,
         });
         if !rollers.is_empty() {
             p.preview.push(PreviewGear {
@@ -185,6 +221,7 @@ pub(super) fn sprocket(s: &Spec, p: &mut Plan) {
                 slide: 0.0,
                 pitch_radius: 0.0,
                 period: 0.0,
+                orbit: 0.0,
             });
         }
         return;
@@ -232,6 +269,7 @@ pub(super) fn sprocket(s: &Spec, p: &mut Plan) {
             slide: 0.0,
             pitch_radius: 0.0,
             period: 0.0,
+            orbit: 0.0,
         });
     }
     p.preview.push(PreviewGear {
@@ -242,6 +280,7 @@ pub(super) fn sprocket(s: &Spec, p: &mut Plan) {
         slide: 0.0,
         pitch_radius: r1,
         period: 0.0,
+        orbit: 0.0,
     });
     p.preview.push(PreviewGear {
         name: "sprocket 2".into(),
@@ -251,6 +290,7 @@ pub(super) fn sprocket(s: &Spec, p: &mut Plan) {
         slide: 0.0,
         pitch_radius: r2,
         period: 0.0,
+        orbit: 0.0,
     });
 }
 
@@ -293,6 +333,8 @@ pub(super) fn pulley(s: &Spec, p: &mut Plan) {
     p.preview_note = format!("{} groove approximated from published belt dimensions", belt.label);
     if belt.id.starts_with("gt2") || belt.id.starts_with("htd") {
         p.warn(format!("{}: the groove form is proprietary; this one is approximated from published belt tooth dimensions", belt.label));
+    } else {
+        p.warn(format!("{}: the groove is approximated from the belt's standard tooth dimensions, not the standard's pulley gauge; check the fit on a test piece", belt.label));
     }
     let (z1, z2) = (s.teeth, s.teeth2);
     let build = |z: u32, who: &str, bore: &crate::hub::Bore, phase: f64, p: &mut Plan| -> (Vec<Step>, Outline, f64, f64) {
@@ -339,6 +381,7 @@ pub(super) fn pulley(s: &Spec, p: &mut Plan) {
             slide: 0.0,
             pitch_radius: r1,
             period: 0.0,
+            orbit: 0.0,
         });
         return;
     }
@@ -374,6 +417,7 @@ pub(super) fn pulley(s: &Spec, p: &mut Plan) {
             slide: 0.0,
             pitch_radius: 0.0,
             period: 0.0,
+            orbit: 0.0,
         });
     }
     p.preview.push(PreviewGear {
@@ -384,6 +428,7 @@ pub(super) fn pulley(s: &Spec, p: &mut Plan) {
         slide: 0.0,
         pitch_radius: r1,
         period: 0.0,
+        orbit: 0.0,
     });
     p.preview.push(PreviewGear {
         name: "pulley 2".into(),
@@ -393,14 +438,15 @@ pub(super) fn pulley(s: &Spec, p: &mut Plan) {
         slide: 0.0,
         pitch_radius: r2,
         period: 0.0,
+        orbit: 0.0,
     });
 }
 
 // ------------------------------------------------------------------------------------------
 // Involute splines
 
-pub(super) fn spline(s: &Spec, p: &mut Plan) {
-    let sp = Spline {
+pub(super) fn spline_of(s: &Spec) -> Spline {
+    Spline {
         standard: s.spline_standard,
         module: s.module,
         teeth: s.teeth,
@@ -408,13 +454,31 @@ pub(super) fn spline(s: &Spec, p: &mut Plan) {
         reference_diameter: s.spline_diameter,
         fillet_root: s.fillet_root,
         clearance: s.backlash,
-    };
+    }
+}
+
+pub(super) fn spline(s: &Spec, p: &mut Plan) {
+    let sp = spline_of(s);
     let m = s.module;
     let shaft = sp.shaft();
     let (o_shaft, f) = sp.shaft_outline(0.0);
+    if let Some(d) = f.defect() {
+        p.refuse(format!("shaft: {d} ({} teeth, profile shift {}): use more teeth or another reference diameter", s.teeth, mm(sp.shift())));
+        return;
+    }
     let hub_teeth = sp.hub_outline(0.0);
     let (da1, df1) = sp.shaft_diameters();
     let (da2, df2) = sp.hub_diameters();
+    let (r_major, hub_pointed) = sp.hub_root_radius();
+    let df2 = df2.min(2.0 * r_major);
+    let (r_minor, hub_raised) = sp.hub_tip_radius(&f);
+    let da2 = da2.max(2.0 * r_minor);
+    if hub_raised {
+        p.warn(format!("hub: the minor diameter is raised to Ø{} to clear the shaft's root fillets (more teeth or a larger reference diameter avoid it)", mm(da2)));
+    }
+    if hub_pointed {
+        p.warn(format!("hub: the spaces come to a point; the major diameter is lowered to Ø{}", mm(df2)));
+    }
     let db = sp.reference_diameter();
     match s.spline_standard {
         SplineStandard::Din5480 => {
@@ -436,12 +500,14 @@ pub(super) fn spline(s: &Spec, p: &mut Plan) {
             p.fact("diametral pitch P", 25.4 / m, Unit::None);
             if ![30.0, 37.5, 45.0].iter().any(|a| (s.pressure_angle - a).abs() < 1e-6) {
                 p.warn("ANSI B92.1 uses 30°, 37.5° or 45° pressure angles");
+            } else if (s.pressure_angle - 30.0).abs() > 1e-6 {
+                p.warn("the 30° tooth proportions are used at this pressure angle (the standard's 37.5° and 45° teeth are shorter)");
             }
         }
     }
     p.fact("pitch diameter", sp.pitch_diameter(), Unit::Mm);
     p.fact("base diameter", 2.0 * shaft.rb(), Unit::Mm);
-    p.fact("shaft major (tip) diameter", da1, Unit::Mm);
+    p.fact("shaft major (tip) diameter", da1.min(2.0 * f.ra), Unit::Mm);
     p.fact("shaft minor (root) diameter", df1, Unit::Mm);
     p.fact("hub minor (tip) diameter", da2, Unit::Mm);
     p.fact("hub major (root) diameter", df2, Unit::Mm);
@@ -456,8 +522,16 @@ pub(super) fn spline(s: &Spec, p: &mut Plan) {
         p.warn("the hub's teeth touch the shaft's roots or tips: check the diameters");
     }
     let r_out = if s.hub_diameter > 0.0 { s.hub_diameter / 2.0 } else { df2 / 2.0 + if s.rim > 0.0 { s.rim } else { (3.0 * m).max(0.25 * db) } };
+    if r_out < df2 / 2.0 + 0.1 * m {
+        p.refuse(format!("the hub's outside diameter must be over Ø{} (its major diameter and a wall); it is Ø{}", mm(df2 + 0.2 * m), mm(2.0 * r_out)));
+        return;
+    }
     if r_out <= df2 / 2.0 + 0.5 * m {
         p.warn("the hub's wall is thinner than half a module");
+    }
+    if s.bore.outline().is_some() && s.bore.reach() >= f.rf - 0.05 * m {
+        p.refuse(format!("shaft: the bore (reaching Ø{}) cuts into the tooth roots (Ø{}); use a smaller bore", mm(2.0 * s.bore.reach()), mm(2.0 * f.rf)));
+        return;
     }
     p.fact("hub outside diameter", 2.0 * r_out, Unit::Mm);
     let face = s.face_width;
@@ -471,8 +545,8 @@ pub(super) fn spline(s: &Spec, p: &mut Plan) {
             op: Op::New,
         }];
         if let Some(b) = s.bore.outline() {
-            if s.bore.reach() >= f.rf {
-                p.warn("shaft: the bore reaches the tooth roots");
+            if s.bore.reach() >= f.rf - m {
+                p.warn("shaft: under one module of material between the bore and the tooth roots");
             }
             steps.push(Step::Prism {
                 region: Region { outer: vec![b], holes: vec![] },
@@ -488,7 +562,7 @@ pub(super) fn spline(s: &Spec, p: &mut Plan) {
         let steps = vec![Step::Prism { region: hub_region.clone(), z0: 0.0, height: face, twist: 0.0, op: Op::New }];
         p.bodies.push(Body { name: name(s, &format!("Spline hub z{}", s.teeth)), frame: Frame::at(s.origin), steps });
     }
-    p.preview.push(PreviewGear { name: "hub".into(), region: hub_region, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: 0.0, period: 0.0 });
+    p.preview.push(PreviewGear { name: "hub".into(), region: hub_region, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: 0.0, period: 0.0, orbit: 0.0 });
     p.preview.push(PreviewGear {
         name: "shaft".into(),
         region: with_bore(Region { outer: vec![o_shaft], holes: vec![] }, &s.bore),
@@ -497,6 +571,7 @@ pub(super) fn spline(s: &Spec, p: &mut Plan) {
         slide: 0.0,
         pitch_radius: shaft.r(),
         period: 0.0,
+        orbit: 0.0,
     });
 }
 
@@ -506,7 +581,7 @@ pub(super) fn spline(s: &Spec, p: &mut Plan) {
 pub(super) fn face_gear(s: &Spec, p: &mut Plan) {
     let m = s.module;
     let pinion = s.involute(s.teeth, 0.0, 0.0);
-    let fg = FaceGear { pinion, teeth: s.teeth2, backlash: s.backlash };
+    let fg = FaceGear::new(pinion, s.teeth2, s.backlash);
     let (r_min, r_max) = (fg.undercut_radius(), fg.pointed_radius());
     let asked = if s.inner_diameter > 0.0 { s.inner_diameter / 2.0 } else { r_min };
     let mut ri = asked;
@@ -514,14 +589,19 @@ pub(super) fn face_gear(s: &Spec, p: &mut Plan) {
         p.warn(format!("the teeth's inner end is raised to Ø{}: inside it the pinion undercuts them", mm(2.0 * r_min)));
         ri = r_min;
     }
-    let mut ro = asked + s.face_width;
+    let mut ro = ri + s.face_width;
     if ro > r_max + 1e-9 {
         p.warn(format!("the teeth's outer end is held to Ø{}: past it they come to a point", mm(2.0 * r_max)));
         ro = r_max;
     }
     if ro - ri < m {
-        p.warn("hardly any room for teeth between the undercut and pointing limits: use more face gear teeth (a higher ratio)");
-        ro = ri + m;
+        p.refuse(format!(
+            "no room for teeth a module long between Ø{} (inside it the pinion undercuts them) and Ø{} (past it they come to a point): use more face gear teeth or fewer pinion teeth{}",
+            mm(2.0 * r_min),
+            mm(2.0 * r_max),
+            if s.inner_diameter > 0.0 { ", or a smaller inner diameter" } else { "" }
+        ));
+        return;
     }
     let r1 = pinion.r();
     p.fact("ratio", fg.z2() / fg.z1(), Unit::None);
@@ -538,12 +618,23 @@ pub(super) fn face_gear(s: &Spec, p: &mut Plan) {
     p.fact("pressure angle at the outer end", aw(ro), Unit::Deg);
     let (o1, f1) = external_outline(&pinion, PI / fg.z1());
     tooth_warnings(p, "pinion", &pinion, &f1);
+    if s.bore.outline().is_some() && s.bore.reach() >= ri - 0.05 * m {
+        p.refuse(format!("face gear: the bore (reaching Ø{}) cuts into the teeth (from Ø{}); use a smaller bore", mm(2.0 * s.bore.reach()), mm(2.0 * ri)));
+        return;
+    }
     let (top, bottom) = (fg.top(), fg.bottom());
     let below = bottom - 0.3 * m;
     let rim = if s.rim > 0.0 { s.rim } else { 2.5 * m };
     if wanted(s, 1) {
+        // The teeth, cut at a few heights and lofted; their lowest section again below the
+        // spaces' bottom, to stand in the base.
+        let heights = fg.heights();
+        let mut sections: Vec<(Outline, f64)> = fg.sections(&heights, ri, ro).into_iter().zip(heights).collect();
+        if let Some(first) = sections.first().cloned() {
+            sections.insert(0, (first.0, below));
+        }
         let mut steps = vec![
-            Step::Loft { sections: vec![(fg.section(below, ri, ro), below), (fg.section(top, ri, ro), top)], op: Op::New },
+            Step::Loft { sections, op: Op::New },
             Step::Prism {
                 region: Region { outer: vec![Outline::circle(V2::ZERO, ro + m)], holes: vec![] },
                 z0: bottom - rim,
@@ -553,9 +644,6 @@ pub(super) fn face_gear(s: &Spec, p: &mut Plan) {
             },
         ];
         if let Some(b) = s.bore.outline() {
-            if s.bore.reach() >= ri {
-                p.warn("face gear: the bore reaches the teeth");
-            }
             steps.push(Step::Prism {
                 region: Region { outer: vec![b], holes: vec![] },
                 z0: bottom - rim - 1.0,
@@ -579,21 +667,9 @@ pub(super) fn face_gear(s: &Spec, p: &mut Plan) {
     // the teeth, a rack there, sliding as the pinion turns.
     let rm = 0.5 * (ri + ro);
     let period = TAU * rm / fg.z2();
-    let half = |h: f64| (fg.thickness(rm, h) / 2.0).clamp(0.01 * period, 0.49 * period);
-    let (tt, tb) = (half(top), half(bottom));
-    let (y_top, y_bot, y_base) = (top - r1, bottom - r1, bottom - rim - r1);
-    let n: i32 = 9;
-    let xk = |k: i32| f64::from(k - (n - 1) / 2) * period + period / 2.0;
-    let (x_left, x_right) = (xk(0) - period / 2.0, xk(n - 1) + period / 2.0);
-    let mut pts = vec![V2::new(x_left, y_base), V2::new(x_right, y_base), V2::new(x_right, y_bot)];
-    for k in (0..n).rev() {
-        let c = xk(k);
-        pts.extend([V2::new(c + tb, y_bot), V2::new(c + tt, y_top), V2::new(c - tt, y_top), V2::new(c - tb, y_bot)]);
-    }
-    pts.push(V2::new(x_left, y_bot));
-    pts.dedup_by(|a, b| a.dist(*b) < 1e-9);
-    let segs: Vec<Seg> = (0..pts.len()).filter_map(|i| Some(Seg::Line(*pts.get(i)?, *pts.get((i + 1) % pts.len())?))).collect();
-    let rack = Outline { segs };
+    // An even count: the outline's own middle is a space, and the preview slides a sliding
+    // member half a pitch back, which puts a tooth under the pinion's space.
+    let rack = fg.unrolled(rm, 10, rim);
     let rw = rm * fg.z1() / fg.z2();
     p.preview_note = "pinion section, and the face gear's teeth at mid length unrolled as a rack".into();
     let pv = external_outline(&pinion, -PI / 2.0 + PI / fg.z1()).0;
@@ -605,6 +681,7 @@ pub(super) fn face_gear(s: &Spec, p: &mut Plan) {
         slide: 0.0,
         pitch_radius: rw,
         period: 0.0,
+        orbit: 0.0,
     });
     p.preview.push(PreviewGear {
         name: "face gear".into(),
@@ -614,6 +691,7 @@ pub(super) fn face_gear(s: &Spec, p: &mut Plan) {
         slide: rw,
         pitch_radius: 0.0,
         period,
+        orbit: 0.0,
     });
 }
 
@@ -688,6 +766,7 @@ pub(super) fn elliptical(s: &Spec, p: &mut Plan) {
         slide: 0.0,
         pitch_radius: 0.0,
         period: 0.0,
+        orbit: 0.0,
     });
     p.preview.push(PreviewGear {
         name: "gear 2".into(),
@@ -697,5 +776,6 @@ pub(super) fn elliptical(s: &Spec, p: &mut Plan) {
         slide: 0.0,
         pitch_radius: 0.0,
         period: 0.0,
+        orbit: 0.0,
     });
 }

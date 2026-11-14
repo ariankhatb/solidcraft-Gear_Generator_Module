@@ -13,6 +13,8 @@
 //!   the chain or belt between two of them.
 //! - [`spline`]: DIN 5480 and ANSI B92.1 involute splines; [`face_gear`]: face gears cut by a
 //!   spur pinion; [`elliptic`]: a centre-pivoted elliptical gear and its conjugate.
+//! - [`strength`]: load capacity (ISO 6336 Method B simplified, Lewis; simplified bevel and
+//!   worm): forces, stresses and safety factors for a given torque or power.
 //!
 //! Pure math with no dependencies: the engine turns a plan into sketches and features, the
 //! window draws its preview from the same plan.
@@ -27,13 +29,22 @@ pub mod plan;
 pub mod pulley;
 pub mod spline;
 pub mod sprocket;
+pub mod strength;
 pub mod wrap;
 
 pub use geom::{Outline, Region, Seg, V2};
 pub use plan::{Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit, plan};
 
 #[cfg(test)]
+mod accuracy_tests;
+#[cfg(test)]
+mod sweep_tests;
+#[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod mesh2d;
+#[cfg(test)]
+mod mesh_tests;
 #[cfg(test)]
 mod tests_extras;

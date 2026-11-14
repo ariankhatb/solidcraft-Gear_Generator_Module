@@ -11,9 +11,6 @@ use solidcraft_gear::plan::{Axes, Kind, Plan, Spec, Unit};
 use crate::SolveApp;
 use crate::ui_kit;
 
-#[path = "gear_window_drives.rs"]
-mod drives;
-
 /// What the window holds between frames.
 pub struct GearWindow {
     pub spec: Spec,
@@ -32,6 +29,11 @@ pub struct GearWindow {
     inch: bool,
     /// Show the basic rack's coefficients.
     advanced: bool,
+    /// Designing for FDM printing: nozzle width (mm) the tooth tips are checked against.
+    printing: bool,
+    nozzle: f64,
+    /// Show the load inputs for the strength rating.
+    load_open: bool,
     /// The last create's error.
     error: Option<String>,
 }
@@ -55,6 +57,9 @@ impl GearWindow {
             preview_3d: true,
             inch: false,
             advanced: false,
+            printing: false,
+            nozzle: 0.4,
+            load_open: false,
             error: None,
         };
         w.replan();
@@ -226,7 +231,7 @@ fn body(ui: &mut Ui, w: &mut GearWindow, busy: bool, view_error: Option<&str>) {
 }
 
 fn type_picker(ui: &mut Ui, w: &mut GearWindow) {
-    for (axes, label) in [(Axes::Parallel, "Parallel axes"), (Axes::Intersecting, "Intersecting axes"), (Axes::Crossed, "Crossed axes"), (Axes::Special, "Special"), (Axes::Wrapped, "Chain and belt")] {
+    for (axes, label) in [(Axes::Parallel, "Parallel axes"), (Axes::Intersecting, "Intersecting axes"), (Axes::Crossed, "Crossed axes"), (Axes::Special, "Special")] {
         ui.horizontal_wrapped(|ui| {
             ui.add_sized([110.0, 18.0], egui::Label::new(egui::RichText::new(label).small().weak()));
             for k in Kind::ALL.iter().copied().filter(|k| k.axes() == axes) {
@@ -234,10 +239,7 @@ fn type_picker(ui: &mut Ui, w: &mut GearWindow) {
                     // A new type starts from its own defaults, keeping the hub choices.
                     let keep = w.spec.clone();
                     let mut s = Spec::defaults_for(k);
-                    if k.involute() == keep.kind.involute()
-                        && !matches!(k, Kind::Hypoid | Kind::Worm | Kind::Cycloidal | Kind::Spline)
-                        && keep.kind != Kind::Spline
-                    {
+                    if k.involute() == keep.kind.involute() && !matches!(k, Kind::Hypoid | Kind::Worm | Kind::Cycloidal) {
                         s.module = keep.module;
                         s.pressure_angle = keep.pressure_angle;
                         s.rack = keep.rack;
@@ -287,9 +289,7 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
     let k = s.kind;
     egui::ScrollArea::vertical().id_salt("gear_params").max_height(470.0).auto_shrink([false, true]).show(ui, |ui| {
         heading(ui, "Teeth");
-        if drives::wrapped_rows(ui, s) {
-            // A sprocket's or pulley's rows.
-        } else if k == Kind::CycloidalDrive {
+        if k == Kind::CycloidalDrive {
             count(ui, "Ring pins", "The disc gets one lobe fewer; the reduction is pins − 1", &mut s.pins, 3..=200);
             num(ui, "Pin circle Ø", "Diameter through the pin centres", &mut s.pin_circle, 1.0..=5000.0, 0.5, " mm");
             num(ui, "Pin Ø", "", &mut s.pin_diameter, 0.1..=500.0, 0.1, " mm");
@@ -320,8 +320,6 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
                 Kind::Hypoid => ("Pinion teeth", Some("Gear teeth")),
                 Kind::Pair | Kind::Bevel | Kind::SpiralBevel | Kind::CrossedHelical => ("Gear 1 teeth", Some("Gear 2 teeth")),
                 Kind::Cycloidal => ("Wheel teeth", Some("Pinion teeth (0: none)")),
-                Kind::FaceGear => ("Pinion teeth", Some("Face gear teeth")),
-                Kind::Elliptical => ("Teeth (each)", None),
                 _ => ("Teeth", None),
             };
             if k == Kind::Rack {
@@ -355,7 +353,6 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
                 });
                 s.helix = if left { -1.0 } else { 0.0 };
             }
-            drives::extra_rows(ui, s);
             if k.involute() {
                 num(ui, "Pressure angle", "Normal pressure angle; 20° is standard, 14.5° older, 25° stronger", &mut s.pressure_angle, 5.0..=45.0, 0.1, "°");
             }
@@ -375,7 +372,7 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
                 num(ui, "Offset", "Distance between the axes; 0 for equal spiral angles", &mut s.offset, 0.0..=5000.0, 0.5, " mm");
                 num(ui, "Face start", "Where the teeth start along the line of contact, from the throat; larger looks more like a bevel", &mut s.face_start, -5000.0..=5000.0, 0.5, " mm");
             }
-            if k.involute() && !matches!(k, Kind::Worm | Kind::Spline | Kind::FaceGear | Kind::Elliptical) {
+            if k.involute() && k != Kind::Worm {
                 num(ui, if k.is_set() { "Shift x₁" } else { "Profile shift x" }, "Profile shift coefficient: positive thickens the root and avoids undercut", &mut s.shift, -1.5..=1.5, 0.01, "");
                 if matches!(k, Kind::Pair | Kind::Planetary | Kind::CrossedHelical) {
                     num(ui, "Shift x₂", "Gear 2's (planets') profile shift", &mut s.shift2, -1.5..=1.5, 0.01, "");
@@ -393,10 +390,9 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
                 });
             }
             if k != Kind::CycloidalDrive {
-                let (label, tip) = if k == Kind::Spline { ("Clearance", "Between the flanks at the pitch circle") } else { ("Backlash", "Taken off each tooth at the pitch circle") };
-                num(ui, label, tip, &mut s.backlash, 0.0..=5.0, 0.005, " mm");
+                num(ui, "Backlash", "Taken off each tooth at the pitch circle", &mut s.backlash, 0.0..=5.0, 0.005, " mm");
             }
-            if k.involute() && k != Kind::Spline {
+            if k.involute() {
                 row(ui, "Basic rack", "Tooth proportions", |ui| {
                     let current = BasicRack::STANDARDS.iter().find(|(_, r)| *r == s.rack).map(|(n, _)| *n).unwrap_or("custom");
                     egui::ComboBox::from_id_salt("gear_rack").selected_text(current).show_ui(ui, |ui| {
@@ -411,55 +407,66 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
                     num(ui, "  Dedendum ×m", "", &mut s.rack.dedendum, 0.5..=2.5, 0.01, "");
                     num(ui, "  Root radius ×m", "The cutter's tip radius; makes the root fillet", &mut s.rack.root_radius, 0.0..=0.6, 0.01, "");
                 }
+                let mut clearance = s.rack.dedendum - s.rack.addendum;
+                row(ui, "Clearance ×m", "Gap between a tooth tip and the mating root, in modules (0.25 standard; 0.3 or more for printed gears)", |ui| {
+                    if ui.add(egui::DragValue::new(&mut clearance).range(0.05..=1.0).speed(0.005).max_decimals(3)).changed() {
+                        s.rack.dedendum = s.rack.addendum + clearance;
+                    }
+                });
+                row(ui, "3D printing", "Tooth form and checks for FDM printing", |ui| {
+                    if ui.toggle_value(&mut w.printing, "print preset").clicked() && w.printing {
+                        // Stronger, more forgiving teeth: 25° pressure angle, extra clearance, a
+                        // full root fillet, and backlash a printer can hold.
+                        s.pressure_angle = 25.0;
+                        s.rack = BasicRack::standard("print_fdm").unwrap_or(s.rack);
+                        s.backlash = s.backlash.max(0.15);
+                    }
+                });
+                if w.printing {
+                    num(ui, "  Nozzle width", "Tooth tips thinner than two extrusion widths print badly", &mut w.nozzle, 0.1..=2.0, 0.05, " mm");
+                }
+            }
+        }
+        if k.involute() && k != Kind::Rack {
+            ui.add_space(4.0);
+            ui.toggle_value(&mut w.load_open, egui::RichText::new("Load and materials (strength rating)").strong());
+            if w.load_open {
+                let l = &mut s.load;
+                num(ui, "Torque", "On the driving member; 0: not rated (or give power and speed)", &mut l.torque, 0.0..=1e6, 0.1, " N·m");
+                num(ui, "Power", "Used when the torque is 0", &mut l.power, 0.0..=1e5, 0.01, " kW");
+                num(ui, "Speed", "Of the driving member", &mut l.speed, 0.0..=1e6, 10.0, " rpm");
+                num(ui, "Application factor", "1.0 smooth; 1.25 light shocks; 1.5 moderate; 1.75+ heavy", &mut l.application_factor, 1.0..=3.0, 0.05, "");
+                material(ui, "Material", "gear_mat1", &mut l.material);
+                if k.is_set() {
+                    material(ui, "Mate material", "gear_mat2", &mut l.material2);
+                }
             }
         }
         heading(ui, "Body");
-        let face_label = match k {
-            Kind::CycloidalDrive => Some("Thickness"),
-            Kind::Sprocket => None,
-            Kind::Pulley => Some("Belt width"),
-            Kind::Spline => Some("Hub length"),
-            Kind::FaceGear => Some("Tooth length"),
-            _ => Some("Face width"),
-        };
-        if let Some(label) = face_label {
-            num(ui, label, "", &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
-        }
+        num(ui, if k == Kind::CycloidalDrive { "Thickness" } else { "Face width" }, "", &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
         if matches!(k, Kind::Internal | Kind::Planetary) {
             num(ui, "Ring rim", "Beyond the roots; 0: 3 modules", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
-        }
-        if k == Kind::Spline {
-            num(ui, "Hub outside Ø", "0: from the hub wall", &mut s.hub_diameter, 0.0..=5000.0, 0.2, " mm");
-            if s.hub_diameter <= 0.0 {
-                num(ui, "Hub wall", "Beyond the hub's roots; 0: 3 modules or a quarter of the diameter", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
-            }
-        }
-        if k == Kind::FaceGear {
-            num(ui, "Base thickness", "Below the tooth spaces; 0: 2.5 modules", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
         }
         if k == Kind::Rack {
             num(ui, "Height below pitch", "0: 3 modules", &mut s.rack_height, 0.0..=1000.0, 0.1, " mm");
         }
         if k != Kind::Rack && k != Kind::CycloidalDrive {
-            bore(ui, if k == Kind::Spline { "Shaft bore" } else { "Bore" }, "bore1", &mut s.bore);
-            if k.is_set() && k != Kind::Spline && !(matches!(k, Kind::Sprocket | Kind::Pulley) && s.teeth2 == 0) {
+            bore(ui, "Bore", "bore1", &mut s.bore);
+            if k.is_set() {
                 let who = match k {
                     Kind::Planetary => "Planet bore",
                     Kind::Worm => "Worm bore",
-                    Kind::FaceGear => "Pinion bore",
-                    Kind::Sprocket => "Sprocket 2 bore",
-                    Kind::Pulley => "Pulley 2 bore",
                     _ => "Gear 2 bore",
                 };
                 bore(ui, who, "bore2", &mut s.bore2);
             }
-            if !matches!(k, Kind::Internal | Kind::Hypoid | Kind::Spline | Kind::Elliptical) {
+            if !matches!(k, Kind::Internal | Kind::Hypoid) {
                 num(ui, "Hub Ø", "On the back face; 0: none", &mut s.hub_diameter, 0.0..=5000.0, 0.2, " mm");
                 if s.hub_diameter > 0.0 {
                     num(ui, "Hub length", "", &mut s.hub_length, 0.0..=5000.0, 0.2, " mm");
                 }
             }
-            if matches!(k, Kind::Spur | Kind::Helical | Kind::Herringbone | Kind::Pair | Kind::Planetary | Kind::Cycloidal | Kind::Sprocket) {
+            if matches!(k, Kind::Spur | Kind::Helical | Kind::Herringbone | Kind::Pair | Kind::Planetary | Kind::Cycloidal) {
                 count(ui, "Lightening holes", "Through the web between hub and rim", &mut s.holes, 0..=24);
                 if s.holes > 0 {
                     num(ui, "Hole Ø", "0: to fit", &mut s.hole_diameter, 0.0..=1000.0, 0.2, " mm");
@@ -468,18 +475,13 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
         } else if k == Kind::CycloidalDrive {
             bore(ui, "Bearing bore", "bore1", &mut s.bore);
         }
-        if k.is_set() && !(matches!(k, Kind::Sprocket | Kind::Pulley) && s.teeth2 == 0) {
+        if k.is_set() {
             row(ui, "Build", "Make every member, or just one", |ui| {
                 let names: &[&str] = match k {
                     Kind::Planetary => &["all", "sun", "planets", "ring"],
                     Kind::Worm => &["both", "wheel", "worm"],
                     Kind::CycloidalDrive => &["both", "disc", "pins"],
                     Kind::Hypoid => &["both", "pinion", "gear"],
-                    Kind::Sprocket => &["both", "sprocket 1", "sprocket 2"],
-                    Kind::Pulley => &["both", "pulley 1", "pulley 2"],
-                    Kind::Spline => &["both", "shaft", "hub"],
-                    Kind::FaceGear => &["both", "face gear", "pinion"],
-                    Kind::Elliptical => &["both", "gear 1", "gear 2"],
                     _ => &["both", "gear 1", "gear 2"],
                 };
                 egui::ComboBox::from_id_salt("gear_only").selected_text(names.get(s.only as usize).copied().unwrap_or("all")).show_ui(ui, |ui| {
@@ -495,6 +497,16 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
         row(ui, "Centre at", "Where gear 1's centre goes", |ui| {
             for v in &mut s.origin {
                 ui.add(egui::DragValue::new(v).speed(0.5).max_decimals(3));
+            }
+        });
+    });
+}
+
+fn material(ui: &mut Ui, label: &str, id: &str, m: &mut solidcraft_gear::strength::Material) {
+    row(ui, label, "Sets the allowable contact and root stress", |ui| {
+        egui::ComboBox::from_id_salt(id).width(170.0).selected_text(m.data().label).show_ui(ui, |ui| {
+            for (k, d) in solidcraft_gear::strength::MATERIALS {
+                ui.selectable_value(m, *k, d.label);
             }
         });
     });
@@ -529,13 +541,21 @@ fn facts(ui: &mut Ui, w: &GearWindow) {
             ui.colored_label(ui.visuals().error_fg_color, e);
         }
         Ok(p) => {
+            if w.printing {
+                for f in p.facts.iter().filter(|f| f.label.ends_with("tip land") && f.value < 2.0 * w.nozzle) {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        format!("⚠ {} {:.2} mm is under two nozzle widths ({:.2} mm): use a larger module or a finer nozzle", f.label, f.value, 2.0 * w.nozzle),
+                    );
+                }
+            }
             for warn in &p.warnings {
                 ui.colored_label(ui.visuals().warn_fg_color, format!("⚠ {warn}"));
             }
             egui::ScrollArea::vertical().id_salt("gear_facts").max_height(170.0).auto_shrink([false, true]).show(ui, |ui| {
-                egui::Grid::new("gear_facts_grid").num_columns(2).striped(true).spacing([12.0, 2.0]).show(ui, |ui| {
+                egui::Grid::new("gear_facts_grid").num_columns(2).striped(true).spacing([12.0, 2.0]).min_col_width(200.0).show(ui, |ui| {
                     for f in &p.facts {
-                        ui.label(egui::RichText::new(&f.label).small());
+                        ui.add(egui::Label::new(egui::RichText::new(&f.label).small()).wrap_mode(egui::TextWrapMode::Extend));
                         let v = match f.unit {
                             Unit::Mm => format!("{:.3} mm", f.value),
                             Unit::Deg => format!("{:.3}°", f.value),
@@ -571,8 +591,10 @@ fn preview(ui: &mut Ui, w: &GearWindow) {
     for (g, m) in plan.preview.iter().zip(&w.meshes) {
         if g.slide == 0.0 && g.speed != 0.0 {
             let r = m.outlines.iter().flatten().map(|q| q.len()).fold(0.0, f64::max);
-            lo = V2::new(lo.x.min(g.center.x - r), lo.y.min(g.center.y - r));
-            hi = V2::new(hi.x.max(g.center.x + r), hi.y.max(g.center.y + r));
+            // A centre that goes round the origin sweeps a circle about that instead.
+            let (c, r) = if g.orbit != 0.0 { (V2::ZERO, r + g.center.len()) } else { (g.center, r) };
+            lo = V2::new(lo.x.min(c.x - r), lo.y.min(c.y - r));
+            hi = V2::new(hi.x.max(c.x + r), hi.y.max(c.y + r));
         } else {
             for q in m.outlines.iter().flatten() {
                 let p = g.center + *q;
@@ -591,17 +613,9 @@ fn preview(ui: &mut Ui, w: &GearWindow) {
     let to_screen = |p: V2| -> Pos2 { pos2(c.x + ((p.x - mid.x) * scale) as f32, c.y - ((p.y - mid.y) * scale) as f32) };
     let stroke_color = ui.visuals().text_color();
     for (i, (g, m)) in plan.preview.iter().zip(&w.meshes).enumerate() {
-        let angle = g.speed * w.turned;
-        let slide = g.slide * w.turned;
-        let place = |q: V2| -> Pos2 {
-            let q = if g.slide != 0.0 {
-                // A rack: slides; the worm's section slides along its own axis (+y).
-                if g.name == "worm" { q + V2::new(0.0, wrap_slide(slide, g)) } else { q + V2::new(wrap_slide(slide, g), 0.0) }
-            } else {
-                q.rot(angle)
-            };
-            to_screen(g.center + q)
-        };
+        // The motion the gear crate's mesh tests prove: turning about the centre (which goes
+        // round with the input for a cycloidal drive's disc), or sliding by wrapped tooth pitches.
+        let place = |q: V2| -> Pos2 { to_screen(g.place(q, w.turned)) };
         let color = PALETTE[i % PALETTE.len()];
         let fill = color.gamma_multiply(0.55);
         let mut mesh = egui::Mesh::default();
@@ -638,17 +652,18 @@ fn preview(ui: &mut Ui, w: &GearWindow) {
         if g.slide == 0.0 && g.speed != 0.0 {
             painter.circle_filled(place(V2::polar(g.pitch_radius.max(1.0) * 0.35, 0.0)), 2.5, stroke_color.gamma_multiply(0.6));
         }
-        painter.circle_filled(to_screen(g.center), 2.0, stroke_color.gamma_multiply(0.6));
+        let at = to_screen(if g.slide == 0.0 { g.place(V2::ZERO, w.turned) } else { g.center });
+        painter.circle_filled(at, 2.0, stroke_color.gamma_multiply(0.6));
+        // The member's name in its own colour, on a chip so it reads over the gear.
+        let font = egui::FontId::proportional(11.0);
+        let galley = painter.layout_no_wrap(g.name.clone(), font, color.lerp_to_gamma(stroke_color, 0.55));
+        let pos = at + vec2(-galley.size().x / 2.0, 5.0);
+        painter.rect_filled(egui::Rect::from_min_size(pos, galley.size()).expand(2.0), 3.0, bg.gamma_multiply(0.8));
+        painter.galley(pos, galley, stroke_color);
     }
     if !plan.preview_note.is_empty() {
         painter.text(rect.left_bottom() + vec2(8.0, -6.0), egui::Align2::LEFT_BOTTOM, &plan.preview_note, egui::FontId::proportional(11.0), stroke_color.gamma_multiply(0.6));
     }
-}
-
-/// A sliding member moves on by whole tooth pitches only, so it stays in view and its teeth
-/// keep meshing.
-fn wrap_slide(s: f64, g: &solidcraft_gear::PreviewGear) -> f64 {
-    if g.period > 0.0 { s.rem_euclid(g.period) - g.period / 2.0 } else { 0.0 }
 }
 
 fn dashed_circle(p: &egui::Painter, c: Pos2, r: f32, stroke: Stroke) {

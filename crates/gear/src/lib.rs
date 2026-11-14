@@ -14,6 +14,7 @@
 //!   load) and ratio splitting for multi-stage gearboxes.
 //! - [`mesh2d`]: a 2D mesh checker (overlap and loss of contact over a tooth pitch) for the
 //!   parallel-axis sets, behind the window's mesh verdict and the mesh tests.
+//! - [`sheet`]: a design sheet (Markdown) of a planned set and a gear profile as a DXF.
 //! - [`strength`]: load capacity (ISO 6336 Method B simplified, Lewis; simplified bevel and
 //!   worm): forces, stresses and safety factors for a given torque or power.
 //!
@@ -28,6 +29,7 @@ pub mod hub;
 pub mod involute;
 pub mod mesh2d;
 pub mod plan;
+pub mod sheet;
 pub mod strength;
 
 pub use geom::{Outline, Region, Seg, V2};

@@ -35,7 +35,7 @@ pub static COMMANDS: &[CommandSpec] = &[
              backlash? (mm); face_width?; center_distance? (pair: gear 2's shift reaches it); shaft_angle?, spiral_angle? (deg); offset?, face_start? (hypoid, mm); \
              starts?, worm_diameter?, worm_length? (worm); rim?; rack_teeth?, rack_height?; pins?, pin_circle?, pin_diameter?, eccentricity? (cycloidal drive); \
              bore?, bore2?: {type?: round|keyway|d_flat|hex|square|none, diameter, key_width?, key_depth?, flat?}; hub_diameter?, hub_length?; holes?, hole_diameter?; \
-             only?: 1|2|3 (one member); origin?: [x,y,z]; name?; strength rating: torque? (N·m) | power? (kW), speed? (rpm) on the driver, \
+             only?: 1|2|3 (one member); coupon?: bool, coupon_teeth? (pair, planetary: a print test coupon instead of the set); origin?: [x,y,z]; name?; strength rating: torque? (N·m) | power? (kW), speed? (rpm) on the driver, \
              material?, material2?, material3?: steel_normalized|steel_through_hardened|steel_case_hardened|steel_nitrided|cast_iron|bronze|pom|pa66|pla|petg, \
              application_factor?, life_hours?, accuracy_grade? (5..12). Returns bodies, group, facts (diameters, ratio, centre distance, contact ratio, span and over-pins \
              measurements; with a load: forces, stresses, safety factors SF and SH) and warnings (undercut, pointed teeth, low contact ratio, interference, SF < 1.4, SH < 1)",
@@ -187,6 +187,8 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     set!(holes, p.holes);
     set!(hole_diameter, p.hole_diameter);
     set!(only, p.only);
+    set!(coupon, p.coupon);
+    set!(coupon_teeth, p.coupon_teeth);
     set!(origin, p.origin);
     if let Some(n) = &p.name {
         s.name = n.clone();
@@ -330,6 +332,8 @@ pub fn params_of(s: &Spec) -> Value {
         application_factor: (s.load.application_factor != 1.0).then_some(s.load.application_factor),
         life_hours: (s.load.life_hours > 0.0).then_some(s.load.life_hours),
         accuracy_grade: (s.load.quality != 7).then_some(s.load.quality),
+        coupon: s.coupon.then_some(true),
+        coupon_teeth: (s.coupon && s.coupon_teeth != 4).then_some(s.coupon_teeth),
     };
     serde_json::to_value(p).map(strip_nulls).unwrap_or(Value::Null)
 }

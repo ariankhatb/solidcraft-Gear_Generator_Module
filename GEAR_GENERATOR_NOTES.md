@@ -268,3 +268,10 @@ Agent worktree for the new kind: `solidcraft-bevelplanet` / `gear-bevelplanet`.
   sketch. Out-of-plane angles (bevel/hypoid/crossed shaft angle, bevel planetary cone angle) are
   settings (default 90°). Counts are settings: draw one planet (one line from the sun's centre
   for bevel planetary, one planet circle for classic planetary) and set the planet count.
+- **Origin dot, always**: every mode's first pick is a sketch point = origin of the set; default
+  orientation follows the sketch (circle modes: shafts normal to the sketch; line modes: shafts in
+  the plane); rotate about the origin in 90° steps (+ free angle) to align to the wanted plane.
+- **Bevel and bevel planetary drawn as a side view** in the one sketch: a line (sun/gear 1 shaft),
+  the dot on it (apex = origin), a second line from the dot at an angle (planet/gear 2 shaft);
+  the angle between the lines is the meeting angle (drawn). Sizes, planet count, face width are
+  settings. Hypoid stays circle + off-centre line with the out-of-plane offset as a setting.

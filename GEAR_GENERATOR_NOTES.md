@@ -245,3 +245,22 @@ circle). Non-90° bevel/hypoid: angle field or the two-sketch form.
 - Bevels at any shaft angle (user's example: 80°) must be easy in Simple mode: a shaft-angle
   dimension on the bevel's side-view drawing (default 90°), side-view sketch input (two lines
   meeting at the apex), cone angles and apex drawn. The generator already supports 5–175°.
+
+### Mode first, then pick from the sketch; new mode: bevel planetary (user, same evening)
+
+User: keep the mode selection for now; after choosing the mode, select the components from the
+sketch that the mode needs. New set: "something similar to a sun gear and planet gears around
+it, but the planets are made at a cone shape, so each one goes in a different direction, not
+perpendicular or parallel to each other."
+- **Bevel planetary**: a bevel sun; N bevel planets whose axes meet the sun axis at one apex at a
+  cone angle (90° = differential spider gears); optional second sun opposite (full
+  differential) or an outer bevel ring. Sketch: sun circle + one line per planet from the centre
+  (azimuths) + cone angle dimension (or a side-view sketch: two lines meeting at the apex);
+  planet size from a second circle on a spoke or a ratio.
+- Window: mode picker stays; each mode lists its pick slots (circle / line / point / second
+  sketch) and validates picks; auto-detection only as a hint. Per-mode slots:
+  single gear: 1 circle; pair: 2 touching circles; internal: circle inside circle; planetary:
+  sun/planet/ring circles; rack/worm: circle + tangent line; bevel: circle + line through centre
+  (or 2 side-view lines); hypoid: circle + off-centre crossing line; crossed helical: circle +
+  missing line; bevel planetary: sun circle + planet lines + cone angle.
+Agent worktree for the new kind: `solidcraft-bevelplanet` / `gear-bevelplanet`.

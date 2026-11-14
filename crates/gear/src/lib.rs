@@ -20,6 +20,8 @@
 //!   the chain or belt between two of them.
 //! - [`spline`]: DIN 5480 and ANSI B92.1 involute splines; [`face_gear`]: face gears cut by a
 //!   spur pinion; [`elliptic`]: a centre-pivoted elliptical gear and its conjugate.
+//! - [`equations`]: a tooth as formulas (involute, trochoid root fillet, tip and root arcs) and a
+//!   pattern, for sketches whose teeth follow design parameters.
 //! - [`coupon`]: a print test coupon of a pair or planetary set (a few teeth of each member at
 //!   the true centre distance), asked for with `Spec::coupon`.
 //! - [`design`]: design by goal (ranked tooth counts, modules and shifts for a ratio, size and
@@ -40,6 +42,7 @@ pub mod cycloid;
 pub mod elliptic;
 pub mod face_gear;
 pub mod design;
+pub mod equations;
 pub mod geom;
 pub mod hub;
 pub mod hypoid;
@@ -70,6 +73,8 @@ mod tests;
 
 #[cfg(test)]
 mod coupon_tests;
+#[cfg(test)]
+mod equations_tests;
 #[cfg(test)]
 mod mesh_tests;
 #[cfg(test)]

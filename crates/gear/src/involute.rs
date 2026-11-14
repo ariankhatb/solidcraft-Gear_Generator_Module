@@ -325,7 +325,7 @@ pub const FILLET_TOLERANCE: f64 = 2e-3;
 
 /// A generated external tooth: its flank (from the root up) as the tooth's half angle against
 /// radius, split where the fillet meets the involute.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ToothFlank {
     /// Root radius, tip radius actually used (lowered when the tooth would be pointed).
     pub rf: f64,

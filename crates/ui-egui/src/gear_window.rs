@@ -29,7 +29,7 @@ use egui::{Color32, Pos2, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use serde_json::{Value, json};
 use solidcraft_gear::axes::{self, Axis, Derived, Drive, Relation, Solved};
 use solidcraft_gear::geom::{Region, V2};
-use solidcraft_gear::hub::{Bore, BoreKind};
+use solidcraft_gear::hub::{BEARINGS, Bore, BoreKind, Chamfer, Hardware, Shaft, ShaftEnd};
 use solidcraft_gear::design::{Goal, Prefer, Suggestion};
 use solidcraft_gear::involute::BasicRack;
 use solidcraft_gear::mesh2d::{MeshResult, Verdict};
@@ -168,6 +168,10 @@ struct Opts {
     /// Designing for FDM printing: nozzle width (mm) the tooth tips are checked against.
     printing: bool,
     nozzle: f64,
+    /// The print preset's layer height (mm).
+    layer: f64,
+    /// Show the back shaft of gear 1 and of gear 2 (a shaft on each side).
+    dual: [bool; 2],
     /// Show the load inputs for the strength rating.
     load_open: bool,
 }
@@ -273,7 +277,7 @@ fn members(k: Kind) -> &'static [&'static str] {
     match k {
         Kind::Planetary => &["Sun", "Planets", "Ring"],
         Kind::Worm => &["Wheel", "Worm"],
-        Kind::Hypoid => &["Pinion", "Gear"],
+        Kind::Hypoid => &["Pinion", "Ring gear"],
         Kind::Cycloidal => &["Wheel", "Pinion"],
         Kind::CycloidalDrive => &["Disc", "Ring pins"],
         Kind::Pair | Kind::Bevel | Kind::SpiralBevel | Kind::CrossedHelical | Kind::Elliptical => &["Gear 1", "Gear 2"],
@@ -320,6 +324,45 @@ fn member_of_body(k: Kind, only: u8, i: usize, name: &str) -> usize {
     }
 }
 
+/// Spur, helical and herringbone gears ("cyl" in `crates/gear/UI_FIELDS.md`).
+fn cyl(k: Kind) -> bool {
+    matches!(k, Kind::Spur | Kind::Helical | Kind::Herringbone)
+}
+
+/// The tip tuning of the gear crate's `body`: tip rounding, elephant foot, nozzle check, tip
+/// relief (cyl, pair, planetary sun and planets).
+fn tip_tuned(k: Kind) -> bool {
+    cyl(k) || matches!(k, Kind::Pair | Kind::Planetary)
+}
+
+/// Kinds cut from the spec's rack: XY compensation, the clearance override, tip shortening.
+fn rack_tuned(k: Kind) -> bool {
+    cyl(k) || matches!(k, Kind::Internal | Kind::Rack | Kind::Pair | Kind::Planetary | Kind::CrossedHelical | Kind::Hypoid)
+}
+
+/// Kinds whose members are built through the gear crate's `hub_steps`: bores and hub
+/// chamfers, hardware, bearing pockets and shafts.
+fn hub_kind(k: Kind) -> bool {
+    cyl(k) || matches!(k, Kind::Pair | Kind::Planetary | Kind::CrossedHelical | Kind::Worm | Kind::Cycloidal | Kind::Sprocket | Kind::Pulley | Kind::FaceGear | Kind::Elliptical)
+}
+
+/// Which gear of the spec (1: `shaft_*`, `hardware`; 2: `shaft2_*`, `hardware2`) member `m` of
+/// [`members`] is, for the body features; none for a member that takes none (a planetary
+/// ring, a face gear's face gear, a spline, a hypoid).
+fn body_gear(k: Kind, m: usize) -> Option<u8> {
+    let shafts_only = matches!(k, Kind::Bevel | Kind::SpiralBevel);
+    if !(hub_kind(k) || shafts_only) {
+        return None;
+    }
+    match (k, m) {
+        (Kind::FaceGear, 0) | (Kind::Planetary, 2) => None,
+        (Kind::FaceGear, _) => Some(2),
+        (_, 0) => Some(1),
+        (_, 1) if k.is_set() => Some(2),
+        _ => None,
+    }
+}
+
 /// A spec from `gear.create` parameters (as the window keeps its typed numbers with a set).
 fn spec_from(v: &Value) -> Option<Spec> {
     let p: solidcraft_engine::schema::gear::GearParams = serde_json::from_value(v.clone()).ok()?;
@@ -347,7 +390,7 @@ impl GearWindow {
             turned: 0.0,
             speed: 0.4,
             preview_3d: true,
-            opts: Opts { inch: false, advanced: false, printing: false, nozzle: 0.4, load_open: false },
+            opts: Opts { inch: false, advanced: false, printing: false, nozzle: 0.4, layer: 0.2, dual: [false; 2], load_open: false },
             hover_section: None,
             hover_preview: None,
             edited: None,
@@ -381,6 +424,7 @@ impl GearWindow {
                 w.opts.inch = flag("inch");
                 w.opts.printing = flag("printing");
                 w.opts.nozzle = ui.get("nozzle").and_then(Value::as_f64).filter(|n| n.is_finite() && *n > 0.0).unwrap_or(0.4);
+                w.opts.layer = ui.get("layer").and_then(Value::as_f64).filter(|n| n.is_finite() && *n > 0.0).unwrap_or(0.2);
             }
             // Made by a script, or by a window that kept nothing: the set as it is, where it is.
             None => {
@@ -398,6 +442,7 @@ impl GearWindow {
         // The type is the set's: the axes are not asked for another.
         w.last_relation = w.axes.relation().as_ref().map(Relation::name);
         w.opts.load_open = w.spec.load.torque > 0.0 || w.spec.load.power > 0.0;
+        w.opts.dual = [w.spec.shaft_back.exists(), w.spec.shaft2_back.exists()];
         w.editing = Some(Editing { group, name: name.to_string(), bodies: bodies.to_vec() });
         w.planned = None;
         w.replan();
@@ -414,6 +459,7 @@ impl GearWindow {
             "inch": self.opts.inch,
             "printing": self.opts.printing,
             "nozzle": self.opts.nozzle,
+            "layer": self.opts.layer,
         })
     }
 
@@ -431,7 +477,11 @@ impl GearWindow {
         // spec, and `spec` stays what was typed.
         let built = match self.axes.axis(0) {
             None => Ok(self.spec.clone()),
-            Some(a1) => axes::solve(&a1, self.axes.axis(1).as_ref(), Some(self.spec.kind), &self.spec, &self.axes.drive()).map(|solved| {
+            Some(a1) => axes::solve(&a1, self.axes.axis(1).as_ref(), Some(self.spec.kind), &self.spec, &Drive {
+                // A hypoid's size is the ring gear Ø the user gives: the axes never choose its module.
+                module_free: self.axes.auto_module && self.spec.kind != Kind::Hypoid,
+                ..self.axes.drive()
+            }).map(|solved| {
                 let spec = solved.spec.clone();
                 self.solved = Some(solved);
                 spec
@@ -827,7 +877,7 @@ fn axes_step(ui: &mut Ui, w: &mut GearWindow) {
     }
     let rel = w.axes.relation();
     let two = rel.is_some() && w.spec.kind.is_set() && !matches!(w.spec.kind, Kind::Planetary | Kind::CycloidalDrive | Kind::Spline);
-    let picks_module = matches!(w.spec.kind, Kind::Pair | Kind::Worm | Kind::CrossedHelical | Kind::Hypoid);
+    let picks_module = matches!(w.spec.kind, Kind::Pair | Kind::Worm | Kind::CrossedHelical);
     ui.horizontal_wrapped(|ui| {
         ui.add_sized([110.0, 18.0], egui::Label::new(egui::RichText::new("Relation").small().weak()));
         let text = match &rel {
@@ -1223,6 +1273,7 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
                 edited = Some(m);
             }
         }
+        section_chamfers(ui, &mut cx);
         section_tooth_form(ui, &mut cx);
         section_print(ui, &mut cx);
         section_body(ui, &mut cx);
@@ -1243,6 +1294,10 @@ fn section_set(ui: &mut Ui, cx: &mut Cx<'_>) {
     heading(ui, if k.is_set() { "Whole set" } else { "Size" });
     if matches!(k, Kind::Sprocket | Kind::Pulley) {
         wrapped_rows(ui, s, b, d);
+        return;
+    }
+    if k == Kind::Hypoid {
+        hypoid_size(ui, s, b, d);
         return;
     }
     if k == Kind::CycloidalDrive {
@@ -1313,6 +1368,27 @@ fn section_set(ui: &mut Ui, cx: &mut Cx<'_>) {
             num(ui, "Face width", "", &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
         }
     }
+}
+
+/// A hypoid set's size: by the ring gear's diameter (which sets the module), its angles, its
+/// face width and backlash. The axes, when set, decide the shaft angle (and the offset, in
+/// [`section_family`]).
+fn hypoid_size(ui: &mut Ui, s: &mut Spec, b: &Spec, d: Derived) {
+    let mut ring = s.module * f64::from(s.teeth2.max(1));
+    row(ui, "Ring gear Ø", "The ring gear's outer pitch diameter (module × ring gear teeth); sets the module", |ui| {
+        if ui.add(egui::DragValue::new(&mut ring).range(5.0..=10000.0).speed(0.5).max_decimals(3).suffix(" mm")).changed() {
+            s.module = ring / f64::from(s.teeth2.max(1));
+        }
+        ui.label(egui::RichText::new(format!("module {:.4}", s.module)).small().weak());
+    });
+    if d.shaft_angle {
+        locked(ui, "Shaft angle", format!("{:.3}°", b.shaft_angle));
+    } else {
+        num(ui, "Shaft angle", "Angle between the axes; 90° in car axles", &mut s.shaft_angle, 5.0..=175.0, 0.5, "°");
+    }
+    num(ui, "Pressure angle", "Normal pressure angle; 20° is usual", &mut s.pressure_angle, 5.0..=45.0, 0.1, "°");
+    num(ui, "Ring gear face width", "Along the ring gear's teeth; over a third of the cone distance is warned about", &mut s.face_width, 0.1..=5000.0, 0.5, " mm");
+    num(ui, "Backlash", "Taken off each tooth at the pitch circle", &mut s.backlash, 0.0..=5.0, 0.005, " mm");
 }
 
 /// Chain sprockets and timing pulleys: the chain or belt, and the drive between two of them
@@ -1495,11 +1571,29 @@ fn section_family(ui: &mut Ui, cx: &mut Cx<'_>) {
     let s = &mut *cx.s;
     if k == Kind::Hypoid {
         if d.offset {
-            locked(ui, "Offset", mm(b.offset));
+            locked(ui, "Pinion offset", mm(b.offset));
         } else {
-            num(ui, "Offset", "Distance between the axes; 0 for equal spiral angles", &mut s.offset, 0.0..=5000.0, 0.5, " mm");
+            num(
+                ui,
+                "Pinion offset",
+                "Distance between the axes; 0 makes a spiral bevel pair. Car axles use about 10–15% of the ring gear Ø",
+                &mut s.offset,
+                0.0..=5000.0,
+                0.5,
+                " mm",
+            );
         }
-        num(ui, "Face start", "Where the teeth start along the line of contact, from the throat; larger looks more like a bevel", &mut s.face_start, -5000.0..=5000.0, 0.5, " mm");
+        num(ui, "Pinion spiral angle", "Mean spiral angle of the pinion; the ring gear's is smaller by the offset angle. 45–50° is usual", &mut s.spiral_angle, 0.0..=60.0, 0.5, "°");
+        let hand_tip = "Left is usual (car axles: pinion below centre); the ring gear gets the other hand";
+        if d.offset && b.left_hand != s.left_hand {
+            // The axes cross the other way round: the solve took the hand that fits them.
+            locked_note(ui, "Pinion hand", (if b.left_hand { "left" } else { "right" }).to_string(), "to fit how the axes cross");
+        } else {
+            row(ui, "Pinion hand", hand_tip, |ui| {
+                ui.radio_value(&mut s.left_hand, true, "left");
+                ui.radio_value(&mut s.left_hand, false, "right");
+            });
+        }
     }
     match k {
         Kind::Spline => {
@@ -1565,10 +1659,30 @@ fn section_member(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
                 ui.radio_value(&mut left, true, "left");
             });
             s.helix = if left { -1.0 } else { 0.0 };
+            gear2_rows(ui, s, k);
             bore(ui, "Bore", "bore2", &mut s.bore2);
             if rated {
                 material(ui, "Material", "gear_mat2", &mut s.load.material2);
             }
+        }
+        (Kind::Hypoid, 0) => {
+            if d.teeth {
+                locked(ui, "Teeth", b.teeth.to_string());
+            } else {
+                count(ui, "Teeth", "Car axles: 9–13", &mut s.teeth, 3..=s.teeth2.saturating_sub(1).max(3));
+            }
+            num(ui, "Shank Ø", "The pinion's shank; 0: auto", &mut s.hub_diameter, 0.0..=5000.0, 0.2, " mm");
+            num(ui, "Shank length", "0: auto", &mut s.hub_length, 0.0..=5000.0, 0.2, " mm");
+            bore(ui, "Pinion bore", "bore1", &mut s.bore);
+        }
+        (Kind::Hypoid, _) => {
+            if d.teeth2 {
+                locked(ui, "Teeth", b.teeth2.to_string());
+            } else {
+                count(ui, "Teeth", "41 in many car axles", &mut s.teeth2, 4..=2000);
+            }
+            num(ui, "Ring gear web", "Thickness behind the teeth; 0: 6% of its Ø", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
+            bore(ui, "Ring gear bore", "bore2", &mut s.bore2);
         }
         (Kind::Sprocket | Kind::Pulley, 0) => {
             if d.teeth {
@@ -1642,7 +1756,7 @@ fn section_member(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
             } else {
                 count(ui, "Teeth", "", &mut s.teeth, 3..=2000);
             }
-            if k.involute() && !matches!(k, Kind::Worm | Kind::Elliptical) {
+            if k.involute() && !matches!(k, Kind::Worm | Kind::Elliptical | Kind::Hypoid) {
                 num(ui, if k.is_set() { "Shift x₁" } else { "Profile shift x" }, "Profile shift coefficient: positive thickens the root and avoids undercut", &mut s.shift, -1.5..=1.5, 0.01, "");
                 if k == Kind::Pair && d.center_distance && d.shift {
                     locked(ui, "  x₁ (auto while 0)", format!("{:.4}", b.shift));
@@ -1657,6 +1771,9 @@ fn section_member(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
             }
             if k == Kind::Internal {
                 num(ui, "Rim", "Beyond the roots; 0: 3 modules", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
+            }
+            if cyl(k) || k == Kind::Pair {
+                num(ui, "Tip Ø", "The finished tip diameter; 0: from the rack. Only lowers the tips: a larger value, or one leaving under ¼ module of addendum, is ignored with a warning", &mut s.tip_diameter, 0.0..=1e5, 0.1, " mm");
             }
             bore(ui, "Bore", "bore1", &mut s.bore);
             if rated {
@@ -1679,6 +1796,7 @@ fn section_member(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
             } else if matches!(k, Kind::Pair | Kind::Planetary | Kind::CrossedHelical) {
                 num(ui, "Shift x₂", "This gear's profile shift", &mut s.shift2, -1.5..=1.5, 0.01, "");
             }
+            gear2_rows(ui, s, k);
             bore(ui, "Bore", "bore2", &mut s.bore2);
             if rated {
                 material(ui, "Material", "gear_mat2", &mut s.load.material2);
@@ -1687,18 +1805,187 @@ fn section_member(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
     }
 }
 
-/// EXTENSION POINT: a member's integral shaft, or one on each side (diameter, length, end
-/// features), once `Spec` carries them. Member `m` as in [`members`]; rows go under that
-/// member's header.
-fn member_shafts(_ui: &mut Ui, _cx: &mut Cx<'_>, _m: usize) {}
+/// Gear 2's own tip diameter, backlash, face width and face offset, where its kind takes them.
+fn gear2_rows(ui: &mut Ui, s: &mut Spec, k: Kind) {
+    if k == Kind::Pair {
+        num(ui, "Tip Ø", "Gear 2's finished tip diameter; 0: from the rack. Only lowers the tips", &mut s.tip_diameter2, 0.0..=1e5, 0.1, " mm");
+    }
+    if matches!(k, Kind::Pair | Kind::Planetary | Kind::CrossedHelical | Kind::Worm) {
+        let mut own = s.backlash2.is_some();
+        row(ui, "Own backlash", "This gear's own backlash (off: the same as gear 1's); the mesh's backlash is the two added together", |ui| {
+            if ui.checkbox(&mut own, "").changed() {
+                s.backlash2 = own.then_some(s.backlash);
+            }
+            if let Some(b2) = &mut s.backlash2 {
+                ui.add(egui::DragValue::new(b2).range(0.0..=5.0).speed(0.005).max_decimals(4).suffix(" mm"));
+            }
+        });
+    }
+    if k == Kind::Pair {
+        num(ui, "Face width", "Gear 2's own face width; 0: the same as gear 1's", &mut s.face_width2, 0.0..=5000.0, 0.1, " mm");
+        num(ui, "Face offset", "How far gear 2's mid plane sits from gear 1's along the axis; faces that don't overlap are refused", &mut s.face_offset2, -5000.0..=5000.0, 0.1, " mm");
+    }
+}
 
-/// EXTENSION POINT: a member's chamfers (tooth edges on both faces, bore and hub edges), once
-/// `Spec` carries them.
+/// A member's integral shafts: one from the front face (through the hub) and, with Dual shaft
+/// on, one from the back face, each with an optional step, an end feature and an end chamfer.
+fn member_shafts(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
+    let Some(g) = body_gear(cx.k, m) else { return };
+    let s = &mut *cx.s;
+    let dual = &mut cx.o.dual[usize::from(g - 1)];
+    let (front, back) = if g == 1 { (&mut s.shaft_front, &mut s.shaft_back) } else { (&mut s.shaft2_front, &mut s.shaft2_back) };
+    let id = format!("gear_shaft{g}");
+    shaft_rows(ui, "Shaft", "From the front face (the hub's side), through the hub; 0: none", &format!("{id}f"), front);
+    row(ui, "Dual shaft", "A second shaft from the back face", |ui| {
+        if ui.checkbox(dual, "").changed() && !*dual {
+            *back = Shaft::default();
+        }
+    });
+    if *dual {
+        shaft_rows(ui, "Back shaft", "From the back face (on the print bed); a bearing pocket is left out with it", &format!("{id}b"), back);
+    }
+}
+
+fn shaft_rows(ui: &mut Ui, label: &str, tip: &str, id: &str, sh: &mut Shaft) {
+    row(ui, label, tip, |ui| {
+        ui.add(egui::DragValue::new(&mut sh.diameter).range(0.0..=5000.0).speed(0.1).max_decimals(3).prefix("Ø ").suffix(" mm"));
+        ui.add(egui::DragValue::new(&mut sh.length).range(0.0..=10000.0).speed(0.2).max_decimals(3).prefix("L ").suffix(" mm"));
+    });
+    if !sh.exists() {
+        return;
+    }
+    row(ui, "  Step", "A second length beyond the first: smaller for a shoulder, larger for a collar (0: none)", |ui| {
+        ui.add(egui::DragValue::new(&mut sh.step_diameter).range(0.0..=5000.0).speed(0.1).max_decimals(3).prefix("Ø ").suffix(" mm"));
+        ui.add(egui::DragValue::new(&mut sh.step_length).range(0.0..=10000.0).speed(0.2).max_decimals(3).prefix("L ").suffix(" mm"));
+    });
+    row(ui, "  End feature", "What the free end carries; one that doesn't fit is left plain with a warning", |ui| {
+        egui::ComboBox::from_id_salt(id).width(100.0).selected_text(sh.end.name()).show_ui(ui, |ui| {
+            for (e, n) in ShaftEnd::ALL {
+                ui.selectable_value(&mut sh.end, e, n);
+            }
+        });
+    });
+    if sh.end != ShaftEnd::Plain {
+        let size_tip = match sh.end {
+            ShaftEnd::DFlat => "Across the flat; 0: 0.9 × Ø",
+            ShaftEnd::Keyway => "Slot width; 0: DIN 6885",
+            ShaftEnd::Hex => "Across flats; 0: 0.85 × Ø",
+            ShaftEnd::Cross => "Arm width; 0: Ø ÷ 3",
+            _ => "The hole's Ø; 0: 0.3 × Ø",
+        };
+        num(ui, "    Feature length", "Back from the free end (a centre hole: its depth); 0: 1.5 × the end's Ø", &mut sh.end_length, 0.0..=10000.0, 0.1, " mm");
+        num(ui, "    Feature size", size_tip, &mut sh.end_size, 0.0..=5000.0, 0.05, " mm");
+    }
+    num(ui, "  End chamfer", "45° on the free end; 0: none", &mut sh.chamfer, 0.0..=100.0, 0.05, " mm");
+}
+
+/// EXTENSION POINT: a member's own chamfers. The gear crate's chamfers are the set's (both
+/// faces' tooth chamfers, the bores' and the hubs'): they are in [`section_chamfers`].
 fn member_chamfers(_ui: &mut Ui, _cx: &mut Cx<'_>, _m: usize) {}
 
-/// EXTENSION POINT: a member's hub hardware (set screws, nut traps, heat-set inserts, bearing
-/// pockets), once `Spec` carries it.
-fn member_hardware(_ui: &mut Ui, _cx: &mut Cx<'_>, _m: usize) {}
+/// A member's hub hardware (set screws, nut traps, heat-set inserts, a clamp slit) and the
+/// bearing pocket in its back face.
+fn member_hardware(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
+    let k = cx.k;
+    if !hub_kind(k) {
+        return;
+    }
+    let Some(g) = body_gear(k, m) else { return };
+    let s = &mut *cx.s;
+    let hub = s.hub_diameter > 0.0 && s.hub_length > 0.0;
+    let back_shaft = if g == 1 { s.shaft_back.exists() } else { s.shaft2_back.exists() };
+    let h = if g == 1 { &mut s.hardware } else { &mut s.hardware2 };
+    let id = format!("gear_hw{g}");
+    let open = h.set_screw > 0.0 || h.clamp_slit > 0.0 || h.bearing_od > 0.0;
+    egui::CollapsingHeader::new(egui::RichText::new("Hardware").small()).id_salt(&id).default_open(open).show(ui, |ui| {
+        hardware_rows(ui, h, hub, back_shaft, &id);
+    });
+}
+
+fn hardware_rows(ui: &mut Ui, h: &mut Hardware, hub: bool, back_shaft: bool, id: &str) {
+    if !hub {
+        ui.label(egui::RichText::new("Set screws, nut traps, inserts and clamps go in the hub: set Hub Ø and Hub length under Body").small().weak());
+    }
+    ui.add_enabled_ui(hub, |ui| {
+        row(ui, "Set screw Ø", "A radial hole through the hub wall at mid length, over the key or flat; 0: none", |ui| {
+            ui.add(egui::DragValue::new(&mut h.set_screw).range(0.0..=100.0).speed(0.05).max_decimals(3).suffix(" mm"));
+            if h.set_screw > 0.0 {
+                ui.add(egui::DragValue::new(&mut h.set_screws).range(1..=4).speed(0.1).prefix("× "));
+            }
+        });
+        if h.set_screw > 0.0 {
+            row(ui, "  Nut trap", "The captive nut's width across flats (a slot open to the hub's end) and its thickness (0: 0.45 × width)", |ui| {
+                ui.add(egui::DragValue::new(&mut h.nut_width).range(0.0..=100.0).speed(0.05).max_decimals(3).prefix("w ").suffix(" mm"));
+                if h.nut_width > 0.0 {
+                    ui.add(egui::DragValue::new(&mut h.nut_thickness).range(0.0..=100.0).speed(0.05).max_decimals(3).prefix("t ").suffix(" mm"));
+                }
+            });
+            row(ui, "  Heat-set insert", "A pocket at the mouth of each set-screw hole: Ø and depth (0: 0.8 × the hub wall)", |ui| {
+                ui.add(egui::DragValue::new(&mut h.insert_diameter).range(0.0..=100.0).speed(0.05).max_decimals(3).prefix("Ø ").suffix(" mm"));
+                if h.insert_diameter > 0.0 {
+                    ui.add(egui::DragValue::new(&mut h.insert_depth).range(0.0..=100.0).speed(0.05).max_decimals(3).prefix("d ").suffix(" mm"));
+                }
+            });
+        }
+        row(ui, "Clamp slit", "A slit through the hub wall opposite the set screw, down to the face (needs a bore), and a screw hole across it", |ui| {
+            ui.add(egui::DragValue::new(&mut h.clamp_slit).range(0.0..=50.0).speed(0.05).max_decimals(3).prefix("w ").suffix(" mm"));
+            if h.clamp_slit > 0.0 {
+                ui.add(egui::DragValue::new(&mut h.clamp_screw).range(0.0..=50.0).speed(0.05).max_decimals(3).prefix("screw Ø ").suffix(" mm"));
+            }
+        });
+    });
+    let tip = if back_shaft { "Left out while there is a back shaft" } else { "A pocket in the back face; pick a bearing or type its OD and width" };
+    row(ui, "Bearing pocket", tip, |ui| {
+        let current = BEARINGS.iter().find(|(_, _, od, w)| *od == h.bearing_od && *w == h.bearing_width).map(|(n, ..)| *n).unwrap_or(if h.bearing_od > 0.0 { "custom" } else { "none" });
+        egui::ComboBox::from_id_salt(format!("{id}_bearing")).width(80.0).selected_text(current).show_ui(ui, |ui| {
+            if ui.selectable_label(h.bearing_od == 0.0, "none").clicked() {
+                h.bearing_od = 0.0;
+                h.bearing_width = 0.0;
+            }
+            for (name, bore, od, w) in BEARINGS {
+                if ui.selectable_label(current == *name, format!("{name}  ({bore}×{od}×{w})")).clicked() {
+                    h.set_bearing(name);
+                }
+            }
+        });
+    });
+    if h.bearing_od > 0.0 {
+        row(ui, "  OD, width", "The bearing's outer diameter and the pocket's depth", |ui| {
+            ui.add(egui::DragValue::new(&mut h.bearing_od).range(0.0..=1000.0).speed(0.05).max_decimals(3).prefix("Ø ").suffix(" mm"));
+            ui.add(egui::DragValue::new(&mut h.bearing_width).range(0.0..=1000.0).speed(0.05).max_decimals(3).prefix("w ").suffix(" mm"));
+        });
+        num(ui, "  Fit allowance", "How much bigger than the bearing the pocket is made, on the diameter, for a printed fit", &mut h.bearing_fit, 0.0..=2.0, 0.01, " mm");
+    }
+}
+
+/// The set's chamfers: the tooth edges at the tip circle on each face, the bores' ends and the
+/// hubs' outer edges. Not built on bevels (their ends are cones), splines or racks.
+fn section_chamfers(ui: &mut Ui, cx: &mut Cx<'_>) {
+    let k = cx.k;
+    let teeth = (hub_kind(k) && k != Kind::Elliptical) || matches!(k, Kind::Internal | Kind::Planetary);
+    if !(teeth || hub_kind(k)) {
+        return;
+    }
+    let s = &mut *cx.s;
+    heading(ui, "Chamfers");
+    if teeth {
+        chamfer_row(ui, "Front teeth", "The tooth edges at the tip circle on the front face (the hub's side); cut down to fit, with a warning", &mut s.tooth_chamfer_front);
+        chamfer_row(ui, "Back teeth", "The same on the back face (on the bed); helps against elephant foot", &mut s.tooth_chamfer_back);
+    }
+    if hub_kind(k) {
+        num(ui, "Bore", "45° on both ends of the bores; 0: none", &mut s.bore_chamfer, 0.0..=50.0, 0.05, " mm");
+        num(ui, "Hub", "45° on the hub's outer end edge (needs a hub); 0: none", &mut s.hub_chamfer, 0.0..=50.0, 0.05, " mm");
+    }
+}
+
+fn chamfer_row(ui: &mut Ui, label: &str, tip: &str, c: &mut Chamfer) {
+    row(ui, label, tip, |ui| {
+        ui.add(egui::DragValue::new(&mut c.size).range(0.0..=50.0).speed(0.02).max_decimals(3).suffix(" mm"));
+        if c.size > 0.0 {
+            ui.add(egui::DragValue::new(&mut c.angle).range(5.0..=85.0).speed(0.5).max_decimals(1).suffix("° to the face"));
+        }
+    });
+}
 
 /// The tooth form: the basic rack and its coefficients, and the clearance. EXTENSION POINT:
 /// tip relief, crowning, tip rounding and a separate root fillet go here.
@@ -1723,34 +2010,55 @@ fn section_tooth_form(ui: &mut Ui, cx: &mut Cx<'_>) {
         num(ui, "  Dedendum ×m", "", &mut s.rack.dedendum, 0.5..=2.5, 0.01, "");
         num(ui, "  Root radius ×m", "The cutter's tip radius; makes the root fillet", &mut s.rack.root_radius, 0.0..=0.6, 0.01, "");
     }
-    let mut clearance = s.rack.dedendum - s.rack.addendum;
-    row(ui, "Clearance ×m", "Gap between a tooth tip and the mating root, in modules (0.25 standard; 0.3 or more for printed gears)", |ui| {
-        if ui.add(egui::DragValue::new(&mut clearance).range(0.05..=1.0).speed(0.005).max_decimals(3)).changed() {
-            s.rack.dedendum = s.rack.addendum + clearance;
+    let k = cx.k;
+    if rack_tuned(k) {
+        row(ui, "Tip clearance c*", "Gap between a tooth tip and the mating root, in modules: dedendum = addendum + c* (0: the rack's). 0.25 is standard, 0.3 or more for printed gears", |ui| {
+            ui.add(egui::DragValue::new(&mut s.clearance).range(0.0..=1.0).speed(0.005).max_decimals(3));
+            if s.clearance == 0.0 {
+                ui.label(egui::RichText::new(format!("rack's: {:.3}", s.rack.dedendum - s.rack.addendum)).small().weak());
+            }
+        });
+        num(ui, "Tip shortening", "Off every gear's tip radius, on top of what a shifted pair needs", &mut s.tip_shortening, 0.0..=0.5 * s.rack.addendum * s.module, 0.01, " mm");
+    }
+    if tip_tuned(k) {
+        num(ui, "Tip relief", "How far the flank falls away from the involute at the tip; eases teeth into mesh under load. 0: none", &mut s.tip_relief, 0.0..=0.1 * s.module, 0.002, " mm");
+        if s.tip_relief > 0.0 {
+            num(ui, "  Relief height", "Radial height down from the tip it runs over; 0: 0.4 modules", &mut s.tip_relief_height, 0.0..=10.0 * s.module, 0.01, " mm");
         }
-    });
+    }
+    if matches!(k, Kind::Spur | Kind::Pair | Kind::Planetary) && s.helix == 0.0 {
+        num(ui, "Crowning", "Each flank this much thinner at the two faces than at mid face, so slightly misaligned shafts still bear mid face", &mut s.crowning, 0.0..=0.1 * s.module, 0.002, " mm");
+    }
 }
 
 /// Designing for FDM printing: the print preset and the nozzle the tooth tips are checked
 /// against. EXTENSION POINT: the print profile's own fields (XY compensation, elephant-foot
 /// relief, minimum tip thickness, printer presets) go here.
 fn section_print(ui: &mut Ui, cx: &mut Cx<'_>) {
-    if !cx.k.involute() || cx.k == Kind::Spline {
-        return;
-    }
+    let k = cx.k;
     let s = &mut *cx.s;
     let o = &mut *cx.o;
-    row(ui, "3D printing", "Tooth form and checks for FDM printing", |ui| {
-        if ui.toggle_value(&mut o.printing, "print preset").clicked() && o.printing {
-            // Stronger, more forgiving teeth: 25° pressure angle, extra clearance, a full root
-            // fillet, and backlash a printer can hold.
-            s.pressure_angle = 25.0;
-            s.rack = BasicRack::standard("print_fdm").unwrap_or(s.rack);
-            s.backlash = s.backlash.max(0.15);
+    heading(ui, "3D printing");
+    row(ui, "Print preset", "For FDM: the print rack at 25° or more, rounded tips, XY and elephant-foot compensation, backlash that turns freely, a bore chamfer and bearing fit (never lowers what is set). Every value stays editable", |ui| {
+        ui.add(egui::DragValue::new(&mut o.nozzle).range(0.1..=2.0).speed(0.01).max_decimals(2).prefix("nozzle ").suffix(" mm"));
+        ui.add(egui::DragValue::new(&mut o.layer).range(0.04..=1.0).speed(0.01).max_decimals(2).prefix("layer ").suffix(" mm"));
+        if ui.button("Apply").clicked() {
+            s.apply_print_defaults(o.nozzle, o.layer);
+            o.printing = true;
         }
     });
-    if o.printing {
-        num(ui, "  Nozzle width", "Tooth tips thinner than two extrusion widths print badly", &mut o.nozzle, 0.1..=2.0, 0.05, " mm");
+    if tip_tuned(k) {
+        num(ui, "Tip rounding", "Rounds each tip corner, radius in modules (0: sharp); cut down with a warning where the tip is too thin", &mut s.tip_round, 0.0..=0.5, 0.005, " ×m");
+    }
+    if rack_tuned(k) {
+        num(ui, "XY compensation", "Horizontal expansion: the teeth are drawn this far inside where they should print (flanks, tips, roots). Your slicer's over-extrusion per side; tune by measuring the span over k teeth", &mut s.xy_compensation, 0.0..=0.25 * s.module, 0.005, " mm");
+    }
+    if tip_tuned(k) {
+        num(ui, "Elephant foot", "The first layers of the teeth drawn this far inside the rest; 0: none", &mut s.elephant_foot, 0.0..=0.25 * s.module, 0.005, " mm");
+        if s.elephant_foot > 0.0 {
+            num(ui, "  Height", "From the back face (on the bed); usually the first layer. 0: 0.2 mm", &mut s.elephant_foot_height, 0.0..=10.0, 0.01, " mm");
+        }
+        num(ui, "Nozzle check", "Warns when a tip land is under two nozzle widths (0: no check); changes no geometry", &mut s.nozzle, 0.0..=2.0, 0.01, " mm");
     }
 }
 
@@ -1814,7 +2122,7 @@ fn section_output(ui: &mut Ui, cx: &mut Cx<'_>) {
                 Kind::Planetary => &["all", "sun", "planets", "ring"],
                 Kind::Worm => &["both", "wheel", "worm"],
                 Kind::CycloidalDrive => &["both", "disc", "pins"],
-                Kind::Hypoid => &["both", "pinion", "gear"],
+                Kind::Hypoid => &["both", "pinion", "ring gear"],
                 Kind::Cycloidal => &["both", "wheel", "pinion"],
                 Kind::Sprocket => &["both", "sprocket 1", "sprocket 2"],
                 Kind::Pulley => &["both", "pulley 1", "pulley 2"],
@@ -1852,7 +2160,8 @@ fn section_output(ui: &mut Ui, cx: &mut Cx<'_>) {
             }
         });
     } else {
-        row(ui, "Centre at", "Where gear 1's centre goes", |ui| {
+        let tip = if k == Kind::Hypoid { "Where the centre of the ring gear's back face goes" } else { "Where gear 1's centre goes" };
+        row(ui, "Centre at", tip, |ui| {
             for v in &mut s.origin {
                 ui.add(egui::DragValue::new(v).speed(0.5).max_decimals(3));
             }
@@ -1912,14 +2221,6 @@ fn facts(ui: &mut Ui, w: &GearWindow) {
             ui.colored_label(ui.visuals().error_fg_color, e);
         }
         Ok(p) => {
-            if w.opts.printing {
-                for f in p.facts.iter().filter(|f| f.label.ends_with("tip land") && f.value < 2.0 * w.opts.nozzle) {
-                    ui.colored_label(
-                        ui.visuals().warn_fg_color,
-                        format!("⚠ {} {:.2} mm is under two nozzle widths ({:.2} mm): use a larger module or a finer nozzle", f.label, f.value, 2.0 * w.opts.nozzle),
-                    );
-                }
-            }
             for warn in &p.warnings {
                 ui.colored_label(ui.visuals().warn_fg_color, format!("⚠ {warn}"));
             }

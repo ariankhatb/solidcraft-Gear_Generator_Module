@@ -96,7 +96,9 @@ fn nothing_is_added_by_default() {
     for k in Kind::ALL {
         let p = planned(&Spec::defaults_for(k));
         for b in &p.bodies {
-            assert!(!b.steps.iter().any(|st| matches!(st, Step::Placed { .. } | Step::Revolve { .. })), "{k:?}");
+            // (A sprocket's own ISO 606 side chamfer is a revolve; it is on by default.)
+            let revolve_ok = k == Kind::Sprocket;
+            assert!(!b.steps.iter().any(|st| matches!(st, Step::Placed { .. }) || (!revolve_ok && matches!(st, Step::Revolve { .. }))), "{k:?}");
         }
     }
 }
@@ -866,7 +868,10 @@ fn everything_at_once_plans() {
         (s.bore_chamfer, s.hub_chamfer) = (0.4, 0.6);
         s.bore = Bore { kind: BoreKind::DFlat, diameter: 3.0, ..Bore::default() };
         s.bore2 = Bore { kind: BoreKind::Round, diameter: 3.0, ..Bore::default() };
-        (s.hub_diameter, s.hub_length) = (14.0, 8.0);
+        // (A spline's hub diameter is its hub part's outside diameter: left at its default.)
+        if k != Kind::Spline {
+            (s.hub_diameter, s.hub_length) = (14.0, 8.0);
+        }
         s.shaft_back = sh(8.0, ShaftEnd::Hex);
         s.shaft2_front = sh(8.0, ShaftEnd::Keyway);
         s.shaft2_back = sh(7.0, ShaftEnd::DFlat);

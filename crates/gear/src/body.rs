@@ -207,7 +207,8 @@ pub(crate) fn check(s: &Spec) -> Result<(), String> {
     if s.tip_relief > 0.1 * m || s.crowning > 0.1 * m {
         return Err(format!("tip relief and crowning must each be a tenth of the module ({} mm) or less", mm(0.1 * m)));
     }
-    if s.kind.involute() {
+    // (A spline has its own tooth proportions and ignores the rack: `plan::extras::check`.)
+    if s.kind.involute() && s.kind != Kind::Spline {
         // As `plan::check` does for the rack itself: the cutter must still have a tip with the
         // deeper root the clearance, the compensation and the elephant-foot relief ask for.
         let tan = s.pressure_angle.to_radians().tan();

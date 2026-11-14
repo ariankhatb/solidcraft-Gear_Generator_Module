@@ -41,6 +41,8 @@ mod edit;
 mod face;
 mod features;
 mod features_more;
+mod gear;
+pub use gear::{params_of as gear_params_of, spec_of as gear_spec_of};
 mod join_pieces;
 pub(crate) use component::follow_expressed_moves;
 pub use construct::picked_plane_refs;
@@ -369,6 +371,7 @@ pub fn command_specs() -> Vec<&'static CommandSpec> {
     v.extend(sketch_project::COMMANDS.iter());
     v.extend(features::COMMANDS.iter());
     v.extend(features_more::COMMANDS.iter());
+    v.extend(gear::COMMANDS.iter());
     v.extend(cell_grid::COMMANDS.iter());
     v.extend(mesh::COMMANDS.iter());
     v.extend(construct_auto::COMMANDS.iter());

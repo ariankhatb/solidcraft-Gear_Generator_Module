@@ -72,6 +72,7 @@ pub mod edit;
 pub mod end_cap;
 pub mod features;
 pub mod features_more;
+pub mod gear;
 pub mod file;
 pub mod frame;
 pub mod insert_mesh;

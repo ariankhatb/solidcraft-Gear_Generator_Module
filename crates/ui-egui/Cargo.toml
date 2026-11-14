@@ -15,6 +15,7 @@ solidcraft-viewport = { workspace = true }
 solidcore-record = { workspace = true }
 solidcore-tess = { workspace = true }
 solidcraft-engine = { workspace = true }
+solidcraft-gear = { workspace = true }
 solidcraft-control = { workspace = true }
 solidcraft-control-egui = { workspace = true }
 # The UI kit and its components (ribbon, app bar, history bar, navigation bar, view compass,

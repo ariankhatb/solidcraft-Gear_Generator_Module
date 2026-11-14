@@ -1,0 +1,42 @@
+{
+  "ar": {
+    "cmd.gear_create": "مولّد التروس",
+    "cmd.gear_calculate": "حاسبة التروس",
+    "help.gear.create": "يصمم التروس ويبنيها: عدلية وحلزونية ومزدوجة الحلزون وداخلية وجريدية، وأزواجًا ومجموعات كوكبية، وتروسًا مخروطية مستقيمة وحلزونية، وتروسًا هيبويدية بمحور مزاح، وحلزونية متقاطعة، ودودة وعجلتها، وتروسًا دائرية الشكل ومخفضًا دويريًا. يُظهر التعشيق متحركًا مع الأبعاد ونسبة التلامس والتحذيرات، ويبني كل ترس من رسومات وميزات عادية."
+  },
+  "de": {
+    "cmd.gear_create": "Zahnradgenerator",
+    "cmd.gear_calculate": "Zahnradrechner",
+    "help.gear.create": "Entwirft und baut Zahnräder: Stirnräder gerade, schräg und mit Pfeilverzahnung, Hohlräder und Zahnstangen, Radpaare und Planetensätze, gerade und spiralverzahnte Kegelräder, Hypoidräder mit versetzten Achsen, Schraubräder, Schnecke und Schneckenrad, Zykloidenräder und Zykloidgetriebe. Zeigt den Eingriff bewegt mit Maßen, Überdeckung und Warnungen und baut jedes Rad aus gewöhnlichen Skizzen und Features."
+  },
+  "en": {
+    "cmd.gear_create": "Gear Generator",
+    "cmd.gear_calculate": "Gear Calculator",
+    "help.gear.create": "Designs and builds gears: spur, helical and herringbone, internal and rack, pairs and planetary sets, straight and spiral bevels, hypoid (offset-axis bevel) gears, crossed helical, worm and wheel, cycloidal gears and the cycloidal drive. Shows the mesh turning with its sizes, contact ratio and warnings, and builds each gear from ordinary sketches and features."
+  },
+  "he": {
+    "cmd.gear_create": "מחולל גלגלי שיניים",
+    "cmd.gear_calculate": "מחשבון גלגלי שיניים",
+    "help.gear.create": "מתכנן ובונה גלגלי שיניים: ישרים, הליקליים וחץ, פנימיים ומסילות שיניים, זוגות ומערכות פלנטריות, גלגלים חרוטיים ישרים וספירליים, גלגלי היפואיד עם צירים מוסטים, הליקליים מוצלבים, תולע וגלגל תולע, גלגלים ציקלואידיים ומפחית ציקלואידי. מציג את ההשתלבות בתנועה עם המידות, יחס המגע והאזהרות, ובונה כל גלגל מסקיצות ותכונות רגילות."
+  },
+  "ja": {
+    "cmd.gear_create": "歯車ジェネレーター",
+    "cmd.gear_calculate": "歯車計算",
+    "help.gear.create": "歯車を設計して作成します。平歯車、はすば歯車、やまば歯車、内歯車とラック、歯車対と遊星歯車、すぐばかさ歯車とまがりばかさ歯車、軸がずれたハイポイドギヤ、ねじ歯車、ウォームとウォームホイール、サイクロイド歯車とサイクロイド減速機。かみ合いを動かして寸法、かみ合い率、警告とともに表示し、各歯車を通常のスケッチとフィーチャーで作ります。"
+  },
+  "ko": {
+    "cmd.gear_create": "기어 생성기",
+    "cmd.gear_calculate": "기어 계산기",
+    "help.gear.create": "기어를 설계하고 만듭니다. 평기어, 헬리컬 기어, 헤링본 기어, 내접 기어와 랙, 기어 쌍과 유성 기어 세트, 직선 및 스파이럴 베벨 기어, 축이 어긋난 하이포이드 기어, 나사 기어, 웜과 웜휠, 사이클로이드 기어와 사이클로이드 감속기. 치수, 물림률, 경고와 함께 맞물림을 움직여 보여 주고 각 기어를 일반 스케치와 피처로 만듭니다."
+  },
+  "vi": {
+    "cmd.gear_create": "Trình tạo bánh răng",
+    "cmd.gear_calculate": "Máy tính bánh răng",
+    "help.gear.create": "Thiết kế và dựng bánh răng: răng thẳng, răng nghiêng và răng chữ V, bánh răng trong và thanh răng, cặp bánh răng và bộ hành tinh, bánh răng côn răng thẳng và răng cong, bánh răng hypoid có trục lệch, bánh răng nghiêng chéo trục, trục vít và bánh vít, bánh răng cycloid và bộ giảm tốc cycloid. Hiển thị sự ăn khớp chuyển động cùng kích thước, hệ số trùng khớp và cảnh báo, rồi dựng từng bánh răng từ các bản phác và tính năng thông thường."
+  },
+  "zh": {
+    "cmd.gear_create": "齿轮生成器",
+    "cmd.gear_calculate": "齿轮计算器",
+    "help.gear.create": "设计并创建齿轮：直齿、斜齿和人字齿轮，内齿轮和齿条，齿轮副和行星齿轮组，直齿和弧齿锥齿轮，轴线偏置的准双曲面齿轮，交错轴斜齿轮，蜗杆与蜗轮，摆线齿轮和摆线减速器。动态显示啮合及尺寸、重合度和警告，并用普通草图和特征构建每个齿轮。"
+  }
+}

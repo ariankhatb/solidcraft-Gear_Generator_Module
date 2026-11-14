@@ -53,6 +53,7 @@ use serde_json::Value;
 use solidcore_record::Vec3;
 use solidcraft_doc::{Document, Model, ModelState};
 
+pub use cmd::{gear_params_of, gear_spec_of};
 pub use cmd::settings::{MAX_PROFILE_NAME, profile_name};
 pub use cmd::{
     Addition, CommandInfo, CommandSpec, LinkProblem, LinkState, OpenSteps, addition, auto_operation, command_specs, dimension_roles, extrude_reach,

@@ -73,6 +73,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("color", Class::Shared),
     // length display: a millimetre value in a design unit with its decimal places (no dependencies)
     ("display-units", Class::Shared),
+    // gear geometry: involute, cycloidal, bevel, worm and crossed gears as plans of solid steps (no dependencies)
+    ("gear", Class::Shared),
     // the widget handle and rect registry UI components publish into and scenarios/the control channel read (#12936)
     ("ui-registry", Class::Shared),
     // message catalogs' machinery and bidirectional text: lookup, formatting, language choice (#13290)

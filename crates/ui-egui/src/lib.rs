@@ -303,6 +303,7 @@ mod sketch_moving_click_tests;
 pub mod sketch_palette;
 mod sketch_pattern_tree;
 pub mod sketch_report;
+pub mod gear_window;
 #[cfg(test)]
 mod sketch_side_ui_tests;
 mod sketch_state;
@@ -656,6 +657,8 @@ pub struct SolveApp {
     pub design_properties: Option<design_properties::DesignProperties>,
     /// The Sketch report window (`sketch.inspect` from the ribbon), when open.
     pub sketch_report: Option<sketch_report::SketchReport>,
+    /// The Gear Generator window, while open.
+    pub gear_window: Option<gear_window::GearWindow>,
     /// The KiCad import options window, when a board is chosen to open.
     pub kicad_import: Option<kicad_import_dialog::Dialog>,
     /// The Bill of Materials window, when open.
@@ -973,6 +976,7 @@ impl SolveApp {
             params: None,
             design_properties: None,
             sketch_report: None,
+            gear_window: None,
             kicad_import: None,
             bom: None,
             material_card_review: None,
@@ -2306,6 +2310,10 @@ impl SolveApp {
         }
         if id == "sketch.inspect" {
             sketch_report::open(self);
+            return;
+        }
+        if id == "gear.create" {
+            gear_window::open(self);
             return;
         }
         if id == "assembly.bom" {
@@ -3868,6 +3876,7 @@ impl SolveApp {
         params_dialog::show(self, ui.ctx());
         design_properties::show(self, ui.ctx());
         sketch_report::show(self, ui.ctx());
+        gear_window::show(self, ui.ctx());
         material_card_review::show(self, ui.ctx());
         recovery_ui::show(self, ui.ctx());
         mesh_units::show(self, ui.ctx());

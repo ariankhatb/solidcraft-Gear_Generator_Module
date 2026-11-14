@@ -5901,6 +5901,7 @@ dependencies = [
  "solidcraft-color",
  "solidcraft-control",
  "solidcraft-doc",
+ "solidcraft-gear",
  "solidcraft-geom",
  "solidcraft-io",
  "solidcraft-kernel",
@@ -5922,6 +5923,10 @@ dependencies = [
  "sha2 0.10.9",
  "zip",
 ]
+
+[[package]]
+name = "solidcraft-gear"
+version = "0.42.0"
 
 [[package]]
 name = "solidcraft-geom"
@@ -6156,6 +6161,7 @@ dependencies = [
  "solidcraft-control",
  "solidcraft-control-egui",
  "solidcraft-engine",
+ "solidcraft-gear",
  "solidcraft-gpu",
  "solidcraft-look",
  "solidcraft-space-mouse",

@@ -158,6 +158,30 @@ impl CycloidalDrive {
         }
         Outline { segs }
     }
+    /// Whether the pins are too big for the lobes: the profile (the pin centres' path on the
+    /// disc, offset by the pin radius) doubles back on itself where the path bends tighter than
+    /// a pin.
+    pub fn undercut(&self) -> bool {
+        let n = f64::from(self.pins);
+        let (rr, rp, e) = (self.pin_circle_radius, self.pin_radius + self.clearance, self.eccentricity);
+        let path = |t: f64| V2::new(rr * t.cos() - e * (n * t).cos(), -rr * t.sin() + e * (n * t).sin());
+        let profile = |t: f64| {
+            let psi = ((1.0 - n) * t).sin().atan2(rr / (e * n) - ((1.0 - n) * t).cos());
+            path(t) + V2::new(-rp * (t + psi).cos(), rp * (t + psi).sin())
+        };
+        let period = TAU / f64::from(self.lobes().max(1));
+        let steps = 720;
+        let h = period / steps as f64;
+        (0..steps).any(|i| {
+            let t = h * i as f64;
+            let (a, b) = (path(t + h) - path(t), profile(t + h) - profile(t));
+            !(a.dot(b) > 0.02 * a.dot(a))
+        })
+    }
+    /// The disc's smallest radius (the bottom of a valley between lobes).
+    pub fn valley_radius(&self) -> f64 {
+        self.pin_circle_radius - self.pin_radius - self.clearance - self.eccentricity
+    }
     /// The largest eccentricity before the profile loops (cusps): e < rr / N roughly, and the
     /// pin must fit its curvature.
     pub fn max_eccentricity(&self) -> f64 {

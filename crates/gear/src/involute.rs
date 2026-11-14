@@ -141,14 +141,19 @@ impl Involute {
     pub fn base_pitch(&self) -> f64 {
         PI * self.mt() * self.alpha_t().cos()
     }
-    /// Span measurement over k teeth (Wildhaber) with the k that touches near the pitch circle.
+    /// Span (base tangent) measurement over k teeth, with the k whose anvils touch the flanks
+    /// nearest mid height (the usual tables' rule; for a shifted gear that is the circle through
+    /// r + x·mn, so k grows with the shift).
     pub fn span(&self) -> (u32, f64) {
         let an = self.pressure_angle;
         let at = self.alpha_t();
-        let bb = (self.helix.sin() * an.cos()).asin();
         let z = self.z();
-        // Virtual tooth count for helical gears.
-        let k = ((z * at.tan() / bb.cos().powi(2) - z * inv(at) - 2.0 * self.shift * an.tan()) / PI + 0.5).round().max(1.0);
+        let (sb, cb) = self.helix.sin_cos();
+        let f = self.shift / z;
+        let q = cb * cb + an.tan().powi(2);
+        let reach = (q * (1.0 / cb + 2.0 * f).powi(2) - 1.0).max(0.0).sqrt();
+        let ideal = z / PI * ((1.0 + sb * sb / q) * reach - inv(at) - 2.0 * f * an.tan()) + 0.5;
+        let k = if ideal.is_finite() { ideal.round().clamp(1.0, (z - 1.0).max(1.0)) } else { 1.0 };
         let w = self.module * an.cos() * (PI * (k - 0.5) + z * inv(at)) + 2.0 * self.shift * self.module * an.sin() - self.backlash * an.cos() * self.helix.cos();
         (k as u32, w)
     }
@@ -255,13 +260,16 @@ impl Cutter {
 struct Generated {
     cutter: Cutter,
     curves: [Vec<V2>; 3],
+    /// The samples' distances from the centre.
+    radii: [Vec<f64>; 3],
 }
 
 impl Generated {
     fn new(g: &Involute) -> Self {
         let cutter = Cutter::new(g);
-        let curves = [0, 1, 2].map(|k| (0..=CUTTER_SAMPLES[k]).map(|i| cutter.gear(k, i as f64 / CUTTER_SAMPLES[k] as f64)).collect());
-        Generated { cutter, curves }
+        let curves: [Vec<V2>; 3] = [0, 1, 2].map(|k| (0..=CUTTER_SAMPLES[k]).map(|i| cutter.gear(k, i as f64 / CUTTER_SAMPLES[k] as f64)).collect());
+        let radii = [0, 1, 2].map(|k| curves[k].iter().map(|q| q.len()).collect());
+        Generated { cutter, curves, radii }
     }
     /// The space's half angle at radius `rr`: the largest angle any generated curve reaches
     /// there (each crossing refined on the cutter itself), and which curve (0 tip, 1 fillet,
@@ -270,8 +278,9 @@ impl Generated {
         let mut best: Option<(f64, usize)> = None;
         for (k, c) in self.curves.iter().enumerate() {
             let n = c.len() - 1;
+            let radii = &self.radii[k];
             for i in 0..n {
-                let (ra, rb) = (c[i].len(), c[i + 1].len());
+                let (ra, rb) = (radii[i], radii[i + 1]);
                 if (ra - rr) * (rb - rr) > 0.0 || (ra - rb).abs() <= 1e-12 * rr {
                     continue;
                 }
@@ -305,9 +314,11 @@ fn psi(p: V2) -> f64 {
     p.x.atan2(p.y)
 }
 
-/// The most a tooth side's fit point spline may stray from the exact curve, in modules
-/// (0.25 µm per mm of module).
-pub const PROFILE_TOLERANCE: f64 = 2.5e-4;
+/// The most a working flank's fit point spline may stray from the exact curve, in modules
+/// (0.6 µm per mm of module; root fillets, which nothing runs on, get [`FILLET_TOLERANCE`]).
+pub const PROFILE_TOLERANCE: f64 = 6e-4;
+/// The most a root fillet's spline may stray from the generated trochoid, in modules.
+pub const FILLET_TOLERANCE: f64 = 2e-3;
 
 /// A generated external tooth: its flank (from the root up) as the tooth's half angle against
 /// radius, split where the fillet meets the involute.
@@ -456,7 +467,7 @@ pub fn external_flank(g: &Involute) -> ToothFlank {
     };
     // Bunched towards the root, where the fillet runs nearly round the root circle.
     let span = handover - rf;
-    let mut fillet = if span > 0.0 { side_points(&fillet_half, &|s| if s >= 1.0 { handover } else { rf + span * s * s }, tol, min_gap) } else { Vec::new() };
+    let mut fillet = if span > 0.0 { side_points(&fillet_half, &|s| if s >= 1.0 { handover } else { rf + span * s * s }, FILLET_TOLERANCE * m, min_gap) } else { Vec::new() };
     // The involute by its roll angle (the points crowd towards the base circle, where it
     // bends most).
     let t_of = |rr: f64| ((rr / rb).powi(2) - 1.0).max(0.0).sqrt();
@@ -732,7 +743,7 @@ pub fn mesh_internal(pinion: &Involute, ring: &Internal, face: f64) -> Mesh {
         overlap_ratio: eb,
         total_contact_ratio: ea + eb,
         clearance_1: ring.r_root() - aw - ra1,
-        clearance_2: aw + ra2 - pinion.rf(),
+        clearance_2: ra2 - aw - pinion.rf(),
         ratio: z2 / z1,
     }
 }

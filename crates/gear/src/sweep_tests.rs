@@ -124,57 +124,13 @@ pub(crate) fn random_spec(r: &mut Rng, kind: Kind) -> Spec {
 // ---------------------------------------------------------------------------------------------
 // Geometry checks.
 
-/// Hermite pieces of the kernel's fit point spline: natural cubic, chord-length parameters
-/// (the same interpolation as the sketch crate's `fit_spans`).
-pub(crate) fn natural_spline(p: &[V2], per_span: usize) -> Vec<V2> {
-    let n = p.len();
-    if n < 3 {
-        return p.to_vec();
-    }
-    let h: Vec<f64> = p.windows(2).map(|w| w[0].dist(w[1]).max(1e-12)).collect();
-    let m = n - 2;
-    let (mut diag, mut up, mut low, mut rhs) = (vec![0.0; m], vec![0.0; m], vec![0.0; m], vec![V2::ZERO; m]);
-    for i in 0..m {
-        let (h0, h1) = (h[i], h[i + 1]);
-        diag[i] = 2.0 * (h0 + h1);
-        low[i] = h0;
-        up[i] = h1;
-        rhs[i] = ((p[i + 2] - p[i + 1]) * (1.0 / h1) - (p[i + 1] - p[i]) * (1.0 / h0)) * 6.0;
-    }
-    for i in 1..m {
-        let w = low[i] / diag[i - 1];
-        diag[i] -= w * up[i - 1];
-        rhs[i] = rhs[i] - rhs[i - 1] * w;
-    }
-    let mut sol = vec![V2::ZERO; m];
-    for i in (0..m).rev() {
-        let next = if i + 1 < m { sol[i + 1] * up[i] } else { V2::ZERO };
-        sol[i] = (rhs[i] - next) * (1.0 / diag[i]);
-    }
-    let mm = |i: usize| if i == 0 || i == n - 1 { V2::ZERO } else { sol[i - 1] };
-    let mut out = vec![p[0]];
-    for i in 0..n - 1 {
-        let hi = h[i];
-        let slope = (p[i + 1] - p[i]) * (1.0 / hi);
-        let d0 = (slope - (mm(i) * 2.0 + mm(i + 1)) * (hi / 6.0)) * hi;
-        let d1 = (slope + (mm(i) + mm(i + 1) * 2.0) * (hi / 6.0)) * hi;
-        for k in 1..=per_span {
-            let s = k as f64 / per_span as f64;
-            let (s2, s3) = (s * s, s * s * s);
-            let q = p[i] * (2.0 * s3 - 3.0 * s2 + 1.0) + d0 * (s3 - 2.0 * s2 + s) + p[i + 1] * (-2.0 * s3 + 3.0 * s2) + d1 * (s3 - s2);
-            out.push(q);
-        }
-    }
-    out
-}
-
 /// The outline as a closed polyline (last point = first), splines as the kernel fits them.
 fn polyline(o: &Outline, tol: f64) -> Vec<V2> {
     let mut out: Vec<V2> = Vec::new();
     for s in &o.segs {
         let mut pts = Vec::new();
         match s {
-            Seg::Spline(p) => pts = natural_spline(p, 4),
+            Seg::Spline(p) => crate::geom::natural_spline(p, 4, &mut pts),
             other => other.sample(tol, &mut pts),
         }
         if !out.is_empty() && !pts.is_empty() {
@@ -273,8 +229,9 @@ fn first_crossing(loops: &[&[V2]], eps: f64) -> Option<(usize, V2)> {
 
 fn inside(p: V2, poly: &[V2]) -> bool {
     let mut c = false;
-    for w in poly.windows(2) {
-        let (a, b) = (w[0], w[1]);
+    // Closed whatever the last point is (a sampled circle's last point misses its first by a hair).
+    for i in 0..poly.len() {
+        let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
         if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
             c = !c;
         }
@@ -586,60 +543,6 @@ fn sweep(kinds: &[Kind], per_kind: usize, seed: u64) {
 }
 
 #[test]
-#[ignore]
-fn diag_external() {
-    use crate::involute::{Involute, external_outline};
-    let mut r = Rng(7);
-    let mut shown = 0;
-    for i in 0..20000 {
-        let s = random_spec(&mut r, Kind::Helical);
-        let g = Involute {
-            teeth: s.teeth,
-            module: 1.0,
-            pressure_angle: s.pressure_angle.to_radians(),
-            helix: s.helix.to_radians(),
-            shift: s.shift,
-            rack: s.rack,
-            backlash: s.backlash / s.module,
-            tip_shortening: 0.0,
-            virtual_teeth: 0.0,
-        };
-        if crate::plan::check(&Spec { module: 1.0, ..s.clone() }).is_err() {
-            continue;
-        }
-        let (o, f) = external_outline(&g, 0.0);
-        if let Err(e) = check_outline(&o) {
-            if shown < 25 {
-                eprintln!(
-                    "#{i} z{} a{:.1} b{:.1} x{:.2} rack({:.2},{:.2},{:.2}) bl{:.3}: {e}\n   rf {:.4} ra {:.4} root_half {:.4} tip_half {:.4} fillet {} flank {} uc{} pt{}",
-                    g.teeth,
-                    s.pressure_angle,
-                    s.helix,
-                    g.shift,
-                    g.rack.addendum,
-                    g.rack.dedendum,
-                    g.rack.root_radius,
-                    g.backlash,
-                    f.rf,
-                    f.ra,
-                    f.root_half,
-                    f.tip_half,
-                    f.fillet.len(),
-                    f.flank.len(),
-                    f.undercut,
-                    f.pointed
-                );
-                if shown < 6 {
-                    eprintln!("   fillet {:?}\n   flank {:?}", f.fillet, f.flank);
-                }
-            }
-            shown += 1;
-        }
-    }
-    eprintln!("{shown} bad");
-}
-
-#[test]
 fn sweep_parallel_axis_kinds() {
     sweep(&[Kind::Spur, Kind::Helical, Kind::Herringbone, Kind::Internal, Kind::Rack, Kind::Pair, Kind::Planetary], 400, 1);
 }
@@ -652,4 +555,96 @@ fn sweep_bevel_and_crossed_kinds() {
 #[test]
 fn sweep_cycloidal_kinds() {
     sweep(&[Kind::Cycloidal, Kind::CycloidalDrive], 600, 3);
+}
+
+/// `plan` stays interactive for big gears: under 50 ms for 400 teeth of any kind.
+#[test]
+fn big_gears_plan_quickly() {
+    for kind in Kind::ALL {
+        let mut s = Spec::defaults_for(kind);
+        s.teeth = 400;
+        s.teeth2 = 400;
+        s.teeth3 = 0;
+        s.pins = 200;
+        s.pin_circle = 600.0;
+        s.pin_diameter = 4.0;
+        s.eccentricity = 0.8;
+        s.face_width = 20.0;
+        s.rack_teeth = 400;
+        if kind == Kind::Planetary {
+            s.teeth2 = 200;
+            s.planets = 6;
+        }
+        let mut best = f64::INFINITY;
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            let p = plan(&s).unwrap_or_else(|e| panic!("{kind:?}: {e}"));
+            best = best.min(t.elapsed().as_secs_f64() * 1e3);
+            assert!(!p.bodies.is_empty());
+        }
+        let points: usize = match plan(&s).unwrap().bodies[0].steps.first() {
+            Some(Step::Prism { region, .. }) => region.outer.iter().chain(&region.holes).flat_map(|o| &o.segs).map(|g| if let Seg::Spline(p) = g { p.len() } else { 2 }).sum(),
+            _ => 0,
+        };
+        eprintln!("timing {kind:?}: {best:.2} ms, first sketch {points} points");
+        assert!(best < 50.0, "{kind:?} took {best:.1} ms");
+    }
+}
+
+/// The slowest shapes the sweeps found (a bevel wheel near a crown gear, a fine herringbone).
+#[test]
+fn awkward_gears_plan_quickly() {
+    let mut bevel = Spec::defaults_for(Kind::Bevel);
+    (bevel.teeth, bevel.teeth2) = (15, 100);
+    let mut herringbone = Spec::defaults_for(Kind::Herringbone);
+    (herringbone.teeth, herringbone.shift, herringbone.pressure_angle) = (26, -0.3, 14.5);
+    let mut planetary = Spec::defaults_for(Kind::Planetary);
+    (planetary.teeth, planetary.teeth2, planetary.teeth3, planetary.planets) = (337, 373, 1083, 8);
+    for s in [bevel, herringbone, planetary] {
+        let mut best = f64::INFINITY;
+        for _ in 0..5 {
+            let t = std::time::Instant::now();
+            plan(&s).unwrap_or_else(|e| panic!("{:?}: {e}", s.kind));
+            best = best.min(t.elapsed().as_secs_f64() * 1e3);
+        }
+        eprintln!("timing awkward {:?}: {best:.2} ms", s.kind);
+        assert!(best < 50.0, "{:?} took {best:.1} ms", s.kind);
+    }
+}
+
+/// Impossible inputs are refused with a message that names the value and the way out.
+#[test]
+fn impossible_inputs_are_refused_clearly() {
+    let refusal = |edit: &dyn Fn(&mut Spec), kind: Kind| -> String {
+        let mut s = Spec::defaults_for(kind);
+        edit(&mut s);
+        plan(&s).err().unwrap_or_else(|| panic!("{kind:?} should be refused"))
+    };
+    let has = |e: String, words: &[&str]| assert!(words.iter().all(|w| e.contains(w)), "{e}");
+    has(refusal(&|s| (s.pressure_angle, s.rack.dedendum) = (35.0, 1.25), Kind::Spur), &["pointed", "dedendum"]);
+    has(refusal(&|s| (s.teeth, s.shift) = (5, -1.0), Kind::Spur), &["5 teeth", "profile shift"]);
+    has(refusal(&|s| (s.teeth, s.shift) = (3, -0.9), Kind::Spur), &["root circle", "more teeth"]);
+    has(refusal(&|s| s.bore = Bore { kind: BoreKind::Round, diameter: 36.0, ..Bore::default() }, Kind::Spur), &["bore", "tooth roots"]);
+    has(refusal(&|s| s.backlash = 2.0, Kind::Spur), &["backlash"]);
+    has(refusal(&|s| s.shift = f64::NAN, Kind::Spur), &["profile shift"]);
+    has(refusal(&|s| s.rack_height = 1.0, Kind::Rack), &["rack height"]);
+    has(refusal(&|s| (s.shaft_angle, s.teeth, s.teeth2) = (150.0, 40, 12), Kind::Bevel), &["cone angle"]);
+    has(refusal(&|s| (s.shaft_angle, s.helix) = (170.0, -45.0), Kind::CrossedHelical), &["helix angle"]);
+    has(refusal(&|s| s.worm_diameter = 3.0, Kind::Worm), &["worm", "diameter"]);
+    has(refusal(&|s| (s.starts, s.worm_diameter) = (6, 9.0), Kind::Worm), &["lead angle"]);
+    has(refusal(&|s| s.teeth3 = 19, Kind::Planetary), &["ring teeth"]);
+    has(refusal(&|s| s.eccentricity = 2.6, Kind::CycloidalDrive), &["eccentricity"]);
+    has(refusal(&|s| s.pin_diameter = 16.0, Kind::CycloidalDrive), &["pins overlap"]);
+    has(refusal(&|s| (s.pin_diameter, s.eccentricity) = (14.0, 2.3), Kind::CycloidalDrive), &["too big"]);
+    has(refusal(&|s| (s.teeth, s.shift) = (3, -1.0), Kind::Internal), &["internal teeth"]);
+    // Lightening holes that don't fit are left out with a note rather than overlapping.
+    let mut s = Spec::defaults_for(Kind::Spur);
+    (s.teeth, s.holes, s.hole_diameter) = (60, 12, 40.0);
+    let p = plan(&s).unwrap();
+    assert!(p.warnings.iter().any(|w| w.contains("left out")), "{:?}", p.warnings);
+    check_plan(&p).unwrap();
+    s.hole_diameter = 0.0;
+    let p = plan(&s).unwrap();
+    assert!(p.warnings.is_empty() && p.bodies[0].steps.len() == 2, "{:?}", p.warnings);
+    check_plan(&p).unwrap();
 }

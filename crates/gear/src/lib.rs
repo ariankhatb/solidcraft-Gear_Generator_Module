@@ -22,6 +22,8 @@ pub use geom::{Outline, Region, Seg, V2};
 pub use plan::{Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit, plan};
 
 #[cfg(test)]
+mod accuracy_tests;
+#[cfg(test)]
 mod sweep_tests;
 #[cfg(test)]
 mod tests;

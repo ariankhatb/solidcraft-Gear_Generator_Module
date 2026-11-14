@@ -266,7 +266,15 @@ pub fn fit_profile(half: &dyn Fn(f64) -> f64, grade: &dyn Fn(f64) -> f64, tol: f
                 if j == 0 { 0.0 } else if j == n { 1.0 } else { s_at(u) }
             })
             .collect();
-        let fit: Vec<(f64, f64)> = ss.iter().map(|s| if *s == 0.0 { dense[0] } else if *s == 1.0 { dense[DENSE] } else { at(*s) }).collect();
+        // Between the dense samples by a straight line while searching (they are close enough
+        // to judge the count by); the points returned are exact.
+        let between = |s: f64| -> (f64, f64) {
+            let x = (s * DENSE as f64).clamp(0.0, DENSE as f64);
+            let i = (x.floor() as usize).min(DENSE - 1);
+            let f = x - i as f64;
+            (dense[i].0 + (dense[i + 1].0 - dense[i].0) * f, dense[i].1 + (dense[i + 1].1 - dense[i].1) * f)
+        };
+        let fit: Vec<(f64, f64)> = ss.iter().map(|s| between(*s)).collect();
         let q: Vec<V2> = fit.iter().map(|(r, h)| V2::polar(*r, *h)).collect();
         let mut sharpest: f64 = 0.0;
         for w in q.windows(3) {
@@ -295,8 +303,9 @@ pub fn fit_profile(half: &dyn Fn(f64) -> f64, grade: &dyn Fn(f64) -> f64, tol: f
                 worst = worst.max(d);
             }
         }
-        best = fit;
-        if worst <= tol && sharpest <= 30f64.to_radians() {
+        let done = worst <= tol && sharpest <= 30f64.to_radians();
+        if done || n >= max.max(min.max(1)) {
+            best = ss.iter().map(|s| if *s == 0.0 { dense[0] } else if *s == 1.0 { dense[DENSE] } else { at(*s) }).collect();
             break;
         }
     }

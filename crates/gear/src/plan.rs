@@ -15,7 +15,7 @@ use crate::octoid::Crown;
 use crate::worm::Hob;
 use crate::spline::SplineStandard;
 
-mod extras;
+pub(crate) mod extras;
 
 /// Gear set types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]

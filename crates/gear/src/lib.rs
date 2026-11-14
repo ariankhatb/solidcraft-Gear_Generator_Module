@@ -58,6 +58,7 @@ pub mod pulley;
 pub mod spline;
 pub mod sprocket;
 pub mod sheet;
+pub mod simple;
 pub mod sketch_rules;
 pub mod strength;
 pub mod worm;

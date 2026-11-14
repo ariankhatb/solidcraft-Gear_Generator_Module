@@ -141,14 +141,19 @@ impl Involute {
     pub fn base_pitch(&self) -> f64 {
         PI * self.mt() * self.alpha_t().cos()
     }
-    /// Span measurement over k teeth (Wildhaber) with the k that touches near the pitch circle.
+    /// Span (base tangent) measurement over k teeth, with the k whose anvils touch the flanks
+    /// nearest mid height (the usual tables' rule; for a shifted gear that is the circle through
+    /// r + x·mn, so k grows with the shift).
     pub fn span(&self) -> (u32, f64) {
         let an = self.pressure_angle;
         let at = self.alpha_t();
-        let bb = (self.helix.sin() * an.cos()).asin();
         let z = self.z();
-        // Virtual tooth count for helical gears.
-        let k = ((z * at.tan() / bb.cos().powi(2) - z * inv(at) - 2.0 * self.shift * an.tan()) / PI + 0.5).round().max(1.0);
+        let (sb, cb) = self.helix.sin_cos();
+        let f = self.shift / z;
+        let q = cb * cb + an.tan().powi(2);
+        let reach = (q * (1.0 / cb + 2.0 * f).powi(2) - 1.0).max(0.0).sqrt();
+        let ideal = z / PI * ((1.0 + sb * sb / q) * reach - inv(at) - 2.0 * f * an.tan()) + 0.5;
+        let k = if ideal.is_finite() { ideal.round().clamp(1.0, (z - 1.0).max(1.0)) } else { 1.0 };
         let w = self.module * an.cos() * (PI * (k - 0.5) + z * inv(at)) + 2.0 * self.shift * self.module * an.sin() - self.backlash * an.cos() * self.helix.cos();
         (k as u32, w)
     }
@@ -174,61 +179,134 @@ struct CutterPt {
     nv: f64,
 }
 
-/// The candidate curves the cutter generates for the right side of the tooth space centred on
-/// +y: tip flat (root), fillet (trochoid) and flank (involute), each as gear points.
-fn generated(g: &Involute) -> [Vec<V2>; 3] {
-    generated_with(g, 60)
+/// The rack cutter generating the right side of the tooth space centred on +y, in the
+/// transverse plane: its tip flat (cuts the root), tip fillet (cuts the trochoid) and straight
+/// flank (cuts the involute), each a curve with a parameter from 0 to 1.
+struct Cutter {
+    r: f64,
+    datum: f64,
+    hc: f64,
+    uc: f64,
+    vc: f64,
+    rho: f64,
+    fillet_end: f64,
+    tan_at: f64,
+    normal: (f64, f64),
+    flank_start: (f64, f64),
+    v_top: f64,
 }
 
-/// [`generated`] with `fillet_steps` points round the cutter's tip radius (more for a fillet
-/// whose curvature is to be measured).
-fn generated_with(g: &Involute, fillet_steps: usize) -> [Vec<V2>; 3] {
-    let mn = g.module;
-    let at = g.alpha_t();
-    let r = g.r();
-    let pt = PI * g.mt();
-    let hc = g.rack.dedendum * mn;
-    let datum = r + g.shift * mn;
-    // Fillet: tangent to the tip line and the flank; no bigger than the tip allows.
-    let u_tip_corner = pt / 4.0 - hc * at.tan();
-    // Largest radius whose centre still sits right of the tooth middle (full round tip).
-    let rho_max = (u_tip_corner.max(0.0)) / (1.0 / at.cos() - at.tan()).max(1e-9);
-    let rho = (g.rack.root_radius * mn).min(rho_max * 0.999).max(1e-7);
-    let vc = -hc + rho;
-    let uc = pt / 4.0 + vc * at.tan() - rho / at.cos();
-    let n_flank = (at.cos(), -at.sin());
+/// Coarse samples per cutter curve (tip flat, fillet, flank), refined where a radius is wanted.
+const CUTTER_SAMPLES: [usize; 3] = [8, 60, 120];
 
-    let mut tip = Vec::new();
-    let steps = 8;
-    for i in 0..=steps {
-        tip.push(CutterPt { u: uc.max(0.0) * i as f64 / steps as f64, v: -hc, nu: 0.0, nv: -1.0 });
+impl Cutter {
+    fn new(g: &Involute) -> Self {
+        let mn = g.module;
+        let at = g.alpha_t();
+        let r = g.r();
+        let pt = PI * g.mt();
+        let hc = g.rack.dedendum * mn;
+        // Fillet: tangent to the tip line and the flank; no bigger than the tip allows.
+        let u_tip_corner = pt / 4.0 - hc * at.tan();
+        // Largest radius whose centre still sits right of the tooth middle (full round tip).
+        let rho_max = (u_tip_corner.max(0.0)) / (1.0 / at.cos() - at.tan()).max(1e-9);
+        let rho = (g.rack.root_radius * mn).min(rho_max * 0.999).max(1e-7);
+        let vc = -hc + rho;
+        let uc = pt / 4.0 + vc * at.tan() - rho / at.cos();
+        let normal = (at.cos(), -at.sin());
+        Cutter {
+            r,
+            datum: r + g.shift * mn,
+            hc,
+            uc,
+            vc,
+            rho,
+            fillet_end: normal.1.atan2(normal.0),
+            tan_at: at.tan(),
+            normal,
+            flank_start: (uc + rho * normal.0, vc + rho * normal.1),
+            v_top: (g.rack.addendum + g.rack.dedendum) * mn,
+        }
     }
-    let mut fillet = Vec::new();
-    // From straight down (−π/2) to the flank normal.
-    let a0 = -PI / 2.0;
-    let a1 = n_flank.1.atan2(n_flank.0);
-    let steps = fillet_steps.max(4);
-    for i in 0..=steps {
-        let a = a0 + (a1 - a0) * i as f64 / steps as f64;
-        fillet.push(CutterPt { u: uc + rho * a.cos(), v: vc + rho * a.sin(), nu: a.cos(), nv: a.sin() });
+    /// The cutter point at `t` along curve `k` (0 tip flat, 1 fillet, 2 flank).
+    fn point(&self, k: usize, t: f64) -> CutterPt {
+        match k {
+            0 => CutterPt { u: self.uc.max(0.0) * t, v: -self.hc, nu: 0.0, nv: -1.0 },
+            1 => {
+                // From straight down (−π/2) round to the flank's normal.
+                let a = -PI / 2.0 + (self.fillet_end + PI / 2.0) * t;
+                let (s, c) = a.sin_cos();
+                CutterPt { u: self.uc + self.rho * c, v: self.vc + self.rho * s, nu: c, nv: s }
+            }
+            _ => {
+                let (fu, fv) = self.flank_start;
+                let v = fv + (self.v_top - fv) * t;
+                CutterPt { u: fu + (v - fv) * self.tan_at, v, nu: self.normal.0, nv: self.normal.1 }
+            }
+        }
     }
-    let mut flank = Vec::new();
-    let (fu, fv) = (uc + rho * n_flank.0, vc + rho * n_flank.1);
-    let v_top = (g.rack.addendum + g.rack.dedendum) * mn;
-    let steps = 120;
-    for i in 0..=steps {
-        let v = fv + (v_top - fv) * i as f64 / steps as f64;
-        let u = fu + (v - fv) * at.tan();
-        flank.push(CutterPt { u, v, nu: n_flank.0, nv: n_flank.1 });
+    /// The gear point the cutter point at `t` along curve `k` cuts: where its normal passes
+    /// through the pitch point as the rack rolls on the pitch circle.
+    fn gear(&self, k: usize, t: f64) -> V2 {
+        let c = self.point(k, t);
+        let y = self.datum + c.v;
+        let s = if c.nv.abs() > 1e-12 { (y - self.r) * c.nu / c.nv - c.u } else { -c.u };
+        V2::new(c.u + s, y).rot(s / self.r)
     }
-    let map = |c: &CutterPt| -> V2 {
-        let y = datum + c.v;
-        // The normal through the pitch point (0, r): the rack's displacement s.
-        let s = if c.nv.abs() > 1e-12 { (y - r) * c.nu / c.nv - c.u } else { -c.u };
-        let x = c.u + s;
-        V2::new(x, y).rot(s / r)
-    };
-    [tip.iter().map(map).collect(), fillet.iter().map(map).collect(), flank.iter().map(map).collect()]
+}
+
+/// The curves the cutter generates for the right side of the tooth space centred on +y, as
+/// coarse samples of gear points, and the cutter to refine them with.
+struct Generated {
+    cutter: Cutter,
+    curves: [Vec<V2>; 3],
+    /// The samples' distances from the centre.
+    radii: [Vec<f64>; 3],
+}
+
+impl Generated {
+    fn new(g: &Involute) -> Self {
+        let cutter = Cutter::new(g);
+        let curves: [Vec<V2>; 3] = [0, 1, 2].map(|k| (0..=CUTTER_SAMPLES[k]).map(|i| cutter.gear(k, i as f64 / CUTTER_SAMPLES[k] as f64)).collect());
+        let radii = [0, 1, 2].map(|k| curves[k].iter().map(|q| q.len()).collect());
+        Generated { cutter, curves, radii }
+    }
+    /// The space's half angle at radius `rr`: the largest angle any generated curve reaches
+    /// there (each crossing refined on the cutter itself), and which curve (0 tip, 1 fillet,
+    /// 2 flank).
+    fn space_half(&self, rr: f64) -> Option<(f64, usize)> {
+        let mut best: Option<(f64, usize)> = None;
+        for (k, c) in self.curves.iter().enumerate() {
+            let n = c.len() - 1;
+            let radii = &self.radii[k];
+            for i in 0..n {
+                let (ra, rb) = (radii[i], radii[i + 1]);
+                if (ra - rr) * (rb - rr) > 0.0 || (ra - rb).abs() <= 1e-12 * rr {
+                    continue;
+                }
+                let up = rb > ra;
+                let (mut lo, mut hi) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
+                let mut p = c[i];
+                for _ in 0..48 {
+                    let mid = 0.5 * (lo + hi);
+                    p = self.cutter.gear(k, mid);
+                    if (p.len() < rr) == up {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                    if hi - lo < 1e-15 {
+                        break;
+                    }
+                }
+                let a = psi(p);
+                if best.is_none_or(|(b, _)| a > b) {
+                    best = Some((a, k));
+                }
+            }
+        }
+        best
+    }
 }
 
 /// The angle from +y towards +x (clockwise), for the tooth space centred on +y.
@@ -236,24 +314,11 @@ fn psi(p: V2) -> f64 {
     p.x.atan2(p.y)
 }
 
-/// The space's half angle at radius `rr`: the largest angle any generated curve reaches there,
-/// and which curve (0 tip, 1 fillet, 2 flank).
-fn space_half(curves: &[Vec<V2>; 3], rr: f64) -> Option<(f64, usize)> {
-    let mut best: Option<(f64, usize)> = None;
-    for (k, c) in curves.iter().enumerate() {
-        for w in c.windows(2) {
-            let (ra, rb) = (w[0].len(), w[1].len());
-            if (ra - rr) * (rb - rr) <= 0.0 && (ra - rb).abs() > 1e-12 {
-                let t = (rr - ra) / (rb - ra);
-                let a = psi(w[0]) + (psi(w[1]) - psi(w[0])) * t;
-                if best.is_none_or(|(b, _)| a > b) {
-                    best = Some((a, k));
-                }
-            }
-        }
-    }
-    best
-}
+/// The most a working flank's fit point spline may stray from the exact curve, in modules
+/// (0.6 µm per mm of module; root fillets, which nothing runs on, get [`FILLET_TOLERANCE`]).
+pub const PROFILE_TOLERANCE: f64 = 6e-4;
+/// The most a root fillet's spline may stray from the generated trochoid, in modules.
+pub const FILLET_TOLERANCE: f64 = 2e-3;
 
 /// A generated external tooth: its flank (from the root up) as the tooth's half angle against
 /// radius, split where the fillet meets the involute.
@@ -275,91 +340,164 @@ pub struct ToothFlank {
     pub pointed: bool,
 }
 
-/// The generated external tooth's half angle against radius (root fillet and flank alike), with
-/// a finely generated fillet: for measuring the tooth (root thickness, fillet curvature).
-pub fn tooth_half_sampler(g: &Involute) -> impl Fn(f64) -> Option<f64> {
-    let curves = generated_with(g, 3000);
-    let z = g.z();
-    let backlash_turn = g.backlash / (2.0 * g.r());
-    move |rr: f64| space_half(&curves, rr).map(|(s, _)| PI / z - s - backlash_turn)
+impl ToothFlank {
+    /// What makes these teeth unbuildable, if anything.
+    pub fn defect(&self) -> Option<&'static str> {
+        let finite = [self.rf, self.ra, self.root_half, self.tip_half].iter().all(|v| v.is_finite())
+            && self.fillet.iter().chain(&self.flank).all(|(r, h)| r.is_finite() && h.is_finite());
+        if !finite {
+            return Some("the tooth geometry doesn't work out (check the inputs)");
+        }
+        if self.rf <= 0.0 {
+            return Some("the root circle reaches the centre");
+        }
+        if self.ra <= self.rf || self.fillet.len() + self.flank.len() < 2 || self.root_half * self.rf <= 0.0 {
+            return Some("no tooth is left between the root and tip circles");
+        }
+        if self.pointed && self.flank.len() < 2 {
+            return Some("the undercut cuts through the teeth");
+        }
+        None
+    }
 }
 
-/// Generates the flank of an external involute tooth with its trochoidal root fillet.
+/// Bisection for the boundary of `inside` between `lo` (inside) and `hi` (not): the last
+/// inside value found.
+fn boundary(mut lo: f64, mut hi: f64, inside: &dyn Fn(f64) -> bool) -> f64 {
+    for _ in 0..60 {
+        let mid = 0.5 * (lo + hi);
+        if inside(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// Fit points (radius, half angle) along `half` from `r0` to `r1` by `grade`, or none when the
+/// side is too short to be a curve of its own (under `min_gap` end to end).
+pub(crate) fn side_points(half: &dyn Fn(f64) -> f64, grade: &dyn Fn(f64) -> f64, tol: f64, min_gap: f64) -> Vec<(f64, f64)> {
+    let (a, b) = (grade(0.0), grade(1.0));
+    let length = V2::polar(a, half(a)).dist(V2::polar(b, half(b)));
+    if !(length > 2.0 * min_gap) {
+        return Vec::new();
+    }
+    let pts = crate::geom::fit_profile(half, grade, tol, 3, 24);
+    // Drop points that crowd the previous one (the last point stays).
+    let mut out: Vec<(f64, f64)> = Vec::with_capacity(pts.len());
+    for (i, p) in pts.iter().enumerate() {
+        let q = V2::polar(p.0, p.1);
+        let last = i + 1 == pts.len();
+        if let Some(prev) = out.last()
+            && q.dist(V2::polar(prev.0, prev.1)) < min_gap
+        {
+            if last {
+                let l = out.len() - 1;
+                if l > 0 {
+                    out[l] = *p;
+                }
+            }
+            continue;
+        }
+        out.push(*p);
+    }
+    if out.len() < 2 {
+        return Vec::new();
+    }
+    out
+}
+
+/// The generated external tooth's half angle against radius (root fillet and flank alike),
+/// each crossing refined on the cutter itself: for measuring the tooth (root thickness, fillet
+/// curvature).
+pub fn tooth_half_sampler(g: &Involute) -> impl Fn(f64) -> Option<f64> {
+    let cut = Generated::new(g);
+    let z = g.z();
+    let backlash_turn = g.backlash / (2.0 * g.r());
+    move |rr: f64| cut.space_half(rr).map(|(s, _)| PI / z - s - backlash_turn)
+}
+
+/// Generates the flank of an external involute tooth with its trochoidal root fillet: the
+/// fillet as the cutter's tip generates it, the flank above it as the exact involute, each as
+/// few fit points as keep the sketch's spline within [`PROFILE_TOLERANCE`] of it.
 pub fn external_flank(g: &Involute) -> ToothFlank {
-    let curves = generated(g);
+    let cut = Generated::new(g);
     let z = g.z();
     let r = g.r();
     let rf = g.rf();
+    let m = g.module;
     let backlash_turn = g.backlash / (2.0 * r);
-    let half = |rr: f64| -> Option<(f64, usize)> { space_half(&curves, rr).map(|(s, k)| (PI / z - s - backlash_turn, k)) };
+    let half = |rr: f64| -> Option<(f64, usize)> { cut.space_half(rr).map(|(s, k)| (PI / z - s - backlash_turn, k)) };
     // The root: the tip flat's last point.
-    let root_half = PI / z - psi(*curves[0].last().unwrap_or(&V2::new(0.0, rf))) - backlash_turn;
-    // Tip: lowered to where the tooth keeps a sliver of land if it would be pointed.
-    let mut ra = g.ra();
+    let root_half = PI / z - psi(*cut.curves[0].last().unwrap_or(&V2::new(0.0, rf))) - backlash_turn;
+    let ra_full = g.ra();
+    // Up from the root: where the generated involute takes over from the fillet, and where the
+    // tooth runs out of thickness (a pointed tip, lowered to keep a sliver of land, or an
+    // undercut neck).
+    let land = 0.02 * m;
+    let thick = |rr: f64| half(rr).is_some_and(|(h, _)| h * rr > land / 2.0);
+    let mut ra = ra_full;
     let mut pointed = false;
-    let land = 0.02 * g.module;
-    if let Some((h, _)) = half(ra)
-        && h * ra < land / 2.0
-    {
-        pointed = true;
-        let (mut lo, mut hi) = (rf, ra);
-        for _ in 0..60 {
-            let mid = (lo + hi) / 2.0;
-            match half(mid) {
-                Some((h, _)) if h * mid > land / 2.0 => lo = mid,
-                _ => hi = mid,
+    let mut handover: Option<f64> = None;
+    let probes = 200;
+    let mut prev = rf;
+    if ra_full > rf {
+        for i in 1..=probes {
+            let rr = rf + (ra_full - rf) * (i as f64 / probes as f64) * (1.0 - 1e-12);
+            let Some((h, k)) = half(rr) else {
+                prev = rr;
+                continue;
+            };
+            if handover.is_none() && k == 2 {
+                handover = Some(boundary(rr, prev, &|x| half(x).is_some_and(|(_, k)| k == 2)));
             }
-        }
-        ra = lo;
-    }
-    // Where the fillet hands over to the flank (the last radius won by a non-flank curve).
-    let probe = 400;
-    let mut handover = rf;
-    let mut seen_flank = false;
-    for i in 1..=probe {
-        let rr = rf + (ra - rf) * i as f64 / probe as f64;
-        if let Some((_, k)) = half(rr) {
-            if k == 2 {
-                if !seen_flank {
-                    handover = rr;
-                }
-                seen_flank = true;
-            } else if !seen_flank {
-                handover = rr;
+            if h * rr <= land / 2.0 {
+                ra = boundary(prev, rr, &thick);
+                pointed = true;
+                break;
             }
+            prev = rr;
         }
     }
-    if !seen_flank {
-        handover = ra;
-    }
-    let undercut = g.undercut();
-    // Samples: denser towards the root, where the fillet bends most, but never so close that
-    // the spline through them kinks.
-    let n = if g.z() > 80.0 { 7 } else if g.z() > 40.0 { 9 } else { 11 };
-    let mut fillet = Vec::new();
-    for i in 0..=n {
-        let t = i as f64 / n as f64;
-        let rr = rf + (handover - rf) * t.powf(1.4);
-        let rr = if i == 0 { rf + (handover - rf) * 1e-6 } else { rr };
-        if let Some((h, _)) = half(rr) {
-            fillet.push((rr, h));
+    let handover = handover.filter(|h| *h < ra).unwrap_or(ra);
+    let tol = PROFILE_TOLERANCE * m;
+    let min_gap = 5e-6 * ra.abs().max(m);
+    let rb = g.rb();
+    let involute = |rr: f64| g.half_angle_at(rr);
+    let has_flank = handover < ra;
+    let fillet_half = |rr: f64| -> f64 {
+        if rr <= rf {
+            root_half
+        } else if rr >= handover && has_flank {
+            involute(handover)
+        } else {
+            half(rr).map(|x| x.0).unwrap_or(root_half)
         }
-    }
-    let mut flank = Vec::new();
-    for i in 0..=n {
-        let t = i as f64 / n as f64;
-        let rr = handover + (ra - handover) * t;
-        if let Some((h, _)) = half(rr) {
-            flank.push((rr, h));
+    };
+    // Bunched towards the root, where the fillet runs nearly round the root circle.
+    let span = handover - rf;
+    let mut fillet = if span > 0.0 { side_points(&fillet_half, &|s| if s >= 1.0 { handover } else { rf + span * s * s }, FILLET_TOLERANCE * m, min_gap) } else { Vec::new() };
+    // The involute by its roll angle (the points crowd towards the base circle, where it
+    // bends most).
+    let t_of = |rr: f64| ((rr / rb).powi(2) - 1.0).max(0.0).sqrt();
+    let (t0, t1) = (t_of(handover), t_of(ra));
+    let grade = |s: f64| -> f64 {
+        if s <= 0.0 {
+            handover
+        } else if s >= 1.0 {
+            ra
+        } else {
+            let t = t0 + (t1 - t0) * s;
+            (rb * (1.0 + t * t).sqrt()).clamp(handover, ra)
         }
+    };
+    let flank = if has_flank { side_points(&involute, &grade, tol, min_gap) } else { Vec::new() };
+    if let (Some(a), Some(b)) = (fillet.last_mut(), flank.first()) {
+        *a = *b;
     }
-    if let (Some(a), Some(b)) = (fillet.last().copied(), flank.first().copied())
-        && (a.0 - b.0).abs() < 1e-9
-    {
-        flank[0] = a;
-    }
-    let tip_half = flank.last().map(|p| p.1).unwrap_or(root_half);
-    ToothFlank { rf, ra, root_half: root_half.max(0.0), tip_half, fillet, flank, undercut, pointed }
+    let tip_half = flank.last().or(fillet.last()).map(|p| p.1).unwrap_or(root_half);
+    ToothFlank { rf, ra, root_half: root_half.max(0.0), tip_half, fillet, flank, undercut: g.undercut(), pointed }
 }
 
 /// Teeth placed round the centre, tooth 0 centred at `phase` (radians from +x).
@@ -445,10 +583,12 @@ impl Internal {
         let g = &self.gear;
         g.r() + (g.rack.dedendum + g.shift) * g.module
     }
-    /// Space width on the pitch circle (arc).
+    /// Space width on the pitch circle (arc). A positive shift moves the teeth outwards, so the
+    /// pitch circle meets them nearer their (inner) tips, where they are thinner: the space
+    /// widens (ISO 21771; it is what makes `mesh_internal`'s working pressure angle hold).
     pub fn space(&self) -> f64 {
         let g = &self.gear;
-        PI * g.mt() / 2.0 - 2.0 * g.shift * g.module * g.alpha_t().tan() + g.backlash
+        PI * g.mt() / 2.0 + 2.0 * g.shift * g.module * g.alpha_t().tan() + g.backlash
     }
     /// The space's half angle at radius `rr` (the involute, radial below the base circle).
     pub fn space_half_at(&self, rr: f64) -> f64 {
@@ -457,30 +597,58 @@ impl Internal {
         let ar = (rb / rr.max(rb)).acos();
         self.space() / (2.0 * g.r()) + inv(g.alpha_t()) - inv(ar)
     }
+    /// The tooth spaces as the teeth of a virtual external gear (its root on the ring's tip
+    /// circle, its tip on the ring's root circle). Teeth that would come to a point at their
+    /// inner tips have the tips raised to keep a land (`ra`… `rf` is then above `r_tip`);
+    /// spaces that would close before the root circle have the root lowered (`pointed`).
+    pub fn space_flank(&self) -> ToothFlank {
+        let g = &self.gear;
+        let m = g.module;
+        let (mut r0, mut r1) = (self.r_tip(), self.r_root());
+        let land = 0.02 * m;
+        let pitch_half = PI / g.z();
+        let space = |rr: f64| self.space_half_at(rr);
+        let tooth_ok = |rr: f64| (pitch_half - space(rr)) * rr >= land / 2.0;
+        let space_ok = |rr: f64| space(rr) * rr >= land / 2.0;
+        let mut raised = false;
+        if r0 > 0.0 && r1 > r0 && !tooth_ok(r0) && tooth_ok(r1) {
+            r0 = boundary(r1, r0, &tooth_ok);
+            raised = true;
+        }
+        let mut pointed = false;
+        if r1 > r0 && r0 > 0.0 && !space_ok(r1) && space_ok(r0) {
+            r1 = boundary(r0, r1, &space_ok);
+            pointed = true;
+        }
+        let rb = g.rb();
+        let tol = PROFILE_TOLERANCE * m;
+        let min_gap = 5e-6 * r1.abs().max(m);
+        let lo = r0.max(rb);
+        let t_of = |rr: f64| ((rr / rb).powi(2) - 1.0).max(0.0).sqrt();
+        let (t0, t1) = (t_of(lo), t_of(r1));
+        let grade = |s: f64| -> f64 {
+            if s <= 0.0 {
+                lo
+            } else if s >= 1.0 {
+                r1
+            } else {
+                let t = t0 + (t1 - t0) * s;
+                (rb * (1.0 + t * t).sqrt()).clamp(lo, r1)
+            }
+        };
+        // Below the base circle the space's sides run straight in, radially.
+        let radial = if r0 < lo && lo - r0 > min_gap { vec![(r0, space(r0)), (lo, space(lo))] } else { Vec::new() };
+        let mut flank = if r1 > lo { side_points(&space, &grade, tol, min_gap) } else { Vec::new() };
+        if flank.is_empty() && radial.is_empty() && r1 > r0 {
+            flank = vec![(r0, space(r0)), (r1, space(r1))];
+        }
+        let _ = raised;
+        ToothFlank { rf: r0, ra: r1, root_half: space(r0), tip_half: space(r1).max(0.0), fillet: radial, flank, undercut: false, pointed }
+    }
     /// The toothed boundary, counter-clockwise; tooth 0 (material) centred at `phase`.
     pub fn outline(&self, phase: f64, root_fillet: f64) -> Outline {
-        let g = &self.gear;
-        let (r0, r1) = (self.r_tip(), self.r_root());
-        let n = 16;
-        let mut pts = Vec::new();
-        for i in 0..=n {
-            let t = i as f64 / n as f64;
-            let rr = r0 + (r1 - r0) * t;
-            pts.push((rr, self.space_half_at(rr).max(0.0)));
-        }
         let _ = root_fillet;
-        // The "tooth" of the virtual external gear is the internal space.
-        let f = ToothFlank {
-            rf: r0,
-            ra: r1,
-            root_half: pts[0].1,
-            tip_half: pts[n].1,
-            fillet: vec![pts[0], pts[1]],
-            flank: pts[1..].to_vec(),
-            undercut: false,
-            pointed: pts[n].1 <= 0.0,
-        };
-        teeth_outline(&f, g.teeth, phase + PI / g.z())
+        teeth_outline(&self.space_flank(), self.gear.teeth, phase + PI / self.gear.z())
     }
 }
 
@@ -585,7 +753,7 @@ pub fn mesh_internal(pinion: &Involute, ring: &Internal, face: f64) -> Mesh {
         overlap_ratio: eb,
         total_contact_ratio: ea + eb,
         clearance_1: ring.r_root() - aw - ra1,
-        clearance_2: aw + ra2 - pinion.rf(),
+        clearance_2: ra2 - aw - pinion.rf(),
         ratio: z2 / z1,
     }
 }

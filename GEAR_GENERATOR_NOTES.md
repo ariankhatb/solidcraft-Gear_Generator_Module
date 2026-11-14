@@ -264,3 +264,7 @@ perpendicular or parallel to each other."
   (or 2 side-view lines); hypoid: circle + off-centre crossing line; crossed helical: circle +
   missing line; bevel planetary: sun circle + planet lines + cone angle.
 Agent worktree for the new kind: `solidcraft-bevelplanet` / `gear-bevelplanet`.
+- **Correction: ONE sketch only**, basic geometry (circles, lines). No second sketch, no side-view
+  sketch. Out-of-plane angles (bevel/hypoid/crossed shaft angle, bevel planetary cone angle) are
+  settings (default 90°). Counts are settings: draw one planet (one line from the sun's centre
+  for bevel planetary, one planet circle for classic planetary) and set the planet count.

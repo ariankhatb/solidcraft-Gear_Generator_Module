@@ -1,0 +1,994 @@
+//! Gear sets from a sketch: circles are pitch circles, lines are shafts.
+//!
+//! The rules (confirmed by the user, `GEAR_GENERATOR_NOTES.md`, "Sketch rules"): one sketch is
+//! gear 1's plane. A circle is a gear's pitch circle (Ø = pitch Ø), its shaft through the centre
+//! normal to the sketch unless a line says otherwise.
+//!
+//! | Mode | Picks | Sizes |
+//! |---|---|---|
+//! | single gear | one circle | pitch Ø |
+//! | pair (spur/helical), cycloidal | two circles touching outside | both Ø; centre distance |
+//! | sprocket / pulley | one or two circles | Ø; centre distance |
+//! | internal | a circle touching inside a bigger one | ring Ø (and the pinion's) |
+//! | planetary | sun, planet, ring: sun and ring concentric, the planet touching both | three Ø |
+//! | rack, worm and wheel | circle + tangent line (worm: optional second parallel line) | line = pitch line |
+//! | bevel, face gear | circle + line through its centre (shaft 2 seen from above) | Ø; shaft angle (a setting, default 90°) |
+//! | hypoid | circle (ring gear) + line crossing it off-centre (pinion shaft) | ring Ø; offset |
+//! | crossed helical | circle + line missing it | Ø; offset |
+//!
+//! Everything is in one sketch (user, 2026-11-14): angles out of the sketch's plane (a bevel's,
+//! hypoid's or crossed helicals' shaft angle) are settings, and repeated members (planets) are a
+//! count, patterned from the one drawn.
+//!
+//! The window keeps a mode picker: [`slots`] says what a mode needs, [`measure`] checks the picks
+//! against the mode's rule and measures them (an error says what is wrong and what it would
+//! make instead), and [`recognize`] is only a hint ("these picks look like a hypoid"). Then
+//! [`spec_for`] sizes a [`Spec`] of that mode from the measured diameters (standard modules where
+//! one fits, an exact module otherwise) and [`axes_for`] gives the shafts in the world, for
+//! [`crate::axes::solve`] to place the set on.
+//!
+//! The solver agent's `simple.rs` may take over `spec_for`; the rules and the measuring stay
+//! here, shared by the window's drawing and the engine's `gear.create {sketch}`.
+
+use std::f64::consts::PI;
+
+use crate::axes::{Axis, MODULES, MODULES_2};
+use crate::geom::V2;
+use crate::plan::{Frame, Kind, Spec};
+
+/// A circle of the sketch (its plane's coordinates, mm).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Circle {
+    pub c: V2,
+    pub r: f64,
+}
+
+/// A straight line of the sketch, through `a` and `b`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Line {
+    pub a: V2,
+    pub b: V2,
+}
+
+impl Line {
+    /// Unit direction from `a` to `b` (x when they coincide).
+    pub fn dir(&self) -> V2 {
+        let d = self.b - self.a;
+        if d.len() > 1e-12 { d * (1.0 / d.len()) } else { V2::new(1.0, 0.0) }
+    }
+    /// The point of the (endless) line nearest `p`.
+    pub fn foot(&self, p: V2) -> V2 {
+        let u = self.dir();
+        self.a + u * (p - self.a).dot(u)
+    }
+    /// How far `p` is from the (endless) line.
+    pub fn distance(&self, p: V2) -> f64 {
+        p.dist(self.foot(p))
+    }
+    pub fn len(&self) -> f64 {
+        self.a.dist(self.b)
+    }
+}
+
+/// What is drawn, in the sketch's plane.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Drawn {
+    /// Sketch points (the origin dot).
+    pub points: Vec<V2>,
+    pub circles: Vec<Circle>,
+    pub lines: Vec<Line>,
+}
+
+/// What a slot takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Point,
+    Circle,
+    Line,
+}
+
+/// One thing a mode needs from the sketch.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Slot {
+    pub label: &'static str,
+    pub role: Role,
+    pub optional: bool,
+    /// What it must be, for people.
+    pub hint: &'static str,
+}
+
+const fn slot(label: &'static str, role: Role, optional: bool, hint: &'static str) -> Slot {
+    Slot { label, role, optional, hint }
+}
+
+/// The modes the sketch input covers (the rest are set up in the window's Advanced mode).
+pub fn sketched(k: Kind) -> bool {
+    !matches!(k, Kind::CycloidalDrive | Kind::Spline | Kind::Elliptical)
+}
+
+/// What mode `k` needs from the sketch, in order. The first is always the origin dot: the
+/// set's anchor, about which [`axes_for`]'s turns go (left empty: gear 1's centre, or where a
+/// bevel's shafts meet).
+pub fn slots(k: Kind) -> Vec<Slot> {
+    use Role::*;
+    let origin = if matches!(k, Kind::Bevel | Kind::SpiralBevel) {
+        slot("Origin (apex)", Point, true, "the dot where the two shafts meet: the pitch cones' apex")
+    } else {
+        slot("Origin", Point, true, "the set's anchor: turns go about it (empty: gear 1's centre)")
+    };
+    let mut all = vec![origin];
+    all.extend(own_slots(k));
+    all
+}
+
+fn own_slots(k: Kind) -> Vec<Slot> {
+    use Role::*;
+    match k {
+        Kind::Pair | Kind::Cycloidal => vec![
+            slot("Gear 1 pitch circle", Circle, false, "its Ø is gear 1's pitch Ø"),
+            slot("Gear 2 pitch circle", Circle, false, "touching gear 1's circle outside"),
+        ],
+        Kind::Sprocket | Kind::Pulley => vec![
+            slot("Pitch circle 1", Circle, false, "its Ø is the pitch Ø"),
+            slot("Pitch circle 2", Circle, true, "the second one; the centre distance is between the centres"),
+        ],
+        Kind::Internal => vec![
+            slot("Ring pitch circle", Circle, false, "the bigger circle: the ring gear's pitch Ø"),
+            slot("Pinion pitch circle", Circle, true, "inside the ring's, touching it"),
+        ],
+        Kind::Planetary => vec![
+            slot("Sun pitch circle", Circle, false, "at the ring's centre"),
+            slot("Planet pitch circle", Circle, false, "touching the sun outside and the ring inside"),
+            slot("Ring pitch circle", Circle, false, "round the sun, the same centre"),
+        ],
+        Kind::Rack => vec![
+            slot("Pinion pitch circle", Circle, false, "the gear the rack meshes with"),
+            slot("Rack pitch line", Line, false, "tangent to the circle; its length is the rack's"),
+        ],
+        Kind::Worm => vec![
+            slot("Wheel pitch circle", Circle, false, "its Ø is the wheel's pitch Ø"),
+            slot("Worm pitch line", Line, false, "tangent to the circle: the worm's shaft runs along it"),
+            slot("Worm's far side", Line, true, "parallel to the pitch line, beyond it: the distance between them is the worm's pitch Ø"),
+        ],
+        // A side view, like a pinion and a spur gear drawn edge on: the angle between the lines
+        // is the shaft angle; the sizes are settings (gear 1's pitch Ø and the ratio).
+        Kind::Bevel | Kind::SpiralBevel => vec![
+            slot("Gear 1 shaft", Line, false, "a line through the origin dot (the apex), seen from the side"),
+            slot("Gear 2 shaft", Line, false, "a line from the dot: the angle between the two lines is the shaft angle"),
+        ],
+        Kind::FaceGear => vec![
+            slot("Face gear pitch circle", Circle, false, "its Ø is the face gear's pitch Ø"),
+            slot("Pinion shaft", Line, false, "through the circle's centre"),
+        ],
+        Kind::Hypoid => vec![
+            slot("Ring gear pitch circle", Circle, false, "its Ø is the ring gear's outer pitch Ø"),
+            slot("Pinion shaft", Line, false, "crossing the circle off its centre: the offset is its distance from the centre"),
+        ],
+        Kind::CrossedHelical => vec![
+            slot("Gear 1 pitch circle", Circle, false, "its Ø is gear 1's pitch Ø"),
+            slot("Shaft 2", Line, false, "missing the circle: the offset is its distance from the centre"),
+        ],
+        // Single gears, and the modes only Advanced sets up: their one circle.
+        _ => vec![slot("Pitch circle", Circle, false, "its Ø is the gear's pitch Ø")],
+    }
+}
+
+/// Each slot's pick: an index into `Drawn::circles` or `Drawn::lines` (by its role); `None`
+/// for an empty slot.
+pub type Picks = Vec<Option<usize>>;
+
+/// Fills the slots of mode `k` from what is drawn, in drawing order (the ring of a planetary
+/// or internal set is the largest circle, a planetary sun the one at its centre).
+pub fn auto_picks(k: Kind, d: &Drawn) -> Picks {
+    let sl = slots(k);
+    let mut picks: Picks = vec![None; sl.len()];
+    let biggest = (0..d.circles.len()).max_by(|a, b| d.circles[*a].r.total_cmp(&d.circles[*b].r));
+    let dot = (!d.points.is_empty()).then_some(0);
+    match k {
+        Kind::Planetary if d.circles.len() >= 3 => {
+            let ring = biggest.unwrap_or(0);
+            let rc = d.circles[ring];
+            let sun = (0..d.circles.len()).filter(|i| *i != ring).min_by(|a, b| d.circles[*a].c.dist(rc.c).total_cmp(&d.circles[*b].c.dist(rc.c)));
+            let planet = (0..d.circles.len()).find(|i| *i != ring && Some(*i) != sun);
+            return vec![dot, sun, planet, Some(ring)];
+        }
+        Kind::Internal if d.circles.len() >= 2 => {
+            let ring = biggest.unwrap_or(0);
+            return vec![dot, Some(ring), (0..d.circles.len()).find(|i| *i != ring)];
+        }
+        _ => {}
+    }
+    let (mut pi, mut ci, mut li) = (0usize, 0usize, 0usize);
+    for (p, s) in picks.iter_mut().zip(&sl) {
+        match s.role {
+            Role::Point if pi < d.points.len() => {
+                *p = Some(pi);
+                pi += 1;
+            }
+            Role::Circle if ci < d.circles.len() => {
+                *p = Some(ci);
+                ci += 1;
+            }
+            Role::Line if li < d.lines.len() => {
+                *p = Some(li);
+                li += 1;
+            }
+            _ => {}
+        }
+    }
+    picks
+}
+
+/// How the picks lie.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shape {
+    Single,
+    /// Two circles touching outside (or, for chains and belts, any two circles).
+    Pair,
+    Internal,
+    Planetary,
+    /// Circle + tangent line (rack, worm).
+    Tangent,
+    /// Circle + line through its centre (bevel, face gear).
+    ThroughCentre,
+    /// Circle + line crossing it off-centre (hypoid).
+    Crossing,
+    /// Circle + line missing it (crossed helical).
+    Missing,
+    /// Two lines meeting at the origin dot (a bevel's side view).
+    SideView,
+}
+
+/// The picks measured for a mode.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Measured {
+    pub kind: Kind,
+    pub shape: Shape,
+    /// Gear 1's circle (the wheel, the ring gear of a hypoid, the sun, a single gear's), its
+    /// mate's, and a planetary ring's.
+    pub c1: Option<Circle>,
+    pub c2: Option<Circle>,
+    pub c3: Option<Circle>,
+    /// The shaft line (or pitch line), and the worm's far-side line.
+    pub line: Option<Line>,
+    pub line2: Option<Line>,
+    /// Pitch diameters: gear 1, its mate, a planetary ring (0: not drawn).
+    pub d1: f64,
+    pub d2: f64,
+    pub d3: f64,
+    pub center_distance: f64,
+    /// Distance of the shaft line from gear 1's centre.
+    pub offset: f64,
+    /// The origin dot: as picked, else gear 1's centre or the apex.
+    pub origin: V2,
+    /// The side view's shaft angle (deg; `None`: the setting's) and apex.
+    pub shaft_angle: Option<f64>,
+    pub apex: Option<V2>,
+    /// The worm's pitch Ø from its far-side line (0: not drawn).
+    pub worm_diameter: f64,
+    pub notes: Vec<String>,
+}
+
+impl Measured {
+    fn new(kind: Kind, shape: Shape) -> Measured {
+        Measured {
+            kind,
+            shape,
+            c1: None,
+            c2: None,
+            c3: None,
+            line: None,
+            line2: None,
+            d1: 0.0,
+            d2: 0.0,
+            d3: 0.0,
+            center_distance: 0.0,
+            offset: 0.0,
+            origin: V2::ZERO,
+            shaft_angle: None,
+            apex: None,
+            worm_diameter: 0.0,
+            notes: Vec::new(),
+        }
+    }
+}
+
+fn num(v: f64) -> String {
+    let s = format!("{v:.3}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" { "0".into() } else { s.to_string() }
+}
+
+/// Lengths this close (mm, plus this share of the size they are compared at) are equal: a
+/// sketch constrained tangent or concentric is exact, a rough one within half a percent.
+pub const TOLERANCE: f64 = 0.005;
+
+fn near(a: f64, b: f64, size: f64) -> bool {
+    (a - b).abs() <= 1e-6 + TOLERANCE * size.abs()
+}
+
+/// The direction along `l` from `from` towards its farther end.
+fn ray(l: &Line, from: V2) -> V2 {
+    let far = if l.a.dist(from) >= l.b.dist(from) { l.a } else { l.b };
+    let d = far - from;
+    if d.len() > 1e-12 { d * (1.0 / d.len()) } else { l.dir() }
+}
+
+/// The two lines' crossing point, or none for parallel ones.
+fn crossing(l1: &Line, l2: &Line) -> Option<V2> {
+    let (u, v) = (l1.dir(), l2.dir());
+    let den = u.cross(v);
+    if den.abs() < 1e-9 {
+        return None;
+    }
+    let t = (l2.a - l1.a).cross(v) / den;
+    Some(l1.a + u * t)
+}
+
+/// Checks the picks against mode `k`'s rule and measures them. The error says which pick is
+/// missing or what is wrong with how they lie, and what that would make instead.
+pub fn measure(k: Kind, d: &Drawn, picks: &[Option<usize>]) -> Result<Measured, String> {
+    let dot = picks.first().copied().flatten().and_then(|i| d.points.get(i)).copied();
+    let mut m = measure_own(k, d, picks.get(1..).unwrap_or(&[]), dot)?;
+    m.origin = dot.or(m.apex).or(m.c1.map(|c| c.c)).unwrap_or(V2::ZERO);
+    Ok(m)
+}
+
+/// [`measure`] of the slots after the origin dot.
+fn measure_own(k: Kind, d: &Drawn, picks: &[Option<usize>], dot: Option<V2>) -> Result<Measured, String> {
+    let sl = own_slots(k);
+    let pick = |i: usize| picks.get(i).copied().flatten();
+    let circle = |i: usize| -> Result<Option<Circle>, String> {
+        match (pick(i).and_then(|j| d.circles.get(j)).copied(), sl.get(i)) {
+            (Some(c), _) if c.r > 0.0 && c.r.is_finite() => Ok(Some(c)),
+            (Some(_), _) => Err("a circle needs a radius greater than 0".into()),
+            (None, Some(s)) if !s.optional => Err(format!("{}: pick or draw a circle ({})", s.label, s.hint)),
+            _ => Ok(None),
+        }
+    };
+    let line = |i: usize| -> Result<Option<Line>, String> {
+        match (pick(i).and_then(|j| d.lines.get(j)).copied(), sl.get(i)) {
+            (Some(l), _) if l.len() > 1e-9 => Ok(Some(l)),
+            (Some(_), _) => Err("a line needs two different points".into()),
+            (None, Some(s)) if !s.optional => Err(format!("{}: pick or draw a line ({})", s.label, s.hint)),
+            _ => Ok(None),
+        }
+    };
+    let need = |c: Option<Circle>| c.ok_or_else(|| "a circle is missing".to_string());
+    match k {
+        Kind::Pair | Kind::Cycloidal => {
+            let (a, b) = (need(circle(0)?)?, need(circle(1)?)?);
+            let dist = a.c.dist(b.c);
+            if !near(dist, a.r + b.r, a.r.min(b.r)) {
+                let how = if dist < a.r + b.r && near(dist, (a.r - b.r).abs(), a.r.min(b.r)) {
+                    "one is inside the other: that is an internal pair".to_string()
+                } else if dist < a.r + b.r {
+                    format!("they overlap: centres {} mm apart, the radii add up to {} mm", num(dist), num(a.r + b.r))
+                } else {
+                    format!("they are apart: centres {} mm apart, the radii add up to {} mm", num(dist), num(a.r + b.r))
+                };
+                return Err(format!("the two pitch circles must touch outside; {how}. Move one, or type the centre distance"));
+            }
+            let mut m = Measured::new(k, Shape::Pair);
+            (m.c1, m.c2, m.d1, m.d2, m.center_distance) = (Some(a), Some(b), 2.0 * a.r, 2.0 * b.r, dist);
+            Ok(m)
+        }
+        Kind::Sprocket | Kind::Pulley => {
+            let a = need(circle(0)?)?;
+            let b = circle(1)?;
+            let mut m = Measured::new(k, if b.is_some() { Shape::Pair } else { Shape::Single });
+            (m.c1, m.d1) = (Some(a), 2.0 * a.r);
+            if let Some(b) = b {
+                let dist = a.c.dist(b.c);
+                if dist <= a.r + b.r {
+                    return Err(format!("the two circles overlap: a chain or belt drive needs them apart (centres {} mm apart, radii {} and {} mm)", num(dist), num(a.r), num(b.r)));
+                }
+                (m.c2, m.d2, m.center_distance) = (Some(b), 2.0 * b.r, dist);
+            }
+            Ok(m)
+        }
+        Kind::Internal => {
+            let ring = need(circle(0)?)?;
+            let mut m = Measured::new(k, Shape::Internal);
+            (m.c1, m.d1) = (Some(ring), 2.0 * ring.r);
+            if let Some(p) = circle(1)? {
+                if p.r >= ring.r {
+                    return Err("the pinion's circle must be the smaller one, inside the ring's".into());
+                }
+                let dist = ring.c.dist(p.c);
+                if !near(dist, ring.r - p.r, p.r) {
+                    return Err(format!("the pinion's circle must touch the ring's inside: centres {} mm apart, the radii differ by {} mm", num(dist), num(ring.r - p.r)));
+                }
+                (m.c2, m.d2, m.center_distance) = (Some(p), 2.0 * p.r, dist);
+                m.notes.push("the pinion is not built with the ring: make it as a single gear on its circle".into());
+            }
+            Ok(m)
+        }
+        Kind::Planetary => {
+            let (sun, planet, ring) = (need(circle(0)?)?, need(circle(1)?)?, need(circle(2)?)?);
+            if !near(sun.c.dist(ring.c), 0.0, sun.r) {
+                return Err(format!("the sun's and the ring's circles must share a centre ({} mm apart)", num(sun.c.dist(ring.c))));
+            }
+            if !near(planet.c.dist(sun.c), sun.r + planet.r, planet.r) {
+                return Err("the planet's circle must touch the sun's outside".into());
+            }
+            if !near(planet.c.dist(ring.c), ring.r - planet.r, planet.r) {
+                return Err(format!("the planet's circle must touch the ring's inside: the ring Ø should be {} mm (sun + 2 × planet)", num(2.0 * (sun.r + 2.0 * planet.r))));
+            }
+            let mut m = Measured::new(k, Shape::Planetary);
+            (m.c1, m.c2, m.c3) = (Some(sun), Some(planet), Some(ring));
+            (m.d1, m.d2, m.d3, m.center_distance) = (2.0 * sun.r, 2.0 * planet.r, 2.0 * ring.r, sun.r + planet.r);
+            Ok(m)
+        }
+        Kind::Rack | Kind::Worm => {
+            let c = need(circle(0)?)?;
+            let l = line(1)?.ok_or("a line is missing")?;
+            let e = l.distance(c.c);
+            if !near(e, c.r, c.r) {
+                let what = if e < 1e-6 + TOLERANCE * c.r {
+                    "it passes through the centre: that makes a bevel"
+                } else if e < c.r {
+                    "it crosses the circle: off-centre that makes a hypoid"
+                } else {
+                    "it misses the circle: that makes crossed helicals"
+                };
+                return Err(format!("the line must touch the circle (tangent): it is {} mm from the centre, the radius is {} mm; {what}", num(e), num(c.r)));
+            }
+            let mut m = Measured::new(k, Shape::Tangent);
+            (m.c1, m.line, m.d1, m.offset) = (Some(c), Some(l), 2.0 * c.r, e);
+            if k == Kind::Worm
+                && let Some(far) = line(2)?
+            {
+                if far.dir().cross(l.dir()).abs() > 1e-3 {
+                    return Err("the worm's far-side line must be parallel to its pitch line".into());
+                }
+                let e2 = far.distance(c.c);
+                if e2 <= e {
+                    return Err("the worm's far-side line must lie beyond the pitch line, away from the wheel".into());
+                }
+                m.worm_diameter = e2 - e;
+                m.line2 = Some(far);
+            }
+            if k == Kind::Rack {
+                m.notes.push("only the rack is built: make the pinion as a spur gear on its circle".into());
+            }
+            Ok(m)
+        }
+        Kind::Bevel | Kind::SpiralBevel => {
+            let (l1, l2) = (line(0)?.ok_or("a line is missing")?, line(1)?.ok_or("a line is missing")?);
+            let reach = l1.len().max(l2.len());
+            let apex = match dot {
+                Some(p) => {
+                    for (l, which) in [(&l1, "gear 1's"), (&l2, "gear 2's")] {
+                        if !near(l.distance(p), 0.0, reach) {
+                            return Err(format!("{which} shaft line must pass through the origin dot (the apex where the shafts meet); it is {} mm off", num(l.distance(p))));
+                        }
+                    }
+                    p
+                }
+                None => crossing(&l1, &l2).ok_or("the two shaft lines are parallel: a bevel's shafts meet at the apex (parallel shafts make a pair)")?,
+            };
+            let (r1, r2) = (ray(&l1, apex), ray(&l2, apex));
+            let sigma = r1.cross(r2).abs().atan2(r1.dot(r2)).to_degrees();
+            if !(5.0..=175.0).contains(&sigma) {
+                return Err(format!("the shafts meet at {}°: bevels need 5° to 175°", num(sigma)));
+            }
+            let mut m = Measured::new(k, Shape::SideView);
+            (m.line, m.line2, m.apex, m.shaft_angle) = (Some(l2), Some(l1), Some(apex), Some(sigma));
+            Ok(m)
+        }
+        Kind::FaceGear => {
+            let c = need(circle(0)?)?;
+            let l = line(1)?.ok_or("a line is missing")?;
+            let e = l.distance(c.c);
+            if e > 1e-6 + TOLERANCE * c.r {
+                let what = if e < c.r { "off-centre makes a hypoid" } else { "missing the circle makes crossed helicals" };
+                return Err(format!("this line doesn't pass through the circle's centre ({} mm off): for a bevel it must; {what}", num(e)));
+            }
+            let mut m = Measured::new(k, Shape::ThroughCentre);
+            (m.c1, m.line, m.d1) = (Some(c), Some(l), 2.0 * c.r);
+            Ok(m)
+        }
+        Kind::Hypoid => {
+            let c = need(circle(0)?)?;
+            let l = line(1)?.ok_or("a line is missing")?;
+            let e = l.distance(c.c);
+            if e <= 1e-6 + TOLERANCE * c.r {
+                return Err("the pinion shaft passes through the ring gear's centre: that is a spiral bevel (offset 0). Move it off the centre for a hypoid".into());
+            }
+            if e >= c.r {
+                return Err(format!("the pinion shaft misses the ring gear's circle ({} mm from the centre, radius {} mm): a hypoid's shaft crosses it; further out makes crossed helicals", num(e), num(c.r)));
+            }
+            let mut m = Measured::new(k, Shape::Crossing);
+            (m.c1, m.line, m.d1, m.offset) = (Some(c), Some(l), 2.0 * c.r, e);
+            Ok(m)
+        }
+        Kind::CrossedHelical => {
+            let c = need(circle(0)?)?;
+            let l = line(1)?.ok_or("a line is missing")?;
+            let e = l.distance(c.c);
+            if e <= c.r * (1.0 + TOLERANCE) + 1e-6 {
+                return Err(format!("shaft 2 must miss the circle: it is {} mm from the centre, the radius is {} mm (crossing makes a hypoid, through the centre a bevel)", num(e), num(c.r)));
+            }
+            let mut m = Measured::new(k, Shape::Missing);
+            (m.c1, m.line, m.d1, m.offset) = (Some(c), Some(l), 2.0 * c.r, e);
+            m.d2 = 2.0 * (e - c.r);
+            Ok(m)
+        }
+        _ => {
+            let c = need(circle(0)?)?;
+            let mut m = Measured::new(k, Shape::Single);
+            (m.c1, m.d1) = (Some(c), 2.0 * c.r);
+            Ok(m)
+        }
+    }
+}
+
+/// The mode the drawing looks like (a hint only: the user's mode stays).
+pub fn recognize(d: &Drawn) -> Option<Kind> {
+    let order = [Kind::Planetary, Kind::Pair, Kind::Internal, Kind::Bevel, Kind::Worm, Kind::Hypoid, Kind::CrossedHelical, Kind::Spur];
+    let (nc, nl) = (d.circles.len(), d.lines.len());
+    order.into_iter().find(|k| {
+        // Each row of the table by what it is drawn with.
+        let drawn_as = match k {
+            Kind::Planetary => nc >= 3,
+            Kind::Pair | Kind::Internal => nc == 2,
+            Kind::Spur => nc == 1 && nl == 0,
+            Kind::Bevel => nc == 0 && nl >= 2,
+            _ => nc == 1 && nl >= 1,
+        };
+        drawn_as && measure(*k, d, &auto_picks(*k, d)).is_ok()
+    })
+}
+
+/// Whether two modes are the same family for a hint (spur, helical, herringbone; straight and
+/// spiral bevels; rack and worm share a picture).
+pub fn same_family(a: Kind, b: Kind) -> bool {
+    let fam = |k: Kind| match k {
+        Kind::Spur | Kind::Helical | Kind::Herringbone => 0,
+        Kind::Bevel | Kind::SpiralBevel | Kind::FaceGear => 1,
+        Kind::Rack | Kind::Worm => 2,
+        Kind::Pair | Kind::Cycloidal => 3,
+        k => 10 + k as i32,
+    };
+    fam(a) == fam(b)
+}
+
+/// The module and tooth counts that give the diameters `ds` (each with its factor: pitch Ø =
+/// module × teeth × factor, e.g. 1 / cos β): the largest standard module (ISO 54 series I,
+/// then II) that gives each within half a percent with at least `zmin` teeth; otherwise the
+/// exact module for the counts nearest a standard one (`false`).
+pub fn fit_module(ds: &[(f64, f64)], zmin: u32) -> (f64, Vec<u32>, bool) {
+    let counts = |m: f64| -> Option<(Vec<u32>, f64)> {
+        let mut zs = Vec::new();
+        let mut err = 0.0f64;
+        for (d, f) in ds {
+            let z = (d / (m * f)).round();
+            if z < f64::from(zmin) || z > 1000.0 {
+                return None;
+            }
+            err = err.max((m * f * z - d).abs() / d);
+            zs.push(z as u32);
+        }
+        Some((zs, err))
+    };
+    for series in [&MODULES[..], &MODULES_2[..]] {
+        let mut best: Option<(f64, Vec<u32>)> = None;
+        for &m in series.iter().rev() {
+            if let Some((zs, err)) = counts(m)
+                && err <= TOLERANCE
+            {
+                best = Some((m, zs));
+                break;
+            }
+        }
+        if let Some((m, zs)) = best {
+            return (m, zs, true);
+        }
+    }
+    // No standard module: the nearest counts, and the module that makes their diameters add up
+    // to the drawn ones exactly.
+    let mut best: Option<(f64, Vec<u32>)> = None;
+    for &m in MODULES.iter().chain(MODULES_2.iter()) {
+        if let Some((zs, err)) = counts(m)
+            && best.as_ref().is_none_or(|(e, _)| err < *e)
+        {
+            best = Some((err, zs));
+        }
+    }
+    let zs = match best {
+        Some((_, zs)) => zs,
+        None => ds.iter().map(|_| zmin.max(1)).collect(),
+    };
+    let (sd, sz): (f64, f64) = ds.iter().zip(&zs).fold((0.0, 0.0), |(a, b), ((d, f), z)| (a + d, b + f * f64::from(*z)));
+    (if sz > 0.0 { sd / sz } else { 1.0 }, zs, false)
+}
+
+/// The spec of the measured mode: `base` (of the same kind) with the module and tooth counts
+/// that give the drawn diameters, and the sizes the drawing gives (offset, centre distance,
+/// shaft angle, worm Ø). What the drawing doesn't give (helix, face width, the mate's size by
+/// ratio when only one circle is drawn, bores…) stays `base`'s.
+pub fn spec_for(m: &Measured, base: &Spec) -> Result<(Spec, Vec<String>), String> {
+    let mut s = base.clone();
+    s.kind = m.kind;
+    let mut notes = m.notes.clone();
+    let inv_cos = |deg: f64| 1.0 / deg.to_radians().cos().max(1e-6);
+    let helix = |k: Kind| if matches!(k, Kind::Spur) { 1.0 } else { inv_cos(s.helix) };
+    let mut exact = |std: bool, m: f64| {
+        if !std {
+            notes.push(format!("no standard module gives these diameters: module {} gives them exactly", num(m)));
+        }
+    };
+    let ratio = f64::from(base.teeth2.max(1)) / f64::from(base.teeth.max(1));
+    match m.kind {
+        Kind::Spur | Kind::Helical | Kind::Herringbone => {
+            let (md, z, std) = fit_module(&[(m.d1, helix(m.kind))], 8);
+            exact(std, md);
+            (s.module, s.teeth) = (md, z[0]);
+        }
+        Kind::Pair | Kind::Cycloidal => {
+            let f = if m.kind == Kind::Pair { helix(Kind::Pair) } else { 1.0 };
+            let (md, z, std) = fit_module(&[(m.d1, f), (m.d2, f)], if m.kind == Kind::Cycloidal { 6 } else { 8 });
+            exact(std, md);
+            (s.module, s.teeth, s.teeth2) = (md, z[0], z[1]);
+            s.center_distance = 0.0;
+        }
+        Kind::Sprocket | Kind::Pulley => {
+            let pitch = if m.kind == Kind::Sprocket {
+                crate::sprocket::chain_by_id(s.chain).map(|c| c.pitch).unwrap_or(s.chain_pitch)
+            } else {
+                crate::pulley::belt_by_id(s.belt).map(|b| b.pitch).unwrap_or(2.0)
+            };
+            let teeth = |d: f64| -> u32 {
+                let z = if m.kind == Kind::Sprocket { PI / (pitch / d).clamp(-1.0, 1.0).asin() } else { PI * d / pitch };
+                z.round().clamp(6.0, 400.0) as u32
+            };
+            s.teeth = teeth(m.d1);
+            s.teeth2 = if m.d2 > 0.0 { teeth(m.d2) } else { 0 };
+            s.center_distance = m.center_distance;
+        }
+        Kind::Internal => {
+            let (md, z, std) = fit_module(&[(m.d1, helix(Kind::Internal))], 20);
+            exact(std, md);
+            (s.module, s.teeth) = (md, z[0]);
+        }
+        Kind::Planetary => {
+            let f = helix(Kind::Planetary);
+            let (md, z, std) = fit_module(&[(m.d1, f), (m.d2, f)], 8);
+            exact(std, md);
+            (s.module, s.teeth, s.teeth2) = (md, z[0], z[1]);
+            s.teeth3 = z[0] + 2 * z[1];
+            if (s.teeth + s.teeth3) % s.planets.max(1) != 0 {
+                notes.push(format!("{} planets don't space evenly with {} + {} teeth: (sun + ring) ÷ planets must be whole", s.planets, s.teeth, s.teeth3));
+            }
+        }
+        Kind::Bevel | Kind::SpiralBevel => {
+            // Drawn edge on: the angle is the drawing's; the sizes (module, teeth: gear 1's
+            // pitch Ø and the ratio) are the settings'. The lines' lengths are not used.
+            if let Some(a) = m.shaft_angle {
+                s.shaft_angle = a;
+            }
+        }
+        Kind::FaceGear => {
+            let (md, z, std) = fit_module(&[(m.d1, 1.0)], 20);
+            exact(std, md);
+            s.module = md;
+            s.teeth2 = z[0];
+            s.teeth = ((f64::from(z[0]) / ratio.max(1.0)).round() as u32).clamp(6, z[0].saturating_sub(2).max(6));
+            s.shaft_angle = 90.0;
+        }
+        Kind::Hypoid => {
+            s.module = m.d1 / f64::from(s.teeth2.max(1));
+            s.offset = m.offset;
+        }
+        Kind::CrossedHelical => {
+            let sigma = s.shaft_angle;
+            let b1 = if s.helix > 0.0 && s.helix < sigma { s.helix } else { sigma / 2.0 };
+            if m.d2 <= 0.0 {
+                return Err("shaft 2 must miss gear 1's circle for crossed helicals".into());
+            }
+            let (md, z, std) = fit_module(&[(m.d1, inv_cos(b1)), (m.d2, inv_cos(sigma - b1))], 8);
+            exact(std, md);
+            (s.module, s.teeth, s.teeth2, s.helix) = (md, z[0], z[1], b1);
+        }
+        Kind::Worm => {
+            let (md, z, std) = fit_module(&[(m.d1, 1.0)], 20);
+            exact(std, md);
+            (s.module, s.teeth) = (md, z[0]);
+            if m.worm_diameter > 0.0 {
+                s.worm_diameter = m.worm_diameter;
+            }
+        }
+        Kind::Rack => {
+            let (md, z, std) = fit_module(&[(m.d1, 1.0)], 8);
+            exact(std, md);
+            s.module = md;
+            s.teeth = z[0];
+            let len = m.line.map(|l| l.len()).unwrap_or(0.0);
+            s.rack_teeth = ((len / (PI * md)).round() as u32).clamp(1, 2000);
+        }
+        _ => {
+            let (md, z, std) = fit_module(&[(m.d1, 1.0)], 6);
+            exact(std, md);
+            (s.module, s.teeth) = (md, z[0]);
+        }
+    }
+    Ok((s, notes))
+}
+
+fn add3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+fn mul3(a: [f64; 3], k: f64) -> [f64; 3] {
+    [a[0] * k, a[1] * k, a[2] * k]
+}
+
+/// The shafts of the measured set in the world (`frame`: the sketch's plane, its z the normal)
+/// for [`crate::axes::solve`] with `spec` ([`spec_for`]'s): gear 1's (the hypoid's pinion's)
+/// and gear 2's where the set has one. Circle modes turn about the circles' normals; a bevel's
+/// shafts lie along its side view's lines; skew shafts lie in the sketch's plane, tilted out of
+/// it by the shaft angle setting. Then the whole set is turned about the origin dot by `turn`
+/// (degrees about the sketch's x, then y, then its normal), to stand in the plane wanted.
+pub fn axes_for(m: &Measured, spec: &Spec, frame: &Frame, turn: [f64; 3]) -> (Axis, Option<Axis>) {
+    let (a1, a2) = sketch_axes(m, spec);
+    let o = [m.origin.x, m.origin.y, 0.0];
+    let r = |v: [f64; 3]| rotate(v, turn);
+    let place = |a: Axis| {
+        let p = add3(r(sub3(a.origin, o)), o);
+        Axis::new(frame.world(p), frame.dir(r(a.dir))).unwrap_or(a)
+    };
+    (place(a1), a2.map(place))
+}
+
+fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+/// `v` turned `t[0]` degrees about x, then `t[1]` about y, then `t[2]` about z.
+pub fn rotate(v: [f64; 3], t: [f64; 3]) -> [f64; 3] {
+    let (sx, cx) = t[0].to_radians().sin_cos();
+    let (sy, cy) = t[1].to_radians().sin_cos();
+    let (sz, cz) = t[2].to_radians().sin_cos();
+    let v = [v[0], cx * v[1] - sx * v[2], sx * v[1] + cx * v[2]];
+    let v = [cy * v[0] + sy * v[2], v[1], -sy * v[0] + cy * v[2]];
+    [cz * v[0] - sz * v[1], sz * v[0] + cz * v[1], v[2]]
+}
+
+/// [`axes_for`] in the sketch's own coordinates, before any turn.
+fn sketch_axes(m: &Measured, spec: &Spec) -> (Axis, Option<Axis>) {
+    let n = [0.0, 0.0, 1.0];
+    let at = |p: V2, h: f64| [p.x, p.y, h];
+    let along = |v: V2| [v.x, v.y, 0.0];
+    let axis = |o: [f64; 3], d: [f64; 3]| Axis::new(o, d).unwrap_or(Axis { origin: o, dir: n });
+    let c1 = m.c1.map(|c| c.c).unwrap_or(V2::ZERO);
+    let sigma = spec.shaft_angle.to_radians();
+    let gear1 = axis(at(c1, 0.0), n);
+    let x_line = Line { a: c1, b: c1 + V2::new(1.0, 0.0) };
+    match m.shape {
+        Shape::Pair => (gear1, m.c2.map(|c| axis(at(c.c, 0.0), n))),
+        Shape::ThroughCentre => {
+            // A face gear: the pinion's axis crosses the face gear's a pinion pitch radius above
+            // its pitch plane.
+            let l = m.line.unwrap_or(x_line);
+            let rp = spec.module * f64::from(spec.teeth) / 2.0;
+            let u = along(ray(&l, c1));
+            (gear1, Some(axis(add3(at(c1, rp), mul3(u, spec.module * f64::from(spec.teeth2) / 2.0)), u)))
+        }
+        Shape::SideView => {
+            // Each shaft from the apex out along its line: the gear sits on that ray.
+            let apex = m.apex.unwrap_or(m.origin);
+            let (l1, l2) = (m.line2.unwrap_or(x_line), m.line.unwrap_or(x_line));
+            let (r1, r2) = (ray(&l1, apex), ray(&l2, apex));
+            let reach = l1.len().max(l2.len()).max(1.0);
+            (axis(at(apex + r1 * reach, 0.0), along(r1)), Some(axis(at(apex + r2 * reach, 0.0), along(r2))))
+        }
+        Shape::Tangent if m.kind == Kind::Worm => {
+            let l = m.line.unwrap_or(x_line);
+            let foot = l.foot(c1);
+            let out = if foot.dist(c1) > 1e-9 { (foot - c1) * (1.0 / foot.dist(c1)) } else { V2::new(-l.dir().y, l.dir().x) };
+            let r1 = spec.module * f64::from(spec.teeth) / 2.0;
+            let dw = if spec.worm_diameter > 0.0 { spec.worm_diameter } else { 10.0 * spec.module };
+            (gear1, Some(axis(at(c1 + out * (r1 + dw / 2.0), 0.0), along(l.dir()))))
+        }
+        Shape::Crossing | Shape::Missing => {
+            let l = m.line.unwrap_or(x_line);
+            let shaft = axis(at(l.foot(c1), 0.0), add3(mul3(along(l.dir()), sigma.sin()), mul3(n, sigma.cos())));
+            if m.kind == Kind::Hypoid {
+                // The pinion turns about axis 1, the ring gear (the circle) about axis 2.
+                (shaft, Some(gear1))
+            } else {
+                (gear1, Some(shaft))
+            }
+        }
+        _ => (gear1, None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::axes::{self, Drive, Relation};
+
+    fn circle(x: f64, y: f64, r: f64) -> Circle {
+        Circle { c: V2::new(x, y), r }
+    }
+    fn line(ax: f64, ay: f64, bx: f64, by: f64) -> Line {
+        Line { a: V2::new(ax, ay), b: V2::new(bx, by) }
+    }
+    fn drawn(circles: Vec<Circle>, lines: Vec<Line>) -> Drawn {
+        Drawn { points: vec![], circles, lines }
+    }
+    fn measured(k: Kind, d: &Drawn) -> Result<Measured, String> {
+        measure(k, d, &auto_picks(k, d))
+    }
+    /// Measures, sizes and solves the set on its shafts, and plans it.
+    fn solved(k: Kind, d: &Drawn, base: Spec) -> (Measured, axes::Solved) {
+        let m = measured(k, d).unwrap();
+        let (spec, _) = spec_for(&m, &base).unwrap();
+        let (a1, a2) = axes_for(&m, &spec, &Frame::at([0.0; 3]), [0.0; 3]);
+        let s = axes::solve(&a1, a2.as_ref(), Some(k), &spec, &Drive::default()).unwrap_or_else(|e| panic!("{k:?}: {e}"));
+        crate::plan(&s.spec).unwrap_or_else(|e| panic!("{k:?}: {e}"));
+        (m, s)
+    }
+
+    #[test]
+    fn one_circle_is_a_single_gear() {
+        let d = drawn(vec![circle(0.0, 0.0, 20.0)], vec![]);
+        assert_eq!(recognize(&d), Some(Kind::Spur));
+        let (_, s) = solved(Kind::Spur, &d, Spec::defaults_for(Kind::Spur));
+        assert!((s.spec.module * f64::from(s.spec.teeth) - 40.0).abs() < 0.2, "{} × {}", s.spec.module, s.spec.teeth);
+    }
+
+    #[test]
+    fn touching_circles_are_a_pair() {
+        let d = drawn(vec![circle(0.0, 0.0, 20.0), circle(50.0, 0.0, 30.0)], vec![]);
+        assert_eq!(recognize(&d), Some(Kind::Pair));
+        let (m, s) = solved(Kind::Pair, &d, Spec::defaults_for(Kind::Pair));
+        assert!((m.center_distance - 50.0).abs() < 1e-9);
+        assert_eq!(f64::from(s.spec.teeth2) / f64::from(s.spec.teeth), 1.5);
+        assert!(matches!(s.relation, Some(Relation::Parallel { distance, .. }) if (distance - 50.0).abs() < 1e-9));
+    }
+
+    #[test]
+    fn apart_or_overlapping_circles_are_refused_with_why() {
+        let d = drawn(vec![circle(0.0, 0.0, 20.0), circle(60.0, 0.0, 30.0)], vec![]);
+        let e = measured(Kind::Pair, &d).unwrap_err();
+        assert!(e.contains("must touch outside") && e.contains("apart"), "{e}");
+        let d = drawn(vec![circle(0.0, 0.0, 20.0), circle(40.0, 0.0, 30.0)], vec![]);
+        assert!(measured(Kind::Pair, &d).unwrap_err().contains("overlap"));
+    }
+
+    #[test]
+    fn tolerance_takes_a_rough_drawing_but_not_a_wrong_one() {
+        // 0.3 % off the touching distance: taken; 3 % off: refused.
+        let d = drawn(vec![circle(0.0, 0.0, 20.0), circle(50.06, 0.0, 30.0)], vec![]);
+        assert!(measured(Kind::Pair, &d).is_ok());
+        let d = drawn(vec![circle(0.0, 0.0, 20.0), circle(50.6, 0.0, 30.0)], vec![]);
+        assert!(measured(Kind::Pair, &d).is_err());
+    }
+
+    #[test]
+    fn circle_inside_a_bigger_one_is_internal() {
+        let d = drawn(vec![circle(0.0, 0.0, 60.0), circle(40.0, 0.0, 20.0)], vec![]);
+        assert_eq!(recognize(&d), Some(Kind::Internal));
+        let (m, _) = solved(Kind::Internal, &d, Spec::defaults_for(Kind::Internal));
+        assert_eq!((m.d1, m.d2), (120.0, 40.0));
+    }
+
+    #[test]
+    fn sun_planet_ring_are_planetary() {
+        let d = drawn(vec![circle(0.0, 0.0, 18.0), circle(36.0, 0.0, 18.0), circle(0.0, 0.0, 54.0)], vec![]);
+        assert_eq!(recognize(&d), Some(Kind::Planetary));
+        let (_, s) = solved(Kind::Planetary, &d, Spec::defaults_for(Kind::Planetary));
+        assert_eq!(s.spec.teeth3, s.spec.teeth + 2 * s.spec.teeth2);
+        let bad = drawn(vec![circle(0.0, 0.0, 18.0), circle(36.0, 0.0, 18.0), circle(0.0, 0.0, 60.0)], vec![]);
+        assert!(measured(Kind::Planetary, &bad).unwrap_err().contains("ring Ø should be"));
+    }
+
+    #[test]
+    fn tangent_line_is_a_worm_or_a_rack() {
+        let d = drawn(vec![circle(0.0, 0.0, 30.0)], vec![line(-40.0, 30.0, 40.0, 30.0)]);
+        assert_eq!(recognize(&d), Some(Kind::Worm));
+        let (_, s) = solved(Kind::Worm, &d, Spec::defaults_for(Kind::Worm));
+        assert!(matches!(s.relation, Some(Relation::Skew { angle, .. }) if (angle - 90.0).abs() < 1e-6));
+        let m = measured(Kind::Rack, &d).unwrap();
+        let (spec, _) = spec_for(&m, &Spec::defaults_for(Kind::Rack)).unwrap();
+        assert!((spec.rack_teeth as f64 - 80.0 / (PI * spec.module)).abs() <= 0.5, "{}", spec.rack_teeth);
+        // A second parallel line beyond gives the worm's diameter.
+        let d = drawn(vec![circle(0.0, 0.0, 30.0)], vec![line(-40.0, 30.0, 40.0, 30.0), line(-40.0, 50.0, 40.0, 50.0)]);
+        assert_eq!(measured(Kind::Worm, &d).unwrap().worm_diameter, 20.0);
+    }
+
+    /// A side view: gear 1's shaft down −y from the dot at the origin, gear 2's at `deg` from it.
+    fn side_view(deg: f64) -> Drawn {
+        let a = deg.to_radians();
+        Drawn { points: vec![V2::ZERO], circles: vec![], lines: vec![line(0.0, 0.0, 0.0, -50.0), line(0.0, 0.0, 50.0 * a.sin(), -50.0 * a.cos())] }
+    }
+
+    #[test]
+    fn two_lines_from_the_dot_are_a_bevel_at_their_angle() {
+        let d = side_view(90.0);
+        assert_eq!(recognize(&d), Some(Kind::Bevel));
+        let (m, s) = solved(Kind::Bevel, &d, Spec::defaults_for(Kind::Bevel));
+        assert_eq!(m.shape, Shape::SideView);
+        assert!((s.spec.shaft_angle - 90.0).abs() < 1e-6, "{}", s.spec.shaft_angle);
+        // Gear 1 on its shaft below the apex, its axis along the drawn line.
+        let f = s.frames[0];
+        assert!(f.origin[1] < 0.0 && f.origin[0].abs() < 1e-6, "{:?}", f.origin);
+        assert!((f.z[1].abs() - 1.0).abs() < 1e-9, "{:?}", f.z);
+    }
+
+    #[test]
+    fn bevel_at_80_degrees_drawn_and_solved() {
+        let d = side_view(80.0);
+        let m = measured(Kind::Bevel, &d).unwrap();
+        assert!((m.shaft_angle.unwrap() - 80.0).abs() < 1e-9);
+        let (_, s) = solved(Kind::Bevel, &d, Spec::defaults_for(Kind::Bevel));
+        assert!((s.spec.shaft_angle - 80.0).abs() < 1e-6, "{}", s.spec.shaft_angle);
+        assert!(matches!(s.relation, Some(Relation::Intersecting { .. })));
+    }
+
+    #[test]
+    fn bevel_lines_must_meet_at_the_dot() {
+        let mut d = side_view(90.0);
+        d.points[0] = V2::new(5.0, 0.0);
+        assert!(measured(Kind::Bevel, &d).unwrap_err().contains("origin dot"));
+        let parallel = Drawn { points: vec![], circles: vec![], lines: vec![line(0.0, 0.0, 0.0, 50.0), line(10.0, 0.0, 10.0, 50.0)] };
+        assert!(measured(Kind::Bevel, &parallel).unwrap_err().contains("parallel"));
+    }
+
+    #[test]
+    fn turns_about_the_dot_keep_the_set() {
+        // A pair turned 90° about the sketch's x through a dot at gear 1's centre: the shafts lie
+        // along −y, still 50 mm apart.
+        let d = Drawn { points: vec![V2::ZERO], circles: vec![circle(0.0, 0.0, 20.0), circle(50.0, 0.0, 30.0)], lines: vec![] };
+        let m = measured(Kind::Pair, &d).unwrap();
+        let (spec, _) = spec_for(&m, &Spec::defaults_for(Kind::Pair)).unwrap();
+        let (a1, a2) = axes_for(&m, &spec, &Frame::at([0.0; 3]), [90.0, 0.0, 0.0]);
+        assert!((a1.dir[1] + 1.0).abs() < 1e-9, "{:?}", a1.dir);
+        assert!(a1.origin.iter().all(|v| v.abs() < 1e-9));
+        let a2 = a2.unwrap();
+        assert!((a2.origin[0] - 50.0).abs() < 1e-9);
+        assert!(matches!(axes::relate(&a1, &a2), Relation::Parallel { distance, .. } if (distance - 50.0).abs() < 1e-9));
+    }
+    #[test]
+    fn off_centre_line_crossing_is_a_hypoid() {
+        let d = drawn(vec![circle(0.0, 0.0, 100.0)], vec![line(-120.0, -25.0, 120.0, -25.0)]);
+        assert_eq!(recognize(&d), Some(Kind::Hypoid));
+        let (m, s) = solved(Kind::Hypoid, &d, Spec::defaults_for(Kind::Hypoid));
+        assert!((m.offset - 25.0).abs() < 1e-9);
+        assert!((s.spec.offset - 25.0).abs() < 1e-6, "{}", s.spec.offset);
+        assert!((s.spec.module * f64::from(s.spec.teeth2) - 200.0).abs() < 1e-6);
+        let through = drawn(vec![circle(0.0, 0.0, 100.0)], vec![line(-120.0, 0.0, 120.0, 0.0)]);
+        assert!(measured(Kind::Hypoid, &through).unwrap_err().contains("spiral bevel"));
+    }
+
+    #[test]
+    fn line_missing_the_circle_is_crossed_helical() {
+        let d = drawn(vec![circle(0.0, 0.0, 20.0)], vec![line(-60.0, 45.0, 60.0, 45.0)]);
+        assert_eq!(recognize(&d), Some(Kind::CrossedHelical));
+        let (m, s) = solved(Kind::CrossedHelical, &d, Spec::defaults_for(Kind::CrossedHelical));
+        assert!((m.d2 - 50.0).abs() < 1e-9);
+        assert!(matches!(s.relation, Some(Relation::Skew { offset, .. }) if (offset - 45.0).abs() < 1e-6));
+    }
+
+    #[test]
+    fn missing_picks_say_what_to_draw() {
+        let d = drawn(vec![circle(0.0, 0.0, 20.0)], vec![]);
+        let e = measured(Kind::Pair, &d).unwrap_err();
+        assert!(e.starts_with("Gear 2 pitch circle"), "{e}");
+        let e = measured(Kind::Hypoid, &d).unwrap_err();
+        assert!(e.contains("Pinion shaft"), "{e}");
+    }
+
+    #[test]
+    fn fit_prefers_the_largest_standard_module() {
+        let (m, z, std) = fit_module(&[(40.0, 1.0), (60.0, 1.0)], 8);
+        assert!(std);
+        assert_eq!((m, z), (5.0, vec![8, 12]));
+        // Ø9.1 is 1.1 % off every standard module's nearest count of 8 or more teeth.
+        let (m, z, std) = fit_module(&[(9.1, 1.0)], 8);
+        assert!(!std);
+        assert!((m * f64::from(z[0]) - 9.1).abs() < 1e-9);
+    }
+}

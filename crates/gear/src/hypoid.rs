@@ -1268,24 +1268,35 @@ fn mirror_body(b: &mut Body, y0: f64) {
     let m = |v: V3| [v[0], -v[1], v[2]];
     let f = b.frame;
     b.frame = Frame { origin: [f.origin[0], 2.0 * y0 - f.origin[1], f.origin[2]], x: m(f.x), z: m(f.z) };
-    let my = |q: V2| V2::new(q.x, -q.y);
     for st in &mut b.steps {
-        match st {
-            Step::Prism { region, twist, .. } => {
-                *region = mirror_region(region, &my);
-                *twist = -*twist;
+        mirror_step(st);
+    }
+}
+
+/// A step mirrored in its frame's plane y = 0.
+fn mirror_step(st: &mut Step) {
+    let my = |q: V2| V2::new(q.x, -q.y);
+    match st {
+        Step::Prism { region, twist, .. } => {
+            *region = mirror_region(region, &my);
+            *twist = -*twist;
+        }
+        Step::Taper { outline, twist, .. } => {
+            *outline = outline.map(&my, true);
+            *twist = -*twist;
+        }
+        Step::Loft { sections, .. } => {
+            for (o, _) in sections.iter_mut() {
+                *o = o.map(&my, true);
             }
-            Step::Taper { outline, twist, .. } => {
-                *outline = outline.map(&my, true);
-                *twist = -*twist;
-            }
-            Step::Loft { sections, .. } => {
-                for (o, _) in sections.iter_mut() {
-                    *o = o.map(&my, true);
-                }
-            }
-            Step::Revolve { .. } => {}
-            Step::Coil { left, .. } => *left = !*left,
+        }
+        Step::Revolve { .. } => {}
+        Step::Coil { left, .. } => *left = !*left,
+        // Its frame mirrored like the body's (its local y negated), its own geometry with it.
+        Step::Placed { frame, step } => {
+            let m = |v: V3| [v[0], -v[1], v[2]];
+            *frame = Frame { origin: m(frame.origin), x: m(frame.x), z: m(frame.z) };
+            mirror_step(step);
         }
     }
 }

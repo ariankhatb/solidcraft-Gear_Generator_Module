@@ -126,3 +126,207 @@ impl Bore {
 pub fn lightening_holes(count: u32, diameter: f64, at_radius: f64, phase: f64) -> Vec<Outline> {
     (0..count).map(|k| Outline::circle(V2::polar(at_radius, phase + TAU * f64::from(k) / f64::from(count.max(1))), diameter / 2.0)).collect()
 }
+
+// ---------------------------------------------------------------------------------------------
+// Integral shafts, chamfers and hub hardware (built by `crate::body`).
+
+/// What the free end of an integral shaft carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ShaftEnd {
+    #[default]
+    Plain,
+    /// A flat (towards +y): `end_size` is the distance from the flat to the far side.
+    DFlat,
+    /// A key slot (towards +y): `end_size` is its width (0: DIN 6885 for the diameter).
+    Keyway,
+    /// Hexagonal: `end_size` across flats.
+    Hex,
+    /// A "+" for hobby servo horns and toy axles: `end_size` is the width of its arms.
+    Cross,
+    /// A centre hole down the axis: `end_size` is its diameter, `end_length` its depth.
+    CentreHole,
+}
+
+impl ShaftEnd {
+    pub const ALL: [(ShaftEnd, &'static str); 6] = [
+        (ShaftEnd::Plain, "plain"),
+        (ShaftEnd::DFlat, "d_flat"),
+        (ShaftEnd::Keyway, "keyway"),
+        (ShaftEnd::Hex, "hex"),
+        (ShaftEnd::Cross, "cross"),
+        (ShaftEnd::CentreHole, "centre_hole"),
+    ];
+    pub fn name(self) -> &'static str {
+        Self::ALL.iter().find(|(k, _)| *k == self).map(|(_, n)| *n).unwrap_or("plain")
+    }
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.iter().find(|(_, n)| *n == s).map(|(k, _)| *k)
+    }
+}
+
+/// A shaft made in one piece with a gear, on one side of it: a first length next to the gear,
+/// an optional second length (a step or shoulder) beyond it, and what its free end carries.
+/// Lengths are measured from the gear's face. No diameter or no length: no shaft.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Shaft {
+    pub diameter: f64,
+    pub length: f64,
+    /// The second length's diameter and length (0: none). Smaller than `diameter` for a
+    /// shoulder, larger for a collar.
+    pub step_diameter: f64,
+    pub step_length: f64,
+    pub end: ShaftEnd,
+    /// How far the end feature runs back from the free end (0: 1.5 × the end's diameter; a
+    /// centre hole: 1.5 × its own diameter).
+    pub end_length: f64,
+    /// The end feature's size, see [`ShaftEnd`] (0: from the diameter).
+    pub end_size: f64,
+    /// A 45° chamfer on the free end (mm).
+    pub chamfer: f64,
+}
+
+impl Shaft {
+    pub fn exists(&self) -> bool {
+        self.diameter > 0.0 && self.length > 0.0
+    }
+    pub fn stepped(&self) -> bool {
+        self.exists() && self.step_diameter > 0.0 && self.step_length > 0.0
+    }
+    /// From the gear's face to the free end.
+    pub fn total(&self) -> f64 {
+        if !self.exists() {
+            0.0
+        } else if self.stepped() {
+            self.length + self.step_length
+        } else {
+            self.length
+        }
+    }
+    /// The diameter at the free end.
+    pub fn end_diameter(&self) -> f64 {
+        if self.stepped() { self.step_diameter } else { self.diameter }
+    }
+    pub fn min_diameter(&self) -> f64 {
+        if self.stepped() { self.diameter.min(self.step_diameter) } else { self.diameter }
+    }
+    pub fn max_diameter(&self) -> f64 {
+        if self.stepped() { self.diameter.max(self.step_diameter) } else { self.diameter }
+    }
+}
+
+/// An edge chamfer: `size` across the face (radially, mm; 0: none) at `angle` degrees to the
+/// face, so it runs `size`·tan(`angle`) along the axis.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Chamfer {
+    pub size: f64,
+    pub angle: f64,
+}
+
+impl Default for Chamfer {
+    fn default() -> Self {
+        Self { size: 0.0, angle: 45.0 }
+    }
+}
+
+impl Chamfer {
+    /// How far the chamfer runs along the axis.
+    pub fn depth(&self) -> f64 {
+        self.size * self.angle.to_radians().tan()
+    }
+}
+
+/// Hardware for fixing a (printed) gear: everything is off at 0. Set screws, nut traps, insert
+/// pockets and the clamp slit go in the hub (which the gear must have); the bearing pocket goes
+/// in the gear's back face.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hardware {
+    /// Set-screw hole diameter: radial, through the hub wall at mid length, over the key or flat
+    /// (+y).
+    pub set_screw: f64,
+    /// How many set screws (1 to 4), 90° apart.
+    pub set_screws: u32,
+    /// Captive nut trap on each set screw: the nut's width across flats and its thickness
+    /// (0: 0.45 × the width). A slot open to the hub's end.
+    pub nut_width: f64,
+    pub nut_thickness: f64,
+    /// Heat-set insert pocket at the mouth of each set-screw hole: diameter and depth (0: most
+    /// of the hub wall).
+    pub insert_diameter: f64,
+    pub insert_depth: f64,
+    /// Clamping hub: the width of a slit through the hub wall (opposite the set screw), and the
+    /// diameter of the clamp screw's hole across it (0: none).
+    pub clamp_slit: f64,
+    pub clamp_screw: f64,
+    /// Bearing pocket in the back face: the bearing's outside diameter and width, and how much
+    /// larger than the bearing the pocket is made (on the diameter, for a printed fit).
+    pub bearing_od: f64,
+    pub bearing_width: f64,
+    pub bearing_fit: f64,
+}
+
+impl Default for Hardware {
+    fn default() -> Self {
+        Self {
+            set_screw: 0.0,
+            set_screws: 1,
+            nut_width: 0.0,
+            nut_thickness: 0.0,
+            insert_diameter: 0.0,
+            insert_depth: 0.0,
+            clamp_slit: 0.0,
+            clamp_screw: 0.0,
+            bearing_od: 0.0,
+            bearing_width: 0.0,
+            bearing_fit: 0.0,
+        }
+    }
+}
+
+impl Hardware {
+    /// Sets the bearing pocket from a standard bearing's name; false when the name is unknown.
+    pub fn set_bearing(&mut self, name: &str) -> bool {
+        match bearing(name) {
+            Some((_, od, w)) => {
+                self.bearing_od = od;
+                self.bearing_width = w;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// Common deep-groove ball bearings: (name, bore, outside diameter, width) in mm.
+pub const BEARINGS: &[(&str, f64, f64, f64)] = &[
+    ("MR63", 3.0, 6.0, 2.5),
+    ("MR84", 4.0, 8.0, 3.0),
+    ("MR105", 5.0, 10.0, 4.0),
+    ("MR115", 5.0, 11.0, 4.0),
+    ("MR126", 6.0, 12.0, 4.0),
+    ("MR128", 8.0, 12.0, 3.5),
+    ("623", 3.0, 10.0, 4.0),
+    ("624", 4.0, 13.0, 5.0),
+    ("625", 5.0, 16.0, 5.0),
+    ("626", 6.0, 19.0, 6.0),
+    ("608", 8.0, 22.0, 7.0),
+    ("688", 8.0, 16.0, 5.0),
+    ("6800", 10.0, 19.0, 5.0),
+    ("6801", 12.0, 21.0, 5.0),
+    ("6802", 15.0, 24.0, 5.0),
+    ("6803", 17.0, 26.0, 5.0),
+    ("6804", 20.0, 32.0, 7.0),
+    ("6000", 10.0, 26.0, 8.0),
+    ("6001", 12.0, 28.0, 8.0),
+    ("6002", 15.0, 32.0, 9.0),
+    ("6003", 17.0, 35.0, 10.0),
+    ("6004", 20.0, 42.0, 12.0),
+    ("6200", 10.0, 30.0, 9.0),
+    ("6201", 12.0, 32.0, 10.0),
+    ("6202", 15.0, 35.0, 11.0),
+];
+
+/// A standard bearing's (bore, outside diameter, width) by name ("608", "6001", "MR105", ...).
+pub fn bearing(name: &str) -> Option<(f64, f64, f64)> {
+    let name = name.trim();
+    BEARINGS.iter().find(|(n, ..)| n.eq_ignore_ascii_case(name)).map(|(_, d, od, w)| (*d, *od, *w))
+}

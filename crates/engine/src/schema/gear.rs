@@ -230,6 +230,111 @@ pub struct BoreParams {
     pub flat: Option<f64>,
 }
 
+/// What the free end of an integral shaft carries.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShaftEndType {
+    Plain,
+    DFlat,
+    Keyway,
+    Hex,
+    /// A "+" for hobby servo horns and toy axles.
+    Cross,
+    CentreHole,
+}
+
+/// A shaft made in one piece with a gear, on one side of it. Lengths are from the gear's face.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct ShaftParams {
+    /// Diameter in mm of the length next to the gear.
+    pub diameter: f64,
+    /// That length in mm.
+    pub length: f64,
+    /// A second length beyond the first (a shoulder or a collar): its diameter in mm.
+    #[serde(default)]
+    pub step_diameter: Option<f64>,
+    /// The second length in mm.
+    #[serde(default)]
+    pub step_length: Option<f64>,
+    /// What the free end carries (default plain).
+    #[serde(default)]
+    pub end: Option<ShaftEndType>,
+    /// How far the end feature runs back from the free end in mm (default 1.5 × the end's
+    /// diameter; a centre hole: its depth, default 1.5 × its diameter).
+    #[serde(default)]
+    pub end_length: Option<f64>,
+    /// The end feature's size in mm: d_flat from the flat to the far side (default 0.9 × the
+    /// diameter), keyway width (default DIN 6885), hex across flats (default 0.85 × the
+    /// diameter), cross arm width (default a third of the diameter), centre hole diameter
+    /// (default 0.3 × the diameter).
+    #[serde(default)]
+    pub end_size: Option<f64>,
+    /// A 45° chamfer on the free end, in mm.
+    #[serde(default)]
+    pub chamfer: Option<f64>,
+}
+
+/// An edge chamfer on the teeth.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct ChamferParams {
+    /// Width across the face (radially, from the tip circle) in mm.
+    pub size: f64,
+    /// Angle to the face in degrees, 5 to 85 (default 45): the chamfer runs size × tan(angle)
+    /// along the axis.
+    #[serde(default)]
+    pub angle: Option<f64>,
+}
+
+/// Hardware for fixing a gear. Set screws, nut traps, insert pockets and the clamp slit go in
+/// the hub (set `hub_diameter` and `hub_length`); the bearing pocket goes in the back face.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct HardwareParams {
+    /// Set-screw hole diameter in mm: radial, through the hub wall at mid length, over the key
+    /// or flat.
+    #[serde(default)]
+    pub set_screw: Option<f64>,
+    /// How many set screws, 1 to 4, 90° apart (default 1).
+    #[serde(default)]
+    pub set_screws: Option<u32>,
+    /// Captive nut trap on each set screw: the nut's width across flats in mm.
+    #[serde(default)]
+    pub nut_width: Option<f64>,
+    /// The nut's thickness in mm (default 0.45 × its width).
+    #[serde(default)]
+    pub nut_thickness: Option<f64>,
+    /// Heat-set insert pocket at the mouth of each set-screw hole: diameter in mm.
+    #[serde(default)]
+    pub insert_diameter: Option<f64>,
+    /// The insert pocket's depth in mm (default: most of the hub wall).
+    #[serde(default)]
+    pub insert_depth: Option<f64>,
+    /// Clamping hub: the width in mm of a slit through the hub wall.
+    #[serde(default)]
+    pub clamp_slit: Option<f64>,
+    /// Clamping hub: diameter in mm of the clamp screw's hole across the slit.
+    #[serde(default)]
+    pub clamp_screw: Option<f64>,
+    /// Bearing pocket in the back face, by a standard bearing's name: MR63, MR84, MR105, MR115,
+    /// MR126, MR128, 623, 624, 625, 626, 608, 688, 6800..6804, 6000..6004, 6200..6202.
+    #[serde(default)]
+    pub bearing: Option<String>,
+    /// Bearing pocket: the bearing's outside diameter in mm (instead of `bearing`).
+    #[serde(default)]
+    pub bearing_od: Option<f64>,
+    /// Bearing pocket: the bearing's width in mm.
+    #[serde(default)]
+    pub bearing_width: Option<f64>,
+    /// How much larger than the bearing the pocket is made, on the diameter, in mm.
+    #[serde(default)]
+    pub bearing_fit: Option<f64>,
+}
+
 /// A gear set: involute spur, helical, herringbone, internal and rack; pairs and planetary sets;
 /// straight and spiral bevels; hypoid (offset bevel) gears; crossed helical gears; worm and
 /// wheel; cycloidal gears and the cycloidal drive; ISO 606 roller chain sprockets and timing belt
@@ -491,6 +596,85 @@ pub struct GearParams {
     /// Strength rating: ISO 1328 accuracy grade 5..12 for the dynamic factor (default 7).
     #[serde(default)]
     pub accuracy_grade: Option<u8>,
+    /// Tip rounding radius in modules, up to 0.5: each tip corner becomes an arc tangent to the
+    /// flank and the tip circle.
+    #[serde(default)]
+    pub tip_round: Option<f64>,
+    /// Horizontal-expansion (XY) compensation for printing, in mm: the teeth are drawn this far
+    /// inside where they should end up (flanks, tips and roots).
+    #[serde(default)]
+    pub xy_compensation: Option<f64>,
+    /// Elephant-foot relief in mm: the first layers of the teeth are drawn this far inside the
+    /// rest.
+    #[serde(default)]
+    pub elephant_foot: Option<f64>,
+    /// How high the elephant-foot relief runs from the back face, in mm (default 0.2).
+    #[serde(default)]
+    pub elephant_foot_height: Option<f64>,
+    /// Nozzle width in mm: tip lands under two of them are warned about.
+    #[serde(default)]
+    pub nozzle: Option<f64>,
+    /// Tip clearance coefficient c*, overriding the rack's dedendum (dedendum = addendum + c*).
+    #[serde(default)]
+    pub clearance: Option<f64>,
+    /// Tip shortening in mm, off every gear's tip radius.
+    #[serde(default)]
+    pub tip_shortening: Option<f64>,
+    /// Gear 1's tip diameter in mm (only lowers the tips).
+    #[serde(default)]
+    pub tip_diameter: Option<f64>,
+    /// Gear 2's tip diameter in mm (only lowers the tips).
+    #[serde(default)]
+    pub tip_diameter2: Option<f64>,
+    /// Tip relief in mm: how far the flank falls away from the involute at the tip.
+    #[serde(default)]
+    pub tip_relief: Option<f64>,
+    /// The radial height the tip relief runs over, in mm (default 0.4 modules).
+    #[serde(default)]
+    pub tip_relief_height: Option<f64>,
+    /// Lead crowning in mm: each flank is this much thinner at the faces than at mid face
+    /// (straight teeth only).
+    #[serde(default)]
+    pub crowning: Option<f64>,
+    /// Gear 2's own backlash in mm (mate, planets, the worm's thread; default: `backlash`).
+    #[serde(default)]
+    pub backlash2: Option<f64>,
+    /// Pair: gear 2's face width in mm (default: `face_width`).
+    #[serde(default)]
+    pub face_width2: Option<f64>,
+    /// Pair: how far gear 2's mid plane sits from gear 1's along the axis, in mm.
+    #[serde(default)]
+    pub face_offset2: Option<f64>,
+    /// Tooth edge chamfer on the front face (the hub's side).
+    #[serde(default)]
+    pub tooth_chamfer_front: Option<ChamferParams>,
+    /// Tooth edge chamfer on the back face.
+    #[serde(default)]
+    pub tooth_chamfer_back: Option<ChamferParams>,
+    /// 45° chamfer on both ends of the bores, in mm.
+    #[serde(default)]
+    pub bore_chamfer: Option<f64>,
+    /// 45° chamfer on the hub's outer edge, in mm.
+    #[serde(default)]
+    pub hub_chamfer: Option<f64>,
+    /// Gear 1's integral shaft on its front face (the hub's side, +z).
+    #[serde(default)]
+    pub shaft_front: Option<ShaftParams>,
+    /// Gear 1's integral shaft on its back face.
+    #[serde(default)]
+    pub shaft_back: Option<ShaftParams>,
+    /// Gear 2's (mate, planets, the worm) integral shaft on its front face.
+    #[serde(default)]
+    pub shaft2_front: Option<ShaftParams>,
+    /// Gear 2's integral shaft on its back face.
+    #[serde(default)]
+    pub shaft2_back: Option<ShaftParams>,
+    /// Gear 1's hub hardware and bearing pocket.
+    #[serde(default)]
+    pub hardware: Option<HardwareParams>,
+    /// Gear 2's hub hardware and bearing pocket.
+    #[serde(default)]
+    pub hardware2: Option<HardwareParams>,
     /// Pair and planetary: build a print test coupon instead of the set (a few teeth of each
     /// member at the true centre distance, on a base with pegs and fences). Default false.
     #[serde(default)]

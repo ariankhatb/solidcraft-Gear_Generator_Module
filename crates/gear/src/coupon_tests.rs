@@ -21,7 +21,17 @@ fn coupon(s: Spec) -> Spec {
 fn check_plan(p: &Plan) -> Result<(), String> {
     for b in &p.bodies {
         for (i, st) in b.steps.iter().enumerate() {
-            let Step::Prism { region, height, .. } = st else { return Err(format!("{}: step {i} is not a prism", b.name)) };
+            // (Crowned teeth are a loft through a few sections.)
+            if let Step::Loft { sections, .. } = st {
+                if sections.len() < 2 {
+                    return Err(format!("{}: step {i} lofts fewer than two sections", b.name));
+                }
+                for (o, _) in sections {
+                    check_outline(o).map_err(|e| format!("{} step {i}: {e}", b.name))?;
+                }
+                continue;
+            }
+            let Step::Prism { region, height, .. } = st else { return Err(format!("{}: step {i} is not a prism or a loft", b.name)) };
             if !(*height > 0.0) || region.outer.is_empty() {
                 return Err(format!("{}: step {i} is empty", b.name));
             }

@@ -169,6 +169,8 @@ pub struct Spec {
     pub origin: [f64; 3],
     /// Body name prefix.
     pub name: String,
+    /// The load to rate the set for (default: none, not rated).
+    pub load: crate::strength::Load,
 }
 
 impl Default for Spec {
@@ -211,6 +213,7 @@ impl Default for Spec {
             only: 0,
             origin: [0.0; 3],
             name: String::new(),
+            load: crate::strength::Load::default(),
         }
     }
 }
@@ -277,7 +280,7 @@ impl Spec {
         s
     }
 
-    fn involute(&self, teeth: u32, shift: f64, helix_deg: f64) -> Involute {
+    pub(crate) fn involute(&self, teeth: u32, shift: f64, helix_deg: f64) -> Involute {
         Involute {
             teeth,
             module: self.module,
@@ -396,10 +399,10 @@ pub struct Plan {
 }
 
 impl Plan {
-    fn fact(&mut self, label: impl Into<String>, value: f64, unit: Unit) {
+    pub(crate) fn fact(&mut self, label: impl Into<String>, value: f64, unit: Unit) {
         self.facts.push(Fact { label: label.into(), value, unit });
     }
-    fn warn(&mut self, w: impl Into<String>) {
+    pub(crate) fn warn(&mut self, w: impl Into<String>) {
         let w = w.into();
         if !self.warnings.contains(&w) {
             self.warnings.push(w);
@@ -445,6 +448,7 @@ pub fn check(s: &Spec) -> Result<(), String> {
     if s.rack.addendum <= 0.0 || s.rack.dedendum <= s.rack.addendum * 0.5 || s.rack.root_radius < 0.0 {
         return Err("the basic rack's addendum, dedendum and root radius don't make a tooth".into());
     }
+    crate::strength::check(&s.load)?;
     Ok(())
 }
 
@@ -464,6 +468,9 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
         Kind::Worm => worm(s, &mut p),
         Kind::Cycloidal => cycloidal(s, &mut p),
         Kind::CycloidalDrive => drive(s, &mut p),
+    }
+    if s.load.rated() {
+        crate::strength::rate(s, &mut p);
     }
     if p.bodies.is_empty() {
         return Err("nothing to build with these choices".into());

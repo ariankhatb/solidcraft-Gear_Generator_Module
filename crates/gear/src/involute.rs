@@ -177,6 +177,12 @@ struct CutterPt {
 /// The candidate curves the cutter generates for the right side of the tooth space centred on
 /// +y: tip flat (root), fillet (trochoid) and flank (involute), each as gear points.
 fn generated(g: &Involute) -> [Vec<V2>; 3] {
+    generated_with(g, 60)
+}
+
+/// [`generated`] with `fillet_steps` points round the cutter's tip radius (more for a fillet
+/// whose curvature is to be measured).
+fn generated_with(g: &Involute, fillet_steps: usize) -> [Vec<V2>; 3] {
     let mn = g.module;
     let at = g.alpha_t();
     let r = g.r();
@@ -201,7 +207,7 @@ fn generated(g: &Involute) -> [Vec<V2>; 3] {
     // From straight down (−π/2) to the flank normal.
     let a0 = -PI / 2.0;
     let a1 = n_flank.1.atan2(n_flank.0);
-    let steps = 60;
+    let steps = fillet_steps.max(4);
     for i in 0..=steps {
         let a = a0 + (a1 - a0) * i as f64 / steps as f64;
         fillet.push(CutterPt { u: uc + rho * a.cos(), v: vc + rho * a.sin(), nu: a.cos(), nv: a.sin() });
@@ -267,6 +273,15 @@ pub struct ToothFlank {
     pub undercut: bool,
     /// The tooth came to a point before its tip radius.
     pub pointed: bool,
+}
+
+/// The generated external tooth's half angle against radius (root fillet and flank alike), with
+/// a finely generated fillet: for measuring the tooth (root thickness, fillet curvature).
+pub fn tooth_half_sampler(g: &Involute) -> impl Fn(f64) -> Option<f64> {
+    let curves = generated_with(g, 3000);
+    let z = g.z();
+    let backlash_turn = g.backlash / (2.0 * g.r());
+    move |rr: f64| space_half(&curves, rr).map(|(s, _)| PI / z - s - backlash_turn)
 }
 
 /// Generates the flank of an external involute tooth with its trochoidal root fillet.

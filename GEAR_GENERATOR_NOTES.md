@@ -275,3 +275,5 @@ Agent worktree for the new kind: `solidcraft-bevelplanet` / `gear-bevelplanet`.
   the dot on it (apex = origin), a second line from the dot at an angle (planet/gear 2 shaft);
   the angle between the lines is the meeting angle (drawn). Sizes, planet count, face width are
   settings. Hypoid stays circle + off-centre line with the out-of-plane offset as a setting.
+- Optimization agent (user request: "faster and smoother"): worktree `solidcraft-perf` /
+  `gear-perf` — kernel build path per kind, plan/check_mesh/solver costs; measure before/after.

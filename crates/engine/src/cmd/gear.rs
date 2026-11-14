@@ -31,7 +31,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params(
             "type?: spur|helical|herringbone|internal|rack|pair|planetary|bevel|spiral_bevel|hypoid|crossed_helical|worm|cycloidal|cycloidal_drive; \
              module? (mm) | diametral_pitch?; teeth?, teeth2? (mate or planet), ring_teeth?, planets?; pressure_angle?, helix_angle? (deg, sign = hand); \
-             profile_shift?, profile_shift2?; rack?: iso53_a|iso53_b|iso53_c|iso53_d|agma_full_depth|stub, addendum?, dedendum?, root_radius? (coefficients); \
+             profile_shift?, profile_shift2?; rack?: iso53_a|iso53_b|iso53_c|iso53_d|agma_full_depth|stub|print_fdm, addendum?, dedendum?, root_radius? (coefficients); \
              backlash? (mm); face_width?; center_distance? (pair: gear 2's shift reaches it); shaft_angle?, spiral_angle? (deg); offset?, face_start? (hypoid, mm); \
              starts?, worm_diameter?, worm_length? (worm); rim?; rack_teeth?, rack_height?; pins?, pin_circle?, pin_diameter?, eccentricity? (cycloidal drive); \
              bore?, bore2?: {type?: round|keyway|d_flat|hex|square|none, diameter, key_width?, key_depth?, flat?}; hub_diameter?, hub_length?; holes?, hole_diameter?; \
@@ -65,13 +65,14 @@ const KINDS: [(GearType, Kind); 14] = [
     (GearType::CycloidalDrive, Kind::CycloidalDrive),
 ];
 
-const RACKS: [(RackStandard, &str); 6] = [
+const RACKS: [(RackStandard, &str); 7] = [
     (RackStandard::Iso53A, "iso53_a"),
     (RackStandard::Iso53B, "iso53_b"),
     (RackStandard::Iso53C, "iso53_c"),
     (RackStandard::Iso53D, "iso53_d"),
     (RackStandard::AgmaFullDepth, "agma_full_depth"),
     (RackStandard::Stub, "stub"),
+    (RackStandard::PrintFdm, "print_fdm"),
 ];
 
 const BORES: [(BoreType, BoreKind); 6] = [

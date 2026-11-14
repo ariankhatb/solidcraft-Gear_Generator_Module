@@ -32,6 +32,9 @@ impl BasicRack {
         ("iso53_d", BasicRack { addendum: 1.0, dedendum: 1.4, root_radius: 0.39 }),
         ("agma_full_depth", BasicRack { addendum: 1.0, dedendum: 1.25, root_radius: 0.3 }),
         ("stub", BasicRack { addendum: 0.8, dedendum: 1.0, root_radius: 0.3 }),
+        // For FDM printing: a little more root clearance so tips never bottom in a rough root,
+        // and the largest root fillet the cutter allows (stronger, prints cleaner).
+        ("print_fdm", BasicRack { addendum: 1.0, dedendum: 1.3, root_radius: 0.38 }),
     ];
     pub fn standard(name: &str) -> Option<BasicRack> {
         Self::STANDARDS.iter().find(|(n, _)| *n == name).map(|(_, r)| *r)

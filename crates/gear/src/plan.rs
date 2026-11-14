@@ -627,6 +627,7 @@ fn involute_facts(p: &mut Plan, who: &str, g: &Involute, f: &ToothFlank) {
         p.fact(format!("{pre}lead"), (TAU * g.r() / g.helix.tan()).abs(), Unit::Mm);
     }
     p.fact(format!("{pre}tooth thickness (pitch)"), g.thickness(), Unit::Mm);
+    p.fact(format!("{pre}tip land"), 2.0 * f.ra * f.tip_half, Unit::Mm);
     let (k, w) = g.span();
     p.fact(format!("{pre}span over {k} teeth"), w, Unit::Mm);
     let (m, dp) = g.over_pins(None);

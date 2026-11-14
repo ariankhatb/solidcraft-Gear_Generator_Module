@@ -57,7 +57,24 @@ Added later the same day:
   preview and that member's settings section in the window (coloured section header/marker).
   Hovering or editing a member's settings highlights that gear in the previews, and vice versa.
 
+Batch 1, written but NOT compiled for the engine/UI (gear-crate tests pass, 48/48):
+- `print_fdm` basic rack (dedendum 1.3, full root fillet) + "print preset" toggle in the window
+  (25 deg pressure angle, that rack, backlash >= 0.15 mm) with a nozzle-width field and a
+  warning when a tip land is under two nozzle widths; new "tip land" fact per gear.
+- "Clearance x m" row (edits the dedendum).
+- Member name labels in the 2D preview, in each member's colour.
+- "Load and materials" section in the window feeding the merged strength rating.
+First compile of these is still to do: expect small errors in `gear_window.rs`.
+
+Suggestions the user liked enough to ask for "the easy ones" (the rest still open): mesh-check
+badge in the window (the 2D checker `mesh2d.rs` is test-only; needs to be made public and told
+which members mesh), print test coupon, printer presets, design-by-goal, saved presets and
+design sheet/DXF, joints + housing features, hub hardware (set screws, nut traps, heat-set
+inserts, bearing pockets), tip relief and crowning.
+
 Decisions:
+- **Do not rebuild the app until a large batch of features is ready to test at once** (user,
+  2026-11-14). Fast gear-crate tests are fine; batch engine/UI compiles.
 - The native parametric `FeatureKind::Gear` work (branch `gear-parametric`) is **paused, not
   needed**. Re-point that agent ("timeline rebuilder") at regenerate-in-place with stable
   references.

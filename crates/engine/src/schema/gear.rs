@@ -33,6 +33,8 @@ pub enum RackStandard {
     Iso53D,
     AgmaFullDepth,
     Stub,
+    /// For FDM 3D printing: dedendum 1.3, full root fillet.
+    PrintFdm,
 }
 
 /// How a gear is bored.

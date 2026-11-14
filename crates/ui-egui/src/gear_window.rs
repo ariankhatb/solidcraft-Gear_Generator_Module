@@ -532,8 +532,10 @@ fn preview(ui: &mut Ui, w: &GearWindow) {
     for (g, m) in plan.preview.iter().zip(&w.meshes) {
         if g.slide == 0.0 && g.speed != 0.0 {
             let r = m.outlines.iter().flatten().map(|q| q.len()).fold(0.0, f64::max);
-            lo = V2::new(lo.x.min(g.center.x - r), lo.y.min(g.center.y - r));
-            hi = V2::new(hi.x.max(g.center.x + r), hi.y.max(g.center.y + r));
+            // A centre that goes round the origin sweeps a circle about that instead.
+            let (c, r) = if g.orbit != 0.0 { (V2::ZERO, r + g.center.len()) } else { (g.center, r) };
+            lo = V2::new(lo.x.min(c.x - r), lo.y.min(c.y - r));
+            hi = V2::new(hi.x.max(c.x + r), hi.y.max(c.y + r));
         } else {
             for q in m.outlines.iter().flatten() {
                 let p = g.center + *q;
@@ -552,17 +554,9 @@ fn preview(ui: &mut Ui, w: &GearWindow) {
     let to_screen = |p: V2| -> Pos2 { pos2(c.x + ((p.x - mid.x) * scale) as f32, c.y - ((p.y - mid.y) * scale) as f32) };
     let stroke_color = ui.visuals().text_color();
     for (i, (g, m)) in plan.preview.iter().zip(&w.meshes).enumerate() {
-        let angle = g.speed * w.turned;
-        let slide = g.slide * w.turned;
-        let place = |q: V2| -> Pos2 {
-            let q = if g.slide != 0.0 {
-                // A rack: slides; the worm's section slides along its own axis (+y).
-                if g.name == "worm" { q + V2::new(0.0, wrap_slide(slide, g)) } else { q + V2::new(wrap_slide(slide, g), 0.0) }
-            } else {
-                q.rot(angle)
-            };
-            to_screen(g.center + q)
-        };
+        // The motion the gear crate's mesh tests prove: turning about the centre (which goes
+        // round with the input for a cycloidal drive's disc), or sliding by wrapped tooth pitches.
+        let place = |q: V2| -> Pos2 { to_screen(g.place(q, w.turned)) };
         let color = PALETTE[i % PALETTE.len()];
         let fill = color.gamma_multiply(0.55);
         let mut mesh = egui::Mesh::default();
@@ -599,17 +593,11 @@ fn preview(ui: &mut Ui, w: &GearWindow) {
         if g.slide == 0.0 && g.speed != 0.0 {
             painter.circle_filled(place(V2::polar(g.pitch_radius.max(1.0) * 0.35, 0.0)), 2.5, stroke_color.gamma_multiply(0.6));
         }
-        painter.circle_filled(to_screen(g.center), 2.0, stroke_color.gamma_multiply(0.6));
+        painter.circle_filled(to_screen(if g.slide == 0.0 { g.place(V2::ZERO, w.turned) } else { g.center }), 2.0, stroke_color.gamma_multiply(0.6));
     }
     if !plan.preview_note.is_empty() {
         painter.text(rect.left_bottom() + vec2(8.0, -6.0), egui::Align2::LEFT_BOTTOM, &plan.preview_note, egui::FontId::proportional(11.0), stroke_color.gamma_multiply(0.6));
     }
-}
-
-/// A sliding member moves on by whole tooth pitches only, so it stays in view and its teeth
-/// keep meshing.
-fn wrap_slide(s: f64, g: &solidcraft_gear::PreviewGear) -> f64 {
-    if g.period > 0.0 { s.rem_euclid(g.period) - g.period / 2.0 } else { 0.0 }
 }
 
 fn dashed_circle(p: &egui::Painter, c: Pos2, r: f32, stroke: Stroke) {

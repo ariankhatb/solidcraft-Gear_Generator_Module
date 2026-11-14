@@ -4,7 +4,7 @@
 use std::f64::consts::{PI, TAU};
 
 use crate::geom::{Outline, Seg, V2};
-use crate::involute::{ToothFlank, teeth_outline};
+use crate::involute::{PROFILE_TOLERANCE, ToothFlank, side_points, teeth_outline};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Cycloidal {
@@ -86,28 +86,45 @@ pub fn cycloidal_outline(c: &Cycloidal, phase: f64) -> (Outline, ToothFlank) {
         ra = lo;
     }
     let lowest = (r - 2.0 * a_ded * 0.999).max(rf);
-    // Spaced by the square of the distance from the pitch circle: both cycloids leave it radially
-    // with their angle growing as that distance to the power 3/2, which even steps in radius
-    // would leave the spline to guess.
-    let n = 12;
-    let sq = |i: usize| (i as f64 / n as f64).powi(2);
-    let ded: Vec<(f64, f64)> = (0..=n).map(|i| r - (r - lowest) * sq(n - i)).map(|rr| (rr, half(rr))).collect();
-    let add: Vec<(f64, f64)> = (0..=n).map(|i| r + (ra - r) * sq(i)).map(|rr| (rr, half(rr))).collect();
+    let tol = PROFILE_TOLERANCE * c.module;
+    let min_gap = 5e-6 * ra.max(c.module);
+    // The hypocycloid up to the pitch circle, then the epicycloid: one smooth side (both leave
+    // the pitch circle square to it).
+    // Graded by the square of the distance from the pitch circle: both cycloids leave it
+    // radially with their angle growing as that distance to the power 3/2, which the fit cannot
+    // follow in even steps of radius.
+    let ded = side_points(&half, &|s| if s >= 1.0 { r } else { r - (r - lowest) * (1.0 - s) * (1.0 - s) }, tol, min_gap);
+    let add = side_points(&half, &|s| if s <= 0.0 { r } else if s >= 1.0 { ra } else { r + (ra - r) * s * s }, tol, min_gap);
     let pitch = TAU / f64::from(c.teeth);
-    let root_half = ded[0].1.min(pitch / 2.0);
-    // Straight radial drop from the hypocycloid's end to the root circle.
-    let mut fillet = vec![(rf, root_half)];
-    if lowest > rf + 1e-9 {
-        fillet.push((lowest, root_half));
-    }
-    let mut flank = ded;
-    flank.extend(add.into_iter().skip(1));
-    if fillet.len() < 2 {
-        fillet = vec![(rf, root_half), flank[0]];
-        flank.remove(0);
-        if flank.len() < 2 {
-            flank.insert(0, fillet[1]);
+    let (fillet, flank, root_half);
+    if ded.len() >= 2 && add.len() >= 2 && ded[0].0 - rf <= min_gap {
+        // The dedendum runs down to the root circle: it and the addendum are a spline each,
+        // as they were fitted. One spline through both would have to pass the pitch circle,
+        // where the curvature jumps (a straight radial dedendum against an epicycloid leaving
+        // as the 3/2 power), and would wave about both sides of it.
+        let mut ded = ded;
+        root_half = ded[0].1.min(pitch / 2.0);
+        ded[0] = (rf, root_half);
+        fillet = ded;
+        flank = add;
+    } else {
+        let mut side = ded;
+        if side.is_empty() {
+            side = add;
+        } else if !add.is_empty() {
+            side.extend(add.into_iter().skip(1));
         }
+        if side.len() < 2 {
+            side = vec![(lowest, half(lowest)), (ra, half(ra))];
+        }
+        root_half = side[0].1.min(pitch / 2.0);
+        side[0].1 = root_half;
+        // Straight radial drop from the hypocycloid's end to the root circle.
+        fillet = if side[0].0 - rf > min_gap { vec![(rf, root_half), (side[0].0, root_half)] } else { Vec::new() };
+        if fillet.is_empty() {
+            side[0].0 = rf;
+        }
+        flank = side;
     }
     let f = ToothFlank { rf, ra, root_half, tip_half: half(ra).max(0.0), fillet, flank, undercut: false, pointed };
     (teeth_outline(&f, c.teeth, phase), f)
@@ -138,21 +155,6 @@ impl CycloidalDrive {
         let (rr, e) = (self.pin_circle_radius, self.eccentricity);
         let psi = ((1.0 - n) * t).sin().atan2(rr / (e * n) - ((1.0 - n) * t).cos());
         V2::new(rr * t.cos() - offset * (t + psi).cos() - e * (n * t).cos(), -rr * t.sin() + offset * (t + psi).sin() + e * (n * t).sin())
-    }
-    /// The pins are bigger than the tightest curve of the path their centres trace on the disc:
-    /// the profile offset from that path doubles back on itself (undercut lobes), and the pins
-    /// cut into the lobes it shows.
-    pub fn undercut(&self) -> bool {
-        let rp = self.pin_radius + self.clearance;
-        let steps = 720;
-        let lobe = TAU / f64::from(self.lobes().max(1));
-        let h = lobe / steps as f64 * 0.25;
-        (0..steps).any(|i| {
-            let t = lobe * i as f64 / steps as f64;
-            let path = self.profile(t + h, 0.0) - self.profile(t - h, 0.0);
-            let offset = self.profile(t + h, rp) - self.profile(t - h, rp);
-            path.dot(offset) <= 0.0
-        })
     }
     /// The disc's profile (centred on its own bearing), as one spline per lobe.
     pub fn disc(&self) -> Outline {
@@ -203,6 +205,30 @@ impl CycloidalDrive {
             segs.push(Seg::Spline(pts[k * per_lobe..=(k + 1) * per_lobe].to_vec()));
         }
         Outline { segs }
+    }
+    /// Whether the pins are too big for the lobes: the profile (the pin centres' path on the
+    /// disc, offset by the pin radius) doubles back on itself where the path bends tighter than
+    /// a pin.
+    pub fn undercut(&self) -> bool {
+        let n = f64::from(self.pins);
+        let (rr, rp, e) = (self.pin_circle_radius, self.pin_radius + self.clearance, self.eccentricity);
+        let path = |t: f64| V2::new(rr * t.cos() - e * (n * t).cos(), -rr * t.sin() + e * (n * t).sin());
+        let profile = |t: f64| {
+            let psi = ((1.0 - n) * t).sin().atan2(rr / (e * n) - ((1.0 - n) * t).cos());
+            path(t) + V2::new(-rp * (t + psi).cos(), rp * (t + psi).sin())
+        };
+        let period = TAU / f64::from(self.lobes().max(1));
+        let steps = 720;
+        let h = period / steps as f64;
+        (0..steps).any(|i| {
+            let t = h * i as f64;
+            let (a, b) = (path(t + h) - path(t), profile(t + h) - profile(t));
+            !(a.dot(b) > 0.02 * a.dot(a))
+        })
+    }
+    /// The disc's smallest radius (the bottom of a valley between lobes).
+    pub fn valley_radius(&self) -> f64 {
+        self.pin_circle_radius - self.pin_radius - self.clearance - self.eccentricity
     }
     /// The largest eccentricity before the profile loops (cusps): e < rr / N roughly, and the
     /// pin must fit its curvature.

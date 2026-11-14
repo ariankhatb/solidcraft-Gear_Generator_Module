@@ -2,7 +2,7 @@
 //! pair is probed over driver angles for overlap (area and penetration depth) and for the gap
 //! between the flanks. Conjugate teeth overlap nowhere and stay in (near) contact throughout.
 
-use crate::geom::{Region, V2};
+use crate::geom::{Outline, Region, Seg, V2, natural_spline};
 use crate::plan::PreviewGear;
 
 /// A rigid motion against the driver angle t: turned `speed`·t about a centre that goes round
@@ -50,6 +50,39 @@ pub struct Member {
     pub motion: Motion,
 }
 
+/// The outline as a closed polyline within `tol` of its curves: splines as the sketch runs them
+/// ([`natural_spline`]), sampled finely and thinned to chords that stray no more than `tol`
+/// (`Outline::polyline` gives a spline a fixed few chords a span, whose sag would show up here
+/// as flanks crossing).
+fn polygon(o: &Outline, tol: f64) -> Vec<V2> {
+    let mut out: Vec<V2> = Vec::new();
+    for s in &o.segs {
+        let mut pts = Vec::new();
+        match s {
+            Seg::Spline(p) => {
+                let mut fine = Vec::new();
+                natural_spline(p, 32, &mut fine);
+                let mut i = 0;
+                pts.push(fine[0]);
+                while i + 1 < fine.len() {
+                    let mut j = i + 1;
+                    while j + 1 < fine.len() && j + 1 - i <= 32 && (i + 1..=j).all(|k| seg_dist(fine[k], fine[i], fine[j + 1]) <= tol) {
+                        j += 1;
+                    }
+                    pts.push(fine[j]);
+                    i = j;
+                }
+            }
+            other => other.sample(tol, &mut pts),
+        }
+        if !out.is_empty() && !pts.is_empty() {
+            pts.remove(0);
+        }
+        out.extend(pts);
+    }
+    out
+}
+
 fn signed_area(p: &[V2]) -> f64 {
     p.windows(2).map(|w| w[0].cross(w[1])).sum::<f64>() * 0.5
 }
@@ -69,7 +102,7 @@ impl Member {
         let mut edges = Vec::new();
         for (outlines, hole) in [(&region.outer, false), (&region.holes, true)] {
             for o in outlines {
-                let mut p = o.polyline(tol);
+                let mut p = polygon(o, tol);
                 if p.len() < 3 {
                     continue;
                 }

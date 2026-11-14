@@ -166,3 +166,27 @@ path and its new engine tests have never been compiled into a build or run.
 Next build: after the hypoid fix lands. Also run the engine gear tests once
 (`cargo test --release -p solidcraft-engine gear` — compiles all engine tests; do it when nothing
 else is compiling).
+
+## User feedback 2026-11-14, ~18:45 — UI redesign (priority)
+
+"I want the UI to be a little faster. We don't want to generate the gears immediately. We should
+do the preview first, more realistically though, even including the 3D aspect … use a drawing
+setup where you're able to change the angles … just input the angle and it'll happen … design by
+outputs … I don't want the 0.3 whatever 3D printed thing in the settings; it makes it look too
+complicated. Have a simple mode where you just say the diameters you want, or the angle of the
+shaft … there is no actual 3D preview; the one that generates is too slow, but we don't need to
+generate everything. Generating the angles between the gears, the shafts, all of that is easy
+compute, so we can do that without the teeth."
+
+Plan:
+1. No kernel builds while designing: the live `gear.create` view preview becomes an on-demand
+   button; only Create builds solids.
+2. An instant, orbitable 3D preview inside the window drawn from the math (shafts/axes, angles,
+   pitch cylinders/cones/hyperboloids, gear blanks, optional quick toothed extrusions).
+3. A schematic drawing of the set with editable dimensions (shaft angle, offset, centre distance,
+   diameters): click a dimension, type a value, everything updates.
+4. Simple mode (default): design by outputs — diameters, ratio, shaft angle, centre distance or
+   offset; the solver picks module/teeth/shifts. Advanced mode holds everything else (basic rack,
+   print tuning, hardware, chamfers, tooth tuning).
+Agents: `gear-simple` (outputs solver, gear crate) and `gear-ui2` (window: modes, 3D view,
+drawing, no auto kernel preview).

@@ -47,6 +47,22 @@ pub enum BoreType {
     Square,
 }
 
+/// A gear material for the strength rating (representative allowable stresses).
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GearMaterial {
+    SteelNormalized,
+    SteelThroughHardened,
+    SteelCaseHardened,
+    SteelNitrided,
+    CastIron,
+    Bronze,
+    Pom,
+    Pa66,
+    Pla,
+    Petg,
+}
+
 /// A bore through a gear's axis.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -204,6 +220,36 @@ pub struct GearParams {
     /// A name put in front of the bodies' and the timeline group's names.
     #[serde(default)]
     pub name: Option<String>,
+    /// Strength rating: input torque in N·m on the driving member (gear 1, sun, ring of an
+    /// internal set; the worm of a worm set). Wins over `power`. Without a torque or power the
+    /// set is not rated.
+    #[serde(default)]
+    pub torque: Option<f64>,
+    /// Strength rating: input power in kW (needs `speed`).
+    #[serde(default)]
+    pub power: Option<f64>,
+    /// Strength rating: speed of the driving member in rpm.
+    #[serde(default)]
+    pub speed: Option<f64>,
+    /// Strength rating: gear 1's material (default steel_through_hardened).
+    #[serde(default)]
+    pub material: Option<GearMaterial>,
+    /// Strength rating: gear 2's material (mate, planets, internal set's pinion, worm).
+    #[serde(default)]
+    pub material2: Option<GearMaterial>,
+    /// Strength rating: the planetary ring's material (default: as gear 2).
+    #[serde(default)]
+    pub material3: Option<GearMaterial>,
+    /// Strength rating: application factor KA (default 1; 1.25 light, 1.5 moderate, 1.75 heavy
+    /// shocks).
+    #[serde(default)]
+    pub application_factor: Option<f64>,
+    /// Strength rating: required life in hours (default: unlimited).
+    #[serde(default)]
+    pub life_hours: Option<f64>,
+    /// Strength rating: ISO 1328 accuracy grade 5..12 for the dynamic factor (default 7).
+    #[serde(default)]
+    pub accuracy_grade: Option<u8>,
 }
 
 /// One number describing the set.

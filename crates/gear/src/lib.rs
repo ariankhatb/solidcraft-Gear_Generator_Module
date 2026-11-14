@@ -5,6 +5,9 @@
 //!   ratio, shifts for a centre distance), span and over-pins measurements.
 //! - [`cycloid`]: cycloidal (clock) teeth and the cycloidal drive disc.
 //! - [`hub`]: bores (round, DIN 6885 keyway, D flat, hex, square), hubs, lightening holes.
+//! - [`body`]: integral shafts, chamfers, hub hardware and bearing pockets; tooth tuning for
+//!   printing (tip rounding, horizontal-expansion compensation, elephant-foot relief), tip relief
+//!   and crowning.
 //! - [`plan`]: a gear set ([`plan::Spec`]: spur, helical, herringbone, internal, rack, pair,
 //!   planetary, straight and spiral bevel, hypoid, crossed helical, worm, cycloidal, cycloidal
 //!   drive) as bodies of solid steps, with facts, warnings and a 2D meshing preview.
@@ -14,6 +17,7 @@
 //! Pure math with no dependencies: the engine turns a plan into sketches and features, the
 //! window draws its preview from the same plan.
 
+pub mod body;
 pub mod cycloid;
 pub mod geom;
 pub mod hub;
@@ -26,6 +30,8 @@ pub use plan::{Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit,
 
 #[cfg(test)]
 mod accuracy_tests;
+#[cfg(test)]
+mod body_tests;
 #[cfg(test)]
 mod sweep_tests;
 #[cfg(test)]

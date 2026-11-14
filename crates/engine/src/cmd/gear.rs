@@ -5,7 +5,7 @@
 use serde_json::{Value, json};
 use solidcore_record::Vec2;
 use solidcraft_gear::geom::{Outline, Region, Seg};
-use solidcraft_gear::hub::{Bore, BoreKind};
+use solidcraft_gear::hub::{Bore, BoreKind, Chamfer, Hardware, Shaft, ShaftEnd};
 use solidcraft_gear::involute::BasicRack;
 use solidcraft_gear::plan::{Body, Frame, Kind, Op, Plan, Spec, Step, Unit};
 use solidcraft_io::Geom2;
@@ -15,7 +15,7 @@ use super::CommandSpec;
 use super::sketch::{Left, edit_solved, ids_of};
 use super::sketch_import::add_geometry;
 use crate::params::bad;
-use crate::schema::gear::{BoreParams, BoreType, GearFact, GearMaterial, GearParams, GearResult, GearType, RackStandard};
+use crate::schema::gear::{BoreParams, BoreType, ChamferParams, GearFact, GearMaterial, GearParams, GearResult, GearType, HardwareParams, RackStandard, ShaftEndType, ShaftParams};
 use solidcraft_gear::strength::Material;
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{EngineError, Result, Session};
@@ -37,7 +37,12 @@ pub static COMMANDS: &[CommandSpec] = &[
              bore?, bore2?: {type?: round|keyway|d_flat|hex|square|none, diameter, key_width?, key_depth?, flat?}; hub_diameter?, hub_length?; holes?, hole_diameter?; \
              only?: 1|2|3 (one member); origin?: [x,y,z]; name?; strength rating: torque? (N·m) | power? (kW), speed? (rpm) on the driver, \
              material?, material2?, material3?: steel_normalized|steel_through_hardened|steel_case_hardened|steel_nitrided|cast_iron|bronze|pom|pa66|pla|petg, \
-             application_factor?, life_hours?, accuracy_grade? (5..12). Returns bodies, group, facts (diameters, ratio, centre distance, contact ratio, span and over-pins \
+             application_factor?, life_hours?, accuracy_grade? (5..12); tooth tuning: tip_round? (modules), xy_compensation?, elephant_foot?, elephant_foot_height?, nozzle? (mm), \
+             clearance? (c*), tip_shortening?, tip_diameter?, tip_diameter2?, tip_relief?, tip_relief_height?, crowning?, backlash2?, face_width2?, face_offset2? (pair); \
+             tooth_chamfer_front?, tooth_chamfer_back?: {size, angle?}; bore_chamfer?, hub_chamfer?; shaft_front?, shaft_back?, shaft2_front?, shaft2_back?: \
+             {diameter, length, step_diameter?, step_length?, end?: plain|d_flat|keyway|hex|cross|centre_hole, end_length?, end_size?, chamfer?}; \
+             hardware?, hardware2?: {set_screw?, set_screws?, nut_width?, nut_thickness?, insert_diameter?, insert_depth?, clamp_slit?, clamp_screw?, bearing?: name (608, 625, 6001, MR105, ...), \
+             bearing_od?, bearing_width?, bearing_fit?}. Returns bodies, group, facts (diameters, ratio, centre distance, contact ratio, span and over-pins \
              measurements; with a load: forces, stresses, safety factors SF and SH) and warnings (undercut, pointed teeth, low contact ratio, interference, SF < 1.4, SH < 1)",
         ),
     CommandSpec::new("gear.calculate", "Gear Calculator", crate::checked!("gear.calculate", calculate))
@@ -126,6 +131,107 @@ fn bore_params(b: &Bore) -> Option<BoreParams> {
     Some(BoreParams { kind, diameter: b.diameter, key_width: some(b.key_width), key_depth: some(b.key_depth), flat: some(b.flat) })
 }
 
+const SHAFT_ENDS: [(ShaftEndType, ShaftEnd); 6] = [
+    (ShaftEndType::Plain, ShaftEnd::Plain),
+    (ShaftEndType::DFlat, ShaftEnd::DFlat),
+    (ShaftEndType::Keyway, ShaftEnd::Keyway),
+    (ShaftEndType::Hex, ShaftEnd::Hex),
+    (ShaftEndType::Cross, ShaftEnd::Cross),
+    (ShaftEndType::CentreHole, ShaftEnd::CentreHole),
+];
+
+fn shaft_of(p: &Option<ShaftParams>) -> Shaft {
+    let Some(p) = p else { return Shaft::default() };
+    let end = p.end.unwrap_or(ShaftEndType::Plain);
+    Shaft {
+        diameter: p.diameter,
+        length: p.length,
+        step_diameter: p.step_diameter.unwrap_or(0.0),
+        step_length: p.step_length.unwrap_or(0.0),
+        end: SHAFT_ENDS.iter().find(|(t, _)| *t == end).map(|(_, k)| *k).unwrap_or(ShaftEnd::Plain),
+        end_length: p.end_length.unwrap_or(0.0),
+        end_size: p.end_size.unwrap_or(0.0),
+        chamfer: p.chamfer.unwrap_or(0.0),
+    }
+}
+
+fn shaft_params(s: &Shaft) -> Option<ShaftParams> {
+    if *s == Shaft::default() {
+        return None;
+    }
+    Some(ShaftParams {
+        diameter: s.diameter,
+        length: s.length,
+        step_diameter: Some(s.step_diameter),
+        step_length: Some(s.step_length),
+        end: SHAFT_ENDS.iter().find(|(_, k)| *k == s.end).map(|(t, _)| *t),
+        end_length: Some(s.end_length),
+        end_size: Some(s.end_size),
+        chamfer: Some(s.chamfer),
+    })
+}
+
+fn chamfer_of(p: &Option<ChamferParams>) -> Chamfer {
+    let Some(p) = p else { return Chamfer::default() };
+    Chamfer { size: p.size, angle: p.angle.unwrap_or(45.0) }
+}
+
+fn chamfer_params(c: &Chamfer) -> Option<ChamferParams> {
+    if *c == Chamfer::default() {
+        return None;
+    }
+    Some(ChamferParams { size: c.size, angle: Some(c.angle) })
+}
+
+fn hardware_of(p: &Option<HardwareParams>) -> std::result::Result<Hardware, String> {
+    let mut h = Hardware::default();
+    let Some(p) = p else { return Ok(h) };
+    if let Some(name) = &p.bearing
+        && !h.set_bearing(name)
+    {
+        return Err(format!("`bearing`: no standard bearing is called '{name}'"));
+    }
+    macro_rules! set {
+        ($field:ident) => {
+            if let Some(v) = p.$field {
+                h.$field = v;
+            }
+        };
+    }
+    set!(set_screw);
+    set!(set_screws);
+    set!(nut_width);
+    set!(nut_thickness);
+    set!(insert_diameter);
+    set!(insert_depth);
+    set!(clamp_slit);
+    set!(clamp_screw);
+    set!(bearing_od);
+    set!(bearing_width);
+    set!(bearing_fit);
+    Ok(h)
+}
+
+fn hardware_params(h: &Hardware) -> Option<HardwareParams> {
+    if *h == Hardware::default() {
+        return None;
+    }
+    Some(HardwareParams {
+        set_screw: Some(h.set_screw),
+        set_screws: Some(h.set_screws),
+        nut_width: Some(h.nut_width),
+        nut_thickness: Some(h.nut_thickness),
+        insert_diameter: Some(h.insert_diameter),
+        insert_depth: Some(h.insert_depth),
+        clamp_slit: Some(h.clamp_slit),
+        clamp_screw: Some(h.clamp_screw),
+        bearing: None,
+        bearing_od: Some(h.bearing_od),
+        bearing_width: Some(h.bearing_width),
+        bearing_fit: Some(h.bearing_fit),
+    })
+}
+
 /// The gear set the parameters describe, starting from the type's defaults.
 pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     let kind = p.kind.map(|k| KINDS.iter().find(|(t, _)| *t == k).map(|(_, k)| *k).unwrap_or(Kind::Spur)).unwrap_or(Kind::Spur);
@@ -193,6 +299,32 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     }
     s.bore = bore_of(&p.bore);
     s.bore2 = bore_of(&p.bore2);
+    // Tooth tuning, chamfers, shafts and hub hardware (the gear crate checks the ranges).
+    set!(tip_round, p.tip_round);
+    set!(xy_compensation, p.xy_compensation);
+    set!(elephant_foot, p.elephant_foot);
+    set!(elephant_foot_height, p.elephant_foot_height);
+    set!(nozzle, p.nozzle);
+    set!(clearance, p.clearance);
+    set!(tip_shortening, p.tip_shortening);
+    set!(tip_diameter, p.tip_diameter);
+    set!(tip_diameter2, p.tip_diameter2);
+    set!(tip_relief, p.tip_relief);
+    set!(tip_relief_height, p.tip_relief_height);
+    set!(crowning, p.crowning);
+    s.backlash2 = p.backlash2;
+    set!(face_width2, p.face_width2);
+    set!(face_offset2, p.face_offset2);
+    s.tooth_chamfer_front = chamfer_of(&p.tooth_chamfer_front);
+    s.tooth_chamfer_back = chamfer_of(&p.tooth_chamfer_back);
+    set!(bore_chamfer, p.bore_chamfer);
+    set!(hub_chamfer, p.hub_chamfer);
+    s.shaft_front = shaft_of(&p.shaft_front);
+    s.shaft_back = shaft_of(&p.shaft_back);
+    s.shaft2_front = shaft_of(&p.shaft2_front);
+    s.shaft2_back = shaft_of(&p.shaft2_back);
+    s.hardware = hardware_of(&p.hardware)?;
+    s.hardware2 = hardware_of(&p.hardware2)?;
     // Strength rating (the gear crate checks the ranges).
     let load = &mut s.load;
     if let Some(v) = p.torque {
@@ -330,6 +462,31 @@ pub fn params_of(s: &Spec) -> Value {
         application_factor: (s.load.application_factor != 1.0).then_some(s.load.application_factor),
         life_hours: (s.load.life_hours > 0.0).then_some(s.load.life_hours),
         accuracy_grade: (s.load.quality != 7).then_some(s.load.quality),
+        tip_round: (s.tip_round != 0.0).then_some(s.tip_round),
+        xy_compensation: (s.xy_compensation != 0.0).then_some(s.xy_compensation),
+        elephant_foot: (s.elephant_foot != 0.0).then_some(s.elephant_foot),
+        elephant_foot_height: (s.elephant_foot_height != 0.0).then_some(s.elephant_foot_height),
+        nozzle: (s.nozzle != 0.0).then_some(s.nozzle),
+        clearance: (s.clearance != 0.0).then_some(s.clearance),
+        tip_shortening: (s.tip_shortening != 0.0).then_some(s.tip_shortening),
+        tip_diameter: (s.tip_diameter != 0.0).then_some(s.tip_diameter),
+        tip_diameter2: (s.tip_diameter2 != 0.0).then_some(s.tip_diameter2),
+        tip_relief: (s.tip_relief != 0.0).then_some(s.tip_relief),
+        tip_relief_height: (s.tip_relief_height != 0.0).then_some(s.tip_relief_height),
+        crowning: (s.crowning != 0.0).then_some(s.crowning),
+        backlash2: s.backlash2,
+        face_width2: (s.face_width2 != 0.0).then_some(s.face_width2),
+        face_offset2: (s.face_offset2 != 0.0).then_some(s.face_offset2),
+        tooth_chamfer_front: chamfer_params(&s.tooth_chamfer_front),
+        tooth_chamfer_back: chamfer_params(&s.tooth_chamfer_back),
+        bore_chamfer: (s.bore_chamfer != 0.0).then_some(s.bore_chamfer),
+        hub_chamfer: (s.hub_chamfer != 0.0).then_some(s.hub_chamfer),
+        shaft_front: shaft_params(&s.shaft_front),
+        shaft_back: shaft_params(&s.shaft_back),
+        shaft2_front: shaft_params(&s.shaft2_front),
+        shaft2_back: shaft_params(&s.shaft2_back),
+        hardware: hardware_params(&s.hardware),
+        hardware2: hardware_params(&s.hardware2),
     };
     serde_json::to_value(p).map(strip_nulls).unwrap_or(Value::Null)
 }
@@ -518,12 +675,22 @@ fn feature_id(r: &Value) -> Option<u64> {
 
 /// Builds one body; returns its name.
 fn build_body(s: &mut Session, body: &Body, features: &mut Vec<u64>, warnings: &mut Vec<String>) -> Result<String> {
-    let f: &Frame = &body.frame;
-    let (x, y, z) = (f.x, f.y(), f.z);
     let mut name = body.name.clone();
     for (i, step) in body.steps.iter().enumerate() {
         let label = format!("{} {}", body.name, i + 1);
+        // A placed step (a radial hole, say) runs in its own frame, given in the body's.
+        let placed: Frame;
+        let (step, f): (&Step, &Frame) = match step {
+            Step::Placed { frame, step } => {
+                placed = body.frame.then(frame);
+                (&**step, &placed)
+            }
+            other => (other, &body.frame),
+        };
+        let (x, y, z) = (f.x, f.y(), f.z);
         let reply = match step {
+            // (The gear crate never nests placed steps.)
+            Step::Placed { .. } => continue,
             Step::Prism { region, z0, height, twist, op } => {
                 let (id, _loops) = sketch_loops(s, &format!("{label} profile"), f.world([0.0, 0.0, *z0]), x, y, &region_loops(region), features)?;
                 let mut pick = json!({"sketch": id});
@@ -594,7 +761,7 @@ fn build_body(s: &mut Session, body: &Body, features: &mut Vec<u64>, warnings: &
                         Err(e) if *op != Op::New => {
                             s.execute("timeline.delete", &json!({"features": [id]})).ok();
                             if nudge == 0.0391 {
-                                warnings.push(format!("{}: the back and front cones could not be trimmed ({e}); the teeth ends are left flat", body.name));
+                                warnings.push(format!("{}: a revolved cut (a chamfer or a blank's trim) could not be made ({e}); it is left out", body.name));
                             }
                         }
                         Err(e) => return Err(e),

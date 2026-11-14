@@ -93,6 +93,7 @@ fn every_kind_plans() {
                     Step::Taper { height, scale, .. } => assert!(*height > 0.0 && *scale > 0.0),
                     Step::Revolve { profile, .. } => assert!(profile.len() >= 3),
                     Step::Coil { section, pitch, .. } => assert!(section.len() >= 3 && *pitch > 0.0),
+                    Step::Placed { .. } => panic!("{k:?}: nothing is placed by default"),
                 }
             }
         }

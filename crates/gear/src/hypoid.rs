@@ -36,7 +36,7 @@
 use std::f64::consts::{PI, TAU};
 
 use crate::geom::{Outline, Region, Seg, V2};
-use crate::involute::{Involute, ToothFlank, external_flank, teeth_outline};
+use crate::involute::{Involute, ToothFlank, external_flank};
 use crate::plan::{Body, Frame, Op, Plan, PreviewGear, Spec, Step, Unit};
 
 type V3 = [f64; 3];
@@ -451,74 +451,97 @@ impl Member {
         let flank = external_flank(&v);
         Member { z, delta, re: cone_e * delta.sin(), h: cone_e * delta.cos(), rv: v.r(), flank, pinion, clip: f64::INFINITY }
     }
-    /// A back-cone point (virtual radius `rr`, half angle `half`) on the plane `zs`.
-    fn to_plane(&self, rr: f64, half: f64, zs: f64) -> (f64, f64) {
+    /// Where the ray from the apex through a back-cone point (virtual radius `rr`) meets the plane
+    /// `zs`: its radius there, and how far along the ray that is (1 at the heel).
+    fn project(&self, rr: f64, zs: f64) -> (f64, f64) {
         let t = rr - self.rv;
         let (sd, cd) = self.delta.sin_cos();
         let rho = self.re + t * cd;
         let zz = t * sd;
         let lambda = (self.h - zs) / (self.h - zz);
-        (rho * lambda, half * self.rv / self.re)
+        (rho * lambda, lambda)
     }
     fn root_at(&self, zs: f64) -> f64 {
-        self.to_plane(self.flank.rf, 0.0, zs).0
+        self.project(self.flank.rf, zs).0
     }
-    fn section(&self, zs: f64, phase: f64) -> Outline {
+    /// The teeth on the plane `zs`. A point of the tooth a fraction λ of the way from the apex
+    /// to the heel belongs to the tooth's slice at cone distance λ·`cone_e`, turned by
+    /// `turn` of that distance: on a flat ring gear one plane cuts a tooth along much of its
+    /// length, so its section is itself curved.
+    fn section(&self, zs: f64, phase: f64, cone_e: f64, turn: &dyn Fn(f64) -> f64) -> Outline {
         let f = &self.flank;
-        let map = |pts: &[(f64, f64)]| -> Vec<(f64, f64)> { pts.iter().map(|(rr, hh)| self.to_plane(*rr, *hh, zs)).collect() };
-        let mut ff = ToothFlank {
-            rf: self.to_plane(f.rf, 0.0, zs).0,
-            ra: self.to_plane(f.ra, 0.0, zs).0,
-            root_half: f.root_half * self.rv / self.re,
-            tip_half: f.tip_half * self.rv / self.re,
-            fillet: map(&f.fillet),
-            flank: map(&f.flank),
-            undercut: f.undercut,
-            pointed: f.pointed,
-        };
-        if self.clip < ff.ra && self.clip > ff.rf * 1.001 {
-            clip_flank(&mut ff, self.clip);
+        // Where the tooth ends on this plane: its tip, or the clip radius if that comes first.
+        let mut top = f.ra;
+        if self.clip.is_finite() && self.project(f.ra, zs).0 > self.clip {
+            let (mut lo, mut hi) = (f.rf, f.ra);
+            for _ in 0..60 {
+                let mid = 0.5 * (lo + hi);
+                if self.project(mid, zs).0 < self.clip { lo = mid } else { hi = mid }
+            }
+            top = lo.max(f.rf + 0.02 * (f.ra - f.rf));
         }
-        teeth_outline(&ff, self.z, phase)
+        // One run of points up each side, the same number on every section (a loft needs
+        // sections of the same make-up), closer together towards the root.
+        let all: Vec<(f64, f64)> = f.fillet.iter().chain(f.flank.iter()).copied().collect();
+        let half_at = |rr: f64| -> f64 {
+            if all.len() < 2 {
+                return f.root_half;
+            }
+            let k = all.iter().position(|p| p.0 >= rr).unwrap_or(all.len() - 1).max(1);
+            let (a, b) = (all[k - 1], all[k]);
+            let t = if (b.0 - a.0).abs() > 1e-12 { ((rr - a.0) / (b.0 - a.0)).clamp(0.0, 1.0) } else { 0.0 };
+            a.1 + (b.1 - a.1) * t
+        };
+        let k = self.rv / self.re;
+        let place = |rr: f64, half: f64| -> (f64, f64, f64) {
+            let (rad, lambda) = self.project(rr, zs);
+            (rad, half * k, turn(lambda * cone_e))
+        };
+        let side: Vec<(f64, f64, f64)> = (0..SIDE_POINTS)
+            .map(|i| {
+                let rr = f.rf + (top - f.rf) * (i as f64 / (SIDE_POINTS - 1) as f64).powf(1.3);
+                place(rr, if i == 0 { f.root_half } else { half_at(rr) })
+            })
+            .collect();
+        curved_teeth(&side, place(f.rf, f.root_half), place(top, half_at(top).max(0.0)), self.z, phase)
     }
 }
 
-/// The tooth cut off at radius `r`: its flank ends there and the tip land is the arc at `r`.
-fn clip_flank(f: &mut ToothFlank, r: f64) {
-    let cut = |pts: &mut Vec<(f64, f64)>| -> Option<f64> {
-        let k = pts.iter().position(|p| p.0 >= r)?;
-        let half = if k == 0 {
-            pts[0].1
-        } else {
-            let (a, b) = (pts[k - 1], pts[k]);
-            let t = ((r - a.0) / (b.0 - a.0).max(1e-12)).clamp(0.0, 1.0);
-            a.1 + (b.1 - a.1) * t
-        };
-        pts.truncate(k);
-        // A last point too close to the cut makes a kinked spline end: drop it.
-        if pts.last().is_some_and(|p| r - p.0 < 0.02 * (r - f.rf).max(1e-9)) && pts.len() > 1 {
-            pts.pop();
+/// Points up each side of a tooth section.
+const SIDE_POINTS: usize = 12;
+
+/// The closed outline of `n` teeth whose side is `side`, points (radius, half angle, turn) from
+/// the root to the tip: like [`crate::involute::teeth_outline`], with each point turned by its own
+/// angle and each side one spline.
+fn curved_teeth(side: &[(f64, f64, f64)], root: (f64, f64, f64), tip: (f64, f64, f64), n: u32, phase: f64) -> Outline {
+    let pitch = TAU / f64::from(n);
+    let mut segs = Vec::new();
+    let root_gap = pitch - 2.0 * root.1;
+    for i in 0..n {
+        let a = phase + pitch * f64::from(i);
+        let run = |sign: f64| -> Vec<V2> { side.iter().map(|(r, h, t)| V2::polar(*r, a + t + sign * h)).collect() };
+        let lower = run(-1.0);
+        if lower.len() >= 2 {
+            segs.push(Seg::Spline(lower));
         }
-        pts.push((r, half));
-        Some(half)
-    };
-    let half = match cut(&mut f.fillet) {
-        Some(h) => {
-            f.flank.clear();
-            h
+        // Always a tip land, however thin, so every section has the same pieces.
+        let land = tip.1.max(1e-4 / tip.0.max(1e-6));
+        segs.push(Seg::Arc { c: V2::ZERO, a: V2::polar(tip.0, a + tip.2 - land), b: V2::polar(tip.0, a + tip.2 + land), ccw: true });
+        let upper: Vec<V2> = run(1.0).into_iter().rev().collect();
+        if upper.len() >= 2 {
+            segs.push(Seg::Spline(upper));
         }
-        None => match cut(&mut f.flank) {
-            Some(h) => h,
-            None => return,
-        },
-    };
-    f.ra = r;
-    f.tip_half = half.max(0.0);
+        if root_gap > 1e-6 {
+            segs.push(Seg::Arc { c: V2::ZERO, a: V2::polar(root.0, a + root.2 + root.1), b: V2::polar(root.0, a + pitch + root.2 - root.1), ccw: true });
+        }
+    }
+    crate::involute::join_ends(&mut segs);
+    Outline { segs }
 }
 
 /// Section count along each member's face (more on the pinion: its teeth turn further).
-const PINION_SECTIONS: usize = 6;
-const GEAR_SECTIONS: usize = 5;
+const PINION_SECTIONS: usize = 7;
+const GEAR_SECTIONS: usize = 4;
 
 /// The pinion's frame x axis: square to its axis, towards the gear's +z where it can.
 fn pinion_x(a1: V3) -> V3 {
@@ -579,20 +602,21 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
     }
     // World placement: the crossing point on the gear's axis goes to `origin`.
     let world = |q: V3| -> V3 { [q[0] + s.origin[0], q[1] + s.origin[1], q[2] - d.h + s.origin[2]] };
-    let mut tooth_line_missed = false;
-    // Sections on planes from `z_lo` to `z_hi` (above the heel pitch plane); the tooth line's turn
-    // stays at its end values beyond the face.
-    let mut sections = |m: &Member, count: usize, phase0: f64, cone_e: f64, z_lo: f64, z_hi: f64| -> Vec<(Outline, f64)> {
+    let tooth_line_missed = std::cell::Cell::new(false);
+    // Sections on planes from `z_lo` to `z_hi` (above the heel pitch plane). Past the face the
+    // tooth line runs on along the cutter's circle while that reaches.
+    let sections = |m: &Member, count: usize, phase0: f64, cone_e: f64, z_lo: f64, z_hi: f64| -> Vec<(Outline, f64)> {
         let cone_i = if m.pinion { d.cone_m1 - d.b1 / 2.0 } else { d.cone_m2 - d.b2 / 2.0 };
+        let turn = |r: f64| -> f64 {
+            d.turn(m.pinion, r).or_else(|| d.turn(m.pinion, r.clamp(cone_i, cone_e))).unwrap_or_else(|| {
+                tooth_line_missed.set(true);
+                0.0
+            })
+        };
         (0..count)
             .map(|i| {
                 let zs = z_lo + (z_hi - z_lo) * i as f64 / (count - 1) as f64;
-                let r = (cone_e - zs / m.delta.cos()).clamp(cone_i, cone_e);
-                let turn = d.turn(m.pinion, r).unwrap_or_else(|| {
-                    tooth_line_missed = true;
-                    0.0
-                });
-                (m.section(zs, phase0 + turn), zs)
+                (m.section(zs, phase0, cone_e, &turn), zs)
             })
             .collect()
     };
@@ -601,15 +625,16 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
     let gear_frame = Frame { origin: world([0.0, 0.0, -(d.b2 / 2.0) * d.delta2.cos()]), x: [1.0, 0.0, 0.0], z: [0.0, 0.0, 1.0] };
     let psi2 = d.p[1].atan2(d.p[0]);
     // The ring gear is nearly a crown gear: planes square to its axis cut its teeth at a long
-    // slant, so its sections run from below the heel's roots (else the tooth spaces would be open
-    // underneath) to the toe's pitch plane, each section's teeth cut off at the heel's tip radius
+    // slant, so its sections run from the heel's root plane (else the tooth spaces would be open
+    // underneath) to the toe's tip plane, each section's teeth cut off at the heel's tip radius
     // (a cylinder for a back cone: a boolean trim of the lofted teeth is unreliable in the
     // kernel). Towards the toe the teeth run on, shrinking along the cone, to the top face.
     let (sd2, cd2) = d.delta2.sin_cos();
     let heel_root_z = (gear.flank.rf - gear.rv) * sd2;
     let tip_t = gear.flank.ra - gear.rv;
     let gear_lo = heel_root_z;
-    let gear_hi = d.b2 * cd2;
+    let k_toe = (d.cone_e2 - d.b2) / d.cone_e2;
+    let gear_hi = gear.h - (gear.h - tip_t * sd2) * k_toe;
     let heel_tip_r = gear.re + tip_t * cd2;
     gear.clip = heel_tip_r;
     let gear_secs = sections(&gear, GEAR_SECTIONS, psi2, d.cone_e2, gear_lo, gear_hi);
@@ -623,7 +648,7 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
     let psi1 = dot(rel, y1).atan2(dot(rel, x1));
     let pin_secs = sections(&pin, PINION_SECTIONS, psi1 + PI / d.z1, d.cone_e1, 0.0, d.b1 * d.delta1.cos());
     let pin_top = pin_secs.last().map(|x| x.1).unwrap_or(0.0);
-    if tooth_line_missed {
+    if tooth_line_missed.get() {
         p.warn("the cutter radius is too small to reach across the face; part of the tooth line is left straight");
     }
     let circle = |r: f64| Region { outer: vec![Outline::circle(V2::ZERO, r)], holes: vec![] };
@@ -869,7 +894,7 @@ mod tests {
         let mut s = spec();
         let p = crate::plan(&s).unwrap();
         assert_eq!(p.bodies.len(), 2);
-        assert!(matches!(&p.bodies[0].steps[0], Step::Loft { sections, .. } if sections.len() == PINION_SECTIONS));
+        assert!(matches!(&p.bodies[0].steps[0], Step::Loft { sections, .. } if sections.len() == PINION_SECTIONS && sections.iter().all(|(o, _)| o.segs.len() == sections[0].0.segs.len())));
         // The pinion's axis is E from the gear's (z) axis, square to it.
         let f = p.bodies[0].frame;
         assert!(f.z[2].abs() < 1e-9);
@@ -884,8 +909,10 @@ mod tests {
             let gear = Member::new(&spec(), &d, false);
             let heel_tip = gear.re + (gear.flank.ra - gear.rv) * d.delta2.cos();
             assert!(sections[0].1 < 0.0 && sections.last().unwrap().1 > 0.0);
+            // Every section has the same make-up, as a loft needs.
+            assert!(sections.iter().all(|(o, _)| o.segs.len() == sections[0].0.segs.len()));
             for (o, _) in sections {
-                assert!(o.max_radius() < heel_tip + 1e-6, "{} {heel_tip}", o.max_radius());
+                assert!(o.max_radius() < heel_tip + 0.05, "{} {heel_tip}", o.max_radius());
                 assert!(o.area() > 0.0);
             }
         }

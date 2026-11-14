@@ -336,9 +336,25 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let mut made = Vec::new();
     let mut features = Vec::new();
     let mut warnings = plan.warnings.clone();
-    for body in &plan.bodies {
-        made.push(build_body(s, body, &mut features, &mut warnings).map_err(|e| EngineError::Other(format!("{}: {e}", body.name)))?);
+    // A hypoid set's lofted teeth are many hundreds of faces: the kernel's full check of them
+    // takes several times as long as making them (minutes for a ring gear), so they are built
+    // without it. The check still runs whenever the features are computed again.
+    let checked = s.validation();
+    if spec.kind == Kind::Hypoid {
+        s.set_validation(solidcraft_kernel::Validation::Off);
     }
+    let mut built = Ok(());
+    for body in &plan.bodies {
+        match build_body(s, body, &mut features, &mut warnings) {
+            Ok(name) => made.push(name),
+            Err(e) => {
+                built = Err(EngineError::Other(format!("{}: {e}", body.name)));
+                break;
+            }
+        }
+    }
+    s.set_validation(checked);
+    built?;
     let group_name = if spec.name.trim().is_empty() { kind_title(spec.kind).to_string() } else { spec.name.trim().to_string() };
     let group = if features.is_empty() {
         None

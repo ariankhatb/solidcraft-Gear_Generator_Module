@@ -1,0 +1,26 @@
+{
+  "en": {
+    "gear.window.mesh_checking": "checking the mesh…",
+    "gear.window.mesh_ok": "✓ Meshes",
+    "gear.window.mesh_interferes": "✕ Interferes",
+    "gear.window.mesh_no_contact": "⚠ No contact",
+    "gear.window.copy_sheet": "Copy design sheet",
+    "gear.window.profile_dxf": "Profile DXF:",
+    "gear.window.group_wrapped": "Chain and belt",
+    "gear.window.suggest_open": "Suggest…",
+    "gear.window.suggest": "Suggest",
+    "gear.window.coupon": "Print test coupon"
+  },
+  "de": {
+    "gear.window.mesh_checking": "Eingriff wird geprüft…",
+    "gear.window.mesh_ok": "✓ Kämmt",
+    "gear.window.mesh_interferes": "✕ Kollidiert",
+    "gear.window.mesh_no_contact": "⚠ Kein Kontakt",
+    "gear.window.copy_sheet": "Auslegungsblatt kopieren",
+    "gear.window.profile_dxf": "Profil als DXF:",
+    "gear.window.group_wrapped": "Kette und Riemen",
+    "gear.window.suggest_open": "Vorschlagen…",
+    "gear.window.suggest": "Vorschlagen",
+    "gear.window.coupon": "Testcoupon drucken"
+  }
+}

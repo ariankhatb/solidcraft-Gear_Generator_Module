@@ -30,8 +30,13 @@ use serde_json::{Value, json};
 use solidcraft_gear::axes::{self, Axis, Derived, Drive, Relation, Solved};
 use solidcraft_gear::geom::{Region, V2};
 use solidcraft_gear::hub::{Bore, BoreKind};
+use solidcraft_gear::design::{Goal, Prefer, Suggestion};
 use solidcraft_gear::involute::BasicRack;
+use solidcraft_gear::mesh2d::{MeshResult, Verdict};
 use solidcraft_gear::plan::{Axes, Kind, Plan, Spec, Unit};
+use solidcraft_gear::pulley::{BELTS, belt_by_id};
+use solidcraft_gear::spline::SplineStandard;
+use solidcraft_gear::sprocket::{CHAINS, CUSTOM, chain_by_id};
 
 use crate::SolveApp;
 use crate::ui_kit;
@@ -222,6 +227,23 @@ pub struct GearWindow {
     editing: Option<Editing>,
     /// The last create's or update's error.
     error: Option<String>,
+    /// Bumped whenever the plan is recomputed: what was worked out from a plan (the mesh check)
+    /// carries the generation it was worked out for.
+    plan_gen: u64,
+    /// The 2D mesh check of the plan of that generation (computed once the numbers settle).
+    mesh: Option<(u64, Vec<MeshResult>)>,
+    /// The mesh result the pointer is on in the badge's list: both its members are lit.
+    hover_mesh: Option<usize>,
+    /// Design by goal: the goal as typed, whether its panel is open, and the last suggestions
+    /// (for the goal they were made for), or why there are none.
+    goal: Goal,
+    suggest_open: bool,
+    suggestions: Option<(Goal, Result<Vec<Suggestion>, String>)>,
+    /// A profile DXF asked for: the 2D preview member (index into `plan.preview`) to export;
+    /// taken up after the window is drawn, where the app's save dialog is at hand.
+    export: Option<usize>,
+    /// What the last sheet copy or export did.
+    output_note: Option<String>,
 }
 
 struct GearMesh {
@@ -254,7 +276,11 @@ fn members(k: Kind) -> &'static [&'static str] {
         Kind::Hypoid => &["Pinion", "Gear"],
         Kind::Cycloidal => &["Wheel", "Pinion"],
         Kind::CycloidalDrive => &["Disc", "Ring pins"],
-        Kind::Pair | Kind::Bevel | Kind::SpiralBevel | Kind::CrossedHelical => &["Gear 1", "Gear 2"],
+        Kind::Pair | Kind::Bevel | Kind::SpiralBevel | Kind::CrossedHelical | Kind::Elliptical => &["Gear 1", "Gear 2"],
+        Kind::Sprocket => &["Sprocket 1", "Sprocket 2"],
+        Kind::Pulley => &["Pulley 1", "Pulley 2"],
+        Kind::Spline => &["Shaft", "Hub"],
+        Kind::FaceGear => &["Face gear", "Pinion"],
         Kind::Internal => &["Ring gear"],
         Kind::Rack => &["Rack"],
         // A single gear (spur, helical, herringbone), and any family added later until it
@@ -263,14 +289,20 @@ fn members(k: Kind) -> &'static [&'static str] {
     }
 }
 
-/// The member a 2D preview outline belongs to (the `i`-th of the plan's, called `name`).
-fn member_of_outline(k: Kind, i: usize, name: &str) -> usize {
-    match k {
+/// The member a 2D preview outline belongs to (the `i`-th of the plan's, called `name`); none
+/// for what is drawn but not built (a chain, a belt).
+fn member_of_outline(k: Kind, i: usize, name: &str) -> Option<usize> {
+    let last = members(k).len() - 1;
+    Some(match k {
         Kind::Planetary if name.starts_with("planet") => 1,
         Kind::Planetary if name == "ring" => 2,
         Kind::Planetary => 0,
-        _ => i.min(members(k).len() - 1),
-    }
+        Kind::Sprocket | Kind::Pulley if name == "chain" || name == "belt" => return None,
+        Kind::Sprocket | Kind::Pulley => usize::from(name.ends_with('2')),
+        Kind::Spline => usize::from(name == "hub"),
+        Kind::FaceGear => usize::from(name == "pinion"),
+        _ => i.min(last),
+    })
 }
 
 /// The member a built body belongs to (the `i`-th of the plan's, called `name`; `only` as in
@@ -281,6 +313,8 @@ fn member_of_body(k: Kind, only: u8, i: usize, name: &str) -> usize {
         Kind::Planetary if name.contains("Planet ") => 1,
         Kind::Planetary if name.contains("Ring z") => 2,
         Kind::Planetary => 0,
+        Kind::FaceGear => usize::from(name.contains("pinion")),
+        Kind::Spline => usize::from(name.contains("hub")),
         _ if only > 0 => usize::from(only - 1).min(last),
         _ => i.min(last),
     }
@@ -319,6 +353,14 @@ impl GearWindow {
             edited: None,
             editing: None,
             error: None,
+            plan_gen: 0,
+            mesh: None,
+            hover_mesh: None,
+            goal: Goal::default(),
+            suggest_open: false,
+            suggestions: None,
+            export: None,
+            output_note: None,
         };
         w.replan();
         w.changed_ms = 0.0;
@@ -384,6 +426,7 @@ impl GearWindow {
         self.planned = Some(key);
         self.changed_ms = crate::now_ms();
         self.solved = None;
+        self.plan_gen += 1;
         // With an axis, the set is sized and placed on the axes; what is built is the solved
         // spec, and `spec` stays what was typed.
         let built = match self.axes.axis(0) {
@@ -408,6 +451,24 @@ impl GearWindow {
     /// Whether the numbers have stood still long enough for the view's preview to follow.
     fn settled(&self) -> bool {
         (crate::now_ms() - self.changed_ms).abs() >= SETTLE_MS
+    }
+
+    /// Runs the 2D mesh check once the numbers have settled, for the plan they make (never per
+    /// keystroke: it builds sampled members of every meshing pair).
+    fn check_mesh(&mut self) {
+        if !self.settled() || self.mesh.as_ref().is_some_and(|(g, _)| *g == self.plan_gen) {
+            return;
+        }
+        let results = match &self.plan {
+            Ok(plan) => solidcraft_gear::check_mesh(plan),
+            Err(_) => Vec::new(),
+        };
+        self.mesh = Some((self.plan_gen, results));
+    }
+
+    /// The mesh check for the plan shown, or none while it is not worked out yet.
+    fn mesh_now(&self) -> Option<&[MeshResult]> {
+        self.mesh.as_ref().filter(|(g, _)| *g == self.plan_gen).map(|(_, r)| r.as_slice())
     }
 
     /// The command and parameters that make (or regenerate) the set as the window shows it.
@@ -608,6 +669,7 @@ enum ViewState {
 pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let Some(mut w) = app.gear_window.take() else { return };
     w.replan();
+    w.check_mesh();
     let title = solidcraft_ui_text::tr_label("Gear Generator");
     let create = solidcraft_ui_text::tr("ui.create");
     let close = solidcraft_ui_text::tr("ui.close");
@@ -631,7 +693,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     } else if !w.animate {
         w.turned = 0.0;
     }
-    if view == ViewState::Updating || w.lit().is_some() {
+    if view == ViewState::Updating || w.lit().is_some() || (w.plan.is_ok() && w.mesh_now().is_none()) {
         // The preview starts once the numbers settle, and an edit's glow fades: both need a
         // frame without the pointer moving.
         ctx.request_repaint_after(std::time::Duration::from_millis(80));
@@ -641,6 +703,9 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     }
     if let Some(slot) = w.capture.take() {
         capture(app, &mut w, slot);
+    }
+    if let Some(i) = w.export.take() {
+        export_dxf(app, &mut w, i);
     }
     if action == ui_kit::Action::Ok {
         let (command, params) = w.command(w.ui_state());
@@ -761,7 +826,8 @@ fn axes_step(ui: &mut Ui, w: &mut GearWindow) {
         return;
     }
     let rel = w.axes.relation();
-    let two = rel.is_some() && w.spec.kind.is_set() && !matches!(w.spec.kind, Kind::Planetary | Kind::CycloidalDrive);
+    let two = rel.is_some() && w.spec.kind.is_set() && !matches!(w.spec.kind, Kind::Planetary | Kind::CycloidalDrive | Kind::Spline);
+    let picks_module = matches!(w.spec.kind, Kind::Pair | Kind::Worm | Kind::CrossedHelical | Kind::Hypoid);
     ui.horizontal_wrapped(|ui| {
         ui.add_sized([110.0, 18.0], egui::Label::new(egui::RichText::new("Relation").small().weak()));
         let text = match &rel {
@@ -792,7 +858,9 @@ fn axes_step(ui: &mut Ui, w: &mut GearWindow) {
                     ui.checkbox(&mut a.flip2, "Flip 2").on_hover_text("Gear 2 on the other side of where the axes meet");
                 }
                 _ => {
-                    ui.checkbox(&mut a.auto_module, "Standard module").on_hover_text("Choose the ISO 54 module that suits the axes, instead of the one typed");
+                    if picks_module {
+                        ui.checkbox(&mut a.auto_module, "Standard module").on_hover_text("Choose the ISO 54 module that suits the axes, instead of the one typed");
+                    }
                     if matches!(rel, Some(Relation::Skew { .. })) {
                         ui.checkbox(&mut a.flip1, "Other angle").on_hover_text("Read the shaft angle the other way round (its supplement)");
                     }
@@ -841,6 +909,8 @@ fn body(ui: &mut Ui, w: &mut GearWindow, view: ViewState, view_error: Option<&st
             ui.set_width((full - left - 8.0).max(200.0));
             w.hover_preview = preview(ui, w);
             motion_row(ui, w);
+            mesh_badge(ui, w);
+            output_row(ui, w);
             view_row(ui, w, view, view_error);
             if let Some(e) = &w.error {
                 ui.colored_label(ui.visuals().error_fg_color, e);
@@ -865,6 +935,97 @@ fn motion_row(ui: &mut Ui, w: &mut GearWindow) {
         }
         if w.pose() == 0.0 {
             ui.label(egui::RichText::new("build pose").small().weak()).on_hover_text("The set as it is built: the view's preview shows this pose");
+        }
+    });
+}
+
+/// The 2D mesh check's verdict on the set shown: green when every meshing pair meshes, red when
+/// any cut into each other, amber when any lose contact; hidden for sets it cannot check (axes
+/// that are not parallel). Pointing at it, or at one pair in its list, lights those members.
+fn mesh_badge(ui: &mut Ui, w: &mut GearWindow) {
+    w.hover_mesh = None;
+    if w.plan.is_err() {
+        return;
+    }
+    let Some(results) = w.mesh_now() else {
+        ui.label(egui::RichText::new(solidcraft_ui_text::tr("gear.window.mesh_checking")).small().weak());
+        return;
+    };
+    let Some(verdict) = solidcraft_gear::mesh2d::worst(results) else { return };
+    let (text, color) = match verdict {
+        Verdict::Ok => (solidcraft_ui_text::tr("gear.window.mesh_ok"), Color32::from_rgb(70, 170, 90)),
+        Verdict::Interferes => (solidcraft_ui_text::tr("gear.window.mesh_interferes"), Color32::from_rgb(214, 72, 64)),
+        Verdict::NoContact => (solidcraft_ui_text::tr("gear.window.mesh_no_contact"), Color32::from_rgb(220, 160, 40)),
+    };
+    let tip = results.iter().map(|r| r.message.as_str()).collect::<Vec<_>>().join("\n");
+    let worst_at = results.iter().position(|r| r.verdict == verdict);
+    let mut hovered = None;
+    ui.horizontal(|ui| {
+        let chip = egui::Frame::new().fill(color.gamma_multiply(0.22)).stroke(Stroke::new(1.0, color)).corner_radius(4.0).inner_margin(egui::Margin::symmetric(6, 1));
+        let r = chip.show(ui, |ui| ui.label(egui::RichText::new(text).small().strong().color(color))).response.interact(Sense::hover());
+        if r.on_hover_text(&tip).hovered() {
+            hovered = worst_at;
+        }
+        ui.label(egui::RichText::new("2D mesh check over one tooth pitch").small().weak());
+    });
+    if results.len() > 1 {
+        egui::CollapsingHeader::new(egui::RichText::new("each mesh").small()).id_salt("gear_mesh_list").show(ui, |ui| {
+            for (i, r) in results.iter().enumerate() {
+                let c = match r.verdict {
+                    Verdict::Ok => ui.visuals().weak_text_color(),
+                    Verdict::Interferes => Color32::from_rgb(214, 72, 64),
+                    Verdict::NoContact => Color32::from_rgb(220, 160, 40),
+                };
+                if ui.label(egui::RichText::new(&r.message).small().color(c)).hovered() {
+                    hovered = Some(i);
+                }
+            }
+        });
+    }
+    w.hover_mesh = hovered;
+}
+
+/// The design sheet (Markdown, to the clipboard) and a member's profile as a DXF (through the
+/// app's save dialog).
+fn output_row(ui: &mut Ui, w: &mut GearWindow) {
+    let Ok(plan) = &w.plan else { return };
+    let kind = w.built.kind;
+    let mut export = None;
+    ui.horizontal_wrapped(|ui| {
+        if ui.small_button(solidcraft_ui_text::tr("gear.window.copy_sheet")).on_hover_text("The inputs, every result, the mesh check and the parts, as a Markdown table, to the clipboard").clicked() {
+            ui.ctx().copy_text(solidcraft_gear::sheet::design_sheet(&w.built, plan));
+            w.output_note = Some("Design sheet copied".into());
+        }
+        ui.label(egui::RichText::new(solidcraft_ui_text::tr("gear.window.profile_dxf")).small().weak()).on_hover_text("A member's transverse profile (with its bore) as an R12 DXF in millimetres, centred on the origin");
+        for (i, g) in plan.preview.iter().enumerate() {
+            let Some(member) = member_of_outline(kind, i, &g.name) else { continue };
+            let text = egui::RichText::new(&g.name).small().color(member_color(member));
+            if ui.small_button(text).on_hover_text(format!("Save {}'s profile as a DXF", g.name)).clicked() {
+                export = Some(i);
+            }
+        }
+    });
+    if export.is_some() {
+        w.export = export;
+    }
+    if let Some(note) = &w.output_note {
+        ui.label(egui::RichText::new(note).small().weak());
+    }
+}
+
+/// Saves preview member `i`'s profile as a DXF, through the app's save dialog.
+fn export_dxf(app: &mut SolveApp, w: &mut GearWindow, i: usize) {
+    let Ok(plan) = &w.plan else { return };
+    let Some(g) = plan.preview.get(i) else { return };
+    let text = solidcraft_gear::sheet::region_dxf(&g.region, w.built.module);
+    let stem: String = format!("{} {}", w.built.kind.name(), g.name).chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    w.output_note = None;
+    app.pick_save(&format!("{stem}.dxf"), &["dxf"], move |app, path| {
+        if let Some(path) = path {
+            match std::fs::write(&path, text) {
+                Ok(()) => app.set_status(format!("Profile saved to {path}"), false),
+                Err(e) => app.set_status(format!("Could not save {path}: {e}"), true),
+            }
         }
     });
 }
@@ -894,7 +1055,7 @@ fn type_picker(ui: &mut Ui, w: &mut GearWindow) {
     // With the axes set, the types that can't sit on them are greyed, with why.
     let fit = w.axes.axis(0).map(|_| axes::candidates(w.axes.relation().as_ref()));
     let mut pick = None;
-    for (group, label) in [(Axes::Parallel, "Parallel axes"), (Axes::Intersecting, "Intersecting axes"), (Axes::Crossed, "Crossed axes"), (Axes::Special, "Special")] {
+    for (group, label) in [(Axes::Parallel, "Parallel axes"), (Axes::Intersecting, "Intersecting axes"), (Axes::Crossed, "Crossed axes"), (Axes::Wrapped, solidcraft_ui_text::tr("gear.window.group_wrapped")), (Axes::Special, "Special")] {
         ui.horizontal_wrapped(|ui| {
             ui.add_sized([110.0, 18.0], egui::Label::new(egui::RichText::new(label).small().weak()));
             for k in Kind::ALL.iter().copied().filter(|k| k.axes() == group) {
@@ -921,6 +1082,14 @@ fn locked(ui: &mut Ui, label: &str, value: String) {
     row(ui, label, "Worked out from the axes", |ui| {
         ui.label(egui::RichText::new(value).monospace());
         ui.label(egui::RichText::new("from the axes").small().weak());
+    });
+}
+
+/// A row that follows another value (not the axes): shown, not editable.
+fn locked_note(ui: &mut Ui, label: &str, value: String, why: &str) {
+    row(ui, label, "", |ui| {
+        ui.label(egui::RichText::new(value).monospace());
+        ui.label(egui::RichText::new(why).small().weak());
     });
 }
 
@@ -982,6 +1151,14 @@ struct Cx<'a> {
     /// The set is placed by the Axes step (no "Centre at").
     on_axes: bool,
     o: &'a mut Opts,
+    /// The Axes step (a suggestion taken turns its ratio and standard module off, so the
+    /// suggested numbers are the ones built), and the distance between parallel axes.
+    axes: &'a mut AxesStep,
+    axis_distance: Option<f64>,
+    /// Design by goal: the goal, whether its panel is open, and the last suggestions.
+    goal: &'a mut Goal,
+    suggest_open: &'a mut bool,
+    suggestions: &'a mut Option<(Goal, Result<Vec<Suggestion>, String>)>,
 }
 
 /// The settings column. One function per section, in this order; a member's rows go in
@@ -996,18 +1173,39 @@ struct Cx<'a> {
 /// - printing (print profile, XY compensation, elephant-foot relief): [`section_print`];
 /// - hubs, holes and other shared body features: [`section_body`];
 /// - inputs only one family has (hypoid cutter data, a new family's own): [`section_family`];
-/// - the strength rating: [`section_load`]; what is built and where: [`section_output`].
+/// - the strength rating: [`section_load`]; what is built and where (and the print test
+///   coupon): [`section_output`]; design by goal: [`section_suggest`];
+/// - new tables (shafts, chamfers, print tuning, hardware from `gear-body`; hypoid inputs): a
+///   section function of their own, called from the list below, or the member stubs.
 fn params(ui: &mut Ui, w: &mut GearWindow) {
     // What the axes decided is shown from the solved set, read-only.
     let d: Derived = w.solved.as_ref().map(|s| s.derived).unwrap_or_default();
     let b = w.built.clone();
     let lit = w.lit();
     let k = w.spec.kind;
-    let mut cx = Cx { s: &mut w.spec, b: &b, d, k, on_axes: w.axes.slots[0].is_some(), o: &mut w.opts };
+    let on_axes = w.axes.slots[0].is_some();
+    let axis_distance = match w.axes.relation() {
+        Some(Relation::Parallel { distance, .. }) => Some(distance),
+        _ => None,
+    };
+    let mut cx = Cx {
+        s: &mut w.spec,
+        b: &b,
+        d,
+        k,
+        on_axes,
+        o: &mut w.opts,
+        axes: &mut w.axes,
+        axis_distance,
+        goal: &mut w.goal,
+        suggest_open: &mut w.suggest_open,
+        suggestions: &mut w.suggestions,
+    };
     let mut hovered = None;
     let mut edited = None;
     egui::ScrollArea::vertical().id_salt("gear_params").max_height(470.0).auto_shrink([false, true]).show(ui, |ui| {
         section_set(ui, &mut cx);
+        section_suggest(ui, &mut cx);
         section_family(ui, &mut cx);
         for (m, label) in members(k).iter().enumerate() {
             let before = cx.s.clone();
@@ -1043,6 +1241,10 @@ fn section_set(ui: &mut Ui, cx: &mut Cx<'_>) {
     let s = &mut *cx.s;
     let o = &mut *cx.o;
     heading(ui, if k.is_set() { "Whole set" } else { "Size" });
+    if matches!(k, Kind::Sprocket | Kind::Pulley) {
+        wrapped_rows(ui, s, b, d);
+        return;
+    }
     if k == Kind::CycloidalDrive {
         num(ui, "Pin circle Ø", "Diameter through the pin centres", &mut s.pin_circle, 1.0..=5000.0, 0.5, " mm");
         num(ui, "Eccentricity", "Offset of the disc's bearing; under pin circle radius ÷ pins", &mut s.eccentricity, 0.01..=100.0, 0.05, " mm");
@@ -1097,8 +1299,192 @@ fn section_set(ui: &mut Ui, cx: &mut Cx<'_>) {
             }
         });
     }
-    num(ui, "Backlash", "Taken off each tooth at the pitch circle", &mut s.backlash, 0.0..=5.0, 0.005, " mm");
-    num(ui, "Face width", "", &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
+    match k {
+        Kind::Spline => {
+            num(ui, "Flank clearance", "Taken off the shaft's and the hub's flanks: the fit's side clearance", &mut s.backlash, 0.0..=5.0, 0.005, " mm");
+            num(ui, "Length", "The spline's engaged length", &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
+        }
+        Kind::FaceGear => {
+            num(ui, "Backlash", "Taken off each tooth at the pitch circle", &mut s.backlash, 0.0..=5.0, 0.005, " mm");
+            num(ui, "Tooth length", "Along the face gear's radius, from the inner end", &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
+        }
+        _ => {
+            num(ui, "Backlash", "Taken off each tooth at the pitch circle", &mut s.backlash, 0.0..=5.0, 0.005, " mm");
+            num(ui, "Face width", "", &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
+        }
+    }
+}
+
+/// Chain sprockets and timing pulleys: the chain or belt, and the drive between two of them
+/// (they have no module or pressure angle; the chain or belt sets the teeth's form).
+fn wrapped_rows(ui: &mut Ui, s: &mut Spec, b: &Spec, d: Derived) {
+    if s.kind == Kind::Sprocket {
+        let current = chain_by_id(s.chain).map(|c| c.label).unwrap_or("custom");
+        row(ui, "Chain", "ISO 606 B series, ANSI B29.1 (ISO 606 A series), or sizes of your own", |ui| {
+            egui::ComboBox::from_id_salt("gear_chain").selected_text(current).show_ui(ui, |ui| {
+                for c in CHAINS {
+                    ui.selectable_value(&mut s.chain, c.id, c.label);
+                }
+                ui.selectable_value(&mut s.chain, CUSTOM, "custom");
+            });
+        });
+        if chain_by_id(s.chain).is_none() {
+            num(ui, "  Pitch", "", &mut s.chain_pitch, 1.0..=200.0, 0.05, " mm");
+            num(ui, "  Roller Ø", "", &mut s.roller_diameter, 0.5..=150.0, 0.05, " mm");
+            num(ui, "  Inner width", "Between the inner plates", &mut s.roller_width, 0.5..=150.0, 0.05, " mm");
+            num(ui, "  Strand pitch", "Transverse pitch of a duplex or triplex chain", &mut s.strand_pitch, 0.5..=300.0, 0.05, " mm");
+        }
+        count(ui, "Strands", "1 simplex, 2 duplex, 3 triplex", &mut s.strands, 1..=4);
+        row(ui, "Side chamfer", "ISO 606 tooth side radius and chamfer, so the chain runs on", |ui| {
+            ui.checkbox(&mut s.side_chamfer, "");
+        });
+    } else {
+        let current = belt_by_id(s.belt).map(|b| b.label).unwrap_or("?");
+        row(ui, "Belt", "Groove forms approximated from published belt dimensions", |ui| {
+            egui::ComboBox::from_id_salt("gear_belt").selected_text(current).show_ui(ui, |ui| {
+                for belt in BELTS {
+                    if ui.selectable_value(&mut s.belt, belt.id, belt.label).changed()
+                        && let Some(width) = belt.widths.first()
+                    {
+                        s.face_width = *width;
+                    }
+                }
+            });
+        });
+        num(ui, "Belt width", "The pulley's groove is this wide between the flanges", &mut s.face_width, 0.5..=500.0, 0.5, " mm");
+        row(ui, "Flanges", "Keep the belt on", |ui| {
+            ui.checkbox(&mut s.flanges, "");
+        });
+    }
+    let second = if d.teeth2 { b.teeth2 } else { s.teeth2 };
+    if second > 0 {
+        if d.center_distance {
+            locked(ui, "Centre distance", mm(b.center_distance));
+        } else {
+            let tip = if s.kind == Kind::Sprocket { "0: 40 pitches; rounded to an even number of links" } else { "0: three pitch diameters; rounded to a whole belt" };
+            num(ui, "Centre distance", tip, &mut s.center_distance, 0.0..=1e5, 0.5, " mm");
+        }
+    }
+}
+
+/// Design by goal (gear pairs): a ratio, limits and a preference in, a ranked list of pairs
+/// out, any of which can be taken into the window. Worked out on the button, never per
+/// keystroke. The tooth form, helix, backlash, face width and load are the window's own.
+fn section_suggest(ui: &mut Ui, cx: &mut Cx<'_>) {
+    if cx.k != Kind::Pair {
+        return;
+    }
+    ui.add_space(4.0);
+    ui.toggle_value(cx.suggest_open, egui::RichText::new(solidcraft_ui_text::tr("gear.window.suggest_open")).strong())
+        .on_hover_text("Find gear pairs for a ratio within limits (size, centre distance, modules, teeth), ranked by what matters most");
+    if !*cx.suggest_open {
+        return;
+    }
+    let g = &mut *cx.goal;
+    num(ui, "  Ratio", "Gear 2's teeth ÷ gear 1's", &mut g.ratio, 0.05..=100.0, 0.01, "");
+    let mut tol = g.ratio_tolerance * 100.0;
+    row(ui, "  Within", "How far the ratio may be off (0: exact)", |ui| {
+        if ui.add(egui::DragValue::new(&mut tol).range(0.0..=20.0).speed(0.05).max_decimals(2).suffix(" %")).changed() {
+            g.ratio_tolerance = tol / 100.0;
+        }
+    });
+    match cx.axis_distance {
+        Some(a) => {
+            g.center_distance = a;
+            locked(ui, "  Centre distance", mm(a));
+        }
+        None => num(ui, "  Centre distance", "0: free", &mut g.center_distance, 0.0..=1e5, 0.5, " mm"),
+    }
+    num(ui, "  Largest tip Ø", "Of either gear; 0: free", &mut g.max_outer_diameter, 0.0..=1e5, 1.0, " mm");
+    row(ui, "  Modules", "The standard series from … to", |ui| {
+        ui.add(egui::DragValue::new(&mut g.min_module).range(0.05..=100.0).speed(0.05).max_decimals(3));
+        ui.label("to");
+        ui.add(egui::DragValue::new(&mut g.max_module).range(0.05..=100.0).speed(0.05).max_decimals(3));
+        ui.checkbox(&mut g.second_choice_modules, "2nd choice");
+    });
+    row(ui, "  Teeth", "Fewest (0: no undercut) and most on a gear", |ui| {
+        ui.add(egui::DragValue::new(&mut g.min_teeth).range(0..=400).speed(0.2));
+        ui.label("to");
+        ui.add(egui::DragValue::new(&mut g.max_teeth).range(6..=2000).speed(0.5));
+    });
+    row(ui, "  Profile shift", "May be used to avoid undercut on few teeth and to reach a centre distance", |ui| {
+        ui.checkbox(&mut g.allow_shift, "allowed");
+    });
+    row(ui, "  Prefer", "How the suggestions are ranked", |ui| {
+        egui::ComboBox::from_id_salt("gear_goal_prefer").selected_text(g.prefer.label()).show_ui(ui, |ui| {
+            for p in Prefer::ALL {
+                ui.selectable_value(&mut g.prefer, p, p.label());
+            }
+        });
+    });
+    row(ui, "  Show", "Most suggestions to list", |ui| {
+        ui.add(egui::DragValue::new(&mut g.limit).range(1..=50).speed(0.2));
+    });
+    // The rest of the goal is the window's own.
+    let s = &*cx.s;
+    g.pressure_angle = s.pressure_angle;
+    g.helix = s.helix;
+    g.rack = s.rack;
+    g.backlash = s.backlash;
+    g.face_width = s.face_width;
+    g.load = s.load.clone();
+    if ui.button(solidcraft_ui_text::tr("gear.window.suggest")).clicked() {
+        let found = solidcraft_gear::design::check(g).map(|()| solidcraft_gear::design::suggest(g));
+        *cx.suggestions = Some((g.clone(), found));
+    }
+    let mut take = None;
+    match cx.suggestions.as_ref() {
+        None => {}
+        Some((_, Err(e))) => {
+            ui.colored_label(ui.visuals().error_fg_color, e);
+        }
+        Some((_, Ok(list))) if list.is_empty() => {
+            ui.colored_label(ui.visuals().warn_fg_color, "No pair meets this goal: widen the modules, the teeth or the ratio tolerance");
+        }
+        Some((asked, Ok(list))) => {
+            if asked != &*g {
+                ui.label(egui::RichText::new("The goal changed since: press Suggest again").small().weak());
+            }
+            egui::Grid::new("gear_suggestions").num_columns(7).striped(true).spacing([8.0, 2.0]).show(ui, |ui| {
+                for h in ["z₁ : z₂", "m", "ratio", "a", "tip Ø", "SF / SH", ""] {
+                    ui.label(egui::RichText::new(h).small().weak());
+                }
+                ui.end_row();
+                for (i, sg) in list.iter().enumerate() {
+                    let small = |t: String| egui::RichText::new(t).small().monospace();
+                    ui.label(small(format!("{} : {}{}", sg.teeth, sg.teeth2, if sg.hunting { " ·" } else { "" })))
+                        .on_hover_text(if sg.hunting { "Hunting tooth: every tooth meets every tooth of the mate" } else { "The counts share a factor" });
+                    ui.label(small(format!("{}", sg.module)));
+                    ui.label(small(format!("{:.4}", sg.ratio))).on_hover_text(format!("{:+.3} % from the goal", sg.ratio_error * 100.0));
+                    ui.label(small(format!("{:.2}", sg.center_distance)));
+                    ui.label(small(format!("{:.1}", sg.outer_diameter.max(sg.outer_diameter2))));
+                    let safety = match (sg.safety_bending, sg.safety_contact) {
+                        (Some(f), Some(h)) => format!("{f:.2} / {h:.2}"),
+                        _ => "–".into(),
+                    };
+                    ui.label(small(safety)).on_hover_text(format!("contact ratio {:.3}", sg.total_contact_ratio));
+                    if ui.small_button("Use").on_hover_text("Take this pair into the window").clicked() {
+                        take = Some(i);
+                    }
+                    ui.end_row();
+                }
+            });
+        }
+    }
+    if let Some((asked, Ok(list))) = cx.suggestions.as_ref()
+        && let Some(sg) = take.and_then(|i| list.get(i))
+    {
+        let t = sg.spec(asked);
+        let s = &mut *cx.s;
+        (s.module, s.teeth, s.teeth2, s.shift, s.shift2, s.face_width) = (t.module, t.teeth, t.teeth2, t.shift, t.shift2, t.face_width);
+        // A centre distance the goal fixed and no axes give is kept as the set's own.
+        if cx.axis_distance.is_none() {
+            s.center_distance = if asked.center_distance > 0.0 { sg.center_distance } else { 0.0 };
+        }
+        // The suggested numbers are the ones built: the axes no longer choose them.
+        cx.axes.use_ratio = false;
+        cx.axes.auto_module = false;
+    }
 }
 
 /// Inputs only one family has. EXTENSION POINT: a new family's own inputs, or more of an
@@ -1114,6 +1500,30 @@ fn section_family(ui: &mut Ui, cx: &mut Cx<'_>) {
             num(ui, "Offset", "Distance between the axes; 0 for equal spiral angles", &mut s.offset, 0.0..=5000.0, 0.5, " mm");
         }
         num(ui, "Face start", "Where the teeth start along the line of contact, from the throat; larger looks more like a bevel", &mut s.face_start, -5000.0..=5000.0, 0.5, " mm");
+    }
+    match k {
+        Kind::Spline => {
+            row(ui, "Standard", "", |ui| {
+                egui::ComboBox::from_id_salt("gear_spline_std").selected_text(s.spline_standard.label()).show_ui(ui, |ui| {
+                    for (std, _, label) in SplineStandard::ALL {
+                        ui.selectable_value(&mut s.spline_standard, std, label);
+                    }
+                });
+            });
+            if s.spline_standard == SplineStandard::Din5480 {
+                num(ui, "Reference Ø d_B", "The nominal diameter; sets the profile shift. 0: module × (teeth + 1.1)", &mut s.spline_diameter, 0.0..=5000.0, 0.1, " mm");
+            }
+            row(ui, "Fillet root", "A full round root instead of a flat one", |ui| {
+                ui.checkbox(&mut s.fillet_root, "");
+            });
+        }
+        Kind::Elliptical => {
+            num(ui, "Eccentricity", "Of gear 1's ellipse; 0 is a circle. The mate is its exact conjugate", &mut s.ellipse_eccentricity, 0.0..=0.7, 0.005, "");
+        }
+        Kind::FaceGear => {
+            num(ui, "Teeth inner Ø", "Where the teeth start; 0: the undercut limit", &mut s.inner_diameter, 0.0..=1e5, 0.5, " mm");
+        }
+        _ => {}
     }
 }
 
@@ -1160,6 +1570,57 @@ fn section_member(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
                 material(ui, "Material", "gear_mat2", &mut s.load.material2);
             }
         }
+        (Kind::Sprocket | Kind::Pulley, 0) => {
+            if d.teeth {
+                locked(ui, "Teeth", b.teeth.to_string());
+            } else {
+                let (tip, most) = if k == Kind::Sprocket { ("17 or more runs smoothly", 250) } else { ("", 400) };
+                count(ui, "Teeth", tip, &mut s.teeth, 6..=most);
+            }
+            bore(ui, "Bore", "bore1", &mut s.bore);
+        }
+        (Kind::Sprocket | Kind::Pulley, _) => {
+            if d.teeth2 {
+                locked(ui, "Teeth", b.teeth2.to_string());
+            } else {
+                let most = if k == Kind::Sprocket { 250 } else { 400 };
+                let tip = if k == Kind::Sprocket { "Joined by the chain; 0: no second sprocket" } else { "Joined by the belt; 0: no second pulley" };
+                count(ui, "Teeth", tip, &mut s.teeth2, 0..=most);
+            }
+            bore(ui, "Bore", "bore2", &mut s.bore2);
+        }
+        (Kind::Spline, 0) => {
+            count(ui, "Teeth", "", &mut s.teeth, 6..=200);
+            bore(ui, "Bore", "bore1", &mut s.bore);
+        }
+        (Kind::Spline, _) => {
+            locked_note(ui, "Teeth", b.teeth.to_string(), "as the shaft");
+            num(ui, "Outer Ø", "The hub's outside; 0: the rim below", &mut s.hub_diameter, 0.0..=5000.0, 0.2, " mm");
+            if s.hub_diameter <= 0.0 {
+                num(ui, "Rim", "Beyond the tooth roots; 0: about 3 modules", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
+            }
+        }
+        (Kind::FaceGear, 0) => {
+            if d.teeth2 {
+                locked(ui, "Teeth", b.teeth2.to_string());
+            } else {
+                count(ui, "Teeth", "More than the pinion's by 2 or more", &mut s.teeth2, 8..=2000);
+            }
+            num(ui, "Base", "Below the tooth spaces; 0: 2.5 modules", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
+            bore(ui, "Bore", "bore1", &mut s.bore);
+        }
+        (Kind::FaceGear, _) => {
+            if d.teeth {
+                locked(ui, "Teeth", b.teeth.to_string());
+            } else {
+                count(ui, "Teeth", "The spur pinion that cuts the face gear's teeth", &mut s.teeth, 6..=200);
+            }
+            bore(ui, "Bore", "bore2", &mut s.bore2);
+        }
+        (Kind::Elliptical, 1) => {
+            locked_note(ui, "Teeth", b.teeth.to_string(), "as gear 1");
+            bore(ui, "Bore", "bore2", &mut s.bore2);
+        }
         (Kind::Planetary, 2) => {
             let mut ring = if s.teeth3 > 0 { s.teeth3 } else { s.teeth + 2 * s.teeth2 };
             row(ui, "Teeth", "Sun + 2 × planet for standard gears", |ui| {
@@ -1181,7 +1642,7 @@ fn section_member(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
             } else {
                 count(ui, "Teeth", "", &mut s.teeth, 3..=2000);
             }
-            if k.involute() && k != Kind::Worm {
+            if k.involute() && !matches!(k, Kind::Worm | Kind::Elliptical) {
                 num(ui, if k.is_set() { "Shift x₁" } else { "Profile shift x" }, "Profile shift coefficient: positive thickens the root and avoids undercut", &mut s.shift, -1.5..=1.5, 0.01, "");
                 if k == Kind::Pair && d.center_distance && d.shift {
                     locked(ui, "  x₁ (auto while 0)", format!("{:.4}", b.shift));
@@ -1242,7 +1703,7 @@ fn member_hardware(_ui: &mut Ui, _cx: &mut Cx<'_>, _m: usize) {}
 /// The tooth form: the basic rack and its coefficients, and the clearance. EXTENSION POINT:
 /// tip relief, crowning, tip rounding and a separate root fillet go here.
 fn section_tooth_form(ui: &mut Ui, cx: &mut Cx<'_>) {
-    if !cx.k.involute() {
+    if !cx.k.involute() || cx.k == Kind::Spline {
         return;
     }
     let s = &mut *cx.s;
@@ -1274,7 +1735,7 @@ fn section_tooth_form(ui: &mut Ui, cx: &mut Cx<'_>) {
 /// against. EXTENSION POINT: the print profile's own fields (XY compensation, elephant-foot
 /// relief, minimum tip thickness, printer presets) go here.
 fn section_print(ui: &mut Ui, cx: &mut Cx<'_>) {
-    if !cx.k.involute() {
+    if !cx.k.involute() || cx.k == Kind::Spline {
         return;
     }
     let s = &mut *cx.s;
@@ -1298,7 +1759,8 @@ fn section_print(ui: &mut Ui, cx: &mut Cx<'_>) {
 fn section_body(ui: &mut Ui, cx: &mut Cx<'_>) {
     let k = cx.k;
     let s = &mut *cx.s;
-    let hub = !matches!(k, Kind::Rack | Kind::CycloidalDrive | Kind::Internal | Kind::Hypoid);
+    // A spline's hub is its own member; a face gear's base is in its section.
+    let hub = !matches!(k, Kind::Rack | Kind::CycloidalDrive | Kind::Internal | Kind::Hypoid | Kind::Spline);
     let holes = matches!(k, Kind::Spur | Kind::Helical | Kind::Herringbone | Kind::Pair | Kind::Planetary | Kind::Cycloidal);
     if !(hub || holes) {
         return;
@@ -1322,7 +1784,7 @@ fn section_body(ui: &mut Ui, cx: &mut Cx<'_>) {
 /// material is in its own section while this is open or a load is set.
 fn section_load(ui: &mut Ui, cx: &mut Cx<'_>) {
     let k = cx.k;
-    if !k.involute() || k == Kind::Rack {
+    if !k.involute() || matches!(k, Kind::Rack | Kind::Spline | Kind::FaceGear | Kind::Elliptical) {
         return;
     }
     let o = &mut *cx.o;
@@ -1354,6 +1816,10 @@ fn section_output(ui: &mut Ui, cx: &mut Cx<'_>) {
                 Kind::CycloidalDrive => &["both", "disc", "pins"],
                 Kind::Hypoid => &["both", "pinion", "gear"],
                 Kind::Cycloidal => &["both", "wheel", "pinion"],
+                Kind::Sprocket => &["both", "sprocket 1", "sprocket 2"],
+                Kind::Pulley => &["both", "pulley 1", "pulley 2"],
+                Kind::Spline => &["both", "shaft", "hub"],
+                Kind::FaceGear => &["both", "face gear", "pinion"],
                 _ => &["both", "gear 1", "gear 2"],
             };
             egui::ComboBox::from_id_salt("gear_only").selected_text(names.get(s.only as usize).copied().unwrap_or("all")).show_ui(ui, |ui| {
@@ -1361,6 +1827,14 @@ fn section_output(ui: &mut Ui, cx: &mut Cx<'_>) {
                     ui.selectable_value(&mut s.only, i as u8, *n);
                 }
             });
+        });
+    }
+    if matches!(k, Kind::Pair | Kind::Planetary) {
+        row(ui, solidcraft_ui_text::tr("gear.window.coupon"), "Instead of the set: a few teeth of each member at the true centre distance, on a base with pegs, to check the fit on your printer first", |ui| {
+            ui.checkbox(&mut s.coupon, "");
+            if s.coupon {
+                ui.add(egui::DragValue::new(&mut s.coupon_teeth).range(3..=40).speed(0.2).suffix(" teeth"));
+            }
         });
     }
     row(ui, "Name", "Put in front of the bodies' names", |ui| {
@@ -1518,24 +1992,33 @@ fn preview(ui: &mut Ui, w: &GearWindow) -> Option<usize> {
                 (p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y).then_some(lo.dist(hi) / 2.0)
             };
             if let Some(reach) = reach
+                && let Some(member) = member_of_outline(kind, i, &g.name)
                 && under.is_none_or(|(least, _)| reach < least)
             {
-                under = Some((reach, member_of_outline(kind, i, &g.name)));
+                under = Some((reach, member));
             }
         }
     }
     let under = under.map(|(_, member)| member);
-    let lit = w.lit().or(under);
+    // The members to light: the one asked for (a section, an edit), else the one under the
+    // pointer; or both members of the mesh the pointer is on in the mesh badge.
+    let lit: Vec<usize> = match w.hover_mesh.and_then(|r| w.mesh.as_ref()?.1.get(r)) {
+        Some(r) => [r.a, r.b].iter().filter_map(|&i| plan.preview.get(i).and_then(|g| member_of_outline(kind, i, &g.name))).collect(),
+        None => w.lit().or(under).into_iter().collect(),
+    };
     let stroke_color = ui.visuals().text_color();
+    // What is drawn but not built (a chain, a belt): in the text colour, never lit.
+    let neutral = stroke_color.gamma_multiply(0.6);
     for (i, (g, m)) in plan.preview.iter().zip(&w.meshes).enumerate() {
         let place = |q: V2| -> Pos2 { to_screen(g.place(q, turned)) };
         let member = member_of_outline(kind, i, &g.name);
-        let color = member_color(member);
+        let color = member.map(member_color).unwrap_or(neutral);
+        let is_lit = member.is_some_and(|m| lit.contains(&m));
         // The lit member stands out; the others step back while one is lit.
-        let (strength, line) = match lit {
-            Some(l) if l == member => (0.95, 2.2),
-            Some(_) => (0.32, 1.0),
-            None => (0.55, 1.0),
+        let (strength, line) = match (is_lit, lit.is_empty()) {
+            (true, _) => (0.95, 2.2),
+            (false, false) => (0.32, 1.0),
+            (false, true) => (0.55, 1.0),
         };
         let fill = color.gamma_multiply(strength);
         let mut mesh = egui::Mesh::default();
@@ -1575,7 +2058,7 @@ fn preview(ui: &mut Ui, w: &GearWindow) -> Option<usize> {
         let at = to_screen(if g.slide == 0.0 { g.place(V2::ZERO, turned) } else { g.center });
         painter.circle_filled(at, 2.0, stroke_color.gamma_multiply(0.6));
         // The member's name in its own colour, on a chip so it reads over the gear.
-        let font = egui::FontId::proportional(if lit == Some(member) { 12.5 } else { 11.0 });
+        let font = egui::FontId::proportional(if is_lit { 12.5 } else { 11.0 });
         let galley = painter.layout_no_wrap(g.name.clone(), font, color.lerp_to_gamma(stroke_color, 0.55));
         let pos = at + vec2(-galley.size().x / 2.0, 5.0);
         painter.rect_filled(egui::Rect::from_min_size(pos, galley.size()).expand(2.0), 3.0, bg.gamma_multiply(0.8));

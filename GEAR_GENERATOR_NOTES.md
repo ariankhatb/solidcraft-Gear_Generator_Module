@@ -148,3 +148,21 @@ points, optionally driven by design parameters so Change Parameters reshapes the
 Planar tooth kinds (spur, helical, herringbone, internal, pair, planetary, rack) first; bevel,
 spiral bevel, hypoid and worm wheel keep fitted splines (no closed-form planar section).
 Agent worktree: `solidcraft-eqn` / `gear-equations`.
+
+## Status 2026-11-14, 18:30
+
+Build of 18:03 (`target/release`) contains everything except equation-driven teeth. Kernel
+results on that build (`inspect.interference`, defaults): pair, planetary, bevel, spiral bevel,
+crossed helical, worm, cycloidal: no overlap; cycloidal drive 0.001 mm^3 and face gear
+0.014 mm^3 (touching contact); **hypoid 12.4 mm^3 (about 0.04 mm deep over 290 mm^2), being
+fixed on `gear-hypoid`** (its math checker said 3.6 um, so the kernel's loft differs from the
+checker's model). All single-gear kinds build.
+
+Merged since that build (needs the next build): `gear-equations` — `tooth_curves:
+fitted|equations`, `parametric`, `parameter_prefix`; planar kinds only; default still fitted.
+Verified on the kernel with scripts (volume and a teeth 20->24 parameter change), but the engine
+path and its new engine tests have never been compiled into a build or run.
+
+Next build: after the hypoid fix lands. Also run the engine gear tests once
+(`cargo test --release -p solidcraft-engine gear` — compiles all engine tests; do it when nothing
+else is compiling).

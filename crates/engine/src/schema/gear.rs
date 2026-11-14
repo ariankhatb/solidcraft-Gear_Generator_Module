@@ -560,6 +560,13 @@ pub struct GearParams {
     /// Gear 2's hub hardware and bearing pocket.
     #[serde(default)]
     pub hardware2: Option<HardwareParams>,
+    /// Pair and planetary: build a print test coupon instead of the set (a few teeth of each
+    /// member at the true centre distance, on a base with pegs and fences). Default false.
+    #[serde(default)]
+    pub coupon: Option<bool>,
+    /// Teeth on each coupon piece, 3..40 (default 4).
+    #[serde(default)]
+    pub coupon_teeth: Option<u32>,
 }
 
 /// One number describing the set.

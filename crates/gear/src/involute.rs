@@ -526,12 +526,19 @@ pub fn teeth_outline(f: &ToothFlank, n: u32, phase: f64) -> Outline {
         let rot = |p: &Vec<V2>| -> Vec<V2> { p.iter().map(|q| q.rot(a)).collect() };
         let start = V2::polar(f.rf, a - f.root_half);
         let mut lf = rot(&lower_fillet);
+        let lf_len = lf.len();
         if lf.len() >= 2 {
             lf[0] = start;
             segs.push(Seg::Spline(lf));
         }
         if lower_flank.len() >= 2 {
-            segs.push(Seg::Spline(rot(&lower_flank)));
+            let mut lo = rot(&lower_flank);
+            // No fillet: the flank itself starts on the root circle, so the root arc on either
+            // side is a true arc (the sampled flank can end a hair off it).
+            if lf_len < 2 && lo[0].dist(start) < 1e-4 * f.rf.max(1.0) {
+                lo[0] = start;
+            }
+            segs.push(Seg::Spline(lo));
         }
         let (ta, tb) = (V2::polar(f.ra, a - f.tip_half), V2::polar(f.ra, a + f.tip_half));
         // Rounded tip corners ([`shape_tips`]): the flank stops short of the tip circle and an
@@ -548,11 +555,16 @@ pub fn teeth_outline(f: &ToothFlank, n: u32, phase: f64) -> Outline {
         {
             segs.push(Seg::Arc { c, a: tb, b: q.rot(a), ccw: true });
         }
-        if upper_flank.len() >= 2 {
-            segs.push(Seg::Spline(rot(&upper_flank)));
-        }
         let mut uf = rot(&upper_fillet);
         let end = V2::polar(f.rf, a + f.root_half);
+        if upper_flank.len() >= 2 {
+            let mut up = rot(&upper_flank);
+            let l = up.len() - 1;
+            if uf.len() < 2 && up[l].dist(end) < 1e-4 * f.rf.max(1.0) {
+                up[l] = end;
+            }
+            segs.push(Seg::Spline(up));
+        }
         if uf.len() >= 2 {
             let l = uf.len() - 1;
             uf[l] = end;

@@ -43,7 +43,7 @@ pub static COMMANDS: &[CommandSpec] = &[
              strands? (1…4), side_chamfer?; teeth2 > 0 and center_distance? for a pair (even links); pulley: belt?: gt2_2|gt2_3|gt2_5|htd_3m|htd_5m|htd_8m|t2_5|t5|t10|mxl|xl, \
              flanges?, face_width = belt width; spline: spline_standard?: din5480|ansi_b92, spline_diameter? (DIN reference Ø; default module × (teeth + 1.1)), fillet_root?, backlash = flank clearance, face_width = length; \
              face_gear: teeth (pinion), teeth2 (face gear), inner_diameter? (default: the undercut limit), face_width = tooth length; elliptical: ellipse_eccentricity? (0…0.7), teeth on each gear; \
-             only?: 1|2|3 (one member); origin?: [x,y,z]; name?; strength rating: torque? (N·m) | power? (kW), speed? (rpm) on the driver, \
+             only?: 1|2|3 (one member); coupon?: bool, coupon_teeth? (pair, planetary: a print test coupon instead of the set); origin?: [x,y,z]; name?; strength rating: torque? (N·m) | power? (kW), speed? (rpm) on the driver, \
              material?, material2?, material3?: steel_normalized|steel_through_hardened|steel_case_hardened|steel_nitrided|cast_iron|bronze|pom|pa66|pla|petg, \
              application_factor?, life_hours?, accuracy_grade? (5..12); tooth tuning: tip_round? (modules), xy_compensation?, elephant_foot?, elephant_foot_height?, nozzle? (mm), \
              clearance? (c*), tip_shortening?, tip_diameter?, tip_diameter2?, tip_relief?, tip_relief_height?, crowning?, backlash2?, face_width2?, face_offset2? (pair); \
@@ -343,6 +343,8 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     set!(holes, p.holes);
     set!(hole_diameter, p.hole_diameter);
     set!(only, p.only);
+    set!(coupon, p.coupon);
+    set!(coupon_teeth, p.coupon_teeth);
     set!(origin, p.origin);
     if let Some(n) = &p.name {
         s.name = n.clone();
@@ -597,6 +599,8 @@ pub fn params_of(s: &Spec) -> Value {
         shaft2_back: shaft_params(&s.shaft2_back),
         hardware: hardware_params(&s.hardware),
         hardware2: hardware_params(&s.hardware2),
+        coupon: s.coupon.then_some(true),
+        coupon_teeth: (s.coupon && s.coupon_teeth != 4).then_some(s.coupon_teeth),
     };
     let p = with_extras(s, p);
     serde_json::to_value(p).map(strip_nulls).unwrap_or(Value::Null)

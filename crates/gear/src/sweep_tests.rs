@@ -449,7 +449,7 @@ pub(crate) fn check_outline(o: &Outline) -> Result<Vec<V2>, String> {
 }
 
 /// A region: every loop valid, no loops crossing, outers apart, each hole inside an outer.
-fn check_region(r: &Region) -> Result<Vec<Vec<V2>>, String> {
+pub(crate) fn check_region(r: &Region) -> Result<Vec<Vec<V2>>, String> {
     if r.outer.is_empty() {
         return Err("region without an outline".into());
     }

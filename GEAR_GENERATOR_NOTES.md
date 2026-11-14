@@ -242,3 +242,6 @@ the centre normal to the sketch unless a line says otherwise.
 Face width: a field per gear (default ≈ 10×module; 30% of cone distance for bevel/hypoid),
 shown as a dimension. Mate size for bevel/hypoid with one circle: ratio field (or the side-sketch
 circle). Non-90° bevel/hypoid: angle field or the two-sketch form.
+- Bevels at any shaft angle (user's example: 80°) must be easy in Simple mode: a shaft-angle
+  dimension on the bevel's side-view drawing (default 90°), side-view sketch input (two lines
+  meeting at the apex), cone angles and apex drawn. The generator already supports 5–175°.

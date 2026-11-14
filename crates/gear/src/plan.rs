@@ -369,6 +369,24 @@ pub struct PreviewGear {
     pub pitch_radius: f64,
     /// For a sliding member: the tooth pitch it repeats with (its slide wraps by this much).
     pub period: f64,
+    /// Turns of `center` about the preview's origin per driver radian (0: the centre stays; 1 for
+    /// a cycloidal drive's disc, whose centre goes round with the input crank).
+    pub orbit: f64,
+}
+
+impl PreviewGear {
+    /// Where the outline's point `q` is when the driver has turned `t` radians: turned about the
+    /// centre (which itself goes round the origin when `orbit` is set), or slid along +x (a
+    /// worm's axial section along +y) by whole-pitch-wrapped steps.
+    pub fn place(&self, q: V2, t: f64) -> V2 {
+        let c = if self.orbit != 0.0 { self.center.rot(self.orbit * t) } else { self.center };
+        if self.slide != 0.0 {
+            let s = if self.period > 0.0 { (self.slide * t).rem_euclid(self.period) - self.period / 2.0 } else { 0.0 };
+            c + q + if self.name == "worm" { V2::new(0.0, s) } else { V2::new(s, 0.0) }
+        } else {
+            c + q.rot(self.speed * t)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -591,7 +609,7 @@ fn single(s: &Spec, p: &mut Plan) {
     let mut steps = tooth_steps(region.clone(), s.face_width, twist_for(&g, s.face_width), s.kind == Kind::Herringbone, Op::New);
     hub_steps(s, &s.bore, f.rf, s.face_width, &mut steps, p, "gear");
     p.bodies.push(Body { name: name(s, &format!("Gear z{}", s.teeth)), frame: Frame::at(s.origin), steps });
-    p.preview.push(PreviewGear { name: "gear".into(), region: with_bore(region, &s.bore), center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: g.r() , period: 0.0});
+    p.preview.push(PreviewGear { name: "gear".into(), region: with_bore(region, &s.bore), center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: g.r() , orbit: 0.0, period: 0.0});
 }
 
 fn with_bore(mut r: Region, b: &Bore) -> Region {
@@ -618,7 +636,7 @@ fn internal(s: &Spec, p: &mut Plan) {
     let region = Region { outer: vec![Outline::circle(V2::ZERO, outer_r)], holes: vec![teeth] };
     let steps = tooth_steps(region.clone(), s.face_width, twist_for(&g, s.face_width), false, Op::New);
     p.bodies.push(Body { name: name(s, &format!("Ring gear z{}", s.teeth)), frame: Frame::at(s.origin), steps });
-    p.preview.push(PreviewGear { name: "ring".into(), region, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: g.r() , period: 0.0});
+    p.preview.push(PreviewGear { name: "ring".into(), region, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: g.r() , orbit: 0.0, period: 0.0});
 }
 
 fn rack(s: &Spec, p: &mut Plan) {
@@ -641,7 +659,7 @@ fn rack(s: &Spec, p: &mut Plan) {
         vec![Step::Prism { region: region.clone(), z0: 0.0, height: s.face_width, twist: 0.0, op: Op::New }]
     };
     p.bodies.push(Body { name: name(s, &format!("Rack m{}", mm(s.module))), frame: Frame::at(s.origin), steps });
-    p.preview.push(PreviewGear { name: "rack".into(), region, center: V2::ZERO, speed: 0.0, slide: 1.0, pitch_radius: 0.0 , period: PI * g.mt()});
+    p.preview.push(PreviewGear { name: "rack".into(), region, center: V2::ZERO, speed: 0.0, slide: 1.0, pitch_radius: 0.0 , orbit: 0.0, period: PI * g.mt()});
 }
 
 fn pair(s: &Spec, p: &mut Plan) {
@@ -680,7 +698,7 @@ fn pair(s: &Spec, p: &mut Plan) {
         hub_steps(s, &s.bore2, f2.rf, s.face_width, &mut steps, p, "gear 2");
         p.bodies.push(Body { name: name(s, &format!("Gear z{}", s.teeth2)), frame: Frame::at(s.origin).shifted([a, 0.0, 0.0]), steps });
     }
-    p.preview.push(PreviewGear { name: "gear 1".into(), region: with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore), center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: g1.r(), period: 0.0 });
+    p.preview.push(PreviewGear { name: "gear 1".into(), region: with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore), center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: g1.r(), orbit: 0.0, period: 0.0 });
     p.preview.push(PreviewGear {
         name: "gear 2".into(),
         region: with_bore(Region { outer: vec![o2], holes: vec![] }, &s.bore2),
@@ -688,7 +706,7 @@ fn pair(s: &Spec, p: &mut Plan) {
         speed: -f64::from(s.teeth) / f64::from(s.teeth2),
         slide: 0.0,
         pitch_radius: g2.r(),
-        period: 0.0,
+        orbit: 0.0, period: 0.0,
     });
 }
 
@@ -788,15 +806,15 @@ fn planetary(s: &Spec, p: &mut Plan) {
             speed: -f64::from(zs) / f64::from(zp),
             slide: 0.0,
             pitch_radius: planet.r(),
-            period: 0.0,
+            orbit: 0.0, period: 0.0,
         });
     }
     if wanted(s, 3) {
         let steps = tooth_steps(ring_region.clone(), s.face_width, twist_for(&ring_gear.gear, s.face_width), false, Op::New);
         p.bodies.push(Body { name: name(s, &format!("Ring z{zr}")), frame: Frame::at(s.origin), steps });
     }
-    p.preview.insert(0, PreviewGear { name: "sun".into(), region: with_bore(Region { outer: vec![o_sun], holes: vec![] }, &s.bore), center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: sun.r(), period: 0.0 });
-    p.preview.push(PreviewGear { name: "ring".into(), region: ring_region, center: V2::ZERO, speed: -f64::from(zs) / f64::from(zr), slide: 0.0, pitch_radius: ring_gear.gear.r() , period: 0.0});
+    p.preview.insert(0, PreviewGear { name: "sun".into(), region: with_bore(Region { outer: vec![o_sun], holes: vec![] }, &s.bore), center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: sun.r(), orbit: 0.0, period: 0.0 });
+    p.preview.push(PreviewGear { name: "ring".into(), region: ring_region, center: V2::ZERO, speed: -f64::from(zs) / f64::from(zr), slide: 0.0, pitch_radius: ring_gear.gear.r() , orbit: 0.0, period: 0.0});
 }
 
 /// A straight or spiral bevel gear's sections and blank, in a frame with the large end's pitch
@@ -940,7 +958,7 @@ fn bevel(s: &Spec, p: &mut Plan) {
     // The preview: the two virtual (back-cone) spur gears in mesh.
     let (rv1, rv2) = (r1 / d1.cos(), r2 / d2.cos());
     p.preview_note = "back-cone (Tredgold) development at the large end".into();
-    p.preview.push(PreviewGear { name: "gear 1".into(), region: Region { outer: vec![pv1], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: rv1, period: 0.0 });
+    p.preview.push(PreviewGear { name: "gear 1".into(), region: Region { outer: vec![pv1], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: rv1, orbit: 0.0, period: 0.0 });
     let pv2 = pv2.rotated(-PI);
     p.preview.push(PreviewGear {
         name: "gear 2".into(),
@@ -949,7 +967,7 @@ fn bevel(s: &Spec, p: &mut Plan) {
         speed: -rv1 / rv2,
         slide: 0.0,
         pitch_radius: rv2,
-        period: 0.0,
+        orbit: 0.0, period: 0.0,
     });
 }
 
@@ -1012,7 +1030,7 @@ fn crossed(s: &Spec, p: &mut Plan) {
 /// Two gears drawn apart (their axes don't share a plane), each turning at its own speed.
 fn side_by_side(p: &mut Plan, o1: Outline, r1: f64, o2: Outline, r2: f64, speed2: f64) {
     let gap = 0.3 * (r1 + r2);
-    p.preview.push(PreviewGear { name: "gear 1".into(), region: Region { outer: vec![o1], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: r1, period: 0.0 });
+    p.preview.push(PreviewGear { name: "gear 1".into(), region: Region { outer: vec![o1], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: r1, orbit: 0.0, period: 0.0 });
     p.preview.push(PreviewGear {
         name: "gear 2".into(),
         region: Region { outer: vec![o2], holes: vec![] },
@@ -1020,7 +1038,7 @@ fn side_by_side(p: &mut Plan, o1: Outline, r1: f64, o2: Outline, r2: f64, speed2
         speed: -speed2,
         slide: 0.0,
         pitch_radius: r2,
-        period: 0.0,
+        orbit: 0.0, period: 0.0,
     });
 }
 
@@ -1206,7 +1224,7 @@ fn worm(s: &Spec, p: &mut Plan) {
     let rack_g = Involute { teeth: 1, module: m, pressure_angle: ax, helix: 0.0, shift: 0.0, rack: s.rack, backlash: s.backlash, tip_shortening: 0.0, virtual_teeth: 0.0 };
     let n = (length / (PI * m)).ceil().max(1.0) as u32;
     let rack_o = rack_outline(&rack_g, n, ha + 0.5 * m).map(&|q: V2| V2::new(-q.y, q.x - PI * m * f64::from(n) / 2.0 + PI * m / 4.0), false);
-    p.preview.push(PreviewGear { name: "wheel".into(), region: Region { outer: vec![wo], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: wheel.r(), period: 0.0 });
+    p.preview.push(PreviewGear { name: "wheel".into(), region: Region { outer: vec![wo], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: wheel.r(), orbit: 0.0, period: 0.0 });
     p.preview.push(PreviewGear {
         name: "worm".into(),
         region: Region { outer: vec![rack_o], holes: vec![] },
@@ -1214,7 +1232,7 @@ fn worm(s: &Spec, p: &mut Plan) {
         speed: 0.0,
         slide: wheel.r(),
         pitch_radius: 0.0,
-        period: PI * m,
+        orbit: 0.0, period: PI * m,
     });
 }
 
@@ -1241,7 +1259,7 @@ fn cycloidal(s: &Spec, p: &mut Plan) {
         hub_steps(s, &s.bore, f1.rf, s.face_width, &mut steps, p, "gear 1");
         p.bodies.push(Body { name: name(s, &format!("Cycloidal z{z1}")), frame: Frame::at(s.origin), steps });
     }
-    p.preview.push(PreviewGear { name: "gear 1".into(), region: with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore), center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: r1, period: 0.0 });
+    p.preview.push(PreviewGear { name: "gear 1".into(), region: with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore), center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: r1, orbit: 0.0, period: 0.0 });
     if !single_only {
         let c2 = Cycloidal { teeth: z2, module: m, rolling_radius_addendum: r1 / 2.0, rolling_radius_dedendum: r2 / 2.0, addendum: 1.0, dedendum: s.rack.dedendum.max(1.2), backlash: s.backlash };
         let ph2 = mesh_phase(z1, 0.0, z2, 0.0);
@@ -1262,7 +1280,7 @@ fn cycloidal(s: &Spec, p: &mut Plan) {
             speed: -f64::from(z1) / f64::from(z2),
             slide: 0.0,
             pitch_radius: r2,
-            period: 0.0,
+            orbit: 0.0, period: 0.0,
         });
     }
 }
@@ -1310,7 +1328,7 @@ fn drive(s: &Spec, p: &mut Plan) {
             steps: vec![Step::Prism { region: Region { outer: pins.clone(), holes: vec![] }, z0: 0.0, height: s.face_width, twist: 0.0, op: Op::New }],
         });
     }
-    p.preview.push(PreviewGear { name: "disc".into(), region, center: V2::new(s.eccentricity, 0.0), speed: -1.0 / (n - 1.0), slide: 0.0, pitch_radius: 0.0 , period: 0.0});
-    p.preview.push(PreviewGear { name: "pins".into(), region: Region { outer: pins, holes: vec![] }, center: V2::ZERO, speed: 0.0, slide: 0.0, pitch_radius: 0.0, period: 0.0 });
+    p.preview.push(PreviewGear { name: "disc".into(), region, center: V2::new(s.eccentricity, 0.0), speed: -1.0 / (n - 1.0), slide: 0.0, pitch_radius: 0.0 , orbit: 0.0, period: 0.0});
+    p.preview.push(PreviewGear { name: "pins".into(), region: Region { outer: pins, holes: vec![] }, center: V2::ZERO, speed: 0.0, slide: 0.0, pitch_radius: 0.0, orbit: 0.0, period: 0.0 });
     p.preview_note = "the disc turns slowly backwards while its centre orbits (shown still)".into();
 }

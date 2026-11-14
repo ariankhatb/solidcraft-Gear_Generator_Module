@@ -23,3 +23,8 @@ pub use plan::{Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit,
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod mesh2d;
+#[cfg(test)]
+mod mesh_tests;

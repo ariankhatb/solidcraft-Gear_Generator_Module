@@ -245,11 +245,8 @@ fn type_picker(ui: &mut Ui, w: &mut GearWindow) {
                         s.rack = keep.rack;
                         s.backlash = keep.backlash;
                     }
-                    if k != Kind::Hypoid {
-                        // (A hypoid ring gear keeps its own centre hole.)
-                        s.bore = keep.bore;
-                        s.bore2 = keep.bore2;
-                    }
+                    s.bore = keep.bore;
+                    s.bore2 = keep.bore2;
                     s.origin = keep.origin;
                     s.name = keep.name;
                     w.spec = s;
@@ -312,12 +309,7 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
                     ui.checkbox(&mut w.inch, "inch");
                 });
             } else {
-                let (label, tip) = match k {
-                    Kind::Worm => ("Axial module", "Pitch diameter ÷ teeth (mm)"),
-                    Kind::Hypoid => ("Ring gear module", "The ring gear's outer pitch diameter ÷ its teeth (mm)"),
-                    _ => ("Module", "Pitch diameter ÷ teeth (mm)"),
-                };
-                row(ui, label, tip, |ui| {
+                row(ui, if k == Kind::Worm { "Axial module" } else { "Module" }, "Pitch diameter ÷ teeth (mm)", |ui| {
                     ui.add(egui::DragValue::new(&mut s.module).range(0.05..=100.0).speed(0.01).max_decimals(4).suffix(" mm"));
                     ui.checkbox(&mut w.inch, "inch");
                 });
@@ -337,14 +329,6 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
             }
             if let Some(t2) = t2 {
                 count(ui, t2, "", &mut s.teeth2, if k == Kind::Cycloidal { 0..=2000 } else { 3..=2000 });
-            }
-            if k == Kind::Hypoid {
-                let mut d = s.module * f64::from(s.teeth2);
-                row(ui, "Ring gear Ø", "Outer pitch diameter of the ring gear; sets the module", |ui| {
-                    if ui.add(egui::DragValue::new(&mut d).range(5.0..=10000.0).speed(0.5).max_decimals(3).suffix(" mm")).changed() && s.teeth2 > 0 {
-                        s.module = d / f64::from(s.teeth2);
-                    }
-                });
             }
             if k == Kind::Planetary {
                 let mut ring = if s.teeth3 > 0 { s.teeth3 } else { s.teeth + 2 * s.teeth2 };
@@ -385,15 +369,10 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
                 num(ui, "Spiral angle", "Mean spiral angle; 35° is usual", &mut s.spiral_angle, 0.0..=60.0, 0.5, "°");
             }
             if k == Kind::Hypoid {
-                num(ui, "Pinion offset", "Distance between the axes; 0 makes a spiral bevel pair. Car axles use about 10–15% of the ring gear Ø", &mut s.offset, 0.0..=5000.0, 0.5, " mm");
-                num(ui, "Pinion spiral angle", "Mean spiral angle of the pinion; the ring gear's is smaller by the offset angle. 45–50° is usual", &mut s.spiral_angle, 0.0..=70.0, 0.5, "°");
-                row(ui, "Pinion hand", "Left is usual (car axles: pinion below centre); the ring gear gets the other hand", |ui| {
-                    ui.radio_value(&mut s.left_hand, true, "left");
-                    ui.radio_value(&mut s.left_hand, false, "right");
-                });
-                num(ui, "Cutter radius", "Face-milling cutter radius: the curvature of the tooth lines; 0: a standard cutter", &mut s.cutter_radius, 0.0..=2000.0, 0.5, " mm");
+                num(ui, "Offset", "Distance between the axes; 0 for equal spiral angles", &mut s.offset, 0.0..=5000.0, 0.5, " mm");
+                num(ui, "Face start", "Where the teeth start along the line of contact, from the throat; larger looks more like a bevel", &mut s.face_start, -5000.0..=5000.0, 0.5, " mm");
             }
-            if k.involute() && !matches!(k, Kind::Worm | Kind::Hypoid) {
+            if k.involute() && k != Kind::Worm {
                 num(ui, if k.is_set() { "Shift x₁" } else { "Profile shift x" }, "Profile shift coefficient: positive thickens the root and avoids undercut", &mut s.shift, -1.5..=1.5, 0.01, "");
                 if matches!(k, Kind::Pair | Kind::Planetary | Kind::CrossedHelical) {
                     num(ui, "Shift x₂", "Gear 2's (planets') profile shift", &mut s.shift2, -1.5..=1.5, 0.01, "");
@@ -465,9 +444,6 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
         }
         heading(ui, "Body");
         num(ui, if k == Kind::CycloidalDrive { "Thickness" } else { "Face width" }, "", &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
-        if k == Kind::Hypoid {
-            num(ui, "Ring gear web", "Thickness of the ring gear's back; 0: 8% of its Ø", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
-        }
         if matches!(k, Kind::Internal | Kind::Planetary) {
             num(ui, "Ring rim", "Beyond the roots; 0: 3 modules", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
         }
@@ -475,20 +451,16 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
             num(ui, "Height below pitch", "0: 3 modules", &mut s.rack_height, 0.0..=1000.0, 0.1, " mm");
         }
         if k != Kind::Rack && k != Kind::CycloidalDrive {
-            bore(ui, if k == Kind::Hypoid { "Pinion bore" } else { "Bore" }, "bore1", &mut s.bore);
+            bore(ui, "Bore", "bore1", &mut s.bore);
             if k.is_set() {
                 let who = match k {
                     Kind::Planetary => "Planet bore",
                     Kind::Worm => "Worm bore",
-                    Kind::Hypoid => "Ring gear bore",
                     _ => "Gear 2 bore",
                 };
                 bore(ui, who, "bore2", &mut s.bore2);
             }
-            if k == Kind::Hypoid {
-                num(ui, "Pinion shank Ø", "Out of the pinion's heel; 0: 60% of its root", &mut s.hub_diameter, 0.0..=5000.0, 0.2, " mm");
-                num(ui, "Pinion shank length", "0: the pinion's face width", &mut s.hub_length, 0.0..=5000.0, 0.2, " mm");
-            } else if k != Kind::Internal {
+            if !matches!(k, Kind::Internal | Kind::Hypoid) {
                 num(ui, "Hub Ø", "On the back face; 0: none", &mut s.hub_diameter, 0.0..=5000.0, 0.2, " mm");
                 if s.hub_diameter > 0.0 {
                     num(ui, "Hub length", "", &mut s.hub_length, 0.0..=5000.0, 0.2, " mm");
@@ -509,7 +481,7 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
                     Kind::Planetary => &["all", "sun", "planets", "ring"],
                     Kind::Worm => &["both", "wheel", "worm"],
                     Kind::CycloidalDrive => &["both", "disc", "pins"],
-                    Kind::Hypoid => &["both", "pinion", "ring gear"],
+                    Kind::Hypoid => &["both", "pinion", "gear"],
                     _ => &["both", "gear 1", "gear 2"],
                 };
                 egui::ComboBox::from_id_salt("gear_only").selected_text(names.get(s.only as usize).copied().unwrap_or("all")).show_ui(ui, |ui| {
@@ -522,7 +494,7 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
         row(ui, "Name", "Put in front of the bodies' names", |ui| {
             ui.add(egui::TextEdit::singleline(&mut s.name).desired_width(150.0));
         });
-        row(ui, "Centre at", if k == Kind::Hypoid { "Where the pinion's axis crosses the ring gear's" } else { "Where gear 1's centre goes" }, |ui| {
+        row(ui, "Centre at", "Where gear 1's centre goes", |ui| {
             for v in &mut s.origin {
                 ui.add(egui::DragValue::new(v).speed(0.5).max_decimals(3));
             }

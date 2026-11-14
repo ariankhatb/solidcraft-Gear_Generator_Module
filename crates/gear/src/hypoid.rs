@@ -302,7 +302,7 @@ pub fn design(s: &Spec) -> Result<Design, String> {
     if hi.is_nan() {
         return Ok(first);
     }
-    for _ in 0..50 {
+    for _ in 0..26 {
         let mid = 0.5 * (lo + hi);
         match miss(mid) {
             Some((f, _)) if f.signum() == f_lo.signum() => (lo, f_lo) = (mid, f),
@@ -766,7 +766,7 @@ impl Carve<'_> {
         let step = self.reach / STEPS as f64;
         let k = (1..=STEPS).find(|k| f(step * *k as f64) >= 0.0)?;
         let (mut lo, mut hi) = (step * (k - 1) as f64, step * k as f64);
-        for _ in 0..34 {
+        for _ in 0..26 {
             let mid = 0.5 * (lo + hi);
             if f(mid) >= 0.0 { hi = mid } else { lo = mid }
         }

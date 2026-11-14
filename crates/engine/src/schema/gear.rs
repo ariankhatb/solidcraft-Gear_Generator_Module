@@ -21,6 +21,82 @@ pub enum GearType {
     Worm,
     Cycloidal,
     CycloidalDrive,
+    Sprocket,
+    Pulley,
+    Spline,
+    FaceGear,
+    Elliptical,
+}
+
+/// A roller chain size: ISO 606 B series (European) or ANSI B29.1 (ISO 606 A series), or
+/// `custom` with the sizes given.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChainSize {
+    #[serde(rename = "04b")]
+    B04,
+    #[serde(rename = "05b")]
+    B05,
+    #[serde(rename = "06b")]
+    B06,
+    #[serde(rename = "08b")]
+    B08,
+    #[serde(rename = "10b")]
+    B10,
+    #[serde(rename = "12b")]
+    B12,
+    #[serde(rename = "16b")]
+    B16,
+    #[serde(rename = "20b")]
+    B20,
+    #[serde(rename = "24b")]
+    B24,
+    Ansi25,
+    Ansi35,
+    Ansi40,
+    Ansi50,
+    Ansi60,
+    Ansi80,
+    Ansi100,
+    Ansi120,
+    Custom,
+}
+
+/// A timing belt profile.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+pub enum BeltProfile {
+    #[serde(rename = "gt2_2")]
+    Gt2_2,
+    #[serde(rename = "gt2_3")]
+    Gt2_3,
+    #[serde(rename = "gt2_5")]
+    Gt2_5,
+    #[serde(rename = "htd_3m")]
+    Htd3m,
+    #[serde(rename = "htd_5m")]
+    Htd5m,
+    #[serde(rename = "htd_8m")]
+    Htd8m,
+    #[serde(rename = "t2_5")]
+    T2_5,
+    #[serde(rename = "t5")]
+    T5,
+    #[serde(rename = "t10")]
+    T10,
+    #[serde(rename = "mxl")]
+    Mxl,
+    #[serde(rename = "xl")]
+    Xl,
+}
+
+/// The involute spline standard.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SplineStandardParam {
+    /// DIN 5480: 30°, sized by the reference diameter (`spline_diameter`).
+    Din5480,
+    /// ANSI B92.1 flat root side fit: module = 25.4 / diametral pitch, no shift.
+    AnsiB92,
 }
 
 /// The hand of a hypoid pinion's spiral (the ring gear gets the other).
@@ -96,7 +172,10 @@ pub struct BoreParams {
 
 /// A gear set: involute spur, helical, herringbone, internal and rack; pairs and planetary sets;
 /// straight and spiral bevels; hypoid (offset bevel) gears; crossed helical gears; worm and
-/// wheel; cycloidal gears and the cycloidal drive. Lengths in mm, angles in degrees. Each gear is
+/// wheel; cycloidal gears and the cycloidal drive; ISO 606 roller chain sprockets and timing belt
+/// pulleys (single or a pair with the chain or belt between); DIN 5480 and ANSI B92.1 involute
+/// splines (shaft and hub); face (crown) gears with their spur pinion; an elliptical gear and
+/// its conjugate. Lengths in mm, angles in degrees. Each gear is
 /// built from ordinary sketches and features (extrude, sweep with twist, loft, revolve, coil),
 /// grouped in the timeline; one undo step.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
@@ -241,6 +320,51 @@ pub struct GearParams {
     /// A name put in front of the bodies' and the timeline group's names.
     #[serde(default)]
     pub name: Option<String>,
+    /// Sprocket: the chain (default 08b). `teeth2` > 0 adds a driven sprocket at
+    /// `center_distance` (rounded to a whole, even number of links).
+    #[serde(default)]
+    pub chain: Option<ChainSize>,
+    /// Custom chain: pitch in mm.
+    #[serde(default)]
+    pub chain_pitch: Option<f64>,
+    /// Custom chain: roller diameter in mm.
+    #[serde(default)]
+    pub roller_diameter: Option<f64>,
+    /// Custom chain: width between the inner plates in mm.
+    #[serde(default)]
+    pub roller_width: Option<f64>,
+    /// Custom chain: transverse pitch between strands in mm.
+    #[serde(default)]
+    pub strand_pitch: Option<f64>,
+    /// Sprocket: chain strands, 1 simplex … 4 (default 1).
+    #[serde(default)]
+    pub strands: Option<u32>,
+    /// Sprocket: the ISO 606 tooth side chamfer (default true).
+    #[serde(default)]
+    pub side_chamfer: Option<bool>,
+    /// Pulley: the belt profile (default gt2_2); `face_width` is the belt width. `teeth2` > 0
+    /// adds a second pulley at `center_distance` (rounded to a whole number of belt teeth).
+    #[serde(default)]
+    pub belt: Option<BeltProfile>,
+    /// Pulley: flanges on both sides (default true).
+    #[serde(default)]
+    pub flanges: Option<bool>,
+    /// Spline: the standard (default din5480).
+    #[serde(default)]
+    pub spline_standard: Option<SplineStandardParam>,
+    /// Spline (DIN 5480): the reference diameter d_B in mm (0: module × (teeth + 1.1)).
+    #[serde(default)]
+    pub spline_diameter: Option<f64>,
+    /// Spline: a fillet root instead of a flat root.
+    #[serde(default)]
+    pub fillet_root: Option<bool>,
+    /// Face gear: the teeth's inner diameter in mm (default: the undercut limit); `face_width` is
+    /// the teeth's length; `teeth` the pinion's, `teeth2` the face gear's.
+    #[serde(default)]
+    pub inner_diameter: Option<f64>,
+    /// Elliptical pair: the ellipse's eccentricity, 0 … 0.7 (default 0.3); `teeth` on each gear.
+    #[serde(default)]
+    pub ellipse_eccentricity: Option<f64>,
     /// Strength rating: input torque in N·m on the driving member (gear 1, sun, ring of an
     /// internal set; the worm of a worm set). Wins over `power`. Without a torque or power the
     /// set is not rated.
@@ -271,6 +395,13 @@ pub struct GearParams {
     /// Strength rating: ISO 1328 accuracy grade 5..12 for the dynamic factor (default 7).
     #[serde(default)]
     pub accuracy_grade: Option<u8>,
+    /// Pair and planetary: build a print test coupon instead of the set (a few teeth of each
+    /// member at the true centre distance, on a base with pegs and fences). Default false.
+    #[serde(default)]
+    pub coupon: Option<bool>,
+    /// Teeth on each coupon piece, 3..40 (default 4).
+    #[serde(default)]
+    pub coupon_teeth: Option<u32>,
 }
 
 /// One number describing the set.

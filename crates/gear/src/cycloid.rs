@@ -4,7 +4,7 @@
 use std::f64::consts::{PI, TAU};
 
 use crate::geom::{Outline, Seg, V2};
-use crate::involute::{ToothFlank, teeth_outline};
+use crate::involute::{PROFILE_TOLERANCE, ToothFlank, side_points, teeth_outline};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Cycloidal {
@@ -86,24 +86,28 @@ pub fn cycloidal_outline(c: &Cycloidal, phase: f64) -> (Outline, ToothFlank) {
         ra = lo;
     }
     let lowest = (r - 2.0 * a_ded * 0.999).max(rf);
-    let n = 12;
-    let ded: Vec<(f64, f64)> = (0..=n).map(|i| lowest + (r - lowest) * i as f64 / n as f64).map(|rr| (rr, half(rr))).collect();
-    let add: Vec<(f64, f64)> = (0..=n).map(|i| r + (ra - r) * i as f64 / n as f64).map(|rr| (rr, half(rr))).collect();
-    let pitch = TAU / f64::from(c.teeth);
-    let root_half = ded[0].1.min(pitch / 2.0);
-    // Straight radial drop from the hypocycloid's end to the root circle.
-    let mut fillet = vec![(rf, root_half)];
-    if lowest > rf + 1e-9 {
-        fillet.push((lowest, root_half));
-    }
+    let tol = PROFILE_TOLERANCE * c.module;
+    let min_gap = 5e-6 * ra.max(c.module);
+    // The hypocycloid up to the pitch circle, then the epicycloid: one smooth side (both leave
+    // the pitch circle square to it).
+    let ded = side_points(&half, &|s| if s >= 1.0 { r } else { lowest + (r - lowest) * s }, tol, min_gap);
+    let add = side_points(&half, &|s| if s >= 1.0 { ra } else { r + (ra - r) * s }, tol, min_gap);
     let mut flank = ded;
-    flank.extend(add.into_iter().skip(1));
-    if fillet.len() < 2 {
-        fillet = vec![(rf, root_half), flank[0]];
-        flank.remove(0);
-        if flank.len() < 2 {
-            flank.insert(0, fillet[1]);
-        }
+    if flank.is_empty() {
+        flank = add;
+    } else if !add.is_empty() {
+        flank.extend(add.into_iter().skip(1));
+    }
+    if flank.len() < 2 {
+        flank = vec![(lowest, half(lowest)), (ra, half(ra))];
+    }
+    let pitch = TAU / f64::from(c.teeth);
+    let root_half = flank[0].1.min(pitch / 2.0);
+    flank[0].1 = root_half;
+    // Straight radial drop from the hypocycloid's end to the root circle.
+    let fillet = if flank[0].0 - rf > min_gap { vec![(rf, root_half), (flank[0].0, root_half)] } else { Vec::new() };
+    if fillet.is_empty() {
+        flank[0].0 = rf;
     }
     let f = ToothFlank { rf, ra, root_half, tip_half: half(ra).max(0.0), fillet, flank, undercut: false, pointed };
     (teeth_outline(&f, c.teeth, phase), f)

@@ -112,7 +112,7 @@ impl Seg {
         }
     }
     /// Points along the segment, from its start to its end, `tol` the most a chord may stray from
-    /// an arc. Splines give their fit points with a Catmull-Rom curve between them.
+    /// an arc. Splines are sampled as the sketch's fit point spline runs (see [`natural_spline`]).
     pub fn sample(&self, tol: f64, out: &mut Vec<V2>) {
         match self {
             Seg::Line(a, b) => {
@@ -138,7 +138,7 @@ impl Seg {
                     out.push(*c + V2::polar(r, t));
                 }
             }
-            Seg::Spline(p) => catmull_rom(p, 6, out),
+            Seg::Spline(p) => natural_spline(p, 6, out),
             Seg::Circle(c, r) => {
                 let n = arc_steps(*r, TAU, tol);
                 for i in 0..=n {
@@ -177,33 +177,130 @@ fn arc_steps(r: f64, sweep: f64, tol: f64) -> usize {
     ((sweep / step.max(1e-3)).ceil() as usize).clamp(1, 720)
 }
 
-/// A centripetal Catmull-Rom curve through `p`, `n` points per span: close to the sketch's
-/// fit point spline, for previews.
-fn catmull_rom(p: &[V2], n: usize, out: &mut Vec<V2>) {
-    if p.len() < 3 {
+/// The curve a sketch's fit point spline makes through `p`: a natural cubic (zero curvature at
+/// both ends) with chord-length parameters, as the sketch crate interpolates it; `n` points per
+/// span, from `p[0]` on.
+pub fn natural_spline(p: &[V2], n: usize, out: &mut Vec<V2>) {
+    let k = p.len();
+    if k < 3 {
         out.extend_from_slice(p);
         return;
     }
-    let get = |i: isize| -> V2 {
-        if i < 0 {
-            p[0] * 2.0 - p[1]
-        } else if i as usize >= p.len() {
-            p[p.len() - 1] * 2.0 - p[p.len() - 2]
-        } else {
-            p[i as usize]
-        }
-    };
+    let h: Vec<f64> = p.windows(2).map(|w| w[0].dist(w[1]).max(1e-12)).collect();
+    // Second derivatives at the inner points (tridiagonal, Thomas algorithm).
+    let m = k - 2;
+    let mut diag = vec![0.0; m];
+    let mut rhs = vec![V2::ZERO; m];
+    for i in 0..m {
+        diag[i] = 2.0 * (h[i] + h[i + 1]);
+        rhs[i] = ((p[i + 2] - p[i + 1]) * (1.0 / h[i + 1]) - (p[i + 1] - p[i]) * (1.0 / h[i])) * 6.0;
+    }
+    for i in 1..m {
+        let w = h[i] / diag[i - 1];
+        diag[i] -= w * h[i];
+        rhs[i] = rhs[i] - rhs[i - 1] * w;
+    }
+    let mut sol = vec![V2::ZERO; m];
+    for i in (0..m).rev() {
+        let next = if i + 1 < m { sol[i + 1] * h[i + 1] } else { V2::ZERO };
+        sol[i] = (rhs[i] - next) * (1.0 / diag[i]);
+    }
+    let second = |i: usize| if i == 0 || i == k - 1 { V2::ZERO } else { sol[i - 1] };
     out.push(p[0]);
-    for i in 0..p.len() - 1 {
-        let (p0, p1, p2, p3) = (get(i as isize - 1), get(i as isize), get(i as isize + 1), get(i as isize + 2));
-        for k in 1..=n {
-            let t = k as f64 / n as f64;
-            let t2 = t * t;
-            let t3 = t2 * t;
-            let q = (p1 * 2.0 + (p2 - p0) * t + (p0 * 2.0 - p1 * 5.0 + p2 * 4.0 - p3) * t2 + (p1 * 3.0 - p0 - p2 * 3.0 + p3) * t3) * 0.5;
-            out.push(q);
+    for i in 0..k - 1 {
+        let hi = h[i];
+        let slope = (p[i + 1] - p[i]) * (1.0 / hi);
+        let d0 = (slope - (second(i) * 2.0 + second(i + 1)) * (hi / 6.0)) * hi;
+        let d1 = (slope + (second(i) + second(i + 1) * 2.0) * (hi / 6.0)) * hi;
+        for j in 1..=n {
+            let s = j as f64 / n as f64;
+            let (s2, s3) = (s * s, s * s * s);
+            out.push(p[i] * (2.0 * s3 - 3.0 * s2 + 1.0) + d0 * (s3 - 2.0 * s2 + s) + p[i + 1] * (3.0 * s2 - 2.0 * s3) + d1 * (s3 - s2));
         }
     }
+}
+
+/// Fit points for one side of a tooth given as its half angle against radius, `half(r)`, with
+/// `grade` taking 0..1 to the radii it runs over (bunched where the side bends hardest): as few
+/// as keep the sketch's spline through them ([`natural_spline`]) within `tol` of the side, and
+/// with no turn of more than 30° between neighbouring chords. (radius, half angle) pairs, from
+/// `grade(0)` to `grade(1)`.
+pub fn fit_profile(half: &dyn Fn(f64) -> f64, grade: &dyn Fn(f64) -> f64, tol: f64, min: usize, max: usize) -> Vec<(f64, f64)> {
+    const DENSE: usize = 128;
+    let at = |s: f64| -> (f64, f64) {
+        let r = grade(s);
+        (r, half(r))
+    };
+    let dense: Vec<(f64, f64)> = (0..=DENSE).map(|i| at(i as f64 / DENSE as f64)).collect();
+    let pts: Vec<V2> = dense.iter().map(|(r, h)| V2::polar(*r, *h)).collect();
+    // A measure along the side, half its length and half its turning, so points crowd where it
+    // bends.
+    let mut length = vec![0.0; DENSE + 1];
+    let mut turning = vec![0.0; DENSE + 1];
+    for i in 1..=DENSE {
+        length[i] = length[i - 1] + pts[i].dist(pts[i - 1]);
+        let turn = if i >= 2 {
+            let (u, v) = (pts[i - 1] - pts[i - 2], pts[i] - pts[i - 1]);
+            u.cross(v).atan2(u.dot(v)).abs()
+        } else {
+            0.0
+        };
+        turning[i] = turning[i - 1] + turn;
+    }
+    let (total_l, total_t) = (length[DENSE].max(1e-300), turning[DENSE]);
+    let measure: Vec<f64> = (0..=DENSE).map(|i| if total_t > 1e-9 { 0.5 * length[i] / total_l + 0.5 * turning[i] / total_t } else { length[i] / total_l }).collect();
+    // The dense parameter s at which the measure reaches u.
+    let s_at = |u: f64| -> f64 {
+        let i = measure.partition_point(|m| *m < u).clamp(1, DENSE);
+        let (m0, m1) = (measure[i - 1], measure[i]);
+        let f = if m1 > m0 { ((u - m0) / (m1 - m0)).clamp(0.0, 1.0) } else { 0.0 };
+        (i as f64 - 1.0 + f) / DENSE as f64
+    };
+    let mut best = Vec::new();
+    for n in min.max(1)..=max.max(min.max(1)) {
+        let ss: Vec<f64> = (0..=n)
+            .map(|j| {
+                let t = j as f64 / n as f64;
+                // Somewhat closer together at the ends, where the spline's free ends sag most.
+                let u = 0.6 * t + 0.4 * (1.0 - (PI * t).cos()) / 2.0;
+                if j == 0 { 0.0 } else if j == n { 1.0 } else { s_at(u) }
+            })
+            .collect();
+        let fit: Vec<(f64, f64)> = ss.iter().map(|s| if *s == 0.0 { dense[0] } else if *s == 1.0 { dense[DENSE] } else { at(*s) }).collect();
+        let q: Vec<V2> = fit.iter().map(|(r, h)| V2::polar(*r, *h)).collect();
+        let mut sharpest: f64 = 0.0;
+        for w in q.windows(3) {
+            let (u, v) = (w[1] - w[0], w[2] - w[1]);
+            sharpest = sharpest.max(u.cross(v).atan2(u.dot(v)).abs());
+        }
+        let mut curve = Vec::new();
+        if q.len() < 3 {
+            curve.extend((0..=8).map(|i| q[0].lerp(q[1], i as f64 / 8.0)));
+        } else {
+            natural_spline(&q, 8, &mut curve);
+        }
+        let mut worst: f64 = 0.0;
+        for j in 0..n {
+            let lo = ((ss[j] * DENSE as f64).floor() as usize).saturating_sub(2);
+            let hi = ((ss[j + 1] * DENSE as f64).ceil() as usize + 2).min(DENSE);
+            for c in &curve[j * 8..=(j + 1) * 8] {
+                let mut d = f64::INFINITY;
+                for k in lo..hi {
+                    let (a, b) = (pts[k], pts[k + 1]);
+                    let e = b - a;
+                    let l2 = e.dot(e);
+                    let t = if l2 > 0.0 { ((*c - a).dot(e) / l2).clamp(0.0, 1.0) } else { 0.0 };
+                    d = d.min(c.dist(a + e * t));
+                }
+                worst = worst.max(d);
+            }
+        }
+        best = fit;
+        if worst <= tol && sharpest <= 30f64.to_radians() {
+            break;
+        }
+    }
+    best
 }
 
 /// A closed outline: segments end to end, the last ending where the first starts.

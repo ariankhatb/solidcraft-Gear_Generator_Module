@@ -484,6 +484,28 @@ fn build_body(s: &mut Session, body: &Body, features: &mut Vec<u64>, warnings: &
                     )?
                 }
             }
+            Step::Taper { outline, z0, height, twist, scale, op } if twist.abs() <= 1e-12 => {
+                // Straight: a loft between the two ends builds faster than a scaled sweep.
+                let mut ids = Vec::new();
+                for (k, (o, h)) in [(outline.clone(), *z0), (outline.scaled(*scale), z0 + height)].iter().enumerate() {
+                    let mut g = Vec::new();
+                    geometry(o, &mut g);
+                    ids.push(json!({"sketch": sketch_with(s, &format!("{label} section {}", k + 1), f.world([0.0, 0.0, *h]), x, y, &g, features)?}));
+                }
+                s.execute("solid.loft", &merge(json!({"sections": ids}), feature_params(*op, &name, &body.name)))?
+            }
+            Step::Taper { outline, z0, height, twist, scale, op } => {
+                let mut g = Vec::new();
+                geometry(outline, &mut g);
+                let id = sketch_with(s, &format!("{label} profile"), f.world([0.0, 0.0, *z0]), x, y, &g, features)?;
+                let path = sketch_with(s, &format!("{label} path"), f.world([0.0, 0.0, *z0]), z, x, &[Geom2::Line(Vec2::new(0.0, 0.0), Vec2::new(*height, 0.0))], features)?;
+                let curve = first_curve(s, path)?;
+                let mut p = json!({"sketch": id, "path_sketch": path, "path": [curve], "scale": scale});
+                if twist.abs() > 1e-12 {
+                    p["twist"] = json!(format!("{} deg", twist.to_degrees()));
+                }
+                s.execute("solid.sweep", &merge(p, feature_params(*op, &name, &body.name)))?
+            }
             Step::Loft { sections, op } => {
                 let mut ids = Vec::new();
                 for (k, (o, h)) in sections.iter().enumerate() {

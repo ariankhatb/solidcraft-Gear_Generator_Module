@@ -338,6 +338,9 @@ pub enum Step {
     Prism { region: Region, z0: f64, height: f64, twist: f64, op: Op },
     /// Sections on planes z = h, joined in order.
     Loft { sections: Vec<(Outline, f64)>, op: Op },
+    /// The outline on z = `z0` swept `height` along +z, turned `twist` radians and scaled
+    /// linearly about the axis to `scale` at the far end (a cone's teeth, straight or spiral).
+    Taper { outline: Outline, z0: f64, height: f64, twist: f64, scale: f64, op: Op },
     /// A closed polygon in the (radius, z) half plane, turned a full turn about z.
     Revolve { profile: Vec<V2>, op: Op },
     /// A closed polygon in the (x, z) plane (x radial) swept round z as a helix of `pitch`, from
@@ -809,16 +812,18 @@ fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, p: &mut P
     let h = re * delta.cos();
     // Tredgold's virtual spur gear on the back cone.
     let zv = f64::from(z) / delta.cos();
+    // The module is the transverse one at the large end: the virtual gear's normal module is
+    // m·cos β, so its transverse module (and pitch radius r / cos δ) come out right.
     let v = Involute {
         teeth: z,
-        module: m,
+        module: m * spiral.cos(),
         pressure_angle: s.pressure_angle.to_radians(),
         helix: spiral,
         shift: if who.contains('1') { s.shift } else { -s.shift },
         rack: s.rack,
         backlash: s.backlash,
         tip_shortening: 0.0,
-        virtual_teeth: zv / spiral.cos().powi(2).max(0.2),
+        virtual_teeth: zv,
     };
     let flank = crate::involute::external_flank(&v);
     let rv = v.r();
@@ -862,24 +867,25 @@ fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, p: &mut P
     profile.push(small_pitch + V2::new(big * dc, big * ds));
     profile.push(front_root);
     profile.push(V2::new(0.0, front_root.y));
-    // Sections a little past both ends, so the blank trims them.
-    let z_a = back - 0.5 * m;
-    let z_b = (small_pitch.y + ha * k * ds + 0.5 * m).min(h - 0.05 * (h - z_a));
-    let mut sections = Vec::new();
-    let count = if spiral.abs() > 1e-6 { 4 } else { 2 };
+    // Sections on the planes through the large and small ends' pitch circles. The ends are
+    // flat (square to the axis) rather than trimmed to the back and front cones: the kernel
+    // refuses that intersection where the cones graze the root fillets.
+    let _ = (&profile, back);
+    let z_a = 0.0;
+    let z_b = small_pitch.y;
+    // One sweep towards the apex: scaled linearly (every section is the large end's, shrunk
+    // about the axis towards the apex) and, for a spiral bevel, turned as it goes, which
+    // follows the logarithmic spiral of constant spiral angle between the ends.
     let rm = re - b / 2.0;
-    for i in 0..count {
-        let zs = z_a + (z_b - z_a) * i as f64 / (count - 1) as f64;
-        let mut o = section(zs);
-        if spiral.abs() > 1e-6 {
-            // A logarithmic spiral on the pitch cone: constant spiral angle, centred mid face.
-            let cone_r = (h - zs) / dc;
-            let turn = spiral.tan() * (cone_r / rm).ln() / ds;
-            o = o.rotated(turn);
-        }
-        sections.push((o, zs));
-    }
-    let steps = vec![Step::Loft { sections, op: Op::New }, Step::Revolve { profile, op: Op::Intersect }];
+    let turn = |zs: f64| if spiral.abs() > 1e-6 { spiral.tan() * (((h - zs) / dc) / rm).ln() / ds } else { 0.0 };
+    let steps = vec![Step::Taper {
+        outline: section(z_a).rotated(turn(z_a)),
+        z0: z_a,
+        height: z_b - z_a,
+        twist: turn(z_b) - turn(z_a),
+        scale: (h - z_b) / (h - z_a),
+        op: Op::New,
+    }];
     p.fact(format!("{who} pitch cone angle"), delta.to_degrees(), Unit::Deg);
     p.fact(format!("{who} outer pitch diameter"), 2.0 * r, Unit::Mm);
     p.fact(format!("{who} outer tip diameter"), 2.0 * (r + ha * dc), Unit::Mm);
@@ -887,7 +893,7 @@ fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, p: &mut P
     p.fact(format!("{who} virtual teeth"), zv, Unit::None);
     tooth_warnings(p, who, &v, &flank);
     let preview = external_outline(&v, phase).0;
-    (steps, preview, flank, back)
+    (steps, preview, flank, 0.0)
 }
 
 fn bevel(s: &Spec, p: &mut Plan) {

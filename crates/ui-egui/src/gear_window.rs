@@ -494,9 +494,9 @@ fn facts(ui: &mut Ui, w: &GearWindow) {
                 ui.colored_label(ui.visuals().warn_fg_color, format!("⚠ {warn}"));
             }
             egui::ScrollArea::vertical().id_salt("gear_facts").max_height(170.0).auto_shrink([false, true]).show(ui, |ui| {
-                egui::Grid::new("gear_facts_grid").num_columns(2).striped(true).spacing([12.0, 2.0]).show(ui, |ui| {
+                egui::Grid::new("gear_facts_grid").num_columns(2).striped(true).spacing([12.0, 2.0]).min_col_width(200.0).show(ui, |ui| {
                     for f in &p.facts {
-                        ui.label(egui::RichText::new(&f.label).small());
+                        ui.add(egui::Label::new(egui::RichText::new(&f.label).small()).wrap_mode(egui::TextWrapMode::Extend));
                         let v = match f.unit {
                             Unit::Mm => format!("{:.3} mm", f.value),
                             Unit::Deg => format!("{:.3}°", f.value),

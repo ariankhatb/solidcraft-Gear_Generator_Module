@@ -277,3 +277,12 @@ Agent worktree for the new kind: `solidcraft-bevelplanet` / `gear-bevelplanet`.
   settings. Hypoid stays circle + off-centre line with the out-of-plane offset as a setting.
 - Optimization agent (user request: "faster and smoother"): worktree `solidcraft-perf` /
   `gear-perf` — kernel build path per kind, plan/check_mesh/solver costs; measure before/after.
+
+## Integrator plan while the user is away (from ~19:15, back in a couple of hours)
+
+User: "whenever that is done, rebuild everything yourself … if the first rebuild goes wrong, redo
+it … if it finishes and I'm not around, double check everything and rebuild again if there are
+bugs." Steps: merge each agent branch as it lands (gear tests + cargo check after each) → full
+release build → kernel overlap check on every kind, engine gear tests, renders, window
+screenshots (Simple and Advanced) via the control channel → fix and rebuild until clean →
+summary for the user.

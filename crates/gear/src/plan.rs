@@ -548,6 +548,9 @@ pub struct Plan {
     pub preview_note: String,
     /// Which preview members mesh (parallel-axis sets; see [`crate::mesh2d::check_mesh`]).
     pub meshes: Vec<crate::mesh2d::MeshPair>,
+    /// Which bodies mesh in sets whose axes are not parallel (bevel, hypoid, crossed helical,
+    /// worm; see [`crate::mesh3d::check`]), with the whole set's bodies.
+    pub meshes3d: Vec<crate::mesh3d::MeshPair3>,
     /// Why the set can't be built, found while planning it ([`plan`] returns it as the error).
     refused: Option<String>,
 }
@@ -721,6 +724,11 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
         crate::strength::rate(s, &mut p);
     }
     p.meshes = crate::mesh2d::topology(s, &p.preview);
+    if matches!(s.kind, Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical | Kind::Worm) {
+        // The mesh is checked between the whole set's members, also when one is built.
+        let whole = if s.only == 0 { None } else { Some(plan(&Spec { only: 0, ..s.clone() }).map(|w| w.bodies).unwrap_or_default()) };
+        p.meshes3d = crate::mesh3d::topology(s, &p.bodies, whole);
+    }
     if s.coupon {
         p.warn("a test coupon is made for gear pairs and planetary sets: this is the whole set");
     }
@@ -1499,8 +1507,44 @@ fn hypoid(s: &Spec, p: &mut Plan) {
     side_by_side(p, o1, r1, o2, r2, z1 / z2);
 }
 
-/// Sections a throated worm wheel is lofted through, across its face.
-const WHEEL_SECTIONS: usize = 9;
+/// Sections a throated worm wheel is lofted through, across its face: at least, and at most.
+const WHEEL_SECTIONS_MIN: usize = 9;
+const WHEEL_SECTIONS_MAX: usize = 15;
+/// How far (× module) the loft's skin may be from the true tooth between its sections.
+const WHEEL_SKIN_TOLERANCE: f64 = 4e-4;
+
+/// The flanks' points as plane points (lower side then upper), short of the tips: where the
+/// teeth work against the thread.
+fn side_points_xy(t: &ToothSides) -> Vec<V2> {
+    [&t.lower, &t.upper].iter().filter_map(|s| s.last()).flat_map(|f| f[..f.len().saturating_sub(2)].iter()).map(|q| V2::polar(q.0, q.1)).collect()
+}
+
+/// How far the cubic skin through the wheel's sections strays from the flanks the hob cuts
+/// half way between them (the outermost gaps and one next to the mid plane, where it is worst): the
+/// largest distance, along the circle, of an interpolated flank point from the true flank.
+fn skin_error(hob: &Hob, sections: &[(f64, ToothSides)], zw: u32) -> f64 {
+    let n = sections.len();
+    let ws: Vec<f64> = sections.iter().map(|s| s.0).collect();
+    let pts: Vec<Vec<V2>> = sections.iter().map(|s| side_points_xy(&s.1)).collect();
+    if pts.iter().any(|p| p.len() != pts[0].len()) {
+        return f64::INFINITY;
+    }
+    let half = pts[0].len() / 2;
+    let mut worst = 0.0f64;
+    // The skin is about symmetric across the mid plane: one side's gaps are checked.
+    for k in [0, 1, n / 2] {
+        let w = 0.5 * (ws[k] + ws[k + 1]);
+        let side = hob.side_angle(w, zw);
+        let weights = crate::mesh3d::spline_weights(&ws, w);
+        for i in 0..pts[0].len() {
+            let q = weights.iter().zip(&pts).fold(V2::ZERO, |acc, (c, p)| acc + p[i] * *c);
+            let r = q.len();
+            let e = r * crate::geom::wrap(q.angle() - side(usize::from(i >= half), r)).abs();
+            worst = worst.max(e);
+        }
+    }
+    worst
+}
 
 fn worm(s: &Spec, p: &mut Plan) {
     let m = s.module;
@@ -1534,7 +1578,6 @@ fn worm(s: &Spec, p: &mut Plan) {
     p.fact("worm root diameter", 2.0 * rf1, Unit::Mm);
     p.fact("wheel pitch diameter", 2.0 * r2, Unit::Mm);
     p.fact("wheel tip diameter", 2.0 * throat, Unit::Mm);
-    p.fact("wheel outside diameter", 2.0 * outside, Unit::Mm);
     p.fact("diameter quotient q", d1 / m, Unit::None);
     if gamma.to_degrees() < 5.0 {
         p.fact("self-locking (likely, lead angle under ~5°)", 1.0, Unit::None);
@@ -1584,7 +1627,10 @@ fn worm(s: &Spec, p: &mut Plan) {
         centre: a,
         wheel_pitch: r2,
         reference: r1,
-        tip: ra1 + clearance,
+        // The hob's tooth is the thread made taller by the clearance, but no taller than where
+        // its flanks (wider apart than the worm's by the backlash) would meet: a steep or thin
+        // thread's hob is cut back to a narrow land there (the wheel's root a little shallower).
+        tip: (ra1 + clearance).min(r1 + (PI * m / 4.0 + s.backlash / 4.0 - 0.02 * m) / ax.tan()),
         corner: s.rack.root_radius * m,
         low: rf1 - 0.5 * m,
         half: PI * m / 4.0 + s.backlash / 4.0,
@@ -1597,23 +1643,46 @@ fn worm(s: &Spec, p: &mut Plan) {
         return;
     }
     // The wheel: sections across the face, each cut by the thread as that plane meets it, the
-    // tips following the worm's root (the throat) out to the outside cylinder.
-    let tip_at = |w: f64| outside.min(a - ((rf1 + clearance).powi(2) - w * w).max(0.0).sqrt());
-    let mut sections = Vec::new();
-    for i in 0..WHEEL_SECTIONS {
-        let w = -face / 2.0 + face * i as f64 / (WHEEL_SECTIONS - 1) as f64;
-        match hob.tooth(w, tip_at(w), zw, m) {
-            Some(t) => sections.push((sided_outline(&t, zw, PI / f64::from(zw)), w, t)),
-            None => {
-                p.refuse(format!("wheel: {zw} teeth are too few for this worm (no tooth is left {} mm off the mid plane): use more teeth, a narrower face or a larger pressure angle", mm(w.abs())));
-                return;
+    // tips following the worm's root (the throat) and eased onto the outside cylinder: the
+    // easing is smooth across the face (the throat's rise less a quadratic of how near it comes
+    // to the cylinder), as a cubic skin through the sections can follow, where a sharp edge in
+    // the tip height would ripple every flank point the sections place by it.
+    let ease = outside - throat;
+    let tip_at = |w: f64| {
+        let u = a - ((rf1 + clearance).powi(2) - w * w).max(0.0).sqrt() - outside;
+        outside + if u <= -ease { u } else if u >= ease { 0.0 } else { u - (u + ease).powi(2) / (4.0 * ease) }
+    };
+    p.fact("wheel outside diameter", 2.0 * tip_at(face / 2.0), Unit::Mm);
+    // The kernel skins the loft cubic across its sections; the true tooth bends more across the
+    // face the steeper the lead, so sections are added (an odd count, one on the mid plane)
+    // until the skin between them is within a small part of the profile tolerance of the
+    // section the hob cuts there.
+    let mut sections: Vec<(f64, ToothSides)> = Vec::new();
+    let mut count = WHEEL_SECTIONS_MIN;
+    loop {
+        sections.clear();
+        for i in 0..count {
+            let w = -face / 2.0 * (PI * i as f64 / (count - 1) as f64).cos();
+            match hob.tooth(w, tip_at(w), zw, m) {
+                Some(t) => sections.push((w, t)),
+                None => {
+                    p.refuse(format!("wheel: {zw} teeth are too few for this worm (no tooth is left {} mm off the mid plane): use more teeth, a narrower face or a larger pressure angle", mm(w.abs())));
+                    return;
+                }
             }
         }
+        let err = skin_error(&hob, &sections, zw);
+        if count >= WHEEL_SECTIONS_MAX || err <= WHEEL_SKIN_TOLERANCE * m {
+            break;
+        }
+        count += 2;
     }
-    let mid = &sections[WHEEL_SECTIONS / 2];
-    let (mid_outline, mid_tooth) = (mid.0.clone(), mid.2.clone());
+    p.fact("wheel loft sections", count as f64, Unit::None);
+    let mid_tooth = sections[count / 2].1.clone();
+    let outlines: Vec<(Outline, f64)> = sections.iter().map(|(w, t)| (sided_outline(t, zw, PI / f64::from(zw)), *w)).collect();
+    let mid_outline = outlines[count / 2].0.clone();
     let tip_land = |t: &ToothSides| t.ra * (t.upper.last().and_then(|q| q.last()).map_or(0.0, |q| q.1) - t.lower.last().and_then(|q| q.last()).map_or(0.0, |q| q.1));
-    if sections.iter().any(|(_, w, t)| t.ra < tip_at(*w) - 1e-6) {
+    if sections.iter().any(|(w, t)| t.ra < tip_at(*w) - 1e-6) {
         p.warn("wheel: the teeth come to a point towards the edges of the face; the tips are lowered there");
     } else if tip_land(&mid_tooth) < 0.25 * m {
         p.warn(format!("wheel: thin tooth tips ({} mm; 0.25 × module or more is usual)", mm(tip_land(&mid_tooth))));
@@ -1624,7 +1693,7 @@ fn worm(s: &Spec, p: &mut Plan) {
         p.warn(format!("wheel: undercut ({zw} teeth; about {:.1} or more avoid it at this shift, or raise the profile shift)", mid_gear.min_teeth_no_undercut()));
     }
     if wanted(s, 1) {
-        let mut steps = vec![Step::Loft { sections: sections.iter().map(|(o, w, _)| (o.clone(), *w)).collect(), op: Op::New }];
+        let mut steps = vec![Step::Loft { sections: outlines, op: Op::New }];
         hub_steps_centered(s, &s.bore, hob.root_radius(0.0), face, &mut steps, p, "wheel");
         p.bodies.push(Body { name: name(s, &format!("Worm wheel z{zw}")), frame: Frame::at(s.origin), steps });
     }

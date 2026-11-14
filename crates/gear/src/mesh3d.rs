@@ -12,15 +12,19 @@
 //! that meshes; a gap that opens means the teeth are apart, not in mesh.
 //!
 //! The sweeps are modelled as the steps define them (a prism's twist linear in height, a
-//! taper's by the logarithm of its scale, a loft straight between corresponding points of its
-//! sections), so this proves the plan's geometry; what the kernel makes of it is checked
-//! separately with `inspect.interference`.
+//! taper's by the logarithm of its scale, a loft of four or more sections cubic across them as
+//! the kernel skins it, of two straight), so this proves the plan's geometry; what the kernel
+//! makes of it is checked separately with `inspect.interference`.
+//!
+//! [`topology`] and [`check`] give the window's mesh verdict for the sets whose axes are not
+//! parallel (`Plan::meshes3d`, through `mesh2d::check_mesh`): one tooth pitch, coarse samples.
 
 use std::f64::consts::{PI, TAU};
 use std::ops::Range;
 
 use crate::geom::{Outline, Seg, V2, natural_spline};
-use crate::plan::{Body, Frame, Op, Step, taper_turn};
+use crate::mesh2d::{MeshResult, Verdict};
+use crate::plan::{Body, Frame, Kind, Op, Plan, Spec, Step, taper_turn};
 
 type P3 = [f64; 3];
 
@@ -254,6 +258,99 @@ fn refined(pts: &[V2], h: f64) -> Vec<V2> {
     out
 }
 
+/// The weights of the values at `xs` that give an interpolating spline's value at `x`: straight
+/// between two, a parabola through three, the not-a-knot cubic through four or more (which a
+/// cubic B-spline interpolating at the points with averaged knots is).
+pub(crate) fn spline_weights(xs: &[f64], x: f64) -> Vec<f64> {
+    let n = xs.len();
+    match n {
+        0 => Vec::new(),
+        1 => vec![1.0],
+        2 => {
+            let t = (x - xs[0]) / (xs[1] - xs[0]);
+            vec![1.0 - t, t]
+        }
+        3 => (0..3)
+            .map(|i| (0..3).filter(|&j| j != i).map(|j| (x - xs[j]) / (xs[i] - xs[j])).product())
+            .collect(),
+        _ => {
+            let h: Vec<f64> = (0..n - 1).map(|i| xs[i + 1] - xs[i]).collect();
+            let k = (0..n - 1).find(|&i| x <= xs[i + 1]).unwrap_or(n - 2);
+            (0..n)
+                .map(|d| {
+                    // The spline through the unit value at point d: its second derivatives.
+                    let y = |i: usize| if i == d { 1.0 } else { 0.0 };
+                    let mut a = vec![vec![0.0; n + 1]; n];
+                    a[0][0] = h[1];
+                    a[0][1] = -(h[0] + h[1]);
+                    a[0][2] = h[0];
+                    for i in 1..n - 1 {
+                        a[i][i - 1] = h[i - 1];
+                        a[i][i] = 2.0 * (h[i - 1] + h[i]);
+                        a[i][i + 1] = h[i];
+                        a[i][n] = 6.0 * ((y(i + 1) - y(i)) / h[i] - (y(i) - y(i - 1)) / h[i - 1]);
+                    }
+                    a[n - 1][n - 3] = h[n - 2];
+                    a[n - 1][n - 2] = -(h[n - 3] + h[n - 2]);
+                    a[n - 1][n - 1] = h[n - 3];
+                    let m = solve(a);
+                    let (t0, t1) = (xs[k + 1] - x, x - xs[k]);
+                    let hk = h[k];
+                    m[k] * t0.powi(3) / (6.0 * hk) + m[k + 1] * t1.powi(3) / (6.0 * hk) + (y(k) / hk - m[k] * hk / 6.0) * t0 + (y(k + 1) / hk - m[k + 1] * hk / 6.0) * t1
+                })
+                .collect()
+        }
+    }
+}
+
+/// Gaussian elimination with partial pivoting of the augmented system `a` (n × n+1).
+fn solve(mut a: Vec<Vec<f64>>) -> Vec<f64> {
+    let n = a.len();
+    for c in 0..n {
+        let p = (c..n).max_by(|&i, &j| a[i][c].abs().total_cmp(&a[j][c].abs())).unwrap_or(c);
+        a.swap(c, p);
+        let d = a[c][c];
+        if d.abs() < 1e-300 {
+            continue;
+        }
+        for r in 0..n {
+            if r != c {
+                let f = a[r][c] / d;
+                if f != 0.0 {
+                    for k in c..=n {
+                        a[r][k] -= f * a[c][k];
+                    }
+                }
+            }
+        }
+    }
+    (0..n).map(|i| if a[i][i].abs() < 1e-300 { 0.0 } else { a[i][n] / a[i][i] }).collect()
+}
+
+/// Corresponding polygons at `zs`, with `sub` more between each two on the spline the kernel's
+/// loft skins through them.
+fn across(polys: &[Vec<V2>], zs: &[f64], sub: usize) -> (Vec<Vec<V2>>, Vec<f64>) {
+    if polys.len() < 3 {
+        return (polys.to_vec(), zs.to_vec());
+    }
+    let (mut out, mut at) = (Vec::new(), Vec::new());
+    for j in 0..zs.len() - 1 {
+        for s in 0..sub {
+            let z = zs[j] + (zs[j + 1] - zs[j]) * s as f64 / sub as f64;
+            if s == 0 {
+                out.push(polys[j].clone());
+            } else {
+                let w = spline_weights(zs, z);
+                out.push((0..polys[0].len()).map(|i| w.iter().zip(polys).fold(V2::ZERO, |acc, (wk, p)| acc + p[i] * *wk)).collect());
+            }
+            at.push(z);
+        }
+    }
+    out.push(polys[polys.len() - 1].clone());
+    at.push(zs[zs.len() - 1]);
+    (out, at)
+}
+
 enum Part {
     Prism { outer: Vec<Poly>, holes: Vec<Poly>, z0: f64, height: f64, twist: f64 },
     Taper { poly: Poly, z0: f64, height: f64, twist: f64, scale: f64 },
@@ -309,8 +406,9 @@ impl Part {
         }
     }
     /// The part's side surface as rows of corresponding points (each row a closed loop), the
-    /// rows about `hz` apart: one list of rows per sheet.
-    fn sheets(&self, h: f64, hz: f64) -> Vec<Vec<Vec<P3>>> {
+    /// rows about `hz` apart: one list of rows per sheet. A coil's rows are only those that
+    /// reach into the `band` of heights.
+    fn sheets(&self, h: f64, hz: f64, band: (f64, f64)) -> Vec<Vec<Vec<P3>>> {
         let layers = |len: f64| ((len.abs() / hz).ceil() as usize).clamp(1, 20000);
         let mut out = Vec::new();
         match self {
@@ -360,13 +458,16 @@ impl Part {
                 let n = layers(TAU * rmax).max(24);
                 out.push((0..=n).map(|j| pts.iter().map(|q| V2::polar(q.x, TAU * j as f64 / n as f64)).zip(&pts).map(|(c, q)| [c.x, c.y, q.y]).collect()).collect());
             }
-            Part::Coil { section, pitch, turns, left, .. } => {
+            Part::Coil { section, pitch, turns, left, zlo, zhi } => {
                 let pts = refined(section, h);
                 let rmax = pts.iter().map(|q| q.x).fold(0.0, f64::max);
                 let n = layers(turns * (TAU * rmax).hypot(*pitch)).max(24);
                 let hand = if *left { -1.0 } else { 1.0 };
+                // Only the rows whose section reaches into the band.
+                let row = |z: f64| (z / (pitch * turns) * n as f64).clamp(0.0, n as f64);
+                let (j0, j1) = (row(band.0 - zhi).floor() as usize, row(band.1 - zlo).ceil() as usize);
                 out.push(
-                    (0..=n)
+                    (j0..=j1)
                         .map(|j| {
                             let th = TAU * turns * j as f64 / n as f64;
                             pts.iter().map(|q| (V2::polar(q.x, hand * th), q.y + pitch * th / TAU)).map(|(c, z)| [c.x, c.y, z]).collect()
@@ -427,7 +528,12 @@ impl Solid {
                     }
                     let polys: Vec<Vec<V2>> = sections.iter().map(|(o, _)| polygon(o, &counts)).collect();
                     assert!(polys.iter().all(|p| p.len() == polys[0].len()), "loft sections must correspond point for point");
-                    let slabs: Vec<Slab> = (0..sections.len() - 1).map(|j| Slab::new(polys[j].clone(), polys[j + 1].clone(), sections[j].1, sections[j + 1].1)).collect();
+                    // The kernel skins a loft of four or more sections cubic across them (three:
+                    // quadratic), so the solid between two sections is that curve's, here
+                    // followed by short straight slabs.
+                    let zs: Vec<f64> = sections.iter().map(|s| s.1).collect();
+                    let (polys, zs) = across(&polys, &zs, 4);
+                    let slabs: Vec<Slab> = (0..zs.len() - 1).map(|j| Slab::new(polys[j].clone(), polys[j + 1].clone(), zs[j], zs[j + 1])).collect();
                     if adds(op) {
                         radius = slabs.iter().fold(radius, |a, s| a.max(s.rmax));
                         zr = (zr.0.min(sections[0].1), zr.1.max(sections[sections.len() - 1].1));
@@ -508,8 +614,11 @@ impl Solid {
     }
     /// The band of this body (least radius, z range, its own coordinates) that can come within
     /// `margin` of `other`'s bounding cylinder however either is turned.
-    fn reach_of(&self, other: &Solid, margin: f64) -> (f64, f64, f64) {
+    /// Also the arc of angles about this body's own axis (unturned: its middle and half its
+    /// width) the band lies in, when that is less than a full turn.
+    fn reach_of(&self, other: &Solid, margin: f64) -> (f64, f64, f64, Option<(f64, f64)>) {
         let (mut rmin, mut zlo, mut zhi) = (f64::MAX, f64::MAX, f64::MIN);
+        let mut angles = Vec::with_capacity(25 * 96 * 4);
         let rr = other.radius + margin;
         for k in 0..=24 {
             let z = other.z.0 - margin + (other.z.1 - other.z.0 + 2.0 * margin) * f64::from(k) / 24.0;
@@ -520,12 +629,31 @@ impl Solid {
                     rmin = rmin.min(l[0].hypot(l[1]));
                     zlo = zlo.min(l[2]);
                     zhi = zhi.max(l[2]);
+                    angles.push(l[1].atan2(l[0]) + self.spin);
                 }
             }
         }
         // The probe points are a grid: allow for what lies between them.
         let slack = 0.05 * rr + (other.z.1 - other.z.0) / 24.0;
-        ((rmin - slack).max(0.0), zlo - slack, zhi + slack)
+        let rmin = (rmin - slack).max(0.0);
+        // The arc: the whole turn less the widest gap between the probes' angles, widened by
+        // the angle the grid's slack reaches at the least radius.
+        for a in angles.iter_mut() {
+            *a = a.rem_euclid(TAU);
+        }
+        angles.sort_by(f64::total_cmp);
+        let n = angles.len();
+        let (mut gap, mut from) = (angles[0] + TAU - angles[n - 1], angles[n - 1]);
+        for w in angles.windows(2) {
+            if w[1] - w[0] > gap {
+                gap = w[1] - w[0];
+                from = w[0];
+            }
+        }
+        let widen = if rmin > 1e-9 { (2.0 * slack / rmin).min(PI) } else { PI };
+        let half = 0.5 * (TAU - gap) + widen;
+        let arc = if half < PI { Some((from + gap + 0.5 * (TAU - gap), half)) } else { None };
+        (rmin, zlo - slack, zhi + slack, arc)
     }
 }
 
@@ -554,14 +682,48 @@ pub struct Surface {
 
 impl Surface {
     /// Samples of `solid`'s surface where it can meet `other`: about `h` apart round the
-    /// outlines and `hz` apart along the sweeps.
-    pub fn of(solid: &Solid, other: &Solid, hz: f64) -> Surface {
+    /// outlines and `hz` apart along the sweeps. With `spins` (the least and most `solid` will
+    /// be turned) only the arc of it that can come round to face `other` is sampled.
+    pub fn of(solid: &Solid, other: &Solid, hz: f64, spins: Option<(f64, f64)>) -> Surface {
         let h = solid.h;
-        let (rmin, zlo, zhi) = solid.reach_of(other, 1.0);
+        let (rmin, zlo, zhi, arc) = solid.reach_of(other, 1.0);
+        // The arc each sample's own angle must be in, in the body's own coordinates.
+        let window = match (arc, spins) {
+            (Some((mid, half)), Some((lo, hi))) if half + 0.5 * (hi - lo).abs() < PI => Some((mid - 0.5 * (lo + hi), half + 0.5 * (hi - lo).abs())),
+            _ => None,
+        };
+        // Which rings about the axis (a grid of radius and height) come within reach of `other`
+        // at any angle in the arc: only samples on those are kept.
+        let (nr, nz, na) = (32usize, 64usize, 48usize);
+        let rtop = solid.radius.max(rmin + 1e-9);
+        let (dr, dz) = ((rtop - rmin) / nr as f64, (zhi - zlo).max(1e-9) / nz as f64);
+        let (amid, ahalf) = arc.unwrap_or((0.0, PI));
+        let da = 2.0 * ahalf / na as f64;
+        let mut ring = vec![false; nr * nz];
+        let (mut blo, mut bhi) = (f64::MAX, f64::MIN);
+        for iz in 0..nz {
+            let z = zlo + (iz as f64 + 0.5) * dz;
+            for ir in 0..nr {
+                let r = rmin + (ir as f64 + 0.5) * dr;
+                let margin = 1.0 + 0.5 * dr.hypot(dz) + r * da;
+                if (0..=na).any(|k| {
+                    let q = V2::polar(r, amid - ahalf + da * k as f64);
+                    other.near(solid.frame.world([q.x, q.y, z]), margin)
+                }) {
+                    ring[iz * nr + ir] = true;
+                    blo = blo.min(z - dz);
+                    bhi = bhi.max(z + dz);
+                }
+            }
+        }
+        let reachable = |p: P3| {
+            let (ir, iz) = (((p[0].hypot(p[1]) - rmin) / dr).floor(), ((p[2] - zlo) / dz).floor());
+            ir >= 0.0 && iz >= 0.0 && (ir as usize) < nr && (iz as usize) < nz && ring[iz as usize * nr + ir as usize] || ir >= nr as f64
+        };
         let eps = 0.02 * h;
         let mut samples = Vec::new();
         for (part, _) in &solid.parts {
-            for rows in part.sheets(h, hz) {
+            for rows in part.sheets(h, hz, (blo, bhi)) {
                 for w in rows.windows(2) {
                     let (r0, r1) = (&w[0], &w[1]);
                     let n = r0.len();
@@ -569,7 +731,7 @@ impl Surface {
                         let j = (i + 1) % n;
                         let (a, b, c, d) = (r0[i], r0[j], r1[i], r1[j]);
                         let p = [0, 1, 2].map(|k| 0.25 * (a[k] + b[k] + c[k] + d[k]));
-                        if p[2] < zlo || p[2] > zhi || p[0].hypot(p[1]) < rmin {
+                        if p[2] < zlo || p[2] > zhi || p[0].hypot(p[1]) < rmin || window.is_some_and(|(mid, half)| crate::geom::wrap(p[1].atan2(p[0]) - mid).abs() > half) || !reachable(p) {
                             continue;
                         }
                         let du = [0, 1, 2].map(|k| 0.5 * (b[k] + d[k] - a[k] - c[k]));
@@ -801,7 +963,15 @@ impl Pair {
     /// along the sweeps they are `hz` apart.
     pub fn new(a: &Body, b: &Body, h: f64, hz: f64) -> Pair {
         let (a, b) = (Solid::new(a, h), Solid::new(b, h));
-        let (sa, sb) = (Surface::of(&a, &b, hz), Surface::of(&b, &a, hz));
+        let (sa, sb) = (Surface::of(&a, &b, hz, None), Surface::of(&b, &a, hz, None));
+        Pair { a, b, sa, sb }
+    }
+    /// Like [`Pair::new`] for the motion [`Pair::run`] makes from `t0` to `t1` at `ratio` (no
+    /// other turns): only the arcs of the bodies that come round to face each other are sampled.
+    pub fn for_run(a: &Body, b: &Body, h: f64, hz: f64, ratio: f64, t0: f64, t1: f64) -> Pair {
+        let (a, b) = (Solid::new(a, h), Solid::new(b, h));
+        let (b0, b1) = (ratio * t0, ratio * t1);
+        let (sa, sb) = (Surface::of(&a, &b, hz, Some((t0.min(t1), t0.max(t1)))), Surface::of(&b, &a, hz, Some((b0.min(b1), b0.max(b1)))));
         Pair { a, b, sa, sb }
     }
     /// The pair with the first body turned `ta` and the second `tb` about their own axes.
@@ -871,4 +1041,121 @@ pub fn overlap(a: &Solid, b: &Solid, cell: f64) -> f64 {
         }
     }
     count as f64 * d[0] * d[1] * d[2]
+}
+
+// ---------------------------------------------------------------------------------------------
+// The plan's 3D meshes, checked for the window.
+
+/// How a pair whose axes are not parallel turns: member 2's turn per radian of member 1's
+/// (bodies in plan order: gear 1 and gear 2, or the wheel and then the worm), half a pitch of
+/// member 2, and one tooth pitch of member 1 (the driver angle after which the mesh repeats).
+pub fn motion(s: &Spec) -> (f64, f64, f64) {
+    match s.kind {
+        // A right-hand worm turned forwards carries the wheel back.
+        Kind::Worm => {
+            let hand = if s.helix < 0.0 { -1.0 } else { 1.0 };
+            let starts = f64::from(s.starts.max(1));
+            (-hand * f64::from(s.teeth) / starts, PI / starts, TAU / f64::from(s.teeth.max(1)))
+        }
+        _ => (-f64::from(s.teeth) / f64::from(s.teeth2.max(1)), PI / f64::from(s.teeth2.max(1)), TAU / f64::from(s.teeth.max(1))),
+    }
+}
+
+/// The least flank gap the backlash asks for, square to the flanks (mm): the smallest and the
+/// largest anywhere on the face. Every member's teeth are thinner by the backlash on its pitch
+/// circle (a bevel's at its large end; a worm's thread and its wheel's teeth by half of it each,
+/// along the worm's axis), and the pair is turned to the middle of the play, so each side has
+/// (j/2)·cos αn·cos β of each member's thinning, β the member's helix (spiral, lead) angle.
+pub fn expected_gap(s: &Spec) -> (f64, f64) {
+    let (j, an) = (s.backlash, s.pressure_angle.to_radians());
+    match s.kind {
+        Kind::CrossedHelical => {
+            let (b1, b2) = (s.helix.to_radians(), (s.shaft_angle - s.helix).to_radians());
+            let g = 0.5 * j * an.cos() * (b1.cos() + b2.cos());
+            (g, g)
+        }
+        Kind::Bevel | Kind::SpiralBevel => {
+            let sigma = s.shaft_angle.to_radians();
+            let (z1, z2) = (f64::from(s.teeth), f64::from(s.teeth2));
+            let d1 = sigma.sin().atan2(z2 / z1 + sigma.cos());
+            let re = s.module * z1 / 2.0 / d1.sin();
+            let b = s.face_width.min(0.45 * re);
+            let beta = if s.kind == Kind::SpiralBevel { s.spiral_angle.to_radians() } else { 0.0 };
+            // The same turn of play is less gap nearer the apex.
+            let g = j * an.cos() * beta.cos();
+            (g * (re - b) / re, g)
+        }
+        Kind::Worm => {
+            let d1 = if s.worm_diameter > 0.0 { s.worm_diameter } else { 10.0 * s.module };
+            let gamma = (s.module * f64::from(s.starts.max(1)) / d1).atan();
+            let g = 0.5 * j * an.cos() * gamma.cos();
+            (g, g)
+        }
+        _ => (0.0, j * an.cos()),
+    }
+}
+
+/// Two bodies of a set whose axes are not parallel that mesh, for [`check`], and which preview
+/// members they are.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshPair3 {
+    /// Indices into `Plan::preview` (gear 1 and gear 2; the wheel and the worm).
+    pub a: usize,
+    pub b: usize,
+    /// The whole set's two members when only one is built (the plan's bodies otherwise).
+    pub bodies: Option<[Body; 2]>,
+    /// Member 2's turn per radian of member 1's, and member 1's tooth pitch (radians).
+    pub ratio: f64,
+    pub period: f64,
+    /// The flank gap the backlash asks for (least and most over the face; mm).
+    pub gap: (f64, f64),
+    /// The length tolerances scale with (the module; mm).
+    pub scale: f64,
+}
+
+/// The 3D meshes of a planned set whose axes are not parallel: `whole`, the whole set's two
+/// bodies when the plan has only one of them.
+pub fn topology(s: &Spec, planned: &[Body], whole: Option<Vec<Body>>) -> Vec<MeshPair3> {
+    if !matches!(s.kind, Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical | Kind::Worm) {
+        return Vec::new();
+    }
+    let bodies = match whole {
+        Some(w) if w.len() == 2 => Some([w[0].clone(), w[1].clone()]),
+        Some(_) => return Vec::new(),
+        None if planned.len() == 2 => None,
+        None => return Vec::new(),
+    };
+    let (ratio, _, period) = motion(s);
+    vec![MeshPair3 { a: 0, b: 1, bodies, ratio, period, gap: expected_gap(s), scale: s.module }]
+}
+
+/// Driver angles [`check`] probes over one tooth pitch.
+pub const CHECK_STEPS: usize = 6;
+
+/// Checks a 3D mesh over one tooth pitch of member 1 with coarse surface samples (a tenth of a
+/// module apart round the outlines, a third along the sweeps; about 30 to 150 ms for the
+/// default sets, so debounce it as the 2D check): overlap deeper than
+/// [`crate::mesh2d::CHECK_DEPTH`] is interference, flanks further apart than the backlash asks
+/// plus [`crate::mesh2d::CHECK_GAP`] have lost contact.
+pub fn check(plan: &Plan, m: &MeshPair3) -> MeshResult {
+    use crate::mesh2d::{CHECK_DEPTH, CHECK_GAP};
+    let (ba, bb) = match &m.bodies {
+        Some(b) => (&b[0], &b[1]),
+        None => (&plan.bodies[0], &plan.bodies[1]),
+    };
+    let mut pair = Pair::for_run(ba, bb, m.scale / 10.0, m.scale / 3.0, m.ratio, -0.5 * m.period, 0.5 * m.period);
+    let r = pair.run(m.ratio, 0.0, -0.5 * m.period, 0.5 * m.period, CHECK_STEPS);
+    let name = |i: usize| plan.preview.get(i).map_or_else(|| format!("member {}", i + 1), |g| g.name.clone());
+    let (na, nb) = (name(m.a), name(m.b));
+    let (depth, gap_min, gap_max) = (r.penetration, if r.gap_min.is_finite() { r.gap_min } else { 0.0 }, r.gap_max);
+    let (verdict, message) = if depth > CHECK_DEPTH * m.scale {
+        (Verdict::Interferes, format!("{na} and {nb} interfere: they overlap by {depth:.3} mm"))
+    } else if gap_max > m.gap.1 + CHECK_GAP * m.scale {
+        (Verdict::NoContact, format!("{na} and {nb} lose contact: up to {gap_max:.3} mm apart"))
+    } else if m.gap.1 > 0.0 {
+        (Verdict::Ok, format!("{na} and {nb} mesh: no overlap, flanks {gap_min:.3} to {gap_max:.3} mm apart"))
+    } else {
+        (Verdict::Ok, format!("{na} and {nb} mesh: no overlap, flanks in contact"))
+    };
+    MeshResult { a: m.a, b: m.b, penetration_mm: depth, gap_min_mm: gap_min, gap_max_mm: gap_max, verdict, message }
 }

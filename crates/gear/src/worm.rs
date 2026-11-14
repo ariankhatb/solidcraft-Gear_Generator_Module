@@ -14,7 +14,7 @@
 use std::f64::consts::PI;
 
 use crate::geom::fit_profile;
-use crate::involute::{FILLET_TOLERANCE, PROFILE_TOLERANCE, ToothSides};
+use crate::involute::{FILLET_TOLERANCE, ToothSides};
 
 /// Curves given by a parameter (0 to 1) as (radius, angle), sampled coarsely and refined where
 /// a radius is wanted: the furthest any of them reaches round at a radius is the edge of what
@@ -43,7 +43,7 @@ impl<F: Fn(usize, f64) -> (f64, f64)> Envelope<F> {
                 let up = rb > ra;
                 let (mut lo, mut hi) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
                 let mut p = c[i];
-                for _ in 0..48 {
+                for _ in 0..34 {
                     let mid = 0.5 * (lo + hi);
                     let q = (self.eval)(k, mid);
                     if !q.0.is_finite() {
@@ -119,8 +119,9 @@ impl Hob {
     /// The wheel point cut by the thread point at `t` along its tip corner (`k` = 0) or flank
     /// (1) on the plane `w`, as (radius, angle from the middle of the tooth space × `side`);
     /// `side` +1 for the thread's side further along the worm, −1 for the other.
-    fn cut(&self, w: f64, side: f64, k: usize, t: f64) -> (f64, f64) {
-        let (rho_c, rc, zc, re) = self.corner_arc();
+    /// `corner`: [`Hob::corner_arc`], worked out once by the caller.
+    fn cut(&self, corner: (f64, f64, f64, f64), w: f64, side: f64, k: usize, t: f64) -> (f64, f64) {
+        let (rho_c, rc, zc, re) = corner;
         let ax = self.tan_axial.atan();
         // The thread's axial profile: radius, axial position and their rates along it.
         let (rho, zeta, d_rho, d_zeta) = if k == 0 {
@@ -148,6 +149,21 @@ impl Hob {
         let slide = -y + (self.wheel_pitch - x) * dx / dy;
         (x.hypot(y + slide), side * ((y + slide).atan2(x) - slide / self.wheel_pitch))
     }
+    /// The true sides of the wheel's tooth on the plane `w` (as [`Hob::tooth`] gives them, before
+    /// fitting): side 0 (lower) or 1's angle from the tooth's centre line at a radius.
+    pub fn side_angle(&self, w: f64, teeth: u32) -> impl Fn(usize, f64) -> f64 + '_ {
+        let rf = self.root_radius(w);
+        let pitch_half = PI / f64::from(teeth);
+        let (_, _, zc, _) = self.corner_arc();
+        let lean = self.screw * (w / self.tip).clamp(-1.0, 1.0).asin();
+        let corner = self.corner_arc();
+        let envelopes = [1.0, -1.0].map(|side| Envelope::new(move |k, t| self.cut(corner, w, side, k, t), &[60, 240]));
+        let roots = [(lean + zc) / self.wheel_pitch, (zc - lean) / self.wheel_pitch];
+        move |i: usize, rr: f64| {
+            let space = if rr <= rf * (1.0 + 1e-12) { roots[i] } else { envelopes[i].extreme(rr).map_or(roots[i], |x| x.0) };
+            (if i == 0 { -1.0 } else { 1.0 }) * (pitch_half - space)
+        }
+    }
     /// One of the wheel's `teeth` teeth on the plane `w` off the mid plane, from the root up to
     /// `tip_radius` (lower where the tooth comes to a point), its sides as angles from the
     /// tooth's centre line (the middle of the tooth space the thread sits in is half a pitch
@@ -157,7 +173,8 @@ impl Hob {
         let pitch_half = PI / f64::from(teeth);
         let (_, _, zc, _) = self.corner_arc();
         let lean = self.screw * (w / self.tip).clamp(-1.0, 1.0).asin();
-        let envelopes = [1.0, -1.0].map(|side| Envelope::new(move |k, t| self.cut(w, side, k, t), &[60, 240]));
+        let corner = self.corner_arc();
+        let envelopes = [1.0, -1.0].map(|side| Envelope::new(move |k, t| self.cut(corner, w, side, k, t), &[60, 240]));
         // Where each side of the space is at a radius (angle × side), and what cut it.
         let roots = [(lean + zc) / self.wheel_pitch, (zc - lean) / self.wheel_pitch];
         let space = |i: usize, rr: f64| -> (f64, usize) { if rr <= rf * (1.0 + 1e-12) { (roots[i], 0) } else { envelopes[i].extreme(rr).unwrap_or((roots[i], 0)) } };
@@ -167,17 +184,18 @@ impl Hob {
             return None;
         }
         let mut ra = tip_radius;
-        let probes = 80;
+        let probes = 48;
         let mut prev = rf;
         let mut handover = [None, None];
         for i in 1..=probes {
             let rr = rf + (tip_radius - rf) * f64::from(i) / f64::from(probes);
+            let here = [space(0, rr), space(1, rr)];
             for (side, h) in handover.iter_mut().enumerate() {
-                if h.is_none() && space(side, rr).1 == 1 {
+                if h.is_none() && here[side].1 == 1 {
                     *h = Some(bisect(rr, prev, &|x| space(side, x).1 == 1));
                 }
             }
-            if thickness(rr) <= land {
+            if (2.0 * pitch_half - here[0].0 - here[1].0) * rr <= land {
                 ra = bisect(prev, rr, &|x| thickness(x) > land);
                 break;
             }
@@ -192,7 +210,16 @@ impl Hob {
             // The fillet up to where the flank takes over, each piece a fair share of the side.
             let split = handover[i].unwrap_or(rf).clamp(rf + 0.04 * (ra - rf), rf + 0.6 * (ra - rf));
             let mut fillet = fit_profile(&angle, &|s| if s >= 1.0 { split } else { rf + (split - rf) * s * s }, FILLET_TOLERANCE * m, FILLET_POINTS, FILLET_POINTS);
-            let flank = fit_profile(&angle, &|s| if s >= 1.0 { ra } else { split + (ra - split) * s }, PROFILE_TOLERANCE * m, FLANK_POINTS, FLANK_POINTS);
+            // The flank's points at set places along it (closer at the ends), not crowded where it
+            // bends as a fitted side's are: a nearly straight flank's bends are noise that would
+            // move its points about from one section to the next, and the loft's skin with them.
+            let flank: Vec<(f64, f64)> = (0..=FLANK_POINTS)
+                .map(|j| {
+                    let t = j as f64 / FLANK_POINTS as f64;
+                    let rr = split + (ra - split) * (0.6 * t + 0.2 * (1.0 - (PI * t).cos()));
+                    (rr, angle(rr))
+                })
+                .collect();
             if let (Some(a), Some(b)) = (fillet.last_mut(), flank.first()) {
                 *a = *b;
             }
@@ -204,9 +231,10 @@ impl Hob {
 
 /// The last value between `lo` (inside) and `hi` (not) that is inside.
 fn bisect(mut lo: f64, mut hi: f64, inside: &dyn Fn(f64) -> bool) -> f64 {
-    for _ in 0..60 {
+    for _ in 0..44 {
         let mid = 0.5 * (lo + hi);
         if inside(mid) { lo = mid } else { hi = mid }
     }
     lo
 }
+

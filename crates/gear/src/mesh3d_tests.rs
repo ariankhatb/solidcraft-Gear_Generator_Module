@@ -3,9 +3,7 @@
 //! apart); half a pitch out of phase they collide. Run with `--nocapture` for every case's
 //! numbers.
 
-use std::f64::consts::{PI, TAU};
-
-use crate::mesh3d::{Pair, Run, Stat};
+use crate::mesh3d::{Pair, Run, Stat, expected_gap as want_gap, motion};
 use crate::plan::{Kind, Spec, plan};
 
 /// Driver angles per run (two tooth pitches).
@@ -15,30 +13,21 @@ pub struct Row {
     pub label: String,
     pub m: f64,
     pub backlash: f64,
+    /// The gap the backlash asks for ([`want_gap`]).
+    pub want_lo: f64,
+    pub want_hi: f64,
     pub run: Run,
     /// Member 2 turned half a pitch out of phase.
     pub off: Stat,
     pub warnings: Vec<String>,
 }
 
-/// Member 2's turn per radian of member 1's (bodies in plan order), and half a pitch of member 2.
-fn motion(s: &Spec) -> (f64, f64, f64) {
-    match s.kind {
-        // Wheel first, then the worm: a right-hand worm turned forwards carries the wheel back.
-        Kind::Worm => {
-            let hand = if s.helix < 0.0 { -1.0 } else { 1.0 };
-            (-hand * f64::from(s.teeth) / f64::from(s.starts), PI / f64::from(s.starts), TAU / f64::from(s.teeth))
-        }
-        _ => (-f64::from(s.teeth) / f64::from(s.teeth2), PI / f64::from(s.teeth2), TAU / f64::from(s.teeth)),
-    }
-}
-
 pub fn measure(label: &str, s: &Spec) -> Row {
     let p = plan(s).unwrap_or_else(|e| panic!("{label}: {e}"));
     assert_eq!(p.bodies.len(), 2, "{label}");
     let m = s.module;
-    let mut pair = Pair::new(&p.bodies[0], &p.bodies[1], 0.03 * m, 0.1 * m);
     let (ratio, half, pitch) = motion(s);
+    let mut pair = Pair::for_run(&p.bodies[0], &p.bodies[1], 0.03 * m, 0.1 * m, ratio, -pitch, 2.0 * pitch);
     let run = pair.run(ratio, 0.0, 0.0, 2.0 * pitch, STEPS);
     let off = pair.at(0.0, half);
     if std::env::var("MESH3D_WHERE").is_ok() {
@@ -53,7 +42,8 @@ pub fn measure(label: &str, s: &Spec) -> Row {
             eprintln!("  {label}: {what} at driver {at:.4}: body 1 r {:.3} z {:.3}, body 2 r {:.3} z {:.3} (z ranges {:?} {:?})", la[0].hypot(la[1]), la[2], lb[0].hypot(lb[1]), lb[2], pair.a.z, pair.b.z);
         }
     }
-    Row { label: label.to_string(), m, backlash: s.backlash, run, off, warnings: p.warnings }
+    let (want_lo, want_hi) = want_gap(s);
+    Row { label: label.to_string(), m, backlash: s.backlash, want_lo, want_hi, run, off, warnings: p.warnings }
 }
 
 /// A flank is a spline within `PROFILE_TOLERANCE` of its curve and the checker's surfaces are
@@ -67,12 +57,14 @@ impl Row {
     pub fn show(&self) {
         let r = &self.run;
         eprintln!(
-            "{:<44} pen {:>8.5} m  gap {:>8.5}..{:>8.5} m (backlash {:.3} mm)  vol {:>7.4} mm3 | half pitch off: pen {:>6.3} mm vol {:>8.2} mm3{}",
+            "{:<44} pen {:>8.5} m  gap {:>8.5}..{:>8.5} m (backlash {:.3} mm, wants {:.4}..{:.4} mm)  vol {:>7.4} mm3 | half pitch off: pen {:>6.3} mm vol {:>8.2} mm3{}",
             self.label,
             r.penetration / self.m,
             r.gap_min / self.m,
             r.gap_max / self.m,
             self.backlash,
+            self.want_lo,
+            self.want_hi,
             r.volume,
             self.off.penetration,
             self.off.volume,
@@ -85,10 +77,8 @@ impl Row {
         self.show();
         let (r, m) = (&self.run, self.m);
         assert!(r.penetration <= DEPTH * m, "{}: flanks cross by {} mm at driver angle {}", self.label, r.penetration, r.at);
-        // Backlash is set along the pitch circle (a worm's along its axis); square to the flanks
-        // each side's share comes out less.
-        assert!(r.gap_max <= 0.5 * self.backlash + GAP * m, "{}: flanks {} mm apart", self.label, r.gap_max);
-        assert!(r.gap_min >= 0.25 * self.backlash - GAP * m, "{}: flanks only {} mm apart, backlash {}", self.label, r.gap_min, self.backlash);
+        assert!(r.gap_max <= self.want_hi + GAP * m, "{}: flanks {} mm apart (the backlash asks for {})", self.label, r.gap_max, self.want_hi);
+        assert!(r.gap_min >= self.want_lo - GAP * m, "{}: flanks only {} mm apart (the backlash asks for {})", self.label, r.gap_min, self.want_lo);
         assert!(self.off.penetration > 0.1 * m && self.off.volume > 0.02 * m * m * m, "{}: half a pitch out of phase should collide: {:?}", self.label, self.off);
     }
 }
@@ -178,5 +168,50 @@ fn probe() {
         ("x 90 30/60 j.1", Spec { helix: 30.0, backlash: 0.1, teeth: 18, teeth2: 23, ..d(Kind::CrossedHelical) }),
         ("x 90 30/60 j.1 stub", Spec { helix: 30.0, backlash: 0.1, teeth: 18, teeth2: 23, rack: crate::involute::BasicRack { addendum: 0.8, dedendum: 1.0, root_radius: 0.3 }, ..d(Kind::CrossedHelical) }),    ] {
         measure(label, &s).show();
+    }
+}
+
+/// The window's verdict (`check_mesh`) on the 3D sets: quick, Ok for sound sets (also when one
+/// member is built), and interference for a member turned half a pitch.
+#[test]
+fn window_check_covers_3d_sets() {
+    use crate::mesh2d::{Verdict, check_mesh};
+    for (label, s) in [
+        ("bevel", d(Kind::Bevel)),
+        ("spiral bevel", d(Kind::SpiralBevel)),
+        ("crossed helical", d(Kind::CrossedHelical)),
+        ("worm", d(Kind::Worm)),
+        ("worm backlash", Spec { backlash: 0.1, ..d(Kind::Worm) }),
+        ("spiral bevel backlash, gear 2 only", Spec { backlash: 0.1, only: 2, ..d(Kind::SpiralBevel) }),
+    ] {
+        let mut p = plan(&s).unwrap();
+        let t = std::time::Instant::now();
+        let r = check_mesh(&p);
+        let ms = t.elapsed().as_secs_f64() * 1e3;
+        eprintln!("{label:<36} {ms:6.1} ms  {}", r.iter().map(|x| x.message.clone()).collect::<Vec<_>>().join(" | "));
+        assert_eq!(r.len(), 1, "{label}");
+        assert_eq!(r[0].verdict, Verdict::Ok, "{label}: {}", r[0].message);
+        assert!(ms < 1000.0, "{label}: {ms} ms");
+        // Member 2 turned half its pitch about its own axis.
+        let (_, half, _) = crate::mesh3d::motion(&s);
+        let f = match &mut p.meshes3d[0].bodies {
+            Some(b) => &mut b[1].frame,
+            None => &mut p.bodies[1].frame,
+        };
+        let y = f.y();
+        f.x = [0, 1, 2].map(|i| f.x[i] * half.cos() + y[i] * half.sin());
+        let r = check_mesh(&p);
+        assert_eq!(r[0].verdict, Verdict::Interferes, "{label} half a pitch out: {}", r[0].message);
+    }
+}
+
+/// A big worm wheel's sections (its flanks nearly straight) still loft within the tolerance in
+/// a few sections, and the plan stays quick.
+#[test]
+fn big_worm_wheels_loft_in_few_sections() {
+    for z in [30, 120, 400] {
+        let p = plan(&Spec { teeth: z, ..d(Kind::Worm) }).unwrap();
+        let n = p.facts.iter().find(|f| f.label == "wheel loft sections").map_or(0.0, |f| f.value);
+        assert!(n <= 11.0, "z{z}: {n} sections");
     }
 }

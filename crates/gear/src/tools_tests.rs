@@ -35,9 +35,14 @@ fn plans_list_their_meshes() {
     assert_eq!(p.meshes.iter().map(|m| (m.a, m.b, m.internal)).collect::<Vec<_>>(), [(0, 1, true)]);
     // A lone cycloidal wheel, single gears and the sets on other axes have none.
     assert!(plan(&Spec { teeth2: 0, ..Spec::defaults_for(Kind::Cycloidal) }).unwrap().meshes.is_empty());
-    for kind in [Kind::Spur, Kind::Helical, Kind::Internal, Kind::Rack, Kind::Bevel, Kind::SpiralBevel, Kind::CrossedHelical, Kind::Worm] {
+    for kind in [Kind::Spur, Kind::Helical, Kind::Internal, Kind::Rack] {
         let p = plan(&Spec::defaults_for(kind)).unwrap();
         assert!(p.meshes.is_empty() && check_mesh(&p).is_empty(), "{kind:?}");
+    }
+    // Sets on other axes are checked in 3D (see `mesh3d_tests` for their verdicts).
+    for kind in [Kind::Bevel, Kind::SpiralBevel, Kind::CrossedHelical, Kind::Worm] {
+        let p = plan(&Spec::defaults_for(kind)).unwrap();
+        assert!(p.meshes.is_empty() && p.meshes3d.len() == 1, "{kind:?}");
     }
     // Building only one member still checks the whole mesh.
     let p = plan(&Spec { only: 2, ..Spec::defaults_for(Kind::Pair) }).unwrap();

@@ -427,12 +427,16 @@ pub const CHECK_GAP: f64 = 6e-3;
 /// loss of contact. Coarser than the tests' sweep (about 1e-3 of a module) and fast enough to
 /// call on every edit (debounce it all the same).
 ///
-/// Sets whose axes are not parallel give an empty list: their preview is a side-by-side
-/// picture, not the plane the teeth mesh in.
+/// Sets whose axes are not parallel (their preview is a side-by-side picture, not the plane the
+/// teeth mesh in) are checked in 3D instead, between their bodies ([`crate::mesh3d::check`]);
+/// `a` and `b` are still preview members (gear 1 and gear 2; the wheel and the worm).
 pub fn check_mesh(plan: &Plan) -> Vec<MeshResult> {
-    // HOOK (mesh3d): bevel, hypoid, crossed helical and worm sets have no `Plan::meshes`; when
-    // the 3D checker (`mesh3d.rs`) lands, call it here for plans whose `meshes` is empty and
-    // append its results (same `MeshResult`, with `a` and `b` as it documents them).
+    let mut out = check_mesh_2d(plan);
+    out.extend(plan.meshes3d.iter().map(|m| crate::mesh3d::check(plan, m)));
+    out
+}
+
+fn check_mesh_2d(plan: &Plan) -> Vec<MeshResult> {
     let n = plan.preview.len();
     let pairs: Vec<&MeshPair> = plan.meshes.iter().filter(|m| m.a < n && m.b < n && m.a != m.b && m.scale > 0.0 && m.period > 0.0).collect();
     let mut members: Vec<Option<Member>> = (0..n).map(|_| None).collect();

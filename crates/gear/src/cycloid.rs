@@ -86,9 +86,13 @@ pub fn cycloidal_outline(c: &Cycloidal, phase: f64) -> (Outline, ToothFlank) {
         ra = lo;
     }
     let lowest = (r - 2.0 * a_ded * 0.999).max(rf);
+    // Spaced by the square of the distance from the pitch circle: both cycloids leave it radially
+    // with their angle growing as that distance to the power 3/2, which even steps in radius
+    // would leave the spline to guess.
     let n = 12;
-    let ded: Vec<(f64, f64)> = (0..=n).map(|i| lowest + (r - lowest) * i as f64 / n as f64).map(|rr| (rr, half(rr))).collect();
-    let add: Vec<(f64, f64)> = (0..=n).map(|i| r + (ra - r) * i as f64 / n as f64).map(|rr| (rr, half(rr))).collect();
+    let sq = |i: usize| (i as f64 / n as f64).powi(2);
+    let ded: Vec<(f64, f64)> = (0..=n).map(|i| r - (r - lowest) * sq(n - i)).map(|rr| (rr, half(rr))).collect();
+    let add: Vec<(f64, f64)> = (0..=n).map(|i| r + (ra - r) * sq(i)).map(|rr| (rr, half(rr))).collect();
     let pitch = TAU / f64::from(c.teeth);
     let root_half = ded[0].1.min(pitch / 2.0);
     // Straight radial drop from the hypocycloid's end to the root circle.
@@ -127,19 +131,65 @@ impl CycloidalDrive {
     pub fn lobes(&self) -> u32 {
         self.pins.saturating_sub(1)
     }
+    /// A point of the disc's profile: the epitrochoid the pin centres trace on the disc, offset
+    /// inwards by `offset` (the pin radius and clearance; 0 for the pin centre's own path).
+    fn profile(&self, t: f64, offset: f64) -> V2 {
+        let n = f64::from(self.pins);
+        let (rr, e) = (self.pin_circle_radius, self.eccentricity);
+        let psi = ((1.0 - n) * t).sin().atan2(rr / (e * n) - ((1.0 - n) * t).cos());
+        V2::new(rr * t.cos() - offset * (t + psi).cos() - e * (n * t).cos(), -rr * t.sin() + offset * (t + psi).sin() + e * (n * t).sin())
+    }
+    /// The pins are bigger than the tightest curve of the path their centres trace on the disc:
+    /// the profile offset from that path doubles back on itself (undercut lobes), and the pins
+    /// cut into the lobes it shows.
+    pub fn undercut(&self) -> bool {
+        let rp = self.pin_radius + self.clearance;
+        let steps = 720;
+        let lobe = TAU / f64::from(self.lobes().max(1));
+        let h = lobe / steps as f64 * 0.25;
+        (0..steps).any(|i| {
+            let t = lobe * i as f64 / steps as f64;
+            let path = self.profile(t + h, 0.0) - self.profile(t - h, 0.0);
+            let offset = self.profile(t + h, rp) - self.profile(t - h, rp);
+            path.dot(offset) <= 0.0
+        })
+    }
     /// The disc's profile (centred on its own bearing), as one spline per lobe.
     pub fn disc(&self) -> Outline {
-        let n = f64::from(self.pins);
-        let (rr, rp, e) = (self.pin_circle_radius, self.pin_radius + self.clearance, self.eccentricity);
+        let rp = self.pin_radius + self.clearance;
         let lobes = self.lobes().max(1);
-        let per_lobe = 40;
-        let total = per_lobe * lobes as usize;
-        let point = |t: f64| -> V2 {
-            // Standard epitrochoid offset by the pin radius (t: the input crank angle).
-            let psi = ((1.0 - n) * t).sin().atan2(rr / (e * n) - ((1.0 - n) * t).cos());
-            V2::new(rr * t.cos() - rp * (t + psi).cos() - e * (n * t).cos(), -rr * t.sin() + rp * (t + psi).sin() + e * (n * t).sin())
-        };
-        let mut pts: Vec<V2> = (0..=total).map(|i| point(TAU * i as f64 / total as f64)).collect();
+        let per_lobe = 48;
+        let lobe = TAU / f64::from(lobes);
+        let point = |t: f64| self.profile(t, rp);
+        // Fit points placed by arc length and by how much the profile turns, in equal shares:
+        // the flanks' tight bends get the points that even steps of the crank angle would spend
+        // on the long, nearly straight stretches (those left the lobes up to 0.1 mm off).
+        let fine = 2400;
+        let f: Vec<V2> = (0..=fine).map(|i| point(lobe * i as f64 / fine as f64)).collect();
+        let len: Vec<f64> = f.windows(2).map(|w| w[0].dist(w[1])).collect();
+        let turn: Vec<f64> = (0..fine)
+            .map(|i| {
+                let bend = |j: usize| if j == 0 || j >= fine { 0.0 } else { (f[j] - f[j - 1]).cross(f[j + 1] - f[j]).atan2((f[j] - f[j - 1]).dot(f[j + 1] - f[j])).abs() };
+                0.5 * (bend(i) + bend(i + 1))
+            })
+            .collect();
+        let (total_len, total_turn) = (len.iter().sum::<f64>().max(1e-12), turn.iter().sum::<f64>().max(1e-12));
+        let mut cum = vec![0.0; fine + 1];
+        for i in 0..fine {
+            cum[i + 1] = cum[i] + 0.5 * len[i] / total_len + 0.5 * turn[i] / total_turn;
+        }
+        let mut ts = Vec::with_capacity(per_lobe);
+        let mut i = 0;
+        for k in 0..per_lobe {
+            let want = cum[fine] * k as f64 / per_lobe as f64;
+            while i + 1 < fine && cum[i + 1] < want {
+                i += 1;
+            }
+            let part = if cum[i + 1] > cum[i] { ((want - cum[i]) / (cum[i + 1] - cum[i])).clamp(0.0, 1.0) } else { 0.0 };
+            ts.push(lobe * (i as f64 + part) / fine as f64);
+        }
+        let mut pts: Vec<V2> = (0..lobes).flat_map(|j| ts.iter().map(move |t| f64::from(j) * lobe + t)).map(point).collect();
+        pts.push(point(0.0));
         // Counter-clockwise.
         let mut area = 0.0;
         for w in pts.windows(2) {

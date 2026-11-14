@@ -73,8 +73,12 @@ impl Member {
                 if p.len() < 3 {
                     continue;
                 }
-                if p[0].dist(p[p.len() - 1]) > 1e-12 {
+                // Closed exactly: a gap of rounding size lets a ray through.
+                let last = p.len() - 1;
+                if p[0].dist(p[last]) > 1e-9 {
                     p.push(p[0]);
+                } else {
+                    p[last] = p[0];
                 }
                 // Material on the left: outer loops counter-clockwise, holes clockwise.
                 if (signed_area(&p) < 0.0) != hole {
@@ -102,7 +106,9 @@ impl Member {
             hi = V2::new(hi.x.max(q.x), hi.y.max(q.y));
         }
         let c = cell.max((hi.x - lo.x).max(hi.y - lo.y) / 400.0);
-        lo = lo - V2::new(2.0 * c, 2.0 * c);
+        // Off the round numbers, so that no ray of the inside test runs along a symmetry axis
+        // through the vertices on it.
+        lo = lo - V2::new(2.137 * c, 2.291 * c);
         let nx = ((hi.x - lo.x) / c).ceil() as usize + 3;
         let ny = ((hi.y - lo.y) / c).ceil() as usize + 3;
         let mut m = Member { loops, edges, lo, c, nx, ny, cells: vec![Vec::new(); nx * ny], solid: vec![false; nx * ny], rows: vec![Vec::new(); ny], motion };

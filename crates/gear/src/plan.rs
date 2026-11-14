@@ -5,7 +5,7 @@
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use crate::cycloid::{Cycloidal, CycloidalDrive, cycloidal_outline};
-use crate::geom::{Outline, Region, V2, wrap_period};
+use crate::geom::{Outline, Region, V2, inv, wrap_period};
 use crate::hub::{Bore, lightening_holes};
 use crate::involute::{
     BasicRack, Internal, Involute, ToothFlank, contact_ratio_external, external_flank, external_outline, internal_tip_interference, mesh_external, mesh_internal, mesh_phase, rack_outline,
@@ -633,6 +633,14 @@ fn internal(s: &Spec, p: &mut Plan) {
     p.fact("root diameter", 2.0 * ring.r_root(), Unit::Mm);
     p.fact("outside diameter", 2.0 * outer_r, Unit::Mm);
     p.fact("base diameter", 2.0 * g.rb(), Unit::Mm);
+    // The biggest standard pinion whose tips still clear the ring's going in and out of mesh.
+    let fits = |z: u32| {
+        let pinion = s.involute(z, 0.0, s.helix);
+        !internal_tip_interference(&pinion, pinion.ra(), &ring, &mesh_internal(&pinion, &ring, s.face_width))
+    };
+    if let Some(z) = (3..s.teeth).rev().find(|z| fits(*z)) {
+        p.fact("largest pinion (no tip interference)", f64::from(z), Unit::None);
+    }
     if ring.r_tip() < g.rb() {
         p.warn("ring: the inner tips are inside the base circle; a pinion may interfere (use more teeth or a positive shift)");
     }
@@ -750,10 +758,31 @@ fn planetary(s: &Spec, p: &mut Plan) {
     let (zs, zp) = (s.teeth, s.teeth2);
     let zr = if s.teeth3 > 0 { s.teeth3 } else { zs + 2 * zp };
     let n = s.planets.max(1);
-    let sun = s.involute(zs, s.shift, s.helix);
-    let planet = s.involute(zp, s.shift2, -s.helix);
+    let mut sun = s.involute(zs, s.shift, s.helix);
+    let mut planet = s.involute(zp, s.shift2, -s.helix);
+    let mut m_sp = mesh_external(&sun, &planet, s.face_width);
+    // As for a pair: shifted gears keep the basic rack's tip clearance.
+    let shorten = (s.shift + s.shift2) * s.module - (m_sp.center_distance - sun.r() - planet.r());
+    if shorten > 1e-9 {
+        sun.tip_shortening = shorten;
+        planet.tip_shortening = shorten;
+        m_sp = mesh_external(&sun, &planet, s.face_width);
+    }
+    // The ring's profile shift puts the planets at the same distance from it as from the sun:
+    // the planet's own shift when the tooth counts close (ring = sun + 2 × planet), more or
+    // less when they don't.
     let mut ring_gear = Internal { gear: s.involute(zr, 0.0, -s.helix) };
-    let m_sp = mesh_external(&sun, &planet, s.face_width);
+    let reach = (ring_gear.gear.r() - planet.r()) * planet.alpha_t().cos() / m_sp.center_distance;
+    if zr > zp && reach > 0.0 && reach <= 1.0 {
+        let x = s.shift2 + (inv(reach.acos()) - inv(planet.alpha_t())) * f64::from(zr - zp) / (2.0 * planet.pressure_angle.tan());
+        if x.abs() > 1e-9 {
+            ring_gear.gear.shift = x;
+            p.fact("ring profile shift", x, Unit::None);
+        }
+        if (x - s.shift2).abs() > 0.6 {
+            p.warn(format!("the ring needs a profile shift of {x:.2} to reach the planets: ring teeth = sun + 2 × planet ({}) fits without", zs + 2 * zp));
+        }
+    }
     // The ring's tips stay on the planets' involute: an undercut or shifted planet has less of
     // it than the ring's standard tip allows for.
     let planet_flank = external_flank(&planet);
@@ -767,6 +796,9 @@ fn planetary(s: &Spec, p: &mut Plan) {
     }
     if m_pr.contact_ratio < 1.0 {
         p.warn(format!("planet–ring contact ratio {:.2} is below 1: the teeth lose contact", m_pr.contact_ratio));
+    }
+    if m_sp.clearance_1 < 0.0 || m_sp.clearance_2 < 0.0 || m_pr.clearance_1 < 0.0 || m_pr.clearance_2 < 0.0 {
+        p.warn("tips hit the mating roots (negative tip clearance): change the shifts or the tooth counts");
     }
     let a = m_sp.center_distance;
     if (m_pr.center_distance - a).abs() > 0.01 * s.module {
@@ -1322,6 +1354,9 @@ fn drive(s: &Spec, p: &mut Plan) {
     if s.eccentricity >= d.max_eccentricity() {
         p.warn(format!("eccentricity {} at or over {}: the disc profile loops", mm(s.eccentricity), mm(d.max_eccentricity())));
     }
+    if d.undercut() {
+        p.warn("the pins are bigger than the lobes' tightest curve: the disc profile doubles back and the pins cut into it (smaller pins, less eccentricity or a bigger pin circle)");
+    }
     let pitch_gap = TAU * d.pin_circle_radius / n - s.pin_diameter;
     if pitch_gap <= 0.0 {
         p.warn("the pins overlap: fewer pins, smaller pins or a bigger pin circle");
@@ -1355,7 +1390,9 @@ fn drive(s: &Spec, p: &mut Plan) {
             steps: vec![Step::Prism { region: Region { outer: pins.clone(), holes: vec![] }, z0: 0.0, height: s.face_width, twist: 0.0, op: Op::New }],
         });
     }
-    p.preview.push(PreviewGear { name: "disc".into(), region, center: V2::new(s.eccentricity, 0.0), speed: -1.0 / (n - 1.0), slide: 0.0, pitch_radius: 0.0 , orbit: 0.0, period: 0.0});
+    // The input crank carries the disc's centre round the pin circle's; the pins turn the disc
+    // back one lobe per turn of the crank.
+    p.preview.push(PreviewGear { name: "disc".into(), region, center: V2::new(s.eccentricity, 0.0), speed: -1.0 / (n - 1.0), slide: 0.0, pitch_radius: 0.0, orbit: 1.0, period: 0.0 });
     p.preview.push(PreviewGear { name: "pins".into(), region: Region { outer: pins, holes: vec![] }, center: V2::ZERO, speed: 0.0, slide: 0.0, pitch_radius: 0.0, orbit: 0.0, period: 0.0 });
-    p.preview_note = "the disc turns slowly backwards while its centre orbits (shown still)".into();
+    p.preview_note = "the disc turns slowly backwards while its centre goes round with the input".into();
 }

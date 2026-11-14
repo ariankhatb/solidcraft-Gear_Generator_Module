@@ -169,6 +169,10 @@ pub struct Spec {
     pub origin: [f64; 3],
     /// Body name prefix.
     pub name: String,
+    /// Where the whole set goes: every body's frame, as built about `origin` on world +Z, is
+    /// read in this frame (`None`: the world). The axis-first solver ([`crate::axes`]) sets it
+    /// so gear 1 turns about the first picked axis.
+    pub placement: Option<Frame>,
 }
 
 impl Default for Spec {
@@ -211,6 +215,7 @@ impl Default for Spec {
             only: 0,
             origin: [0.0; 3],
             name: String::new(),
+            placement: None,
         }
     }
 }
@@ -277,7 +282,7 @@ impl Spec {
         s
     }
 
-    fn involute(&self, teeth: u32, shift: f64, helix_deg: f64) -> Involute {
+    pub(crate) fn involute(&self, teeth: u32, shift: f64, helix_deg: f64) -> Involute {
         Involute {
             teeth,
             module: self.module,
@@ -312,6 +317,15 @@ impl Frame {
     pub fn world(&self, p: [f64; 3]) -> [f64; 3] {
         let y = self.y();
         [0, 1, 2].map(|i| self.origin[i] + p[0] * self.x[i] + p[1] * y[i] + p[2] * self.z[i])
+    }
+    /// A direction given in this frame, in world coordinates.
+    pub fn dir(&self, d: [f64; 3]) -> [f64; 3] {
+        let y = self.y();
+        [0, 1, 2].map(|i| d[0] * self.x[i] + d[1] * y[i] + d[2] * self.z[i])
+    }
+    /// `local`, a frame given in this one, in world coordinates.
+    pub fn compose(&self, local: &Frame) -> Frame {
+        Frame { origin: self.world(local.origin), x: self.dir(local.x), z: self.dir(local.z) }
     }
     /// This frame moved by `d` (world).
     pub fn shifted(mut self, d: [f64; 3]) -> Frame {
@@ -467,6 +481,12 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
     }
     if p.bodies.is_empty() {
         return Err("nothing to build with these choices".into());
+    }
+    // The overall placement wraps whatever frames the builders chose.
+    if let Some(place) = &s.placement {
+        for b in &mut p.bodies {
+            b.frame = place.compose(&b.frame);
+        }
     }
     Ok(p)
 }

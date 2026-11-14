@@ -8,10 +8,13 @@
 //! - [`plan`]: a gear set ([`plan::Spec`]: spur, helical, herringbone, internal, rack, pair,
 //!   planetary, straight and spiral bevel, hypoid, crossed helical, worm, cycloidal, cycloidal
 //!   drive) as bodies of solid steps, with facts, warnings and a 2D meshing preview.
+//! - [`axes`]: axis-first design: how two shaft axes lie (parallel, intersecting, skew), which
+//!   gear families fit them, and a set sized and placed on them from a ratio and one size.
 //!
 //! Pure math with no dependencies: the engine turns a plan into sketches and features, the
 //! window draws its preview from the same plan.
 
+pub mod axes;
 pub mod cycloid;
 pub mod geom;
 pub mod hub;
@@ -21,5 +24,7 @@ pub mod plan;
 pub use geom::{Outline, Region, Seg, V2};
 pub use plan::{Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit, plan};
 
+#[cfg(test)]
+mod axes_tests;
 #[cfg(test)]
 mod tests;

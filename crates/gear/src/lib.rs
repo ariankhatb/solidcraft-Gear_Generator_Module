@@ -27,7 +27,10 @@
 //! - [`design`]: design by goal (ranked tooth counts, modules and shifts for a ratio, size and
 //!   load) and ratio splitting for multi-stage gearboxes.
 //! - [`mesh2d`]: a 2D mesh checker (overlap and loss of contact over a tooth pitch) for the
-//!   parallel-axis sets, behind the window's mesh verdict and the mesh tests.
+//!   parallel-axis sets, behind the window's mesh verdict and the mesh tests; [`mesh3d`]: the
+//!   same in 3D, from the bodies' steps, for bevel, hypoid, crossed helical and worm sets.
+//! - [`octoid`]: bevel teeth cut by a crown gear (conjugate along the face, straight or spiral);
+//!   [`worm`]: the throated worm wheel, cut plane by plane by the worm's thread as a hob.
 //! - [`sheet`]: a design sheet (Markdown) of a planned set and a gear profile as a DXF.
 //! - [`strength`]: load capacity (ISO 6336 Method B simplified, Lewis; simplified bevel and
 //!   worm): forces, stresses and safety factors for a given torque or power.
@@ -48,12 +51,15 @@ pub mod hub;
 pub mod hypoid;
 pub mod involute;
 pub mod mesh2d;
+pub mod mesh3d;
+pub mod octoid;
 pub mod plan;
 pub mod pulley;
 pub mod spline;
 pub mod sprocket;
 pub mod sheet;
 pub mod strength;
+pub mod worm;
 pub mod wrap;
 
 pub use geom::{Outline, Region, Seg, V2};
@@ -75,6 +81,8 @@ mod tests;
 mod coupon_tests;
 #[cfg(test)]
 mod equations_tests;
+#[cfg(test)]
+mod mesh3d_tests;
 #[cfg(test)]
 mod mesh_tests;
 #[cfg(test)]

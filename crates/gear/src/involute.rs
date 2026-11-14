@@ -578,6 +578,50 @@ pub fn teeth_outline(f: &ToothFlank, n: u32, phase: f64) -> Outline {
     Outline { segs }
 }
 
+/// A tooth whose two sides differ (a spiral bevel's on a flat section, a throated worm wheel's
+/// off its mid plane): each side from the root circle up to the tip circle as one or more
+/// splines' fit points, (radius, angle from the tooth's centre line). The lower side is the
+/// clockwise one. Every side of every tooth has the same pieces, so outlines made from sides
+/// with the same piece and point counts correspond segment for segment (a loft's sections).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToothSides {
+    pub rf: f64,
+    pub ra: f64,
+    pub lower: Vec<Vec<(f64, f64)>>,
+    pub upper: Vec<Vec<(f64, f64)>>,
+}
+
+/// The closed outline of `n` teeth with sides `t`, counter-clockwise, tooth 0's centre line at
+/// `phase`.
+pub fn sided_outline(t: &ToothSides, n: u32, phase: f64) -> Outline {
+    let pitch = TAU / f64::from(n);
+    let mut segs = Vec::new();
+    let end_of = |side: &Vec<Vec<(f64, f64)>>, tip: bool| -> (f64, f64) {
+        let piece = if tip { side.last() } else { side.first() };
+        piece.and_then(|p| if tip { p.last() } else { p.first() }).copied().unwrap_or((if tip { t.ra } else { t.rf }, 0.0))
+    };
+    for k in 0..n {
+        let a = phase + pitch * f64::from(k);
+        let at = |q: &(f64, f64)| V2::polar(q.0, a + q.1);
+        for piece in &t.lower {
+            segs.push(Seg::Spline(piece.iter().map(at).collect()));
+        }
+        let (lo, hi) = (end_of(&t.lower, true), end_of(&t.upper, true));
+        if (hi.1 - lo.1) * t.ra > 1e-9 {
+            segs.push(Seg::Arc { c: V2::ZERO, a: V2::polar(t.ra, a + lo.1), b: V2::polar(t.ra, a + hi.1), ccw: true });
+        }
+        for piece in t.upper.iter().rev() {
+            segs.push(Seg::Spline(piece.iter().rev().map(at).collect()));
+        }
+        let (from, to) = (end_of(&t.upper, false), end_of(&t.lower, false));
+        if (pitch + to.1 - from.1) * t.rf > 1e-9 {
+            segs.push(Seg::Arc { c: V2::ZERO, a: V2::polar(t.rf, a + from.1), b: V2::polar(t.rf, a + pitch + to.1), ccw: true });
+        }
+    }
+    join_ends(&mut segs);
+    Outline { segs }
+}
+
 /// The centre of the arc that rounds a tip corner: through the flank's end `p`, tangent to the
 /// tip circle at `t`. None when the flank runs up to the tip circle (no rounding).
 fn tip_round_centre(p: V2, t: V2) -> Option<V2> {

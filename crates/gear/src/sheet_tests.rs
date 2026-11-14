@@ -228,7 +228,7 @@ fn the_design_sheet_lists_inputs_results_checks_and_parts() {
     assert!(md.contains("- gear: undercut") && md.contains("- a single member: nothing to check") && md.contains("| Teeth | 9 |"));
     let s = Spec::defaults_for(Kind::Worm);
     let md = design_sheet(&s, &plan(&s).unwrap());
-    assert!(md.contains("- not checked in 2D (the axes are not parallel)") && md.contains("| Worm starts | 1 |"));
+    assert!(md.contains("- wheel and worm mesh: no overlap") && md.contains("| Worm starts | 1 |"));
     for kind in Kind::ALL {
         let s = Spec::defaults_for(kind);
         let md = design_sheet(&s, &plan(&s).unwrap());

@@ -8,9 +8,11 @@ use crate::cycloid::{Cycloidal, CycloidalDrive, cycloidal_outline};
 use crate::geom::{Outline, Region, V2, inv, wrap_period};
 use crate::hub::{Bore, Chamfer, Hardware, Shaft, lightening_holes};
 use crate::involute::{
-    BasicRack, Internal, Involute, ToothFlank, contact_ratio_external, external_flank, external_outline, internal_tip_interference, mesh_external, mesh_internal, mesh_phase, rack_outline,
-    shift_sum_for_center, teeth_outline,
+    BasicRack, Internal, Involute, ToothFlank, ToothSides, contact_ratio_external, external_flank, external_outline, internal_tip_interference, mesh_external, mesh_internal, mesh_phase, rack_outline,
+    shift_sum_for_center, sided_outline, teeth_outline,
 };
+use crate::octoid::Crown;
+use crate::worm::Hob;
 use crate::spline::SplineStandard;
 
 mod extras;
@@ -568,8 +570,11 @@ pub enum Step {
     Prism { region: Region, z0: f64, height: f64, twist: f64, op: Op },
     /// Sections on planes z = h, joined in order.
     Loft { sections: Vec<(Outline, f64)>, op: Op },
-    /// The outline on z = `z0` swept `height` along +z, turned `twist` radians and scaled
-    /// linearly about the axis to `scale` at the far end (a cone's teeth, straight or spiral).
+    /// The outline on z = `z0` swept `height` along +z, scaled linearly about the axis to
+    /// `scale` at the far end (towards the cone's apex) and turned `twist` radians in all, the
+    /// turn growing with the logarithm of the scale ([`taper_turn`]): every section is the first
+    /// one scaled and turned, the surface a cone's teeth, straight or on a logarithmic spiral
+    /// (constant spiral angle).
     Taper { outline: Outline, z0: f64, height: f64, twist: f64, scale: f64, op: Op },
     /// A closed polygon in the (radius, z) half plane, turned a full turn about z.
     Revolve { profile: Vec<V2>, op: Op },
@@ -579,6 +584,11 @@ pub enum Step {
     /// A step in a frame of its own, given in the body's frame ([`Frame::then`]): a radial hole
     /// is a prism along a frame whose z points out from the axis. Not nested.
     Placed { frame: Frame, step: Box<Step> },
+}
+
+/// How far a [`Step::Taper`]'s section has turned where its scale is `s` (1 at the start).
+pub fn taper_turn(twist: f64, scale: f64, s: f64) -> f64 {
+    if (scale - 1.0).abs() < 1e-12 || scale <= 0.0 || s <= 0.0 { 0.0 } else { twist * s.ln() / scale.ln() }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -649,6 +659,9 @@ pub struct Plan {
     /// The toothed members' tooth data, for drawing their teeth as formulas
     /// ([`crate::equations::cell_for`]); one per member (the first of each name).
     pub teeth: Vec<crate::equations::TeethSource>,
+    /// Which bodies mesh in sets whose axes are not parallel (bevel, hypoid, crossed helical,
+    /// worm; see [`crate::mesh3d::check`]), with the whole set's bodies.
+    pub meshes3d: Vec<crate::mesh3d::MeshPair3>,
     /// Why the set can't be built, found while planning it ([`plan`] returns it as the error).
     refused: Option<String>,
 }
@@ -832,6 +845,11 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
         crate::strength::rate(s, &mut p);
     }
     p.meshes = crate::mesh2d::topology(s, &p.preview);
+    if matches!(s.kind, Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical | Kind::Worm) {
+        // The mesh is checked between the whole set's members, also when one is built.
+        let whole = if s.only == 0 { None } else { Some(plan(&Spec { only: 0, ..s.clone() }).map(|w| w.bodies).unwrap_or_default()) };
+        p.meshes3d = crate::mesh3d::topology(s, &p.bodies, whole);
+    }
     if s.coupon {
         p.warn("a test coupon is made for gear pairs and planetary sets: this is the whole set");
     }
@@ -1319,9 +1337,10 @@ fn planetary(s: &Spec, p: &mut Plan) {
     p.preview.push(PreviewGear { name: "ring".into(), region: ring_region, center: V2::ZERO, speed: -f64::from(zs) / f64::from(zr), slide: 0.0, pitch_radius: ring_gear.gear.r() , orbit: 0.0, period: 0.0});
 }
 
-/// A straight or spiral bevel gear's sections and blank, in a frame with the large end's pitch
-/// circle on z = 0 and the cone's apex on +z.
-fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, p: &mut Plan, who: &str) -> (Vec<Step>, Outline, ToothFlank, f64) {
+/// A straight or spiral bevel gear's teeth, in a frame with the large end's pitch circle on
+/// z = 0 and the cone's apex on +z: cut by a crown gear ([`Crown`]), so the two members of a
+/// pair (cut by the two sides of the same one) are conjugate along the whole face.
+fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, p: &mut Plan, who: &str) -> (Vec<Step>, ToothFlank) {
     let m = s.module;
     let r = m * f64::from(z) / 2.0;
     let re = r / delta.sin();
@@ -1330,93 +1349,62 @@ fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, p: &mut P
         p.warn(format!("{who}: face width over a third of the cone distance ({}) makes weak small ends", mm(re / 3.0)));
     }
     let h = re * delta.cos();
-    // Tredgold's virtual spur gear on the back cone.
+    // Tredgold's virtual spur gear on the back cone, for the checks and notes that go by tooth
+    // count. The module is the transverse one at the large end: the normal module is m·cos β.
     let zv = f64::from(z) / delta.cos();
-    // The module is the transverse one at the large end: the virtual gear's normal module is
-    // m·cos β, so its transverse module (and pitch radius r / cos δ) come out right.
+    let shift = if who.contains('1') { s.shift } else { -s.shift };
     let v = Involute {
         teeth: z,
         module: m * spiral.cos(),
         pressure_angle: s.pressure_angle.to_radians(),
         helix: spiral,
-        shift: if who.contains('1') { s.shift } else { -s.shift },
+        shift,
         rack: s.rack,
         backlash: s.backlash,
         tip_shortening: 0.0,
         virtual_teeth: zv,
     };
-    let flank = crate::involute::external_flank(&v);
-    let rv = v.r();
-    if (flank.ra - rv).max(0.0) * delta.sin() >= 0.5 * h {
-        p.refuse(format!("{who}: the teeth are too tall for a cone this flat (pitch cone angle {}°): use a smaller module, more teeth or a smaller shaft angle", mm(delta.to_degrees())));
-    }
-    // Back-cone point (virtual radius R) to the plane z = zs by the line through the apex.
-    let to_plane = |rr: f64, half: f64, zs: f64| -> (f64, f64) {
-        let t = rr - rv;
-        let rho = r + t * delta.cos();
-        let zz = t * delta.sin();
-        let lambda = (h - zs) / (h - zz);
-        (rho * lambda, half * rv / r)
+    let mn = v.module;
+    let at = v.alpha_t();
+    // The crown gear's tooth in this gear's spaces: where the gear's teeth are thicker (a
+    // positive shift) it is thinner, and the mate's, cut by the other side, thicker.
+    let crown = Crown {
+        delta,
+        cone_distance: re,
+        pressure_angle: at,
+        addendum: (s.rack.addendum + shift) * mn,
+        dedendum: (s.rack.dedendum - shift) * mn,
+        tip_radius: s.rack.root_radius * mn,
+        half_thickness: PI * m / 4.0 - shift * mn * at.tan() + s.backlash / 2.0,
     };
-    let section = |zs: f64| -> Outline {
-        let map = |pts: &[(f64, f64)]| -> Vec<(f64, f64)> { pts.iter().map(|(rr, hh)| to_plane(*rr, *hh, zs)).collect() };
-        let ff = ToothFlank {
-            rf: to_plane(flank.rf, 0.0, zs).0,
-            ra: to_plane(flank.ra, 0.0, zs).0,
-            root_half: flank.root_half * rv / r,
-            tip_half: flank.tip_half * rv / r,
-            fillet: map(&flank.fillet),
-            flank: map(&flank.flank),
-            undercut: flank.undercut,
-            pointed: flank.pointed,
-        };
-        teeth_outline(&ff, z, phase)
-    };
-    // The blank: back cone, front cone (both square to the pitch cone), flat back and front.
-    let k = (re - b) / re;
     let (dc, ds) = (delta.cos(), delta.sin());
-    let ha = (flank.ra - rv).max(0.0);
-    let hf = (rv - flank.rf).max(0.0);
-    let z_root_back = -hf * ds;
-    let back = z_root_back - 0.6 * m;
-    let along_back = |zz: f64| -> f64 { r + zz / ds.max(1e-6) * dc };
-    let big = (ha + hf) * 3.0 + m;
-    let small_pitch = V2::new(k * r, h * (1.0 - k));
-    let front_root = small_pitch + V2::new(-hf * k * dc, -hf * k * ds);
-    let mut profile = vec![V2::new(0.0, back)];
-    let rb_back = if ds > 1e-3 { along_back(back).max(0.0) } else { r + big };
-    profile.push(V2::new(rb_back.max(0.0), back));
-    profile.push(V2::new(r + big * dc, big * ds));
-    profile.push(small_pitch + V2::new(big * dc, big * ds));
-    profile.push(front_root);
-    profile.push(V2::new(0.0, front_root.y));
-    // Sections on the planes through the large and small ends' pitch circles. The ends are
-    // flat (square to the axis) rather than trimmed to the back and front cones: the kernel
-    // refuses that intersection where the cones graze the root fillets.
-    let _ = (&profile, back);
-    let z_a = 0.0;
-    let z_b = small_pitch.y;
-    // One sweep towards the apex: scaled linearly (every section is the large end's, shrunk
-    // about the axis towards the apex) and, for a spiral bevel, turned as it goes, which
-    // follows the logarithmic spiral of constant spiral angle between the ends.
+    let ha = crown.addendum.max(0.0);
+    if ha * ds >= 0.5 * h || crown.dedendum >= 0.9 * re * delta.tan() {
+        p.refuse(format!("{who}: the teeth are too tall for a cone this flat or this slim (pitch cone angle {}°): use a smaller module, more teeth or a different shaft angle", mm(delta.to_degrees())));
+        return (Vec::new(), ToothFlank { rf: 0.0, ra: 0.0, root_half: 0.0, tip_half: 0.0, fillet: Vec::new(), flank: Vec::new(), undercut: false, pointed: false });
+    }
+    // A spiral bevel's teeth are the straight bevel's with every point turned about the axis by
+    // the logarithm of its distance from the apex (a logarithmic spiral of constant spiral angle
+    // on the pitch cone, none at the middle of the face). A tooth's tip and root on one flat
+    // section are at different distances from the apex, so the section's teeth lean.
     let rm = re - b / 2.0;
-    let turn = |zs: f64| if spiral.abs() > 1e-6 { spiral.tan() * (((h - zs) / dc) / rm).ln() / ds } else { 0.0 };
-    let steps = vec![Step::Taper {
-        outline: section(z_a).rotated(turn(z_a)),
-        z0: z_a,
-        height: z_b - z_a,
-        twist: turn(z_b) - turn(z_a),
-        scale: (h - z_b) / (h - z_a),
-        op: Op::New,
-    }];
+    let wind = if spiral.abs() > 1e-6 { spiral.tan() / ds } else { 0.0 };
+    let skew = |rr: f64| if wind == 0.0 { 0.0 } else { wind * (rr.hypot(h) / rm).ln() };
+    let (sides, mut flank) = crown.tooth(z, mn, &skew);
+    flank.undercut = v.undercut();
+    // One taper from the large end's plane to the small end's: every section is the large end's
+    // shrunk about the axis towards the apex and turned by the logarithm of the scale. The ends
+    // are flat (square to the axis) rather than trimmed to the back and front cones: the kernel
+    // refuses that intersection where the cones graze the root fillets.
+    let scale = (re - b) / re;
+    let steps = vec![Step::Taper { outline: sided_outline(&sides, z, phase), z0: 0.0, height: h * (1.0 - scale), twist: wind * scale.ln(), scale, op: Op::New }];
     p.fact(format!("{who} pitch cone angle"), delta.to_degrees(), Unit::Deg);
     p.fact(format!("{who} outer pitch diameter"), 2.0 * r, Unit::Mm);
     p.fact(format!("{who} outer tip diameter"), 2.0 * (r + ha * dc), Unit::Mm);
     p.fact(format!("{who} cone distance"), re, Unit::Mm);
     p.fact(format!("{who} virtual teeth"), zv, Unit::None);
     tooth_warnings(p, who, &v, &flank);
-    let preview = external_outline(&v, phase).0;
-    (steps, preview, flank, 0.0)
+    (steps, flank)
 }
 
 fn bevel(s: &Spec, p: &mut Plan) {
@@ -1448,9 +1436,12 @@ fn bevel(s: &Spec, p: &mut Plan) {
     let h2 = re * d2.cos();
     // Gear 1 along +z, apex at (0, 0, h1); gear 2's axis through the same apex at the shaft
     // angle, in the xz plane.
-    let (st1, pv1, _f1, back1) = bevel_member(s, s.teeth, d1, spiral, 0.0, p, "gear 1");
+    // Gear 1 has a tooth on the pitch line the two cones share (towards +x) at the middle of
+    // the face; gear 2, which sees that line at its own angle π, a space.
+    let (st1, _) = bevel_member(s, s.teeth, d1, spiral, 0.0, p, "gear 1");
     let ph2 = PI / z2 + PI;
-    let (st2, pv2, f2, back2) = bevel_member(s, s.teeth2, d2, -spiral, ph2, p, "gear 2");
+    let (st2, _) = bevel_member(s, s.teeth2, d2, -spiral, ph2, p, "gear 2");
+    let (back1, back2) = (0.0, 0.0);
     let apex = [s.origin[0], s.origin[1], s.origin[2] + h1];
     // Gear 2's axis points from its large end towards the apex: from the apex, back along the
     // direction at the shaft angle from gear 1's axis.
@@ -1467,17 +1458,30 @@ fn bevel(s: &Spec, p: &mut Plan) {
         bevel_hub(s, &s.bore2, r2 * 0.6, back2, &mut steps, p, "gear 2");
         p.bodies.push(Body { name: name(s, &format!("Bevel z{}", s.teeth2)), frame: frame2, steps });
     }
-    let _ = f2;
-    // The preview: the two virtual (back-cone) spur gears in mesh.
-    let (rv1, rv2) = (r1 / d1.cos(), r2 / d2.cos());
-    p.preview_note = "back-cone (Tredgold) development at the large end".into();
-    p.preview.push(PreviewGear { name: "gear 1".into(), region: Region { outer: vec![pv1], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: rv1, orbit: 0.0, period: 0.0 });
-    let pv2 = pv2.rotated(-PI);
+    // The preview: the two virtual (back-cone) spur gears in mesh. A virtual gear's tooth count
+    // (teeth / cos of the pitch cone angle) is rarely whole, and a gear drawn all the way round
+    // needs a whole count, so each is drawn with the nearest: the teeth are the 3D ones to
+    // within that rounding, and the pair meshes all the way round.
+    let virt = |z: f64, d: f64, helix: f64, shift: f64| Involute {
+        teeth: (z / d.cos().max(1e-3)).round().clamp(3.0, 2000.0) as u32,
+        module: s.module * spiral.cos(),
+        pressure_angle: s.pressure_angle.to_radians(),
+        helix,
+        shift,
+        rack: s.rack,
+        backlash: s.backlash,
+        tip_shortening: 0.0,
+        virtual_teeth: 0.0,
+    };
+    let (v1, v2) = (virt(z1, d1, spiral, s.shift), virt(z2, d2, -spiral, -s.shift));
+    let (rv1, rv2) = (v1.r(), v2.r());
+    p.preview_note = "back-cone (Tredgold) development at the large end, virtual tooth counts rounded".into();
+    p.preview.push(PreviewGear { name: "gear 1".into(), region: Region { outer: vec![external_outline(&v1, 0.0).0], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: rv1, orbit: 0.0, period: 0.0 });
     p.preview.push(PreviewGear {
         name: "gear 2".into(),
-        region: Region { outer: vec![pv2], holes: vec![] },
+        region: Region { outer: vec![external_outline(&v2, mesh_phase(v1.teeth, 0.0, v2.teeth, 0.0)).0], holes: vec![] },
         center: V2::new(rv1 + rv2, 0.0),
-        speed: -rv1 / rv2,
+        speed: -f64::from(v1.teeth) / f64::from(v2.teeth),
         slide: 0.0,
         pitch_radius: rv2,
         orbit: 0.0, period: 0.0,
@@ -1598,6 +1602,45 @@ fn hub_steps_centered(s: &Spec, bore: &Bore, rf: f64, face: f64, steps: &mut Vec
     steps.extend(local.into_iter().map(|st| crate::body::shift_z(st, -face / 2.0)));
 }
 
+/// Sections a throated worm wheel is lofted through, across its face: at least, and at most.
+const WHEEL_SECTIONS_MIN: usize = 9;
+const WHEEL_SECTIONS_MAX: usize = 15;
+/// How far (× module) the loft's skin may be from the true tooth between its sections.
+const WHEEL_SKIN_TOLERANCE: f64 = 4e-4;
+
+/// The flanks' points as plane points (lower side then upper), short of the tips: where the
+/// teeth work against the thread.
+fn side_points_xy(t: &ToothSides) -> Vec<V2> {
+    [&t.lower, &t.upper].iter().filter_map(|s| s.last()).flat_map(|f| f[..f.len().saturating_sub(2)].iter()).map(|q| V2::polar(q.0, q.1)).collect()
+}
+
+/// How far the cubic skin through the wheel's sections strays from the flanks the hob cuts
+/// half way between them (the outermost gaps and one next to the mid plane, where it is worst): the
+/// largest distance, along the circle, of an interpolated flank point from the true flank.
+fn skin_error(hob: &Hob, sections: &[(f64, ToothSides)], zw: u32) -> f64 {
+    let n = sections.len();
+    let ws: Vec<f64> = sections.iter().map(|s| s.0).collect();
+    let pts: Vec<Vec<V2>> = sections.iter().map(|s| side_points_xy(&s.1)).collect();
+    if pts.iter().any(|p| p.len() != pts[0].len()) {
+        return f64::INFINITY;
+    }
+    let half = pts[0].len() / 2;
+    let mut worst = 0.0f64;
+    // The skin is about symmetric across the mid plane: one side's gaps are checked.
+    for k in [0, 1, n / 2] {
+        let w = 0.5 * (ws[k] + ws[k + 1]);
+        let side = hob.side_angle(w, zw);
+        let weights = crate::mesh3d::spline_weights(&ws, w);
+        for i in 0..pts[0].len() {
+            let q = weights.iter().zip(&pts).fold(V2::ZERO, |acc, (c, p)| acc + p[i] * *c);
+            let r = q.len();
+            let e = r * crate::geom::wrap(q.angle() - side(usize::from(i >= half), r)).abs();
+            worst = worst.max(e);
+        }
+    }
+    worst
+}
+
 fn worm(s: &Spec, p: &mut Plan) {
     let m = s.module;
     let z1 = s.starts.max(1);
@@ -1609,22 +1652,17 @@ fn worm(s: &Spec, p: &mut Plan) {
     let ax = (an.tan() / gamma.cos()).atan();
     let ha = s.rack.addendum * m;
     let hf = s.rack.dedendum * m;
+    let clearance = hf - ha;
     let (r1, ra1, rf1) = (d1 / 2.0, d1 / 2.0 + ha, d1 / 2.0 - hf);
-    // The wheel: a helical gear at the lead angle, transverse module = the worm's axial module.
-    let wheel = Involute {
-        teeth: zw,
-        module: m * gamma.cos(),
-        pressure_angle: an,
-        helix: gamma,
-        shift: s.shift / gamma.cos(),
-        rack: s.rack,
-        backlash: s.backlash,
-        tip_shortening: 0.0,
-        virtual_teeth: 0.0,
-    };
-    let a = r1 + wheel.r() + s.shift * m;
-    let face = s.face_width.min(2.0 * (ra1 * ra1 - (r1 - m) * (r1 - m)).max(0.0).sqrt() + m).max(s.face_width.min(d1));
-    let length = if s.worm_length > 0.0 { s.worm_length } else { (2.0 * ((wheel.ra() + m).powi(2) - (wheel.r() - m).powi(2)).max(0.0).sqrt() + lead).max(4.0 * PI * m) };
+    // A negative helix angle asks for a left-hand worm; the wheel's teeth lean the same way.
+    let left = s.helix < 0.0;
+    let hand = if left { -1.0 } else { 1.0 };
+    let r2 = m * f64::from(zw) / 2.0;
+    let a = r1 + r2 + s.shift * m;
+    // The wheel's throat (its tips at the mid plane, a root clearance off the worm's root) and
+    // the cylinder its tips are cut back to further out.
+    let throat = a - rf1 - clearance;
+    let outside = throat + 0.5 * m;
     p.fact("ratio", f64::from(zw) / f64::from(z1), Unit::None);
     p.fact("centre distance", a, Unit::Mm);
     p.fact("lead angle", gamma.to_degrees(), Unit::Deg);
@@ -1633,9 +1671,8 @@ fn worm(s: &Spec, p: &mut Plan) {
     p.fact("worm pitch diameter", d1, Unit::Mm);
     p.fact("worm tip diameter", 2.0 * ra1, Unit::Mm);
     p.fact("worm root diameter", 2.0 * rf1, Unit::Mm);
-    p.fact("worm length", length, Unit::Mm);
-    p.fact("wheel pitch diameter", 2.0 * wheel.r(), Unit::Mm);
-    p.fact("wheel tip diameter", 2.0 * wheel.ra(), Unit::Mm);
+    p.fact("wheel pitch diameter", 2.0 * r2, Unit::Mm);
+    p.fact("wheel tip diameter", 2.0 * throat, Unit::Mm);
     p.fact("diameter quotient q", d1 / m, Unit::None);
     if gamma.to_degrees() < 5.0 {
         p.fact("self-locking (likely, lead angle under ~5°)", 1.0, Unit::None);
@@ -1651,28 +1688,124 @@ fn worm(s: &Spec, p: &mut Plan) {
         p.refuse(format!("lead angle {}° is over 45°: use a larger worm diameter or fewer starts", mm(gamma.to_degrees())));
         return;
     }
+    if a - ra1 - clearance <= 0.5 * m {
+        p.refuse("the wheel is too small for this worm: use more teeth or a smaller worm diameter");
+        return;
+    }
     if s.bore2.outline().is_some() && s.bore2.reach() >= rf1 - 0.05 * m {
         p.refuse(format!("worm: the bore (reaching Ø{}) cuts into the thread roots (Ø{}); use a smaller bore", mm(2.0 * s.bore2.reach()), mm(2.0 * rf1)));
         return;
     }
-    let (wo, wf) = external_outline(&wheel, PI / f64::from(zw));
-    tooth_warnings(p, "wheel", &wheel, &wf);
+    // The wheel's face: no wider than the worm's root (beyond it the teeth no longer wrap the
+    // worm), nor than where the screw leans a thread flank over to under 6° of pressure angle
+    // on the planes furthest off the mid plane (past that the threads undercut the teeth).
+    let lean_limit = {
+        let ok = |th: f64| ax.tan() * th.cos() - gamma.tan() * th.sin() >= 6f64.to_radians().tan();
+        let (mut lo, mut hi) = (0.0, FRAC_PI_2);
+        for _ in 0..50 {
+            let mid = 0.5 * (lo + hi);
+            if ok(mid) { lo = mid } else { hi = mid }
+        }
+        2.0 * r1 * lo.sin()
+    };
+    let widest = (1.8 * rf1).min(lean_limit);
+    let face = s.face_width.min(widest);
+    if face < s.face_width - 1e-9 {
+        p.warn(format!("wheel: the face is narrowed to {} mm, the most this worm's threads wrap without undercutting the teeth", mm(face)));
+    }
+    p.fact("wheel face width", face, Unit::Mm);
+    let length = if s.worm_length > 0.0 { s.worm_length } else { (2.0 * (outside.powi(2) - (r2 - m).powi(2)).max(0.0).sqrt() + lead).max(4.0 * PI * m) };
+    p.fact("worm length", length, Unit::Mm);
+    // The thread in axial section: straight sides at the axial pressure angle (a ZA worm). The
+    // worm's thread is thinner by half the backlash, the hob's (the wheel's spaces) wider.
+    let hob = Hob {
+        centre: a,
+        wheel_pitch: r2,
+        reference: r1,
+        // The hob's tooth is the thread made taller by the clearance, but no taller than where
+        // its flanks (wider apart than the worm's by the backlash) would meet: a steep or thin
+        // thread's hob is cut back to a narrow land there (the wheel's root a little shallower).
+        tip: (ra1 + clearance).min(r1 + (PI * m / 4.0 + s.backlash / 4.0 - 0.02 * m) / ax.tan()),
+        corner: s.rack.root_radius * m,
+        low: rf1 - 0.5 * m,
+        half: PI * m / 4.0 + s.backlash / 4.0,
+        tan_axial: ax.tan(),
+        screw: hand * lead / TAU,
+    };
+    // The worm (member 2) is thinned by its own backlash.
+    let half = |rr: f64| (PI * m / 4.0 - s.backlash_of2() / 4.0 - (rr - r1) * ax.tan()).max(0.01 * m);
+    if PI * m / 4.0 - s.backlash_of2() / 4.0 - ha * ax.tan() < 0.05 * m {
+        p.refuse("the worm's threads come to a point: lower the pressure angle or the addendum");
+        return;
+    }
+    // The wheel: sections across the face, each cut by the thread as that plane meets it, the
+    // tips following the worm's root (the throat) and eased onto the outside cylinder: the
+    // easing is smooth across the face (the throat's rise less a quadratic of how near it comes
+    // to the cylinder), as a cubic skin through the sections can follow, where a sharp edge in
+    // the tip height would ripple every flank point the sections place by it.
+    let ease = outside - throat;
+    let tip_at = |w: f64| {
+        let u = a - ((rf1 + clearance).powi(2) - w * w).max(0.0).sqrt() - outside;
+        outside + if u <= -ease { u } else if u >= ease { 0.0 } else { u - (u + ease).powi(2) / (4.0 * ease) }
+    };
+    p.fact("wheel outside diameter", 2.0 * tip_at(face / 2.0), Unit::Mm);
+    // The kernel skins the loft cubic across its sections; the true tooth bends more across the
+    // face the steeper the lead, so sections are added (an odd count, one on the mid plane)
+    // until the skin between them is within a small part of the profile tolerance of the
+    // section the hob cuts there.
+    let mut sections: Vec<(f64, ToothSides)> = Vec::new();
+    let mut count = WHEEL_SECTIONS_MIN;
+    loop {
+        sections.clear();
+        for i in 0..count {
+            let w = -face / 2.0 * (PI * i as f64 / (count - 1) as f64).cos();
+            match hob.tooth(w, tip_at(w), zw, m) {
+                Some(t) => sections.push((w, t)),
+                None => {
+                    p.refuse(format!("wheel: {zw} teeth are too few for this worm (no tooth is left {} mm off the mid plane): use more teeth, a narrower face or a larger pressure angle", mm(w.abs())));
+                    return;
+                }
+            }
+        }
+        let err = skin_error(&hob, &sections, zw);
+        if count >= WHEEL_SECTIONS_MAX || err <= WHEEL_SKIN_TOLERANCE * m {
+            break;
+        }
+        count += 2;
+    }
+    p.fact("wheel loft sections", count as f64, Unit::None);
+    let mid_tooth = sections[count / 2].1.clone();
+    let outlines: Vec<(Outline, f64)> = sections.iter().map(|(w, t)| (sided_outline(t, zw, PI / f64::from(zw)), *w)).collect();
+    let mid_outline = outlines[count / 2].0.clone();
+    let tip_land = |t: &ToothSides| t.ra * (t.upper.last().and_then(|q| q.last()).map_or(0.0, |q| q.1) - t.lower.last().and_then(|q| q.last()).map_or(0.0, |q| q.1));
+    if sections.iter().any(|(w, t)| t.ra < tip_at(*w) - 1e-6) {
+        p.warn("wheel: the teeth come to a point towards the edges of the face; the tips are lowered there");
+    } else if tip_land(&mid_tooth) < 0.25 * m {
+        p.warn(format!("wheel: thin tooth tips ({} mm; 0.25 × module or more is usual)", mm(tip_land(&mid_tooth))));
+    }
+    // In the mid plane the wheel is a spur gear of the worm's axial module and pressure angle.
+    let mid_gear = Involute { teeth: zw, module: m, pressure_angle: ax, helix: 0.0, shift: s.shift, rack: s.rack, backlash: s.backlash / 2.0, tip_shortening: 0.0, virtual_teeth: 0.0 };
+    if mid_gear.undercut() {
+        p.warn(format!("wheel: undercut ({zw} teeth; about {:.1} or more avoid it at this shift, or raise the profile shift)", mid_gear.min_teeth_no_undercut()));
+    }
     if wanted(s, 1) {
-        let mut steps = vec![Step::Prism { region: Region { outer: vec![wo.rotated(-twist_for(&wheel, face) / 2.0)], holes: vec![] }, z0: -face / 2.0, height: face, twist: twist_for(&wheel, face), op: Op::New }];
-        hub_steps_centered(s, &s.bore, wf.rf, face, &mut steps, p, "wheel");
+        let mut steps = vec![Step::Loft { sections: outlines, op: Op::New }];
+        hub_steps_centered(s, &s.bore, hob.root_radius(0.0), face, &mut steps, p, "wheel");
         p.bodies.push(Body { name: name(s, &format!("Worm wheel z{zw}")), frame: Frame::at(s.origin), steps });
     }
     if wanted(s, 2) {
-        let s_ax = PI * m / 2.0 - s.backlash_of2() / 2.0;
-        let half = |rr: f64| s_ax / 2.0 - (rr - r1) * ax.tan();
         let section_at = |z: f64| -> Vec<V2> {
             let inner = rf1 - 0.05 * m;
-            vec![V2::new(inner, z - half(inner)), V2::new(ra1, z - half(ra1).max(0.02 * m)), V2::new(ra1, z + half(ra1).max(0.02 * m)), V2::new(inner, z + half(inner))]
+            vec![V2::new(inner, z - half(inner)), V2::new(ra1, z - half(ra1)), V2::new(ra1, z + half(ra1)), V2::new(inner, z + half(inner))]
         };
         let mut steps = vec![Step::Prism { region: Region { outer: vec![Outline::circle(V2::ZERO, rf1)], holes: vec![] }, z0: -length / 2.0, height: length, twist: 0.0, op: Op::New }];
+        // The worm's frame has x towards the wheel's axis: a coil starts on that side, and one
+        // thread is centred on the wheel's mid plane there, in the tooth space the wheel turns
+        // towards the worm.
+        let below = (length / 2.0 / lead).ceil() + 1.0;
         for k in 0..z1 {
-            let z = -length / 2.0 - lead + PI * m * f64::from(k);
-            steps.push(Step::Coil { section: section_at(z), pitch: lead, z0: z, height: length + 2.0 * lead, left: s.helix < 0.0, op: Op::Join });
+            let z = -below * lead + PI * m * f64::from(k);
+            steps.push(Step::Coil { section: section_at(z), pitch: lead, z0: z, height: 2.0 * below * lead, left, op: Op::Join });
         }
         steps.push(Step::Prism { region: Region { outer: vec![Outline::circle(V2::ZERO, ra1 + 0.01)], holes: vec![] }, z0: -length / 2.0, height: length, twist: 0.0, op: Op::Intersect });
         // The worm's shafts (gear 2's) run on from its two ends.
@@ -1683,20 +1816,24 @@ fn worm(s: &Spec, p: &mut Plan) {
         crate::body::shaft_ends(&built, &s.bore2, -length / 2.0, 0.0, length / 2.0, 0.0, &mut steps, p, "worm");
         p.bodies.push(Body { name: name(s, &format!("Worm {z1}-start")), frame: crossed_frame2(s.origin, a, FRAC_PI_2), steps });
     }
-    // The preview: the wheel and the worm's axial section (a rack) in the wheel's mid plane.
+    // The preview: the wheel's mid plane section and the worm's axial section (a rack) in it.
     p.preview_note = "wheel mid plane, worm in axial section".into();
-    let rack_g = Involute { teeth: 1, module: m, pressure_angle: ax, helix: 0.0, shift: 0.0, rack: s.rack, backlash: s.backlash, tip_shortening: 0.0, virtual_teeth: 0.0 };
+    let rack_g = Involute { teeth: 1, module: m, pressure_angle: ax, helix: 0.0, shift: 0.0, rack: s.rack, backlash: s.backlash / 2.0, tip_shortening: 0.0, virtual_teeth: 0.0 };
     let n = (length / (PI * m)).ceil().max(1.0) as u32;
-    let rack_o = rack_outline(&rack_g, n, ha + 0.5 * m).map(&|q: V2| V2::new(-q.y, q.x - PI * m * f64::from(n) / 2.0 + PI * m / 4.0), false);
-    p.preview.push(PreviewGear { name: "wheel".into(), region: Region { outer: vec![wo], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: wheel.r(), orbit: 0.0, period: 0.0 });
+    // Teeth towards the wheel (−x) from the worm's reference line; a thread centred on the
+    // wheel's mid plane at rest (the preview slides it from half a pitch back), as the 3D
+    // worm's is.
+    let rack_o = rack_outline(&rack_g, n, ha + 0.5 * m).map(&|q: V2| V2::new(-q.y, q.x - PI * m * f64::from(n / 2)), false);
+    p.preview.push(PreviewGear { name: "wheel".into(), region: Region { outer: vec![mid_outline], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: r2, orbit: 0.0, period: 0.0 });
     p.preview.push(PreviewGear {
         name: "worm".into(),
         region: Region { outer: vec![rack_o], holes: vec![] },
-        center: V2::new(a, 0.0),
+        center: V2::new(a - r1, 0.0),
         speed: 0.0,
-        slide: wheel.r(),
+        slide: r2,
         pitch_radius: 0.0,
-        orbit: 0.0, period: PI * m,
+        orbit: 0.0,
+        period: PI * m,
     });
 }
 

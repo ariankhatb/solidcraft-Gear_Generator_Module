@@ -1485,6 +1485,9 @@ fn new_sketch(s: &mut Session, def: &SketchDef) -> Result<u64> {
     Ok(id)
 }
 
+/// Sections a spiral taper is lofted through.
+const TAPER_SECTIONS: usize = 7;
+
 fn op_name(op: Op) -> &'static str {
     match op {
         Op::New => "new",
@@ -1599,9 +1602,19 @@ fn step_def(body: &Body, i: usize, step: &Step, nudge: f64) -> StepDef {
             let sketches = ends.iter().enumerate().map(|(k, (o, h))| sketch(format!("section {}", k + 1), f.world([0.0, 0.0, *h]), x, y, outline(o))).collect();
             StepDef { sketches, command: "solid.loft", shape: format!("taper ({})", op_name(*op)), picks: false }
         }
-        Step::Taper { outline: o, z0, height, op, .. } => {
-            let profile = sketch("profile".into(), f.world([0.0, 0.0, *z0]), x, y, outline(o));
-            StepDef { sketches: vec![profile, path(*z0, *height)], command: "solid.sweep", shape: format!("twisted taper ({})", op_name(*op)), picks: false }
+        // Spiral: the turn follows the logarithm of the scale (`taper_turn`), which a sweep's even
+        // twist does not, so the taper is a loft through its own sections, each the first one
+        // scaled and turned.
+        Step::Taper { outline: o, z0, height, twist, scale, op } => {
+            let sketches = (0..TAPER_SECTIONS)
+                .map(|i| {
+                    let t = i as f64 / (TAPER_SECTIONS - 1) as f64;
+                    let k = 1.0 + (scale - 1.0) * t;
+                    let section = o.scaled(k).rotated(solidcraft_gear::plan::taper_turn(*twist, *scale, k));
+                    sketch(format!("section {}", i + 1), f.world([0.0, 0.0, z0 + height * t]), x, y, outline(&section))
+                })
+                .collect();
+            StepDef { sketches, command: "solid.loft", shape: format!("spiral taper ({})", op_name(*op)), picks: false }
         }
         Step::Loft { sections, op } => {
             let sketches: Vec<SketchDef> = sections.iter().enumerate().map(|(k, (o, h))| sketch(format!("section {}", k + 1), f.world([0.0, 0.0, *h]), x, y, outline(o))).collect();
@@ -1643,9 +1656,9 @@ fn step_params(s: &Session, body: &Body, step: &Step, sketches: &[u64], target: 
             }
         }
         Step::Taper { twist, op, .. } if twist.abs() <= 1e-12 => merge(json!({"sections": [{"sketch": id(0)?}, {"sketch": id(1)?}]}), own(*op)),
-        Step::Taper { twist, scale, op, .. } => {
-            let path = id(1)?;
-            merge(json!({"sketch": id(0)?, "path_sketch": path, "path": [first_curve(s, path)?], "scale": scale, "twist": turn(*twist)}), own(*op))
+        Step::Taper { op, .. } => {
+            let ids = (0..TAPER_SECTIONS).map(|k| id(k).map(|i| json!({"sketch": i}))).collect::<Result<Vec<Value>>>()?;
+            merge(json!({"sections": ids}), own(*op))
         }
         Step::Loft { sections, op } => {
             let ids = (0..sections.len()).map(|k| id(k).map(|i| json!({"sketch": i}))).collect::<Result<Vec<Value>>>()?;

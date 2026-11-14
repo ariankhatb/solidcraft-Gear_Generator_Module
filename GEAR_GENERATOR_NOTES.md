@@ -138,3 +138,13 @@ Agents running (fresh agents; branches merge `gear-generator` first):
 Integration order when they report: body, tools, extras (gear crate, additive) -> mesh3d ->
 hypoid -> axes last (it wires the UI for everyone's new fields), then one build, kernel overlap
 check on every set, screenshots, launch.
+
+## Equation-driven teeth (user decision, 2026-11-14 evening)
+
+User: "I want the calculations to be parametric, not meshes if possible" and picked
+equation-driven teeth: flanks drawn with SolidCraft's `sketch.equation_curve` (the involute and
+trochoid formulas in the design's expression language) instead of splines through computed
+points, optionally driven by design parameters so Change Parameters reshapes the teeth natively.
+Planar tooth kinds (spur, helical, herringbone, internal, pair, planetary, rack) first; bevel,
+spiral bevel, hypoid and worm wheel keep fitted splines (no closed-form planar section).
+Agent worktree: `solidcraft-eqn` / `gear-equations`.

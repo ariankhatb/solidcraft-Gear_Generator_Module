@@ -190,3 +190,20 @@ Plan:
    print tuning, hardware, chamfers, tooth tuning).
 Agents: `gear-simple` (outputs solver, gear crate) and `gear-ui2` (window: modes, 3D view,
 drawing, no auto kernel preview).
+
+### Refinement (same evening): the shafts decide the type
+
+User: "Instead of choosing between hypoid [and the rest], we want an automatic mode selector …
+we are given two shafts. One is coming through the plane of the screen. The other one is placed
+by hand — draw it, 2 points 1 and 2, roughly, then dimension it … and that will give you exactly
+what you need, whether it's going to be a bevel or a hypoid or whatever in between. … I should be
+able to draw this out first using sketches — a sketch with a dot and an angled shaft — and that's
+what you select in the program, and that will generate the gear. … Apply this logic to the other
+ones as well."
+- Simple mode input = the drawing: shaft 1 a dot, shaft 2 two points, then dimensions (angle,
+  offset, position). Type is a label (override only when several fit).
+- Same axis → single gear; parallel → pair; intersecting → bevel; skew → hypoid (small offset;
+  offset 0 = spiral bevel) / worm or crossed helical (large offset).
+- Axis slots accept sketch points (axis normal to the sketch plane) and sketch lines.
+Sent to `gear-ui2` (window, engine axis references) and `gear-simple` (`auto_kind`, two-shaft
+`Simple`).

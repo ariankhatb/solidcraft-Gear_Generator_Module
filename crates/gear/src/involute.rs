@@ -420,20 +420,35 @@ pub struct Internal {
 }
 
 impl Internal {
-    /// Internal tip radius (the teeth's inner ends).
+    /// Internal tip radius (the teeth's inner ends): the basic rack's addendum, but no deeper
+    /// than a rack-cut pinion has involute for. A ring's tip reaches further down a pinion's
+    /// flank than the rack that cut the pinion did, so a full addendum would dig into the
+    /// pinion's root fillets; the limit here is for a pinion without undercut and with the
+    /// ring's own shift (for 20° it comes to about 1 − 7.5 / z modules of addendum).
     pub fn r_tip(&self) -> f64 {
         let g = &self.gear;
-        g.r() - (g.rack.addendum - g.shift) * g.module + g.tip_shortening
+        let at = g.alpha_t();
+        let reach = (g.rack.addendum - g.shift) * g.module;
+        let clear = g.rb().hypot((g.r() * at.sin() - reach / at.sin()).max(0.0));
+        (g.r() - reach).max(clear) + g.tip_shortening
+    }
+    /// The smallest inner tip radius that stays on the involute of this pinion: `form_radius`
+    /// where the pinion's involute starts (its flank's first radius), at `mesh`'s centre distance.
+    pub fn r_tip_clear(&self, pinion: &Involute, form_radius: f64, mesh: &Mesh) -> f64 {
+        let rb1 = pinion.rb();
+        let along = (form_radius * form_radius - rb1 * rb1).max(0.0).sqrt();
+        self.gear.rb().hypot(mesh.center_distance * mesh.working_pressure_angle.sin() + along)
     }
     /// Internal root radius (outer).
     pub fn r_root(&self) -> f64 {
         let g = &self.gear;
         g.r() + (g.rack.dedendum + g.shift) * g.module
     }
-    /// Space width on the pitch circle (arc).
+    /// Space width on the pitch circle (arc). The space is an external tooth's shape, so a
+    /// positive shift (away from the centre, as the tip and root radii move) widens it.
     pub fn space(&self) -> f64 {
         let g = &self.gear;
-        PI * g.mt() / 2.0 - 2.0 * g.shift * g.module * g.alpha_t().tan() + g.backlash
+        PI * g.mt() / 2.0 + 2.0 * g.shift * g.module * g.alpha_t().tan() + g.backlash
     }
     /// The space's half angle at radius `rr` (the involute, radial below the base circle).
     pub fn space_half_at(&self, rr: f64) -> f64 {
@@ -476,8 +491,10 @@ pub fn rack_outline(g: &Involute, count: u32, depth_below: f64) -> Outline {
     let at = g.alpha_t();
     let ha = (g.rack.addendum + g.shift) * g.module - g.tip_shortening;
     let hf = (g.rack.dedendum - g.shift) * g.module;
-    // Tooth thickness on the pitch line.
-    let s = p / 2.0 - g.backlash;
+    // Tooth thickness on the line y = 0. A shift moves the whole profile up by x·mn (tips and
+    // roots with it), so the datum line, where tooth and space are equal, is at y = x·mn and the
+    // tooth is thicker on y = 0.
+    let s = p / 2.0 + 2.0 * g.shift * g.module * at.tan() - g.backlash;
     let half_tip = s / 2.0 - ha * at.tan();
     let half_root = s / 2.0 + hf * at.tan();
     let mut pts = vec![V2::new(0.0, -depth_below)];
@@ -591,5 +608,49 @@ pub fn shift_sum_for_center(g1: &Involute, g2: &Involute, aw: f64) -> Option<f64
 /// gear 2's centre in direction `dir` from it. External mesh. Returns gear 2's tooth-0 angle.
 pub fn mesh_phase(z1: u32, phase1: f64, z2: u32, dir: f64) -> f64 {
     let (z1, z2) = (f64::from(z1), f64::from(z2));
-    dir + PI + PI / z2 - (z1 / z2) * (dir - phase1)
+    // A tooth of gear 1 on the line of centres (phase1 = dir) meets a space of gear 2 there.
+    // Gear 1's tooth an angle d short of the line is an arc r1·d short of the pitch point; seen
+    // from gear 2's centre, which faces the other way, the same arc is r1·d / r2 past it.
+    dir + PI + PI / z2 + (z1 / z2) * (dir - phase1)
+}
+
+/// How an internal gear must be turned to mesh with a pinion inside it: the ring at the origin,
+/// the pinion's centre in direction `dir` from it with its tooth 0 at `phase_pinion`. Returns the
+/// ring's tooth-0 angle (see [`Internal::outline`]).
+pub fn mesh_phase_internal(z_pinion: u32, phase_pinion: f64, z_ring: u32, dir: f64) -> f64 {
+    let (zp, zr) = (f64::from(z_pinion), f64::from(z_ring));
+    // Both turn the same way: the pinion's tooth an angle d past the line of centres sits in a
+    // ring space d·zp / zr past it, and the ring's tooth is half a pitch on from its space.
+    dir + (phase_pinion - dir) * zp / zr + PI / zr
+}
+
+/// The transverse contact ratio of an external pair counting only the involute that is really
+/// there: from each gear's form radius (where its fillet or undercut ends, `flank[0]`) to its
+/// actual tip. Undercut pinions lose the start of the path of contact, which [`mesh_external`]
+/// does not see.
+pub fn contact_ratio_external(g1: &Involute, f1: &ToothFlank, g2: &Involute, f2: &ToothFlank, mesh: &Mesh) -> f64 {
+    let (rb1, rb2) = (g1.rb(), g2.rb());
+    let along = |rr: f64, rb: f64| (rr * rr - rb * rb).max(0.0).sqrt();
+    let form = |f: &ToothFlank| f.flank.first().map_or(f.rf, |p| p.0);
+    // Along the line of action, from gear 1's base circle tangent point.
+    let l = mesh.center_distance * mesh.working_pressure_angle.sin();
+    let start = (l - along(f2.ra, rb2)).max(along(form(f1), rb1));
+    let end = along(f1.ra, rb1).min(l - along(form(f2), rb2));
+    (end - start) / g1.base_pitch()
+}
+
+/// Does the pinion's tip run into the ring's tip as the teeth come out of mesh (trochoid
+/// interference: too few teeth between an internal gear and its pinion)? `ra1`: the pinion's tip
+/// radius, at centre distance and working pressure angle of `mesh`.
+pub fn internal_tip_interference(pinion: &Involute, ra1: f64, ring: &Internal, mesh: &Mesh) -> bool {
+    let (a, aw) = (mesh.center_distance, mesh.working_pressure_angle);
+    let ra2 = ring.r_tip();
+    let (rb1, rb2) = (pinion.rb(), ring.gear.rb());
+    if a <= 1e-9 || ra2 <= rb2 || ra1 <= rb1 {
+        return ra2 < rb2;
+    }
+    let (aa1, aa2) = ((rb1 / ra1).acos(), (rb2 / ra2).acos());
+    let th1 = ((ra2 * ra2 - ra1 * ra1 - a * a) / (2.0 * a * ra1)).clamp(-1.0, 1.0).acos() + inv(aa1) - inv(aw);
+    let th2 = ((a * a + ra2 * ra2 - ra1 * ra1) / (2.0 * a * ra2)).clamp(-1.0, 1.0).acos();
+    th1 * pinion.z() / ring.gear.z() + inv(aw) - inv(aa2) < th2
 }

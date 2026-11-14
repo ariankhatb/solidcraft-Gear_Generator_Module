@@ -7,7 +7,10 @@ use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use crate::cycloid::{Cycloidal, CycloidalDrive, cycloidal_outline};
 use crate::geom::{Outline, Region, V2, wrap_period};
 use crate::hub::{Bore, lightening_holes};
-use crate::involute::{BasicRack, Internal, Involute, ToothFlank, external_outline, mesh_external, mesh_internal, mesh_phase, rack_outline, shift_sum_for_center, teeth_outline};
+use crate::involute::{
+    BasicRack, Internal, Involute, ToothFlank, contact_ratio_external, external_flank, external_outline, internal_tip_interference, mesh_external, mesh_internal, mesh_phase, rack_outline,
+    shift_sum_for_center, teeth_outline,
+};
 
 /// Gear set types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
@@ -675,11 +678,22 @@ fn pair(s: &Spec, p: &mut Plan) {
             None => p.warn("the centre distance can't be reached by shifting"),
         }
     }
-    let g2 = s.involute(s.teeth2, x2, -s.helix);
-    let m = mesh_external(&g1, &g2, s.face_width);
+    let mut g1 = g1;
+    let mut g2 = s.involute(s.teeth2, x2, -s.helix);
+    // Shifted gears sit closer than their shifts push the tips out: shorten both tips by the
+    // difference so the tip clearance stays the basic rack's.
+    let shorten = (s.shift + x2) * s.module - (mesh_external(&g1, &g2, s.face_width).center_distance - g1.r() - g2.r());
+    if shorten > 1e-9 {
+        g1.tip_shortening = shorten;
+        g2.tip_shortening = shorten;
+        p.fact("tip shortening", shorten, Unit::Mm);
+    }
+    let mut m = mesh_external(&g1, &g2, s.face_width);
     let (o1, f1) = external_outline(&g1, 0.0);
     let phase2 = mesh_phase(s.teeth, 0.0, s.teeth2, 0.0);
     let (o2, f2) = external_outline(&g2, phase2);
+    m.contact_ratio = contact_ratio_external(&g1, &f1, &g2, &f2, &m);
+    m.total_contact_ratio = m.contact_ratio + m.overlap_ratio;
     tooth_warnings(p, "gear 1", &g1, &f1);
     tooth_warnings(p, "gear 2", &g2, &f2);
     mesh_facts(p, &m);
@@ -738,9 +752,22 @@ fn planetary(s: &Spec, p: &mut Plan) {
     let n = s.planets.max(1);
     let sun = s.involute(zs, s.shift, s.helix);
     let planet = s.involute(zp, s.shift2, -s.helix);
-    let ring_gear = Internal { gear: s.involute(zr, 0.0, -s.helix) };
+    let mut ring_gear = Internal { gear: s.involute(zr, 0.0, -s.helix) };
     let m_sp = mesh_external(&sun, &planet, s.face_width);
+    // The ring's tips stay on the planets' involute: an undercut or shifted planet has less of
+    // it than the ring's standard tip allows for.
+    let planet_flank = external_flank(&planet);
+    let clear = ring_gear.r_tip_clear(&planet, planet_flank.flank.first().map_or(planet_flank.rf, |q| q.0), &mesh_internal(&planet, &ring_gear, s.face_width));
+    if clear > ring_gear.r_tip() {
+        ring_gear.gear.tip_shortening = clear - ring_gear.r_tip();
+    }
     let m_pr = mesh_internal(&planet, &ring_gear, s.face_width);
+    if internal_tip_interference(&planet, planet_flank.ra, &ring_gear, &m_pr) {
+        p.warn(format!("the planets' tips hit the ring's tips going in and out of mesh (ring − planet = {} teeth is too few)", i64::from(zr) - i64::from(zp)));
+    }
+    if m_pr.contact_ratio < 1.0 {
+        p.warn(format!("planet–ring contact ratio {:.2} is below 1: the teeth lose contact", m_pr.contact_ratio));
+    }
     let a = m_sp.center_distance;
     if (m_pr.center_distance - a).abs() > 0.01 * s.module {
         p.warn(format!(

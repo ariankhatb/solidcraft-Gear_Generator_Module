@@ -11,6 +11,8 @@
 //!   with facts, warnings and a 2D meshing preview.
 //! - [`axes`]: axis-first design: how two shaft axes lie (parallel, intersecting, skew), which
 //!   gear families fit them, and a set sized and placed on them from a ratio and one size.
+//! - [`hypoid`]: spiral hypoid sets (car final drives): ISO 23509 pitch cones, a ring gear with
+//!   logarithmic spiral teeth and a pinion generated from it.
 //! - [`sprocket`], [`pulley`], [`wrap`]: ISO 606 roller chain sprockets, timing belt pulleys, and
 //!   the chain or belt between two of them.
 //! - [`spline`]: DIN 5480 and ANSI B92.1 involute splines; [`face_gear`]: face gears cut by a
@@ -36,6 +38,7 @@ pub mod face_gear;
 pub mod design;
 pub mod geom;
 pub mod hub;
+pub mod hypoid;
 pub mod involute;
 pub mod mesh2d;
 pub mod plan;

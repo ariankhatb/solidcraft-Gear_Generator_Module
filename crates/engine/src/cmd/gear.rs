@@ -33,7 +33,7 @@ use super::sketch_import::add_geometry;
 use crate::params::bad;
 use crate::schema::gear::{
     BeltProfile, BoreParams, BoreType, ChainSize, GearAxesResult, GearAxis, GearAxisLine, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult,
-    GearMaterial, GearParams, GearRelation, GearResult, GearSet, GearType, PlacementParams, RackStandard, SplineStandardParam,
+    GearMaterial, GearParams, GearRelation, GearResult, GearSet, GearType, PlacementParams, RackStandard, SpiralHand, SplineStandardParam,
 };
 use solidcraft_gear::spline::SplineStandard;
 use solidcraft_gear::strength::Material;
@@ -53,7 +53,7 @@ pub static COMMANDS: &[CommandSpec] = &[
             "type?: spur|helical|herringbone|internal|rack|pair|planetary|bevel|spiral_bevel|hypoid|crossed_helical|worm|cycloidal|cycloidal_drive|sprocket|pulley|spline|face_gear|elliptical; \
              module? (mm) | diametral_pitch?; teeth?, teeth2? (mate or planet), ring_teeth?, planets?; pressure_angle?, helix_angle? (deg, sign = hand); \
              profile_shift?, profile_shift2?; rack?: iso53_a|iso53_b|iso53_c|iso53_d|agma_full_depth|stub|print_fdm, addendum?, dedendum?, root_radius? (coefficients); \
-             backlash? (mm); face_width?; center_distance? (pair: gear 2's shift reaches it); shaft_angle?, spiral_angle? (deg); offset?, face_start? (hypoid, mm); \
+             backlash? (mm); face_width?; center_distance? (pair: gear 2's shift reaches it); shaft_angle?, spiral_angle? (deg); offset?, ring_diameter? (hypoid, mm), hand?: left|right (hypoid pinion); \
              starts?, worm_diameter?, worm_length? (worm); rim?; rack_teeth?, rack_height?; pins?, pin_circle?, pin_diameter?, eccentricity? (cycloidal drive); \
              bore?, bore2?: {type?: round|keyway|d_flat|hex|square|none, diameter, key_width?, key_depth?, flat?}; hub_diameter?, hub_length?; holes?, hole_diameter?; \
              sprocket: chain?: 04b|05b|06b|08b|10b|12b|16b|20b|24b|ansi25|ansi35|ansi40|ansi50|ansi60|ansi80|ansi100|ansi120|custom (chain_pitch?, roller_diameter?, roller_width?, strand_pitch?), \
@@ -273,6 +273,9 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     set!(spiral_angle, p.spiral_angle);
     set!(offset, p.offset);
     set!(face_start, p.face_start);
+    if let Some(h) = p.hand {
+        s.left_hand = h == SpiralHand::Left;
+    }
     set!(starts, p.starts);
     set!(worm_diameter, p.worm_diameter);
     set!(worm_length, p.worm_length);
@@ -293,6 +296,12 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     set!(origin, p.origin);
     if let Some(n) = &p.name {
         s.name = n.clone();
+    }
+    if let Some(d) = p.ring_diameter {
+        if !(d.is_finite() && d > 0.0) {
+            return Err("`ring_diameter` must be greater than 0".into());
+        }
+        s.module = d / f64::from(s.teeth2.max(1));
     }
     s.bore = bore_of(&p.bore);
     s.bore2 = bore_of(&p.bore2);
@@ -452,8 +461,10 @@ fn explicit_params(s: &Spec) -> GearParams {
         center_distance: (s.center_distance > 0.0).then_some(s.center_distance),
         shaft_angle: Some(s.shaft_angle),
         spiral_angle: Some(s.spiral_angle),
-        offset: (s.offset > 0.0).then_some(s.offset),
-        face_start: Some(s.face_start),
+        offset: (s.offset > 0.0 || s.kind == Kind::Hypoid).then_some(s.offset),
+        face_start: (s.face_start != 0.0).then_some(s.face_start),
+        hand: (s.kind == Kind::Hypoid).then_some(if s.left_hand { SpiralHand::Left } else { SpiralHand::Right }),
+        ring_diameter: None,
         starts: Some(s.starts),
         worm_diameter: (s.worm_diameter > 0.0).then_some(s.worm_diameter),
         worm_length: (s.worm_length > 0.0).then_some(s.worm_length),
@@ -1482,12 +1493,28 @@ fn step_params(s: &Session, body: &Body, step: &Step, sketches: &[u64], target: 
 /// Builds every body of the plan, each under its name in `names` where there is one (an
 /// update keeps the names the bodies had).
 fn build_set(s: &mut Session, plan: &Plan, names: &[String], warnings: &mut Vec<String>) -> Result<Vec<BodyRecord>> {
+    // Lofts through many tooth sections (a hypoid set) are many hundreds of faces: the kernel's
+    // full check of them takes several times as long as making them (minutes for a ring gear),
+    // so they are built without it. The check still runs whenever the features are computed again.
+    let heavy = plan.bodies.iter().flat_map(|b| &b.steps).any(|st| matches!(st, Step::Loft { sections, .. } if sections.len() > 6));
+    let checked = s.validation();
+    if heavy {
+        s.set_validation(solidcraft_kernel::Validation::Off);
+    }
     let mut made = Vec::new();
+    let mut built = Ok(());
     for (i, body) in plan.bodies.iter().enumerate() {
         let named = Body { name: names.get(i).cloned().unwrap_or_else(|| body.name.clone()), ..body.clone() };
-        made.push(build_body(s, &named, warnings).map_err(|e| EngineError::Other(format!("{}: {e}", named.name)))?);
+        match build_body(s, &named, warnings) {
+            Ok(b) => made.push(b),
+            Err(e) => {
+                built = Err(EngineError::Other(format!("{}: {e}", named.name)));
+                break;
+            }
+        }
     }
-    Ok(made)
+    s.set_validation(checked);
+    built.map(|()| made)
 }
 
 /// Builds one body; returns what it was made of, under the name the design gave it.
@@ -1496,11 +1523,28 @@ fn build_body(s: &mut Session, body: &Body, warnings: &mut Vec<String>) -> Resul
     let mut steps = Vec::new();
     for (i, step) in body.steps.iter().enumerate() {
         // A blank that trims (a bevel's back and front cones) is tried again a hair further
-        // along when the kernel refuses it, and left out with a warning if it still fails.
+        // along when the kernel refuses it. A loft the kernel refuses is tried again through
+        // every other section, then through its two ends: a coarser twist beats no gear. Any
+        // step that changes a body already made (a hub, web, bore or trim) is left out with a
+        // warning if it still fails: the gear is still worth having.
         let trims = matches!(step, Step::Revolve { op, .. } if *op != Op::New);
-        let nudges: &[f64] = if trims { &NUDGES } else { &NUDGES[..1] };
+        let optional = !matches!(step_op(step), Op::New);
+        let mut attempts: Vec<(Step, f64)> = if trims { NUDGES.iter().map(|n| (step.clone(), *n)).collect() } else { vec![(step.clone(), 0.0)] };
+        if let Step::Loft { sections, op } = step {
+            let n = sections.len();
+            if n > 3 {
+                let mut every_other: Vec<usize> = (0..n).step_by(2).collect();
+                if every_other.last() != Some(&(n - 1)) {
+                    every_other.push(n - 1);
+                }
+                attempts.push((Step::Loft { sections: every_other.iter().map(|k| sections[*k].clone()).collect(), op: *op }, 0.0));
+            }
+            if n > 2 {
+                attempts.push((Step::Loft { sections: vec![sections[0].clone(), sections[n - 1].clone()], op: *op }, 0.0));
+            }
+        }
         let mut done = None;
-        for (k, nudge) in nudges.iter().enumerate() {
+        for (k, (step, nudge)) in attempts.iter().enumerate() {
             let def = step_def(body, i, step, *nudge);
             let mut ids = Vec::new();
             for sketch in &def.sketches {
@@ -1514,16 +1558,25 @@ fn build_body(s: &mut Session, body: &Body, warnings: &mut Vec<String>) -> Resul
             let params = step_params(s, body, step, &ids, &name, &body.name)?;
             match s.execute(def.command, &params) {
                 Ok(reply) => {
+                    if k > 0 && let (Step::Loft { sections: all, .. }, Step::Loft { sections: used, .. }) = (&body.steps[i], step) {
+                        warnings.push(format!("{}: the loft through all {} sections failed; built through {} of them", body.name, all.len(), used.len()));
+                    }
                     done = Some((def, ids, params, reply));
                     break;
                 }
-                Err(e) if trims => {
+                Err(e) => {
                     s.execute("timeline.delete", &json!({"features": ids})).ok();
-                    if k + 1 == nudges.len() {
+                    if k + 1 < attempts.len() {
+                        continue;
+                    }
+                    if trims {
                         warnings.push(format!("{}: the back and front cones could not be trimmed ({e}); the teeth ends are left flat", body.name));
+                    } else if optional {
+                        warnings.push(format!("{}: step {} ({}) could not be made ({e}); it is left out", body.name, i + 1, op_name(step_op(step))));
+                    } else {
+                        return Err(e);
                     }
                 }
-                Err(e) => return Err(e),
             }
         }
         let Some((def, ids, params, reply)) = done else {
@@ -1539,6 +1592,13 @@ fn build_body(s: &mut Session, body: &Body, warnings: &mut Vec<String>) -> Resul
         steps.push(StepRecord { shape: def.shape, command: def.command.into(), feature: feature_id(&reply), params, sketches });
     }
     Ok(BodyRecord { name, steps })
+}
+
+/// What a step does to its body.
+fn step_op(step: &Step) -> Op {
+    match step {
+        Step::Prism { op, .. } | Step::Taper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => *op,
+    }
 }
 
 fn polygon(pts: &[solidcraft_gear::V2]) -> Vec<Geom2> {

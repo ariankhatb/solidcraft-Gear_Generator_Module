@@ -159,6 +159,14 @@ pub enum SplineStandardParam {
     AnsiB92,
 }
 
+/// The hand of a hypoid pinion's spiral (the ring gear gets the other).
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SpiralHand {
+    Left,
+    Right,
+}
+
 /// The basic rack profile.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -237,7 +245,8 @@ pub struct GearParams {
     /// The set to make (default spur).
     #[serde(default, rename = "type")]
     pub kind: Option<GearType>,
-    /// Normal module in mm (bevel: at the large end; worm: axial). Default 2.
+    /// Normal module in mm (bevel: at the large end; hypoid: the ring gear's outer transverse
+    /// module; worm: axial). Default 2.
     #[serde(default)]
     pub module: Option<f64>,
     /// Diametral pitch in teeth per inch, instead of `module`.
@@ -294,15 +303,25 @@ pub struct GearParams {
     /// Bevel, hypoid and crossed helical: the angle between the shafts (default 90).
     #[serde(default)]
     pub shaft_angle: Option<f64>,
-    /// Spiral bevel: the mean spiral angle (default 35).
+    /// Spiral bevel: the mean spiral angle (default 35). Hypoid: the pinion's mean spiral angle
+    /// (default 50; the ring gear's is smaller by the offset angle).
     #[serde(default)]
     pub spiral_angle: Option<f64>,
-    /// Hypoid: the distance between the axes in mm (default: from equal spiral angles).
+    /// Hypoid: the pinion's offset from the ring gear's centre in mm (default 25; 0 makes a
+    /// spiral bevel pair). Too large an offset is refused, naming the largest that works.
     #[serde(default)]
     pub offset: Option<f64>,
-    /// Hypoid: where the face starts along the line of contact, from the throat, in mm.
+    /// Ignored (the earlier hypoid builder's face position); kept so older scripts still run.
     #[serde(default)]
     pub face_start: Option<f64>,
+    /// Hypoid: the pinion's spiral hand (default left, as in car axles; the offset goes to the
+    /// side that makes the pinion's spiral angle the larger).
+    #[serde(default)]
+    pub hand: Option<SpiralHand>,
+    /// Hypoid: the ring gear's outer pitch diameter in mm, instead of `module` (default 200 with
+    /// 41 teeth). Wins over `module` and `diametral_pitch` when given.
+    #[serde(default)]
+    pub ring_diameter: Option<f64>,
     /// Worm: thread starts (default 1).
     #[serde(default)]
     pub starts: Option<u32>,

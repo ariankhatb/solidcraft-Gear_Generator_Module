@@ -214,7 +214,15 @@ fn skew_sets_span_the_offset() {
         assert!(close(plan_fact(&p, "centre distance"), 25.0, 1e-6), "{deg}: {}", plan_fact(&p, "centre distance"));
         assert!(MODULE_SET.contains(&s.spec.module) && s.derived.helix);
         assert!(close(s.spec.shaft_angle, deg, 1e-6) || close(s.spec.shaft_angle, 180.0 - deg, 1e-6));
-        let s = solve(&a1, Some(&a2), Some(Kind::Hypoid), &Spec::defaults_for(Kind::Hypoid), &free(3.0)).unwrap();
+        // A spiral hypoid at 3:1 fits the square and the 60° crossing (by the spiral hand the
+        // axes call for); at 110° its ring gear's pitch cone would pass 90°, which it refuses.
+        let hyp = solve(&a1, Some(&a2), Some(Kind::Hypoid), &Spec::defaults_for(Kind::Hypoid), &free(3.0));
+        if deg > 100.0 {
+            let e = hyp.unwrap_err();
+            assert!(e.contains("pitch cone"), "{deg}: {e}");
+            continue;
+        }
+        let s = hyp.unwrap_or_else(|e| panic!("{deg}: {e}"));
         let p = on_axes(&s, &a1, &a2);
         assert!(close(plan_fact(&p, "offset"), 25.0, 1e-6), "{deg}: {}", plan_fact(&p, "offset"));
         assert!(p.warnings.iter().all(|w| !w.contains("offset")), "{:?}", p.warnings);

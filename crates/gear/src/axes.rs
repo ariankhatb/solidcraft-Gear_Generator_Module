@@ -37,6 +37,20 @@ fn mul(a: V, k: f64) -> V {
 fn dot(a: V, b: V) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
+/// The feet of the common perpendicular of the lines through `p1` along `d1` and `p2` along
+/// `d2`, or None for parallel lines.
+fn feet(p1: V, d1: V, p2: V, d2: V) -> Option<(V, V)> {
+    let w = sub(p1, p2);
+    let (a, b, c, d, e) = (dot(d1, d1), dot(d1, d2), dot(d2, d2), dot(d1, w), dot(d2, w));
+    let den = a * c - b * b;
+    if den.abs() < 1e-12 * a * c {
+        return None;
+    }
+    let t1 = (b * e - c * d) / den;
+    let t2 = (a * e - b * d) / den;
+    Some((add(p1, mul(d1, t1)), add(p2, mul(d2, t2))))
+}
+
 fn cross(a: V, b: V) -> V {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
@@ -482,10 +496,45 @@ pub fn solve(axis1: &Axis, axis2: Option<&Axis>, kind: Option<Kind>, base: &Spec
                     sigma
                 }
             };
-            let place = Frame { origin: foot1, x, z };
-            let local2 = Frame { origin: [offset, 0.0, 0.0], x: [-1.0, 0.0, 0.0], z: [0.0, sigma.sin(), sigma.cos()] };
-            out.frames = [place, place.compose(&local2)];
-            spec.placement = Some(place);
+            let world = Frame { origin: foot1, x, z };
+            if kind == Kind::Hypoid {
+                // The hypoid builder places its own pinion and ring gear (the pinion off the
+                // ring gear's axis by the offset, at the shaft angle): find where they come out
+                // unplaced, and move the pair so the pinion's axis is axis 1 and the gear's is
+                // axis 2. Both pairs of axes are skew by the same offset and angle, so one rigid
+                // motion fits both.
+                // Skew axes have a handedness: the set as built may be the mirror of the pair
+                // asked for, and then the other hand of spiral (the mirrored set) fits.
+                let wy = cross(world.z, world.x);
+                let sense = |d2: V, y: V, z: V| dot(d2, y) * dot(d2, z);
+                let want = sense(a2.dir, wy, world.z);
+                let mut tries = 0;
+                let (l1, l2, g1, lx, ly, lz) = loop {
+                    let local = crate::plan(&Spec { placement: None, ..spec.clone() })?;
+                    let (l1, l2) = (local.bodies[0].frame, local.bodies[1].frame);
+                    let (g1, g2) = feet(l1.origin, l1.z, l2.origin, l2.z).ok_or("the hypoid's own axes don't cross skew")?;
+                    let lx = mul(sub(g2, g1), 1.0 / dot(sub(g2, g1), sub(g2, g1)).sqrt());
+                    let lz = l1.z;
+                    let ly = cross(lz, lx);
+                    let have = sense(l2.z, ly, lz);
+                    if tries == 0 && want * have < -1e-9 {
+                        spec.left_hand = !spec.left_hand;
+                        out.notes.push(format!("{}-hand spiral pinion: the hand that fits how these axes cross", if spec.left_hand { "left" } else { "right" }));
+                        tries += 1;
+                        continue;
+                    }
+                    break (l1, l2, g1, lx, ly, lz);
+                };
+                // The rotation taking the local triad (lx, ly, lz) to the world one (x, y, z).
+                let turn = |v: V| -> V { add(add(mul(world.x, dot(lx, v)), mul(wy, dot(ly, v))), mul(world.z, dot(lz, v))) };
+                let place = Frame { origin: sub(world.origin, turn(g1)), x: turn([1.0, 0.0, 0.0]), z: turn([0.0, 0.0, 1.0]) };
+                out.frames = [place.compose(&l1), place.compose(&l2)];
+                spec.placement = Some(place);
+            } else {
+                let local2 = Frame { origin: [offset, 0.0, 0.0], x: [-1.0, 0.0, 0.0], z: [0.0, sigma.sin(), sigma.cos()] };
+                out.frames = [world, world.compose(&local2)];
+                spec.placement = Some(world);
+            }
         }
     }
     out.spec = spec;
@@ -754,6 +803,17 @@ fn skew(e: f64, sigma: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) ->
         out.derived.teeth = drive.teeth_free;
         out.derived.teeth2 = drive.teeth2_free;
         (spec.teeth, spec.teeth2) = (z1, z2);
+    }
+    if kind == Kind::Hypoid {
+        // A spiral hypoid takes the offset and shaft angle as they are: its size (the ring
+        // gear's diameter, so its module) stays as set, and its spiral angles come from its own
+        // ISO 23509 design.
+        spec.offset = e;
+        let ring = spec.module * f64::from(spec.teeth2);
+        out.facts.push(fact("ring gear outer pitch diameter", ring, Unit::Mm));
+        out.notes.push(format!("{} + {} teeth on a Ø{} ring gear; offset {} mm from the axes", spec.teeth, spec.teeth2, num(ring), num(e)));
+        let _ = sigma;
+        return Ok(());
     }
     let (z1, z2) = (f64::from(spec.teeth), f64::from(spec.teeth2));
     let limit = 80f64.to_radians();

@@ -10,6 +10,8 @@
 //!   drive) as bodies of solid steps, with facts, warnings and a 2D meshing preview.
 //! - [`coupon`]: a print test coupon of a pair or planetary set (a few teeth of each member at
 //!   the true centre distance), asked for with `Spec::coupon`.
+//! - [`design`]: design by goal (ranked tooth counts, modules and shifts for a ratio, size and
+//!   load) and ratio splitting for multi-stage gearboxes.
 //! - [`mesh2d`]: a 2D mesh checker (overlap and loss of contact over a tooth pitch) for the
 //!   parallel-axis sets, behind the window's mesh verdict and the mesh tests.
 //! - [`strength`]: load capacity (ISO 6336 Method B simplified, Lewis; simplified bevel and
@@ -20,6 +22,7 @@
 
 pub mod coupon;
 pub mod cycloid;
+pub mod design;
 pub mod geom;
 pub mod hub;
 pub mod involute;

@@ -221,3 +221,24 @@ assembly."
   radial and axial clearance, the shafts, and bearing seats (one bearing size from the library,
   placed at dots on the shafts). Other housing features stay manual for now.
 Agent worktree: `solidcraft-keepout` / `gear-keepout`.
+
+### Sketch rules (confirmed by the user) — circles are pitch diameters, lines are shafts
+
+One sketch = gear 1's plane. A circle is a gear's pitch circle (Ø = pitch Ø), its shaft through
+the centre normal to the sketch unless a line says otherwise.
+
+| Drawn | Set | Sizes |
+|---|---|---|
+| one circle | single gear (spur/helical by helix field) | pitch Ø |
+| two circles touching outside | parallel pair (helix field: helical/herringbone) | both pitch Ø; centre distance |
+| circle touching inside a bigger one | internal pair | both pitch Ø |
+| centre circle + circles around it inside a big circle | planetary | sun, planets, ring |
+| circle + tangent line | rack and pinion OR worm and wheel (one choice; worm Ø a field or a second parallel line) | line = pitch line |
+| circle + line through its centre | bevel, 90° | line = shaft 2 seen from above; meets shaft 1 at the apex |
+| circle + line crossing the circle off-centre | hypoid | offset = line's distance from centre |
+| circle + line missing the circle | crossed helical | offset = line's distance from centre |
+| second circle in another sketch touching the first | bevel at any angle | both pitch Ø; shaft angle = angle between sketch planes |
+
+Face width: a field per gear (default ≈ 10×module; 30% of cone distance for bevel/hypoid),
+shown as a dimension. Mate size for bevel/hypoid with one circle: ratio field (or the side-sketch
+circle). Non-90° bevel/hypoid: angle field or the two-sketch form.

@@ -338,14 +338,22 @@ pub enum Step {
     Prism { region: Region, z0: f64, height: f64, twist: f64, op: Op },
     /// Sections on planes z = h, joined in order.
     Loft { sections: Vec<(Outline, f64)>, op: Op },
-    /// The outline on z = `z0` swept `height` along +z, turned `twist` radians and scaled
-    /// linearly about the axis to `scale` at the far end (a cone's teeth, straight or spiral).
+    /// The outline on z = `z0` swept `height` along +z, scaled linearly about the axis to
+    /// `scale` at the far end (towards the cone's apex) and turned `twist` radians in all, the
+    /// turn growing with the logarithm of the scale ([`taper_turn`]): every section is the first
+    /// one scaled and turned, the surface a cone's teeth, straight or on a logarithmic spiral
+    /// (constant spiral angle).
     Taper { outline: Outline, z0: f64, height: f64, twist: f64, scale: f64, op: Op },
     /// A closed polygon in the (radius, z) half plane, turned a full turn about z.
     Revolve { profile: Vec<V2>, op: Op },
     /// A closed polygon in the (x, z) plane (x radial) swept round z as a helix of `pitch`, from
     /// `z0` for `height`; right-handed unless `left`.
     Coil { section: Vec<V2>, pitch: f64, z0: f64, height: f64, left: bool, op: Op },
+}
+
+/// How far a [`Step::Taper`]'s section has turned where its scale is `s` (1 at the start).
+pub fn taper_turn(twist: f64, scale: f64, s: f64) -> f64 {
+    if (scale - 1.0).abs() < 1e-12 || scale <= 0.0 || s <= 0.0 { 0.0 } else { twist * s.ln() / scale.ln() }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -873,13 +881,26 @@ fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, p: &mut P
     let _ = (&profile, back);
     let z_a = 0.0;
     let z_b = small_pitch.y;
-    // One sweep towards the apex: scaled linearly (every section is the large end's, shrunk
-    // about the axis towards the apex) and, for a spiral bevel, turned as it goes, which
-    // follows the logarithmic spiral of constant spiral angle between the ends.
+    // One taper towards the apex: every section is the large end's, shrunk about the axis
+    // towards the apex and, for a spiral bevel, turned by the logarithm of its distance from
+    // the apex (a logarithmic spiral of constant spiral angle on the pitch cone).
+    //
+    // The teeth are the straight bevel's with every point turned about the axis by where it
+    // is from the apex, not by its height along the axis: a tooth's tip and root in one flat
+    // section are at different distances from the apex, so the flat section is skewed. Turning
+    // whole flat sections instead leans each member's teeth about its own axis, and the two
+    // members' teeth then cut into each other.
     let rm = re - b / 2.0;
-    let turn = |zs: f64| if spiral.abs() > 1e-6 { spiral.tan() * (((h - zs) / dc) / rm).ln() / ds } else { 0.0 };
+    let wind = if spiral.abs() > 1e-6 { spiral.tan() / ds } else { 0.0 };
+    let turn = |zs: f64| wind * (((h - zs) / dc) / rm).ln();
+    let skewed = |o: Outline, zs: f64| -> Outline {
+        if wind == 0.0 {
+            return o;
+        }
+        o.map(&|q: V2| q.rot(wind * ((q.x * q.x + q.y * q.y + (h - zs).powi(2)).sqrt() / rm).ln()), false)
+    };
     let steps = vec![Step::Taper {
-        outline: section(z_a).rotated(turn(z_a)),
+        outline: skewed(section(z_a), z_a),
         z0: z_a,
         height: z_b - z_a,
         twist: turn(z_b) - turn(z_a),
@@ -937,16 +958,31 @@ fn bevel(s: &Spec, p: &mut Plan) {
         p.bodies.push(Body { name: name(s, &format!("Bevel z{}", s.teeth2)), frame: frame2, steps });
     }
     let _ = f2;
-    // The preview: the two virtual (back-cone) spur gears in mesh.
-    let (rv1, rv2) = (r1 / d1.cos(), r2 / d2.cos());
-    p.preview_note = "back-cone (Tredgold) development at the large end".into();
-    p.preview.push(PreviewGear { name: "gear 1".into(), region: Region { outer: vec![pv1], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: rv1, period: 0.0 });
-    let pv2 = pv2.rotated(-PI);
+    // The preview: the two virtual (back-cone) spur gears in mesh. A virtual gear's tooth count
+    // (teeth / cos of the pitch cone angle) is rarely whole, and a gear drawn all the way round
+    // needs a whole count, so each is drawn with the nearest: the teeth are the 3D ones to
+    // within that rounding, and the pair meshes all the way round.
+    let _ = (pv1, pv2);
+    let virt = |z: f64, d: f64, helix: f64, shift: f64| Involute {
+        teeth: (z / d.cos().max(1e-3)).round().clamp(3.0, 2000.0) as u32,
+        module: s.module * spiral.cos(),
+        pressure_angle: s.pressure_angle.to_radians(),
+        helix,
+        shift,
+        rack: s.rack,
+        backlash: s.backlash,
+        tip_shortening: 0.0,
+        virtual_teeth: 0.0,
+    };
+    let (v1, v2) = (virt(z1, d1, spiral, s.shift), virt(z2, d2, -spiral, -s.shift));
+    let (rv1, rv2) = (v1.r(), v2.r());
+    p.preview_note = "back-cone (Tredgold) development at the large end, virtual tooth counts rounded".into();
+    p.preview.push(PreviewGear { name: "gear 1".into(), region: Region { outer: vec![external_outline(&v1, 0.0).0], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: rv1, period: 0.0 });
     p.preview.push(PreviewGear {
         name: "gear 2".into(),
-        region: Region { outer: vec![pv2], holes: vec![] },
+        region: Region { outer: vec![external_outline(&v2, mesh_phase(v1.teeth, 0.0, v2.teeth, 0.0)).0], holes: vec![] },
         center: V2::new(rv1 + rv2, 0.0),
-        speed: -rv1 / rv2,
+        speed: -f64::from(v1.teeth) / f64::from(v2.teeth),
         slide: 0.0,
         pitch_radius: rv2,
         period: 0.0,
@@ -1140,12 +1176,17 @@ fn worm(s: &Spec, p: &mut Plan) {
     let ha = s.rack.addendum * m;
     let hf = s.rack.dedendum * m;
     let (r1, ra1, rf1) = (d1 / 2.0, d1 / 2.0 + ha, d1 / 2.0 - hf);
+    // A negative helix angle asks for a left-hand worm; the wheel's teeth lean the same way.
+    let left = s.helix < 0.0;
+    let hand = if left { -1.0 } else { 1.0 };
     // The wheel: a helical gear at the lead angle, transverse module = the worm's axial module.
+    // With an involute (ZI) worm the two are a crossed helical pair at 90°: conjugate, touching
+    // at a point, the wheel's teeth clear of the threads across the whole face.
     let wheel = Involute {
         teeth: zw,
         module: m * gamma.cos(),
         pressure_angle: an,
-        helix: gamma,
+        helix: hand * gamma,
         shift: s.shift / gamma.cos(),
         rack: s.rack,
         backlash: s.backlash,
@@ -1184,16 +1225,26 @@ fn worm(s: &Spec, p: &mut Plan) {
         p.bodies.push(Body { name: name(s, &format!("Worm wheel z{zw}")), frame: Frame::at(s.origin), steps });
     }
     if wanted(s, 2) {
-        let s_ax = PI * m / 2.0 - s.backlash / 2.0;
-        let half = |rr: f64| s_ax / 2.0 - (rr - r1) * ax.tan();
+        // The thread's axial section: the involute helicoid of a helical gear with as many
+        // teeth as the worm has starts, at helix angle 90° − lead angle. Its half width at a
+        // radius is that gear's half tooth angle there, times the lead per radian.
+        let screw = Involute { teeth: z1, module: m * gamma.cos(), pressure_angle: an, helix: FRAC_PI_2 - gamma, shift: 0.0, rack: s.rack, backlash: 0.0, tip_shortening: 0.0, virtual_teeth: 0.0 };
+        let half = |rr: f64| (lead / TAU * screw.half_angle_at(rr) - s.backlash / 4.0).max(0.02 * m);
         let section_at = |z: f64| -> Vec<V2> {
             let inner = rf1 - 0.05 * m;
-            vec![V2::new(inner, z - half(inner)), V2::new(ra1, z - half(ra1).max(0.02 * m)), V2::new(ra1, z + half(ra1).max(0.02 * m)), V2::new(inner, z + half(inner))]
+            let n = 10;
+            let radii: Vec<f64> = (0..=n).map(|i| inner + (ra1 - inner) * f64::from(i) / f64::from(n)).collect();
+            let mut pts: Vec<V2> = radii.iter().map(|rr| V2::new(*rr, z - half(*rr))).collect();
+            pts.extend(radii.iter().rev().map(|rr| V2::new(*rr, z + half(*rr))));
+            pts
         };
         let mut steps = vec![Step::Prism { region: Region { outer: vec![Outline::circle(V2::ZERO, rf1)], holes: vec![] }, z0: -length / 2.0, height: length, twist: 0.0, op: Op::New }];
+        // A thread is centred on the wheel's mid plane where it faces the wheel (the coil
+        // starts on that side), in the tooth space the wheel turns towards the worm.
+        let below = (length / 2.0 / lead).ceil() + 1.0;
         for k in 0..z1 {
-            let z = -length / 2.0 - lead + PI * m * f64::from(k);
-            steps.push(Step::Coil { section: section_at(z), pitch: lead, z0: z, height: length + 2.0 * lead, left: s.helix < 0.0, op: Op::Join });
+            let z = -below * lead + PI * m * f64::from(k);
+            steps.push(Step::Coil { section: section_at(z), pitch: lead, z0: z, height: 2.0 * below * lead, left, op: Op::Join });
         }
         steps.push(Step::Prism { region: Region { outer: vec![Outline::circle(V2::ZERO, ra1 + 0.01)], holes: vec![] }, z0: -length / 2.0, height: length, twist: 0.0, op: Op::Intersect });
         if let Some(b) = s.bore2.outline() {
@@ -1205,12 +1256,14 @@ fn worm(s: &Spec, p: &mut Plan) {
     p.preview_note = "wheel mid plane, worm in axial section".into();
     let rack_g = Involute { teeth: 1, module: m, pressure_angle: ax, helix: 0.0, shift: 0.0, rack: s.rack, backlash: s.backlash, tip_shortening: 0.0, virtual_teeth: 0.0 };
     let n = (length / (PI * m)).ceil().max(1.0) as u32;
-    let rack_o = rack_outline(&rack_g, n, ha + 0.5 * m).map(&|q: V2| V2::new(-q.y, q.x - PI * m * f64::from(n) / 2.0 + PI * m / 4.0), false);
+    // Teeth towards the wheel (−x) from the worm's pitch line; a thread centred on the wheel's
+    // mid plane at rest (the preview slides it from half a pitch back), as the 3D worm's is.
+    let rack_o = rack_outline(&rack_g, n, ha + 0.5 * m).map(&|q: V2| V2::new(-q.y, q.x - PI * m * f64::from(n / 2)), false);
     p.preview.push(PreviewGear { name: "wheel".into(), region: Region { outer: vec![wo], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: wheel.r(), period: 0.0 });
     p.preview.push(PreviewGear {
         name: "worm".into(),
         region: Region { outer: vec![rack_o], holes: vec![] },
-        center: V2::new(a, 0.0),
+        center: V2::new(a - r1, 0.0),
         speed: 0.0,
         slide: wheel.r(),
         pitch_radius: 0.0,

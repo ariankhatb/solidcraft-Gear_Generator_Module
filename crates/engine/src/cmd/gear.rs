@@ -425,6 +425,9 @@ fn sketch_loops(s: &mut Session, name: &str, origin: [f64; 3], x: [f64; 3], y: [
     Ok((id, ids))
 }
 
+/// Sections a spiral taper is lofted through.
+const TAPER_SECTIONS: usize = 7;
+
 fn op_name(op: Op) -> &'static str {
     match op {
         Op::New => "new",
@@ -495,16 +498,49 @@ fn build_body(s: &mut Session, body: &Body, features: &mut Vec<u64>, warnings: &
                 s.execute("solid.loft", &merge(json!({"sections": ids}), feature_params(*op, &name, &body.name)))?
             }
             Step::Taper { outline, z0, height, twist, scale, op } => {
-                let mut g = Vec::new();
-                geometry(outline, &mut g);
-                let id = sketch_with(s, &format!("{label} profile"), f.world([0.0, 0.0, *z0]), x, y, &g, features)?;
-                let path = sketch_with(s, &format!("{label} path"), f.world([0.0, 0.0, *z0]), z, x, &[Geom2::Line(Vec2::new(0.0, 0.0), Vec2::new(*height, 0.0))], features)?;
-                let curve = first_curve(s, path)?;
-                let mut p = json!({"sketch": id, "path_sketch": path, "path": [curve], "scale": scale});
-                if twist.abs() > 1e-12 {
-                    p["twist"] = json!(format!("{} deg", twist.to_degrees()));
+                // Spiral: the turn follows the logarithm of the scale, which a sweep's even twist
+                // does not, so the taper is a loft through its own sections (each the first one
+                // scaled and turned), or a chain of short sweeps between them.
+                let mode = std::env::var("SOLIDCRAFT_GEAR_TAPER").unwrap_or_default();
+                let (kind, count) = mode.split_once(':').map(|(k, n)| (k.to_string(), n.parse::<usize>().unwrap_or(TAPER_SECTIONS))).unwrap_or(("loft".into(), TAPER_SECTIONS));
+                let count = count.clamp(2, 40);
+                let at = |i: usize| -> (f64, f64, f64) {
+                    let t = i as f64 / (count - 1) as f64;
+                    let k = 1.0 + (scale - 1.0) * t;
+                    (z0 + height * t, k, solidcraft_gear::plan::taper_turn(*twist, *scale, k))
+                };
+                if kind == "sweep" {
+                    let mut last = Value::Null;
+                    for i in 0..count - 1 {
+                        let ((za, ka, ta), (zb, kb, tb)) = (at(i), at(i + 1));
+                        let mut g = Vec::new();
+                        geometry(&outline.scaled(ka).rotated(ta), &mut g);
+                        let id = sketch_with(s, &format!("{label} profile {}", i + 1), f.world([0.0, 0.0, za]), x, y, &g, features)?;
+                        let path = sketch_with(s, &format!("{label} path {}", i + 1), f.world([0.0, 0.0, za]), z, x, &[Geom2::Line(Vec2::new(0.0, 0.0), Vec2::new(zb - za, 0.0))], features)?;
+                        let curve = first_curve(s, path)?;
+                        let p = json!({"sketch": id, "path_sketch": path, "path": [curve], "scale": kb / ka, "twist": format!("{} deg", (tb - ta).to_degrees())});
+                        let this_op = if i == 0 { *op } else { Op::Join };
+                        let r = s.execute("solid.sweep", &merge(p, feature_params(this_op, &name, &body.name)))?;
+                        if i == 0 {
+                            if let Some(made) = r.get("created_bodies").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str) {
+                                name = made.to_string();
+                            }
+                            last = r;
+                        } else if let Some(id) = feature_id(&r) {
+                            features.push(id);
+                        }
+                    }
+                    last
+                } else {
+                    let mut ids = Vec::new();
+                    for i in 0..count {
+                        let (zs, k, turn) = at(i);
+                        let mut g = Vec::new();
+                        geometry(&outline.scaled(k).rotated(turn), &mut g);
+                        ids.push(json!({"sketch": sketch_with(s, &format!("{label} section {}", i + 1), f.world([0.0, 0.0, zs]), x, y, &g, features)?}));
+                    }
+                    s.execute("solid.loft", &merge(json!({"sections": ids}), feature_params(*op, &name, &body.name)))?
                 }
-                s.execute("solid.sweep", &merge(p, feature_params(*op, &name, &body.name)))?
             }
             Step::Loft { sections, op } => {
                 let mut ids = Vec::new();

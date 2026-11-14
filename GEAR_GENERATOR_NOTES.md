@@ -207,3 +207,17 @@ ones as well."
 - Axis slots accept sketch points (axis normal to the sketch plane) and sketch lines.
 Sent to `gear-ui2` (window, engine axis references) and `gear-simple` (`auto_kind`, two-shaft
 `Simple`).
+
+### Clearance body for housings (same evening)
+
+User: "this should also output … the cutout of the gear without the tooth … the surface of the
+gear if you were to Boolean cut it out of a block. And it all has to be just one geometry, so
+it's easy to make a housing: you make whatever shape you want and then Boolean-cut whatever this
+gear set requires out of it. … Add one bearing [size] … load bearings as a library … select it
+… cut that out for all the places you want, which are dots on the shaft … add that to the
+housing-side design. But it's mostly the Boolean part of all of the clearance needed for the
+assembly."
+- One body: every member's swept tip envelope (cylinder/cone/hyperboloid/worm tube) plus
+  radial and axial clearance, the shafts, and bearing seats (one bearing size from the library,
+  placed at dots on the shafts). Other housing features stay manual for now.
+Agent worktree: `solidcraft-keepout` / `gear-keepout`.

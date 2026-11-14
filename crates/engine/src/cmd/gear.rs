@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use solidcore_record::Vec2;
 use solidcraft_gear::geom::{Outline, Region, Seg};
 use solidcraft_gear::hub::{Bore, BoreKind};
+use solidcraft_geom::PlaneGeom as _;
 use solidcraft_gear::involute::BasicRack;
 use solidcraft_gear::axes::{self, Axis, Drive, Relation, Solved};
 use solidcraft_gear::plan::{Body, Fact, Frame, Kind, Op, Plan, Spec, Step, Unit};

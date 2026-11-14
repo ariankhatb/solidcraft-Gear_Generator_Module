@@ -73,12 +73,12 @@ fn axes_are_classified() {
 fn candidates_say_what_fits_and_why_not() {
     let fits = |rel: &Relation| -> Vec<Kind> { candidates(Some(rel)).into_iter().filter(|c| c.fits && c.kind.is_set()).map(|c| c.kind).collect() };
     let par = relate(&Axis::Z, &axis([40.0, 0.0, 0.0], [0.0, 0.0, 1.0]));
-    assert_eq!(fits(&par), [Kind::Pair, Kind::Cycloidal]);
+    assert_eq!(fits(&par), [Kind::Pair, Kind::Cycloidal, Kind::Sprocket, Kind::Pulley, Kind::Elliptical]);
     assert_eq!(natural(Some(&par)), Kind::Pair);
-    assert_eq!(fits(&Relation::Coincident), [Kind::Planetary, Kind::CycloidalDrive]);
+    assert_eq!(fits(&Relation::Coincident), [Kind::Planetary, Kind::CycloidalDrive, Kind::Spline]);
     assert_eq!(natural(Some(&Relation::Coincident)), Kind::Planetary);
     let meet = relate(&Axis::Z, &axis([0.0; 3], [1.0, 0.0, 0.0]));
-    assert_eq!(fits(&meet), [Kind::Bevel, Kind::SpiralBevel]);
+    assert_eq!(fits(&meet), [Kind::Bevel, Kind::SpiralBevel, Kind::FaceGear]);
     assert_eq!(natural(Some(&meet)), Kind::Bevel);
     let skew90 = relate(&Axis::Z, &axis([25.0, 0.0, 0.0], [0.0, 1.0, 0.0]));
     assert_eq!(fits(&skew90), [Kind::Hypoid, Kind::CrossedHelical, Kind::Worm]);
@@ -277,4 +277,31 @@ fn no_placement_leaves_every_set_where_it_was() {
         let at = Spec { placement: Some(crate::Frame::at([0.0; 3])), ..s.clone() };
         assert_eq!(plan(&s).unwrap().bodies, plan(&at).unwrap().bodies, "{k:?}");
     }
+}
+
+/// Chain and belt drives, elliptical pairs and face gears are placed on their axes too.
+#[test]
+fn extras_are_placed_on_their_axes() {
+    let par = axis([60.0, 0.0, 5.0], [0.0, 0.0, 1.0]);
+    for kind in [Kind::Sprocket, Kind::Pulley] {
+        let s = solve(&Axis::Z, Some(&par), Some(kind), &Spec { teeth: 16, ..Spec::default() }, &Drive { ratio: Some(2.0), teeth2_free: true, ..Drive::default() }).unwrap();
+        assert_eq!((s.spec.teeth, s.spec.teeth2), (16, 32), "{kind:?}");
+        assert!(close(s.spec.center_distance, 60.0, 1e-9));
+        assert!(close(s.frames[1].origin[0], 60.0, 1e-9));
+        assert!(plan(&s.spec).unwrap().bodies.len() == 2, "{kind:?}");
+    }
+    let s = solve(&Axis::Z, Some(&par), Some(Kind::Elliptical), &Spec { teeth: 20, ..Spec::default() }, &Drive::default()).unwrap();
+    let p = plan(&s.spec).unwrap();
+    let a = p.facts.iter().find(|f| f.label == "centre distance").unwrap().value;
+    assert!(close(a, 60.0, 1e-6), "{a}");
+    // A face gear: axis 1 its own, axis 2 the pinion's, meeting at 90°.
+    let meet = axis([0.0, 0.0, 30.0], [1.0, 0.0, 0.0]);
+    let s = solve(&Axis::Z, Some(&meet), Some(Kind::FaceGear), &Spec { module: 1.0, teeth: 12, teeth2: 40, ..Spec::default() }, &Drive::default()).unwrap();
+    let pl = s.spec.placement.unwrap();
+    assert!(close(pl.origin[2], 30.0 - 6.0, 1e-9), "{pl:?}");
+    assert!(close(s.frames[1].origin[2], 30.0, 1e-9) && close(s.frames[1].z[0].abs(), 1.0, 1e-9), "{:?}", s.frames[1]);
+    assert!(solve(&Axis::Z, Some(&axis([0.0, 0.0, 30.0], [0.6, 0.0, 0.8])), Some(Kind::FaceGear), &Spec::default(), &Drive::default()).is_err());
+    // A spline is coaxial: one axis.
+    assert!(solve(&Axis::Z, Some(&par), Some(Kind::Spline), &Spec::default(), &Drive::default()).is_err());
+    assert!(solve(&Axis::Z, None, Some(Kind::Spline), &Spec::default(), &Drive::default()).is_ok());
 }

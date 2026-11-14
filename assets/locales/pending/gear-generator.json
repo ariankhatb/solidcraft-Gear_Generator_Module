@@ -7,12 +7,12 @@
   "de": {
     "cmd.gear_create": "Zahnradgenerator",
     "cmd.gear_calculate": "Zahnradrechner",
-    "help.gear.create": "Entwirft und baut Zahnräder: Stirnräder gerade, schräg und mit Pfeilverzahnung, Hohlräder und Zahnstangen, Radpaare und Planetensätze, gerade und spiralverzahnte Kegelräder, Hypoidräder mit versetzten Achsen, Schraubräder, Schnecke und Schneckenrad, Zykloidenräder und Zykloidgetriebe. Zeigt den Eingriff bewegt mit Maßen, Überdeckung und Warnungen und baut jedes Rad aus gewöhnlichen Skizzen und Features."
+    "help.gear.create": "Entwirft und baut Zahnräder: Stirnräder gerade, schräg und mit Pfeilverzahnung, Hohlräder und Zahnstangen, Radpaare und Planetensätze, gerade und spiralverzahnte Kegelräder, Hypoidräder mit versetzten Achsen, Schraubräder, Schnecke und Schneckenrad, Zykloidenräder und Zykloidgetriebe, Kettenräder (ISO 606 und ANSI) und Zahnriemenscheiben (GT2, HTD, T, MXL, XL) einzeln oder paarweise, Evolventen-Zahnwellen (DIN 5480 und ANSI B92.1) sowie Kronenräder mit Ritzel. Zeigt den Eingriff bewegt mit Maßen, Überdeckung und Warnungen und baut jedes Rad aus gewöhnlichen Skizzen und Features."
   },
   "en": {
     "cmd.gear_create": "Gear Generator",
     "cmd.gear_calculate": "Gear Calculator",
-    "help.gear.create": "Designs and builds gears: spur, helical and herringbone, internal and rack, pairs and planetary sets, straight and spiral bevels, hypoid (offset-axis bevel) gears, crossed helical, worm and wheel, cycloidal gears and the cycloidal drive. Shows the mesh turning with its sizes, contact ratio and warnings, and builds each gear from ordinary sketches and features."
+    "help.gear.create": "Designs and builds gears: spur, helical and herringbone, internal and rack, pairs and planetary sets, straight and spiral bevels, hypoid (offset-axis bevel) gears, crossed helical, worm and wheel, cycloidal gears and the cycloidal drive, roller chain sprockets (ISO 606 and ANSI) and timing belt pulleys (GT2, HTD, T, MXL, XL) singly or in pairs, involute splines (DIN 5480 and ANSI B92.1), and face gears with their pinion. Shows the mesh turning with its sizes, contact ratio and warnings, and builds each gear from ordinary sketches and features."
   },
   "he": {
     "cmd.gear_create": "מחולל גלגלי שיניים",

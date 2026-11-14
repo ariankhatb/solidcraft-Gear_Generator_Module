@@ -42,7 +42,7 @@ impl Rng {
     }
 }
 
-fn random_bore(r: &mut Rng, d: f64) -> Bore {
+pub(crate) fn random_bore(r: &mut Rng, d: f64) -> Bore {
     let kinds = [BoreKind::None, BoreKind::Round, BoreKind::Keyway, BoreKind::DFlat, BoreKind::Hex, BoreKind::Square];
     let kind = kinds[r.int(0, 5) as usize];
     let diameter = d * r.range(0.02, 0.75);
@@ -118,6 +118,8 @@ pub(crate) fn random_spec(r: &mut Rng, kind: Kind) -> Spec {
         s.holes = r.int(1, 12);
         s.hole_diameter = if r.chance(0.5) { 0.0 } else { d * r.range(0.02, 0.4) };
     }
+    // Sprockets, pulleys, splines, face gears and elliptical pairs draw their own fields.
+    crate::tests_extras::random_extras(r, &mut s);
     s
 }
 
@@ -476,7 +478,7 @@ pub(crate) fn check_plan(p: &Plan) -> Result<(), String> {
 // ---------------------------------------------------------------------------------------------
 // The sweeps.
 
-fn sweep(kinds: &[Kind], per_kind: usize, seed: u64) {
+pub(crate) fn sweep(kinds: &[Kind], per_kind: usize, seed: u64) {
     let mut failures: BTreeMap<String, (usize, String)> = BTreeMap::new();
     let mut refusals: BTreeMap<String, usize> = BTreeMap::new();
     let mut built = 0usize;
@@ -574,6 +576,13 @@ fn big_gears_plan_quickly() {
         if kind == Kind::Planetary {
             s.teeth2 = 200;
             s.planets = 6;
+        }
+        // The largest these types take.
+        match kind {
+            Kind::Sprocket => (s.teeth, s.teeth2) = (250, 250),
+            Kind::FaceGear => (s.teeth, s.teeth2) = (100, 400),
+            Kind::Elliptical => s.teeth = 200,
+            _ => {}
         }
         let mut best = f64::INFINITY;
         for _ in 0..5 {

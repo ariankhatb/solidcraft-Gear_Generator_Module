@@ -192,7 +192,7 @@ fn candidate(kind: Kind, rel: Option<&Relation>) -> Candidate {
     let no = |reason: String| Candidate { kind, fits: false, natural: false, reason };
     let single = "a single gear: it goes on axis 1";
     let Some(rel) = rel else {
-        return if kind.is_set() && !matches!(kind, Kind::Planetary | Kind::CycloidalDrive) {
+        return if kind.is_set() && !matches!(kind, Kind::Planetary | Kind::CycloidalDrive | Kind::Spline) {
             yes(false, "gear 1 goes on axis 1; pick a second axis to have the set sized to both")
         } else {
             yes(kind == Kind::Spur, if kind.is_set() { "built about axis 1" } else { single })
@@ -200,7 +200,7 @@ fn candidate(kind: Kind, rel: Option<&Relation>) -> Candidate {
     };
     match kind {
         Kind::Spur | Kind::Helical | Kind::Herringbone | Kind::Internal | Kind::Rack => yes(false, single),
-        Kind::Planetary | Kind::CycloidalDrive => match rel {
+        Kind::Planetary | Kind::CycloidalDrive | Kind::Spline => match rel {
             Relation::Coincident => yes(kind == Kind::Planetary, "built about the shared axis"),
             _ => no(format!("{}: this set is coaxial, it needs input and output on one line", lie(rel))),
         },
@@ -208,6 +208,21 @@ fn candidate(kind: Kind, rel: Option<&Relation>) -> Candidate {
             Relation::Parallel { .. } => yes(kind == Kind::Pair, "sized to the distance between the axes"),
             Relation::Coincident => no("the axes are the same line: a pair needs them apart".into()),
             _ => no(format!("{}: a pair needs parallel axes", lie(rel))),
+        },
+        Kind::Sprocket | Kind::Pulley => match rel {
+            Relation::Parallel { .. } => yes(false, "spaced to the axes; the chain or belt rounds the distance to whole links or teeth"),
+            Relation::Coincident => no("the axes are the same line: a chain or belt drive needs them apart".into()),
+            _ => no(format!("{}: a chain or belt drive needs parallel axes", lie(rel))),
+        },
+        Kind::Elliptical => match rel {
+            Relation::Parallel { .. } => yes(false, "the module is scaled to the distance between the axes"),
+            Relation::Coincident => no("the axes are the same line: an elliptical pair needs them apart".into()),
+            _ => no(format!("{}: an elliptical pair needs parallel axes", lie(rel))),
+        },
+        Kind::FaceGear => match rel {
+            Relation::Intersecting { angle, .. } if (fold(*angle) - 90.0).abs() <= SQUARE => yes(false, "the pinion's axis crosses the face gear's above its teeth"),
+            Relation::Intersecting { angle, .. } => no(format!("the axes meet at {}°: a face gear needs 90°", num(fold(*angle)))),
+            _ => no(format!("{}: a face gear needs intersecting axes", lie(rel))),
         },
         Kind::Bevel | Kind::SpiralBevel => match rel {
             Relation::Intersecting { angle, .. } if (5.0..=175.0).contains(angle) => yes(kind == Kind::Bevel, "pitch cones meet where the axes do"),
@@ -336,7 +351,7 @@ pub fn solve(axis1: &Axis, axis2: Option<&Axis>, kind: Option<Kind>, base: &Spec
         out.frames = [place; 2];
         out.spec = Spec { placement: Some(place), ..spec };
     };
-    let sets_both = kind.is_set() && !matches!(kind, Kind::Planetary | Kind::CycloidalDrive);
+    let sets_both = kind.is_set() && !matches!(kind, Kind::Planetary | Kind::CycloidalDrive | Kind::Spline);
     let (Some(a2), Some(rel), true) = (a2, relation, sets_both) else {
         spec.center_distance = base.center_distance;
         if let Some(r) = drive.ratio
@@ -356,6 +371,10 @@ pub fn solve(axis1: &Axis, axis2: Option<&Axis>, kind: Option<Kind>, base: &Spec
             out.facts.push(fact("axis distance", distance, Unit::Mm));
             if kind == Kind::Cycloidal {
                 cycloidal(distance, &mut spec, drive, &mut out);
+            } else if matches!(kind, Kind::Sprocket | Kind::Pulley) {
+                wrapped(distance, &mut spec, drive, &mut out);
+            } else if kind == Kind::Elliptical {
+                elliptical(distance, &mut spec, &mut out);
             } else {
                 pair(distance, &mut spec, drive, &mut out)?;
             }
@@ -364,6 +383,33 @@ pub fn solve(axis1: &Axis, axis2: Option<&Axis>, kind: Option<Kind>, base: &Spec
             let x = unit(sub(foot2, foot1)).unwrap_or_else(|| square_to(z));
             let place = Frame { origin: add(foot1, slide), x, z };
             out.frames = [place, Frame { origin: add(foot2, slide), x, z }];
+            spec.placement = Some(place);
+        }
+        Relation::Intersecting { apex, .. } if kind == Kind::FaceGear => {
+            // The face gear (gear 1) turns about axis 1 below the apex, its teeth facing it; the
+            // pinion's axis (axis 2) crosses the face gear's a pitch radius above the pitch plane.
+            if let Some(r) = drive.ratio {
+                let (z1, z2) = pick_teeth(r, &spec, drive, kind);
+                out.derived.teeth = drive.teeth_free && z1 != spec.teeth;
+                out.derived.teeth2 = drive.teeth2_free && z2 != spec.teeth2;
+                (spec.teeth, spec.teeth2) = (z1, z2);
+            }
+            out.derived.shaft_angle = true;
+            let r1 = spec.module * f64::from(spec.teeth) / 2.0;
+            out.facts.push(fact("pinion axis above the pitch plane", r1, Unit::Mm));
+            let along = |a: &Axis, flip: bool| {
+                let t = dot(sub(a.origin, apex), a.dir);
+                flipped(if t < -TOUCH { mul(a.dir, -1.0) } else { a.dir }, flip)
+            };
+            // Gear 1 sits on the ray from the apex its axis's origin is on; its frame's z points
+            // back up to the apex. The pinion lies along the ray of axis 2.
+            let t1 = mul(along(&a1, drive.flip1), -1.0);
+            let s2 = along(&a2, drive.flip2);
+            let x = unit(sub(s2, mul(t1, dot(s2, t1)))).unwrap_or_else(|| square_to(t1));
+            let place = Frame { origin: sub(apex, mul(t1, r1)), x, z: t1 };
+            let local2 = Frame { origin: [0.0, 0.0, r1], x: [0.0, 0.0, -1.0], z: [1.0, 0.0, 0.0] };
+            out.frames = [place, place.compose(&local2)];
+            out.notes.push(format!("{} pinion teeth, {} face gear teeth (ratio {})", spec.teeth, spec.teeth2, num(f64::from(spec.teeth2) / f64::from(spec.teeth))));
             spec.placement = Some(place);
         }
         Relation::Intersecting { apex, .. } => {
@@ -600,6 +646,47 @@ fn cycloidal(a: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) {
     out.derived.center_distance = true;
     out.facts.push(fact("module (from the distance)", spec.module, Unit::None));
     out.notes.push(format!("cycloidal teeth take no shift: module {} gives the distance exactly", num(spec.module)));
+}
+
+/// Chain sprockets or timing pulleys on two parallel shafts: the distance is asked of the
+/// chain or belt, which takes the nearest whole number of links or teeth.
+fn wrapped(a: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) {
+    if let Some(r) = drive.ratio {
+        let (z1, z2) = pick_teeth(r, spec, drive, spec.kind);
+        out.derived.teeth = drive.teeth_free && z1 != spec.teeth;
+        out.derived.teeth2 = drive.teeth2_free && z2 != spec.teeth2;
+        (spec.teeth, spec.teeth2) = (z1, z2);
+    }
+    if spec.teeth2 == 0 {
+        spec.teeth2 = spec.teeth;
+        out.derived.teeth2 = true;
+    }
+    spec.center_distance = a;
+    out.derived.center_distance = true;
+    let what = if spec.kind == Kind::Sprocket { "links" } else { "belt teeth" };
+    out.notes.push(format!("centre distance {} mm asked of the drive: it takes the nearest whole number of {what}, so gear 2 may sit a little off axis 2", num(a)));
+}
+
+/// An elliptical pair on two parallel shafts: its centre distance grows with the module, so
+/// the module is the one that gives the distance.
+fn elliptical(a: f64, spec: &mut Spec, out: &mut Solved) {
+    let unit_pair = crate::elliptic::EllipticPair {
+        teeth: spec.teeth,
+        module: 1.0,
+        eccentricity: spec.ellipse_eccentricity,
+        pressure_angle: spec.pressure_angle.to_radians(),
+        addendum: spec.rack.addendum,
+        dedendum: spec.rack.dedendum,
+        backlash: 0.0,
+    };
+    let per_module = unit_pair.pitch().center;
+    if per_module > 0.0 && per_module.is_finite() {
+        spec.module = a / per_module;
+        out.derived.module = true;
+        out.facts.push(fact("module (from the distance)", spec.module, Unit::None));
+        out.notes.push(format!("module {} gives the distance exactly", num(spec.module)));
+    }
+    out.derived.center_distance = true;
 }
 
 /// A worm and wheel across a fixed centre distance: the wheel (gear 1) on axis 1, the worm on

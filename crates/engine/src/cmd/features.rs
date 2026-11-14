@@ -2589,7 +2589,7 @@ fn source_features(s: &Session, p: &Value, cmd: &str) -> Result<Vec<solidcraft_d
 
 /// An axis line from its parameter, with what it follows: an edge or round face of the model
 /// ({edge|face: [x,y,z]}) or a construction axis by name ([`named_axis_line`]).
-fn axis_line(s: &Session, p: &Value, cmd: &str) -> Result<(Vec3, Vec3, Option<solidcraft_doc::construct::GeoRef>, Option<FeatureName>)> {
+pub(super) fn axis_line(s: &Session, p: &Value, cmd: &str) -> Result<(Vec3, Vec3, Option<solidcraft_doc::construct::GeoRef>, Option<FeatureName>)> {
     if let Some((geo, o, d)) = super::construct::model_axis_param(s, p.get("axis"), cmd)? {
         return Ok((o, d, Some(geo), None));
     }

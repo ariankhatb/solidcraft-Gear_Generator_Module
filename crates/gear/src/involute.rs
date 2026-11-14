@@ -526,22 +526,45 @@ pub fn teeth_outline(f: &ToothFlank, n: u32, phase: f64) -> Outline {
         let rot = |p: &Vec<V2>| -> Vec<V2> { p.iter().map(|q| q.rot(a)).collect() };
         let start = V2::polar(f.rf, a - f.root_half);
         let mut lf = rot(&lower_fillet);
+        let lf_len = lf.len();
         if lf.len() >= 2 {
             lf[0] = start;
             segs.push(Seg::Spline(lf));
         }
         if lower_flank.len() >= 2 {
-            segs.push(Seg::Spline(rot(&lower_flank)));
+            let mut lo = rot(&lower_flank);
+            // No fillet: the flank itself starts on the root circle, so the root arc on either
+            // side is a true arc (the sampled flank can end a hair off it).
+            if lf_len < 2 && lo[0].dist(start) < 1e-4 * f.rf.max(1.0) {
+                lo[0] = start;
+            }
+            segs.push(Seg::Spline(lo));
         }
         let (ta, tb) = (V2::polar(f.ra, a - f.tip_half), V2::polar(f.ra, a + f.tip_half));
+        // Rounded tip corners ([`shape_tips`]): the flank stops short of the tip circle and an
+        // arc, tangent to the tip circle where the land starts, joins the two.
+        let round = lower_flank.last().and_then(|q| tip_round_centre(q.rot(a), ta));
+        if let (Some(c), Some(q)) = (round, lower_flank.last()) {
+            segs.push(Seg::Arc { c, a: q.rot(a), b: ta, ccw: true });
+        }
         if f.tip_half > 1e-9 {
             segs.push(Seg::Arc { c: V2::ZERO, a: ta, b: tb, ccw: true });
         }
-        if upper_flank.len() >= 2 {
-            segs.push(Seg::Spline(rot(&upper_flank)));
+        if let (Some(_), Some(q)) = (round, upper_flank.first())
+            && let Some(c) = tip_round_centre(q.rot(a), tb)
+        {
+            segs.push(Seg::Arc { c, a: tb, b: q.rot(a), ccw: true });
         }
         let mut uf = rot(&upper_fillet);
         let end = V2::polar(f.rf, a + f.root_half);
+        if upper_flank.len() >= 2 {
+            let mut up = rot(&upper_flank);
+            let l = up.len() - 1;
+            if uf.len() < 2 && up[l].dist(end) < 1e-4 * f.rf.max(1.0) {
+                up[l] = end;
+            }
+            segs.push(Seg::Spline(up));
+        }
         if uf.len() >= 2 {
             let l = uf.len() - 1;
             uf[l] = end;
@@ -597,6 +620,130 @@ pub fn sided_outline(t: &ToothSides, n: u32, phase: f64) -> Outline {
     }
     join_ends(&mut segs);
     Outline { segs }
+}
+
+/// The centre of the arc that rounds a tip corner: through the flank's end `p`, tangent to the
+/// tip circle at `t`. None when the flank runs up to the tip circle (no rounding).
+fn tip_round_centre(p: V2, t: V2) -> Option<V2> {
+    let ra = t.len();
+    if !(p.len() < ra * (1.0 - 1e-7)) {
+        return None;
+    }
+    let out = t.norm();
+    let d = t - p;
+    let along = d.dot(out);
+    if !(along > 0.0) {
+        return None;
+    }
+    let rho = d.dot(d) / (2.0 * along);
+    (rho.is_finite() && rho > 0.0 && rho < ra).then(|| t - out * rho)
+}
+
+impl ToothFlank {
+    /// The same tooth with each side turned `d` radians towards its middle (thinner by 2·d of
+    /// angle at every radius): piece for piece the same outline, for lofting between the two.
+    pub fn thinned(&self, d: f64) -> ToothFlank {
+        let side = |pts: &[(f64, f64)]| -> Vec<(f64, f64)> { pts.iter().map(|(r, h)| (*r, h - d)).collect() };
+        ToothFlank { root_half: self.root_half - d, tip_half: self.tip_half - d, fillet: side(&self.fillet), flank: side(&self.flank), ..self.clone() }
+    }
+}
+
+/// Tip relief and tip rounding on a generated external tooth (`f` from [`external_flank`] of
+/// `g`), by refitting its flank.
+///
+/// - Tip relief: over the top `relief_height` (mm of radius) the flank falls away from the
+///   involute, linearly with radius, to `relief` (mm, normal to the flank) at the tip, so a tooth
+///   deflected under load (or printed a little fat) comes into mesh gently.
+/// - Tip rounding: each tip corner becomes an arc of radius `round` (mm), tangent to the flank
+///   and to the tip circle. The flank then ends below the tip circle and `tip_half` is where the
+///   land starts; [`teeth_outline`] draws the arcs.
+///
+/// Returns the rounding radius used: less than asked when the tooth is too thin or too short for
+/// it (0 when there is none).
+pub fn shape_tips(f: &mut ToothFlank, g: &Involute, relief: f64, relief_height: f64, round: f64) -> f64 {
+    if f.pointed || f.flank.len() < 2 || !(relief > 0.0 || round > 0.0) {
+        return 0.0;
+    }
+    let m = g.module;
+    let (rb, ra, r0) = (g.rb(), f.ra, f.flank[0].0);
+    if !(ra > r0 && rb > 0.0 && ra.is_finite()) {
+        return 0.0;
+    }
+    // The least land left at the tip (as the flank generator keeps).
+    let land = 0.01 * m / ra;
+    let rs = (ra - relief_height.max(0.0)).max(r0);
+    let mut k = if relief > 0.0 && ra > rs { relief / rb / (ra - rs) } else { 0.0 };
+    let full = g.half_angle_at(ra);
+    if k > 0.0 && full - k * (ra - rs) < land {
+        k = ((full - land) / (ra - rs)).max(0.0);
+    }
+    let half = |rr: f64| g.half_angle_at(rr) - k * (rr - rs).max(0.0);
+    let (mut end, mut tip_half, mut used) = (ra, half(ra), 0.0);
+    let mut rho = round.min(0.45 * (ra - r0));
+    while rho >= 0.01 * m {
+        let rc = ra - rho;
+        // From a centre at angle `tc` to the flank: (distance, the nearest flank point's radius).
+        let reach = |tc: f64| -> (f64, f64) {
+            let c = V2::polar(rc, tc);
+            let d = |rr: f64| V2::polar(rr, half(rr)).dist(c);
+            let lo = (ra - 3.0 * rho).max(r0);
+            let n = 32;
+            let step = (ra - lo) / n as f64;
+            let mut best = (f64::INFINITY, lo);
+            for i in 0..=n {
+                let rr = lo + step * i as f64;
+                let v = d(rr);
+                if v < best.0 {
+                    best = (v, rr);
+                }
+            }
+            let (mut a, mut b) = ((best.1 - step).max(lo), (best.1 + step).min(ra));
+            for _ in 0..40 {
+                let (x1, x2) = (a + (b - a) / 3.0, b - (b - a) / 3.0);
+                if d(x1) < d(x2) { b = x2 } else { a = x1 }
+            }
+            let rr = 0.5 * (a + b);
+            (d(rr), rr)
+        };
+        // The centre sits on the flank at `half(rc)` and moves away from it towards the tooth's
+        // middle: the angle at which it is one radius from the flank.
+        let on_flank = half(rc);
+        if on_flank > land && reach(land).0 >= rho {
+            let (mut a, mut b) = (land, on_flank);
+            for _ in 0..50 {
+                let mid = 0.5 * (a + b);
+                if reach(mid).0 >= rho { a = mid } else { b = mid }
+            }
+            let rt = reach(a).1;
+            if rt > r0 + 0.05 * (ra - r0) && rt < ra * (1.0 - 1e-6) {
+                (end, tip_half, used) = (rt, a, rho);
+                break;
+            }
+        }
+        rho *= 0.8;
+    }
+    if used == 0.0 && k == 0.0 {
+        return 0.0;
+    }
+    let t_of = |rr: f64| ((rr / rb).powi(2) - 1.0).max(0.0).sqrt();
+    let (t0, t1) = (t_of(r0), t_of(end));
+    let grade = |s: f64| -> f64 {
+        if s <= 0.0 {
+            r0
+        } else if s >= 1.0 {
+            end
+        } else {
+            let t = t0 + (t1 - t0) * s;
+            (rb * (1.0 + t * t).sqrt()).clamp(r0, end)
+        }
+    };
+    let pts = side_points(&half, &grade, PROFILE_TOLERANCE * m, 5e-6 * ra.abs().max(m));
+    if pts.len() < 2 {
+        return 0.0;
+    }
+    f.flank = pts;
+    f.tip_half = tip_half;
+    used
 }
 
 /// Snap each segment's start onto the previous one's end (sampling leaves tiny gaps).

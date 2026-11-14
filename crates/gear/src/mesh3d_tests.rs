@@ -180,6 +180,7 @@ fn window_check_covers_3d_sets() {
         ("bevel", d(Kind::Bevel)),
         ("spiral bevel", d(Kind::SpiralBevel)),
         ("crossed helical", d(Kind::CrossedHelical)),
+        ("hypoid", d(Kind::Hypoid)),
         ("worm", d(Kind::Worm)),
         ("worm backlash", Spec { backlash: 0.1, ..d(Kind::Worm) }),
         ("spiral bevel backlash, gear 2 only", Spec { backlash: 0.1, only: 2, ..d(Kind::SpiralBevel) }),
@@ -215,3 +216,4 @@ fn big_worm_wheels_loft_in_few_sections() {
         assert!(n <= 11.0, "z{z}: {n} sections");
     }
 }
+

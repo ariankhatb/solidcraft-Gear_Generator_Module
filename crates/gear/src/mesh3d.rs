@@ -357,6 +357,73 @@ enum Part {
     Loft { slabs: Vec<Slab> },
     Revolve { profile: Vec<V2> },
     Coil { section: Vec<V2>, pitch: f64, turns: f64, left: bool, zlo: f64, zhi: f64 },
+    /// A part in a frame of its own, given in the body's.
+    Placed { frame: Frame, inner: Box<Part> },
+}
+
+/// A step as a part, its op, and the cylinder about the body's axis that holds it (radius,
+/// least and most z).
+fn make_part(st: &Step, h: f64) -> (Part, Op, (f64, f64, f64)) {
+    match st {
+        Step::Prism { region, z0, height, twist, op } => {
+            let polys = |v: &Vec<Outline>| v.iter().map(|o| Poly::new(o, h)).collect::<Vec<_>>();
+            let (outer, holes) = (polys(&region.outer), polys(&region.holes));
+            let r = outer.iter().fold(0.0f64, |a, o| a.max(o.rmax));
+            (Part::Prism { outer, holes, z0: *z0, height: *height, twist: *twist }, *op, (r, *z0, z0 + height))
+        }
+        Step::Taper { outline, z0, height, twist, scale, op } => {
+            let poly = Poly::new(outline, h);
+            let r = poly.rmax * scale.max(1.0);
+            (Part::Taper { poly, z0: *z0, height: *height, twist: *twist, scale: *scale }, *op, (r, *z0, z0 + height))
+        }
+        Step::Loft { sections, op } => {
+            // The same cut of every section, fine enough for the largest.
+            let mut counts = seg_counts(&sections[0].0, h);
+            for (o, _) in sections {
+                assert_eq!(o.segs.len(), counts.len(), "loft sections must be made of the same segments");
+                for (c, k) in counts.iter_mut().zip(seg_counts(o, h)) {
+                    *c = (*c).max(k);
+                }
+            }
+            let polys: Vec<Vec<V2>> = sections.iter().map(|(o, _)| polygon(o, &counts)).collect();
+            assert!(polys.iter().all(|p| p.len() == polys[0].len()), "loft sections must correspond point for point");
+            // The kernel skins a loft of four or more sections cubic across them (three:
+            // quadratic), so the solid between two sections is that curve's, here followed by
+            // short straight slabs.
+            let zs: Vec<f64> = sections.iter().map(|s| s.1).collect();
+            let (polys, zs) = across(&polys, &zs, 4);
+            let slabs: Vec<Slab> = (0..zs.len() - 1).map(|j| Slab::new(polys[j].clone(), polys[j + 1].clone(), zs[j], zs[j + 1])).collect();
+            let r = slabs.iter().fold(0.0f64, |a, s| a.max(s.rmax));
+            (Part::Loft { slabs }, *op, (r, sections[0].1, sections[sections.len() - 1].1))
+        }
+        Step::Revolve { profile, op } => {
+            let r = profile.iter().fold(0.0f64, |a, q| a.max(q.x));
+            let (lo, hi) = profile.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q.y), a.1.max(q.y)));
+            (Part::Revolve { profile: profile.clone() }, *op, (r, lo, hi))
+        }
+        Step::Coil { section, pitch, height, left, op, .. } => {
+            let zlo = section.iter().map(|q| q.y).fold(f64::MAX, f64::min);
+            let zhi = section.iter().map(|q| q.y).fold(f64::MIN, f64::max);
+            let r = section.iter().fold(0.0f64, |a, q| a.max(q.x));
+            (Part::Coil { section: section.clone(), pitch: *pitch, turns: height / pitch, left: *left, zlo, zhi }, *op, (r, zlo, zhi + height))
+        }
+        Step::Placed { frame, step } => {
+            let (inner, op, (r, lo, hi)) = make_part(step, h);
+            // The inner part's cylinder, by points round its rims, in the body's coordinates.
+            let (mut rr, mut zlo, mut zhi) = (0.0f64, f64::MAX, f64::MIN);
+            for z in [lo, hi] {
+                for k in 0..32 {
+                    let c = V2::polar(r, TAU * f64::from(k) / 32.0);
+                    let q = frame.world([c.x, c.y, z]);
+                    rr = rr.max(q[0].hypot(q[1]));
+                    zlo = zlo.min(q[2]);
+                    zhi = zhi.max(q[2]);
+                }
+            }
+            let slack = r * (1.0 - (PI / 32.0).cos()) / (PI / 32.0).cos();
+            (Part::Placed { frame: *frame, inner: Box::new(inner) }, op, (rr + slack, zlo - slack, zhi + slack))
+        }
+    }
 }
 
 impl Part {
@@ -402,6 +469,10 @@ impl Part {
                     }
                 }
                 false
+            }
+            Part::Placed { frame, inner } => {
+                let d = sub(p, frame.origin);
+                inner.contains([dot(d, frame.x), dot(d, frame.y()), dot(d, frame.z)])
             }
         }
     }
@@ -475,6 +546,11 @@ impl Part {
                         .collect(),
                 );
             }
+            Part::Placed { frame, inner } => {
+                for rows in inner.sheets(h, hz, (f64::MIN, f64::MAX)) {
+                    out.push(rows.into_iter().map(|row| row.into_iter().map(|q| frame.world(q)).collect()).collect());
+                }
+            }
         }
         out
     }
@@ -498,65 +574,12 @@ impl Solid {
         let mut parts = Vec::new();
         let (mut radius, mut zr) = (0.0f64, (f64::MAX, f64::MIN));
         for st in &body.steps {
-            let adds = |op: &Op| matches!(op, Op::New | Op::Join);
-            match st {
-                Step::Prism { region, z0, height, twist, op } => {
-                    let polys = |v: &Vec<Outline>| v.iter().map(|o| Poly::new(o, h)).collect::<Vec<_>>();
-                    let (outer, holes) = (polys(&region.outer), polys(&region.holes));
-                    if adds(op) {
-                        radius = outer.iter().fold(radius, |a, o| a.max(o.rmax));
-                        zr = (zr.0.min(*z0), zr.1.max(z0 + height));
-                    }
-                    parts.push((Part::Prism { outer, holes, z0: *z0, height: *height, twist: *twist }, *op));
-                }
-                Step::Taper { outline, z0, height, twist, scale, op } => {
-                    let poly = Poly::new(outline, h);
-                    if adds(op) {
-                        radius = radius.max(poly.rmax * scale.max(1.0));
-                        zr = (zr.0.min(*z0), zr.1.max(z0 + height));
-                    }
-                    parts.push((Part::Taper { poly, z0: *z0, height: *height, twist: *twist, scale: *scale }, *op));
-                }
-                Step::Loft { sections, op } => {
-                    // The same cut of every section, fine enough for the largest.
-                    let mut counts = seg_counts(&sections[0].0, h);
-                    for (o, _) in sections {
-                        assert_eq!(o.segs.len(), counts.len(), "loft sections must be made of the same segments");
-                        for (c, k) in counts.iter_mut().zip(seg_counts(o, h)) {
-                            *c = (*c).max(k);
-                        }
-                    }
-                    let polys: Vec<Vec<V2>> = sections.iter().map(|(o, _)| polygon(o, &counts)).collect();
-                    assert!(polys.iter().all(|p| p.len() == polys[0].len()), "loft sections must correspond point for point");
-                    // The kernel skins a loft of four or more sections cubic across them (three:
-                    // quadratic), so the solid between two sections is that curve's, here
-                    // followed by short straight slabs.
-                    let zs: Vec<f64> = sections.iter().map(|s| s.1).collect();
-                    let (polys, zs) = across(&polys, &zs, 4);
-                    let slabs: Vec<Slab> = (0..zs.len() - 1).map(|j| Slab::new(polys[j].clone(), polys[j + 1].clone(), zs[j], zs[j + 1])).collect();
-                    if adds(op) {
-                        radius = slabs.iter().fold(radius, |a, s| a.max(s.rmax));
-                        zr = (zr.0.min(sections[0].1), zr.1.max(sections[sections.len() - 1].1));
-                    }
-                    parts.push((Part::Loft { slabs }, *op));
-                }
-                Step::Revolve { profile, op } => {
-                    if adds(op) {
-                        radius = profile.iter().fold(radius, |a, q| a.max(q.x));
-                        zr = profile.iter().fold(zr, |a, q| (a.0.min(q.y), a.1.max(q.y)));
-                    }
-                    parts.push((Part::Revolve { profile: profile.clone() }, *op));
-                }
-                Step::Coil { section, pitch, height, left, op, .. } => {
-                    let zlo = section.iter().map(|q| q.y).fold(f64::MAX, f64::min);
-                    let zhi = section.iter().map(|q| q.y).fold(f64::MIN, f64::max);
-                    if adds(op) {
-                        radius = section.iter().fold(radius, |a, q| a.max(q.x));
-                        zr = (zr.0.min(zlo), zr.1.max(zhi + height));
-                    }
-                    parts.push((Part::Coil { section: section.clone(), pitch: *pitch, turns: height / pitch, left: *left, zlo, zhi }, *op));
-                }
+            let (part, op, (r, lo, hi)) = make_part(st, h);
+            if matches!(op, Op::New | Op::Join) {
+                radius = radius.max(r);
+                zr = (zr.0.min(lo), zr.1.max(hi));
             }
+            parts.push((part, op));
         }
         Solid { frame: body.frame, parts, spin: 0.0, radius, z: zr, h }
     }
@@ -1067,11 +1090,12 @@ pub fn motion(s: &Spec) -> (f64, f64, f64) {
 /// along the worm's axis), and the pair is turned to the middle of the play, so each side has
 /// (j/2)·cos αn·cos β of each member's thinning, β the member's helix (spiral, lead) angle.
 pub fn expected_gap(s: &Spec) -> (f64, f64) {
-    let (j, an) = (s.backlash, s.pressure_angle.to_radians());
+    // Member 2 (gear 2, the worm) may have a backlash of its own.
+    let (j, j2, an) = (s.backlash, s.backlash_of2(), s.pressure_angle.to_radians());
     match s.kind {
         Kind::CrossedHelical => {
             let (b1, b2) = (s.helix.to_radians(), (s.shaft_angle - s.helix).to_radians());
-            let g = 0.5 * j * an.cos() * (b1.cos() + b2.cos());
+            let g = 0.5 * an.cos() * (j * b1.cos() + j2 * b2.cos());
             (g, g)
         }
         Kind::Bevel | Kind::SpiralBevel => {
@@ -1088,7 +1112,7 @@ pub fn expected_gap(s: &Spec) -> (f64, f64) {
         Kind::Worm => {
             let d1 = if s.worm_diameter > 0.0 { s.worm_diameter } else { 10.0 * s.module };
             let gamma = (s.module * f64::from(s.starts.max(1)) / d1).atan();
-            let g = 0.5 * j * an.cos() * gamma.cos();
+            let g = 0.25 * (j + j2) * an.cos() * gamma.cos();
             (g, g)
         }
         _ => (0.0, j * an.cos()),

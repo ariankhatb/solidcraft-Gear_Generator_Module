@@ -6,7 +6,7 @@ use std::f64::consts::PI;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use crate::geom::{Outline, Region, Seg, V2};
-use crate::hub::{Bore, BoreKind};
+use crate::hub::{Bore, BoreKind, Chamfer, Hardware, Shaft, ShaftEnd};
 use crate::involute::BasicRack;
 use crate::plan::{Kind, Op, Plan, Spec, Step, plan};
 
@@ -118,9 +118,133 @@ pub(crate) fn random_spec(r: &mut Rng, kind: Kind) -> Spec {
         s.holes = r.int(1, 12);
         s.hole_diameter = if r.chance(0.5) { 0.0 } else { d * r.range(0.02, 0.4) };
     }
+    // The body's extras (drawn last, so the draws above stay what they were): each on for a
+    // part of the specs only, so plain gears are still swept.
+    if r.chance(0.6) {
+        random_body(r, &mut s, d, d2);
+    }
     // Sprockets, pulleys, splines, face gears and elliptical pairs draw their own fields.
     crate::tests_extras::random_extras(r, &mut s);
     s
+}
+
+fn random_shaft(r: &mut Rng, d: f64) -> Shaft {
+    let ends = [ShaftEnd::Plain, ShaftEnd::DFlat, ShaftEnd::Keyway, ShaftEnd::Hex, ShaftEnd::Cross, ShaftEnd::CentreHole];
+    let diameter = d * r.range(0.03, 1.2);
+    let stepped = r.chance(0.4);
+    Shaft {
+        diameter,
+        length: d * r.range(0.02, 2.0),
+        step_diameter: if stepped { diameter * r.range(0.3, 1.5) } else { 0.0 },
+        step_length: if stepped { d * r.range(0.02, 1.0) } else { 0.0 },
+        end: ends[r.int(0, 5) as usize],
+        end_length: if r.chance(0.5) { 0.0 } else { d * r.range(0.01, 1.5) },
+        end_size: if r.chance(0.5) { 0.0 } else { diameter * r.range(0.05, 1.3) },
+        chamfer: if r.chance(0.5) { 0.0 } else { diameter * r.range(0.01, 0.8) },
+    }
+}
+
+fn random_hardware(r: &mut Rng, d: f64) -> Hardware {
+    let mut h = Hardware::default();
+    if r.chance(0.5) {
+        h.set_screw = d * r.range(0.01, 0.3);
+        h.set_screws = r.int(0, 4);
+    }
+    if r.chance(0.4) {
+        h.nut_width = d * r.range(0.02, 0.4);
+        h.nut_thickness = if r.chance(0.5) { 0.0 } else { d * r.range(0.01, 0.2) };
+    }
+    if r.chance(0.4) {
+        h.insert_diameter = d * r.range(0.02, 0.4);
+        h.insert_depth = if r.chance(0.5) { 0.0 } else { d * r.range(0.01, 0.4) };
+    }
+    if r.chance(0.4) {
+        h.clamp_slit = d * r.range(0.005, 0.3);
+        h.clamp_screw = if r.chance(0.3) { 0.0 } else { d * r.range(0.01, 0.2) };
+    }
+    if r.chance(0.5) {
+        h.bearing_od = d * r.range(0.1, 1.1);
+        h.bearing_width = d * r.range(0.02, 0.6);
+        h.bearing_fit = if r.chance(0.5) { 0.0 } else { r.range(0.0, 0.3) };
+    }
+    h
+}
+
+fn random_body(r: &mut Rng, s: &mut Spec, d: f64, d2: f64) {
+    let m = s.module;
+    if r.chance(0.3) {
+        s.shaft_front = random_shaft(r, d);
+    }
+    if r.chance(0.3) {
+        s.shaft_back = random_shaft(r, d);
+    }
+    if r.chance(0.3) {
+        s.shaft2_front = random_shaft(r, d2);
+    }
+    if r.chance(0.3) {
+        s.shaft2_back = random_shaft(r, d2);
+    }
+    if r.chance(0.3) {
+        s.tooth_chamfer_front = Chamfer { size: m * r.range(0.05, 4.0), angle: r.range(8.0, 82.0) };
+    }
+    if r.chance(0.3) {
+        s.tooth_chamfer_back = Chamfer { size: m * r.range(0.05, 4.0), angle: r.range(8.0, 82.0) };
+    }
+    if r.chance(0.3) {
+        s.bore_chamfer = m * r.range(0.02, 2.0);
+    }
+    if r.chance(0.3) {
+        s.hub_chamfer = m * r.range(0.02, 2.0);
+    }
+    if r.chance(0.3) {
+        s.tip_round = r.range(0.0, 0.5);
+    }
+    if r.chance(0.25) {
+        s.xy_compensation = m * r.range(0.0, 0.12);
+    }
+    if r.chance(0.25) {
+        s.elephant_foot = m * r.range(0.0, 0.12);
+        s.elephant_foot_height = if r.chance(0.5) { 0.0 } else { m * r.range(0.05, 3.0) };
+    }
+    if r.chance(0.2) {
+        s.clearance = r.range(0.05, 0.6);
+    }
+    if r.chance(0.2) {
+        s.tip_shortening = m * r.range(0.0, 0.4);
+    }
+    if r.chance(0.15) {
+        s.tip_diameter = d * r.range(0.85, 1.2);
+    }
+    if r.chance(0.15) {
+        s.tip_diameter2 = d2 * r.range(0.85, 1.2);
+    }
+    if r.chance(0.25) {
+        s.tip_relief = m * r.range(0.0, 0.08);
+        s.tip_relief_height = if r.chance(0.5) { 0.0 } else { m * r.range(0.05, 1.5) };
+    }
+    if r.chance(0.2) {
+        s.crowning = m * r.range(0.0, 0.08);
+    }
+    if r.chance(0.2) {
+        s.backlash2 = Some(m * r.range(0.0, 0.15));
+    }
+    if r.chance(0.2) {
+        s.face_width2 = s.face_width * r.range(0.4, 2.5);
+        s.face_offset2 = s.face_width * r.range(-0.8, 0.8);
+    }
+    if r.chance(0.2) {
+        s.nozzle = r.range(0.2, 0.8);
+    }
+    if r.chance(0.35) {
+        s.hardware = random_hardware(r, d);
+    }
+    if r.chance(0.35) {
+        s.hardware2 = random_hardware(r, d2);
+    }
+    if (s.hardware != Hardware::default() || s.hardware2 != Hardware::default()) && s.hub_diameter == 0.0 && r.chance(0.7) {
+        s.hub_diameter = s.bore.diameter.max(d * 0.1) * r.range(1.1, 3.0);
+        s.hub_length = s.module * r.range(1.0, 10.0);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -410,6 +534,9 @@ pub(crate) fn check_plan(p: &Plan) -> Result<(), String> {
             return Err(format!("{}: frame not finite", b.name));
         }
         let mut base: Option<Vec<V2>> = None;
+        // The heights the toothed stack (the base and what is joined to it tooth for tooth) runs
+        // between: a cut is held to the base's outline only where it is in the teeth.
+        let mut base_z = (f64::INFINITY, f64::NEG_INFINITY);
         for (k, st) in b.steps.iter().enumerate() {
             let at = format!("{} step {k}", b.name);
             match st {
@@ -421,7 +548,12 @@ pub(crate) fn check_plan(p: &Plan) -> Result<(), String> {
                     if k == 0 && region.outer.len() == 1 {
                         base = Some(loops[0].clone());
                     }
+                    if *op != Op::Cut && *op != Op::Intersect && region.outer.len() == 1 && region.outer[0].segs.len() > 1 && (k == 0 || base.is_some()) {
+                        base_z = (base_z.0.min(*z0), base_z.1.max(z0 + height));
+                    }
+                    let in_teeth = z0 + height > base_z.0 + 1e-9 && *z0 < base_z.1 - 1e-9;
                     if *op == Op::Cut
+                        && in_teeth
                         && let Some(base) = &base
                     {
                         let (lo, hi) = bbox(base);
@@ -445,6 +577,7 @@ pub(crate) fn check_plan(p: &Plan) -> Result<(), String> {
                         if i == 0 {
                             base = Some(l);
                         }
+                        base_z = (base_z.0.min(*h), base_z.1.max(*h));
                         if !same_shape(o, &sections[0].0) {
                             return Err(format!("{at}: loft sections don't match piece for piece"));
                         }
@@ -456,7 +589,29 @@ pub(crate) fn check_plan(p: &Plan) -> Result<(), String> {
                     }
                     base = Some(check_outline(outline).map_err(|e| format!("{at}: {e}"))?);
                 }
-                Step::Revolve { profile, .. } => check_polygon(profile, &at, false)?,
+                Step::Revolve { profile, op } => {
+                    check_polygon(profile, &at, false)?;
+                    // A chamfer's triangle stays on its side of the axis.
+                    if *op == Op::Cut && profile.iter().any(|q| q.x <= 0.0) {
+                        return Err(format!("{at}: a revolved cut reaches the axis"));
+                    }
+                }
+                Step::Placed { frame, step } => {
+                    let dot = |a: &[f64; 3], b: &[f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+                    let square = (dot(&frame.x, &frame.x) - 1.0).abs() < 1e-9 && (dot(&frame.z, &frame.z) - 1.0).abs() < 1e-9 && dot(&frame.x, &frame.z).abs() < 1e-9;
+                    if !square || frame.origin.iter().any(|v| !v.is_finite()) {
+                        return Err(format!("{at}: placed in a frame that is not one"));
+                    }
+                    match step.as_ref() {
+                        Step::Prism { region, z0, height, twist, op: Op::Cut } => {
+                            if !(z0.is_finite() && height.is_finite() && *height > 0.0 && *twist == 0.0) {
+                                return Err(format!("{at}: placed prism z0 {z0} height {height}"));
+                            }
+                            check_region(region).map_err(|e| format!("{at}: {e}"))?;
+                        }
+                        _ => return Err(format!("{at}: only cut prisms are placed")),
+                    }
+                }
                 Step::Coil { section, pitch, z0, height, .. } => {
                     if !(pitch.is_finite() && *pitch > 0.0 && z0.is_finite() && height.is_finite() && *height > 0.0) {
                         return Err(format!("{at}: coil pitch {pitch} height {height}"));

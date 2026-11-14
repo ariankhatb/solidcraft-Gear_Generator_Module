@@ -12,11 +12,17 @@
 //!
 //! Everything is cut from the plan of the whole set (its preview outlines and bodies), so the
 //! teeth are the real ones, at their real phase.
+//!
+//! The tooth tuning of [`crate::body`] (tip rounding, horizontal-expansion compensation, tip
+//! relief, clearance, tip diameters, gear 2's backlash) is in the teeth, so the coupon tests it;
+//! teeth that change along the face (elephant-foot relief, crowning) are cut from the gear's own
+//! steps, as helical teeth are. Shafts, chamfers, hub hardware, bearing pockets and gear 2's own
+//! face width and offset are left off (with a note when they were set), as hubs are.
 
 use std::f64::consts::{PI, TAU};
 
 use crate::geom::{Outline, Region, Seg, V2, wrap};
-use crate::hub::Bore;
+use crate::hub::{Bore, Chamfer, Hardware, Shaft};
 use crate::involute::join_ends;
 use crate::plan::{Body, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit};
 
@@ -202,6 +208,57 @@ fn twisted(body: &Body) -> bool {
     body.steps.iter().any(|s| matches!(s, Step::Prism { twist, .. } if *twist != 0.0))
 }
 
+/// Teeth that aren't one straight prism of the outline: twisted, lofted (crowning) or stacked
+/// (elephant-foot relief). Such pieces are cut from the gear's own steps.
+fn shaped(body: &Body) -> bool {
+    twisted(body)
+        || body.steps.iter().any(|s| matches!(s, Step::Loft { .. } | Step::Taper { .. }))
+        || body.steps.iter().filter(|s| matches!(s, Step::Prism { op: Op::New | Op::Join, .. })).count() > 1
+}
+
+/// The spec of the whole set a coupon is cut from: every member, no hubs, lightening holes,
+/// shafts, chamfers, hardware or gear 2 face width and offset (the tooth tuning stays).
+fn plain_set(s: &Spec) -> Spec {
+    Spec {
+        coupon: false,
+        only: 0,
+        holes: 0,
+        hub_diameter: 0.0,
+        hub_length: 0.0,
+        face_width2: 0.0,
+        face_offset2: 0.0,
+        tooth_chamfer_front: Chamfer::default(),
+        tooth_chamfer_back: Chamfer::default(),
+        bore_chamfer: 0.0,
+        hub_chamfer: 0.0,
+        shaft_front: Shaft::default(),
+        shaft_back: Shaft::default(),
+        shaft2_front: Shaft::default(),
+        shaft2_back: Shaft::default(),
+        hardware: Hardware::default(),
+        hardware2: Hardware::default(),
+        ..s.clone()
+    }
+}
+
+/// Whether the spec sets any of the body features a coupon leaves off (hubs and lightening
+/// holes aside, which a coupon never had).
+fn drops_body_features(s: &Spec) -> bool {
+    let p = plain_set(s);
+    let hw = |h: &Hardware| {
+        h.set_screw > 0.0 || h.nut_width > 0.0 || h.insert_diameter > 0.0 || h.clamp_slit > 0.0 || h.clamp_screw > 0.0 || h.bearing_od > 0.0
+    };
+    [&s.shaft_front, &s.shaft_back, &s.shaft2_front, &s.shaft2_back].iter().any(|sh| sh.exists())
+        || hw(&s.hardware)
+        || hw(&s.hardware2)
+        || s.tooth_chamfer_front.size > 0.0
+        || s.tooth_chamfer_back.size > 0.0
+        || s.bore_chamfer > 0.0
+        || s.hub_chamfer > 0.0
+        || s.face_width2 != p.face_width2
+        || s.face_offset2 != p.face_offset2
+}
+
 /// The piece of one member.
 fn piece(s: &Spec, src: &Source, n: u32) -> Piece {
     let m = s.module;
@@ -210,7 +267,8 @@ fn piece(s: &Spec, src: &Source, n: u32) -> Piece {
     let z = src.teeth;
     let teeth_of = if src.ring { &g.region.holes[0] } else { &g.region.outer[0] };
     let (far, near) = radii(teeth_of, 1e-3 * m);
-    let helical = twisted(src.body);
+    // (Helical, crowned or elephant-foot teeth: cut from the gear's own steps.)
+    let helical = shaped(src.body);
     let cut = |o: &Outline| prism(vec![o.clone()], -1.0, face + 2.0, Op::Cut);
     // The centre hole: the member's own bore, or a pin hole.
     let bore = src.bore.and_then(|b| b.outline().map(|o| (o, b.reach())));
@@ -357,8 +415,9 @@ pub(crate) fn plan(s: &Spec) -> Result<Plan, String> {
     if !(MIN_TEETH..=MAX_TEETH).contains(&s.coupon_teeth) {
         return Err(format!("coupon teeth must be between {MIN_TEETH} and {MAX_TEETH}"));
     }
-    // The whole set, plain: every member, no hubs or lightening holes.
-    let full = crate::plan::plan(&Spec { coupon: false, only: 0, holes: 0, hub_diameter: 0.0, hub_length: 0.0, ..s.clone() })?;
+    // The whole set, plain: every member, no hubs, lightening holes, shafts, chamfers or
+    // hardware (see `plain_set`).
+    let full = crate::plan::plan(&plain_set(s))?;
     let pv = &full.preview;
     let toward = |a: usize, b: usize| (pv[b].center - pv[a].center).angle();
     let sources: Vec<Source> = match s.kind {
@@ -384,6 +443,9 @@ pub(crate) fn plan(s: &Spec) -> Result<Plan, String> {
     let mut p = Plan::default();
     p.facts = full.facts.clone();
     p.warnings = full.warnings.clone();
+    if drops_body_features(s) {
+        p.warn("the test coupon leaves off shafts, chamfers, hub hardware, bearing pockets and gear 2's own face width; the teeth keep their tuning");
+    }
     p.preview_note = "test coupon: a few teeth of each member, at the true centre distance".into();
     let origin = |c: V2| Frame::at(s.origin).shifted([c.x, c.y, 0.0]);
     for (k, pc) in pieces.iter().enumerate() {

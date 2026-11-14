@@ -3,7 +3,7 @@
 
 use std::f64::consts::{PI, TAU};
 
-use super::{Body, Frame, Op, Plan, PreviewGear, Spec, Step, Unit, hub_steps, mm, name, tooth_warnings, wanted, with_bore};
+use super::{Body, Frame, Op, Plan, PreviewGear, Spec, Step, Unit, hub_steps, hub_steps_tip, mm, name, tooth_warnings, wanted, with_bore};
 use crate::face_gear::FaceGear;
 use crate::geom::{Outline, Region, V2};
 use crate::involute::external_outline;
@@ -34,6 +34,103 @@ pub(super) fn belt_of(s: &Spec) -> Belt {
         groove: crate::pulley::Groove::Curvilinear { depth: 0.75, tip_r: 0.555, flank_r: 1.0, fillet_r: 0.15 },
         widths: &[6.0],
     })
+}
+
+// ------------------------------------------------------------------------------------------
+// What these types take of `crate::body`.
+//
+// - Sprockets and pulleys: everything but the tooth tuning, on both members (`hub_steps`).
+// - Face gears: the pinion (member 2) takes gear 2's shafts and hardware and the chamfers
+//   (`hub_steps`); the face gear itself takes none of them.
+// - Elliptical pairs: shafts, hardware, bearing pockets, bore and hub chamfers on both members
+//   (`hub_steps_tip`), no tooth chamfers (their tips are no circle).
+// - Splines: none (the shaft and the hub are the spline).
+// None of them take the tooth tuning: their teeth come from their own generators. Whatever is
+// left out is said once, and only when it was set.
+
+/// The tooth tuning that is set (none of these types take it).
+fn tuning_set(s: &Spec) -> Vec<&'static str> {
+    [
+        (s.tip_round > 0.0, "tip rounding"),
+        (s.xy_compensation > 0.0, "horizontal-expansion compensation"),
+        (s.elephant_foot > 0.0, "elephant-foot relief"),
+        (s.nozzle > 0.0, "the nozzle check"),
+        (s.clearance > 0.0, "tip clearance"),
+        (s.tip_shortening > 0.0, "tip shortening"),
+        (s.tip_diameter > 0.0 || s.tip_diameter2 > 0.0, "tip diameters"),
+        (s.tip_relief > 0.0, "tip relief"),
+        (s.crowning > 0.0, "crowning"),
+        (s.backlash2.is_some(), "gear 2's own backlash"),
+        (s.face_width2 > 0.0 || s.face_offset2 != 0.0, "gear 2's face width and offset"),
+    ]
+    .into_iter()
+    .filter_map(|(on, what)| on.then_some(what))
+    .collect()
+}
+
+fn hardware_set(h: &crate::hub::Hardware) -> bool {
+    h.set_screw > 0.0 || h.nut_width > 0.0 || h.insert_diameter > 0.0 || h.clamp_slit > 0.0 || h.clamp_screw > 0.0 || h.bearing_od > 0.0
+}
+
+/// A member's shafts and hardware that are set.
+fn member_set(s: &Spec, second: bool) -> Vec<&'static str> {
+    [
+        (s.shaft(second, true).exists(), "front shaft"),
+        (s.shaft(second, false).exists(), "back shaft"),
+        (hardware_set(s.hardware_of(second)), "hub hardware and bearing pocket"),
+    ]
+    .into_iter()
+    .filter_map(|(on, what)| on.then_some(what))
+    .collect()
+}
+
+fn chamfers_set(s: &Spec, bore_and_hub: bool) -> Vec<&'static str> {
+    let mut v = Vec::new();
+    if s.tooth_chamfer_front.size > 0.0 || s.tooth_chamfer_back.size > 0.0 {
+        v.push("tooth chamfers");
+    }
+    if bore_and_hub && s.bore_chamfer > 0.0 {
+        v.push("bore chamfer");
+    }
+    if bore_and_hub && s.hub_chamfer > 0.0 {
+        v.push("hub chamfer");
+    }
+    v
+}
+
+/// Warns, once a group, about the `crate::body` settings this type leaves out (see above).
+pub(super) fn left_out(s: &Spec, p: &mut Plan) {
+    use super::Kind;
+    let what = s.kind.label().to_lowercase();
+    let tuning = tuning_set(s);
+    if !tuning.is_empty() {
+        p.warn(format!("{what}: {} don't apply to its teeth (they have their own form); left out", tuning.join(", ")));
+    }
+    let parts: Vec<&str> = match s.kind {
+        Kind::Spline => {
+            let mut v = member_set(s, false);
+            v.extend(member_set(s, true));
+            v.extend(chamfers_set(s, true));
+            v.dedup();
+            v
+        }
+        Kind::FaceGear => member_set(s, false),
+        Kind::Elliptical => chamfers_set(s, false),
+        _ => Vec::new(),
+    };
+    if !parts.is_empty() {
+        let why = match s.kind {
+            Kind::Spline => "the shaft and the hub are the spline itself",
+            Kind::FaceGear => "the face gear itself takes none; the pinion takes gear 2's",
+            _ => "the tips are no circle",
+        };
+        p.warn(format!("{what}: {} left out ({why})", parts.join(", ")));
+    }
+}
+
+/// The nearest point of an outline to its centre (an elliptical gear's root at the minor axis).
+fn min_radius(o: &Outline) -> f64 {
+    o.polyline(0.01).iter().map(|q| q.len()).fold(f64::INFINITY, f64::min)
 }
 
 /// Validates the fields only these types use.
@@ -584,7 +681,9 @@ pub(super) fn spline(s: &Spec, p: &mut Plan) {
 
 pub(super) fn face_gear(s: &Spec, p: &mut Plan) {
     let m = s.module;
-    let pinion = s.involute(s.teeth, 0.0, 0.0);
+    // (The plain rack: the tooth tuning doesn't apply to a face gear, see `left_out`.)
+    let plain = Spec { clearance: 0.0, xy_compensation: 0.0, tip_shortening: 0.0, ..s.clone() };
+    let pinion = plain.involute(s.teeth, 0.0, 0.0);
     let fg = FaceGear::new(pinion, s.teeth2, s.backlash);
     let (r_min, r_max) = (fg.undercut_radius(), fg.pointed_radius());
     let asked = if s.inner_diameter > 0.0 { s.inner_diameter / 2.0 } else { r_min };
@@ -736,29 +835,14 @@ pub(super) fn elliptical(s: &Spec, p: &mut Plan) {
     if wanted(s, 1) {
         let mut steps =
             vec![Step::Prism { region: Region { outer: vec![o1.clone()], holes: vec![] }, z0: 0.0, height: s.face_width, twist: 0.0, op: Op::New }];
-        if let Some(b) = s.bore.outline() {
-            steps.push(Step::Prism {
-                region: Region { outer: vec![b], holes: vec![] },
-                z0: -1.0,
-                height: s.face_width + 2.0,
-                twist: 0.0,
-                op: Op::Cut,
-            });
-        }
+        // Hub, bore, holes, shafts and hardware; no tooth chamfers (tip 0: the tips are no circle).
+        hub_steps_tip(s, &s.bore, min_radius(&o1), 0.0, s.face_width, &mut steps, p, "gear 1");
         p.bodies.push(Body { name: name(s, &format!("Elliptical gear z{}", s.teeth)), frame: Frame::at(s.origin), steps });
     }
     if wanted(s, 2) {
         let mut steps =
             vec![Step::Prism { region: Region { outer: vec![o2.clone()], holes: vec![] }, z0: 0.0, height: s.face_width, twist: 0.0, op: Op::New }];
-        if let Some(b) = s.bore2.outline() {
-            steps.push(Step::Prism {
-                region: Region { outer: vec![b], holes: vec![] },
-                z0: -1.0,
-                height: s.face_width + 2.0,
-                twist: 0.0,
-                op: Op::Cut,
-            });
-        }
+        hub_steps_tip(s, &s.bore2, min_radius(&o2), 0.0, s.face_width, &mut steps, p, "gear 2");
         p.bodies.push(Body { name: name(s, &format!("Conjugate gear z{}", s.teeth)), frame: Frame::at(s.origin).shifted([a, 0.0, 0.0]), steps });
     }
     p.preview_note = "shown still: the speed ratio changes through the turn".into();

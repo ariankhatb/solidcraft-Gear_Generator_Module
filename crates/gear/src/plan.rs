@@ -797,6 +797,9 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
         Kind::FaceGear => extras::face_gear(s, &mut p),
         Kind::Elliptical => extras::elliptical(s, &mut p),
     }
+    if !s.kind.tuned_teeth() {
+        extras::left_out(s, &mut p);
+    }
     if let Some(why) = p.refused.take() {
         return Err(why);
     }

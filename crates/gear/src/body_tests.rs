@@ -893,3 +893,60 @@ fn everything_at_once_plans() {
         }
     }
 }
+
+/// Sprockets, pulleys, splines, face gears and elliptical pairs: what each takes of the body
+/// features, and a note (only) for what it leaves out.
+#[test]
+fn extras_kinds_take_what_fits_and_say_what_they_leave_out() {
+    let shaft = Shaft { diameter: 8.0, length: 10.0, end: ShaftEnd::DFlat, chamfer: 0.5, ..Shaft::default() };
+    let screw = Hardware { set_screw: 3.0, ..Hardware::default() };
+    let notes = |p: &Plan| p.warnings.iter().filter(|w| w.contains("left out (") || w.contains("don't apply")).count();
+    for k in [Kind::Sprocket, Kind::Pulley, Kind::Spline, Kind::FaceGear, Kind::Elliptical] {
+        // Nothing set: nothing said.
+        let p = planned(&Spec::defaults_for(k));
+        assert_eq!(notes(&p), 0, "{k:?}: {:?}", p.warnings);
+        // The print preset sets only what the type takes.
+        let mut s = Spec::defaults_for(k);
+        s.apply_print_defaults(0.4, 0.2);
+        let p = planned(&s);
+        assert_eq!(notes(&p), 0, "{k:?}: {:?}", p.warnings);
+        assert!(s.tip_round == 0.0 && s.xy_compensation == 0.0 && s.elephant_foot == 0.0 && s.nozzle == 0.0, "{k:?}");
+        // Tooth tuning is said to be left out.
+        let p = planned(&Spec { tip_round: 0.2, crowning: 0.05, ..Spec::defaults_for(k) });
+        assert!(p.warnings.iter().any(|w| w.contains("tip rounding, crowning don't apply")), "{k:?}: {:?}", p.warnings);
+    }
+    // Sprockets and pulleys (both members): shafts, hub hardware and chamfers.
+    for k in [Kind::Sprocket, Kind::Pulley] {
+        let base = Spec { teeth: 20, teeth2: 30, hub_diameter: 20.0, hub_length: 8.0, ..Spec::defaults_for(k) };
+        let plain = planned(&base);
+        let s = Spec { shaft_back: shaft, shaft2_back: shaft, hardware2: screw, bore_chamfer: 0.4, hub_chamfer: 0.5, ..base.clone() };
+        let p = planned(&s);
+        assert_eq!(notes(&p), 0, "{k:?}: {:?}", p.warnings);
+        assert_eq!(p.bodies.len(), 2);
+        for (a, b) in plain.bodies.iter().zip(&p.bodies) {
+            assert!(b.steps.len() > a.steps.len() && extent(b).0 < extent(a).0 - 9.0, "{k:?} {}", b.name);
+        }
+        // Gear 2's hardware goes on gear 2 only.
+        assert!(placed(&p.bodies[0]).is_empty() && !placed(&p.bodies[1]).is_empty(), "{k:?}");
+    }
+    // Face gear: the pinion takes gear 2's shafts and hardware; the face gear none.
+    let base = Spec { hub_diameter: 8.0, hub_length: 4.0, ..Spec::defaults_for(Kind::FaceGear) };
+    let plain = planned(&base);
+    let p = planned(&Spec { shaft_front: shaft, shaft2_back: Shaft { diameter: 3.0, length: 6.0, ..Shaft::default() }, ..base.clone() });
+    assert_eq!(p.bodies[0].steps.len(), plain.bodies[0].steps.len());
+    assert!(p.bodies[1].steps.len() > plain.bodies[1].steps.len());
+    assert!(warned(&p, "front shaft left out (the face gear itself"), "{:?}", p.warnings);
+    // Elliptical pair: hub, shafts and hardware on both, no tooth chamfers.
+    let base = Spec { hub_diameter: 12.0, hub_length: 6.0, bore: Bore { kind: BoreKind::Round, diameter: 4.0, ..Bore::default() }, ..Spec::defaults_for(Kind::Elliptical) };
+    let plain = planned(&base);
+    let p = planned(&Spec { shaft_back: shaft, hardware: screw, tooth_chamfer_front: Chamfer { size: 0.5, angle: 45.0 }, bore_chamfer: 0.3, ..base.clone() });
+    assert!(p.bodies[0].steps.len() > plain.bodies[0].steps.len() + 2 && !placed(&p.bodies[0]).is_empty());
+    assert!(warned(&p, "tooth chamfers left out (the tips are no circle)"), "{:?}", p.warnings);
+    assert!(extent(&plain.bodies[0]).1 > Spec::defaults_for(Kind::Elliptical).face_width + 5.0, "the hub is built");
+    // Spline: none of it.
+    let base = Spec::defaults_for(Kind::Spline);
+    let plain = planned(&base);
+    let p = planned(&Spec { shaft_front: shaft, hardware2: screw, bore_chamfer: 0.3, ..base.clone() });
+    assert_eq!(p.bodies.iter().map(|b| b.steps.len()).collect::<Vec<_>>(), plain.bodies.iter().map(|b| b.steps.len()).collect::<Vec<_>>());
+    assert!(warned(&p, "front shaft, hub hardware and bearing pocket, bore chamfer left out (the shaft and the hub are the spline itself)"), "{:?}", p.warnings);
+}

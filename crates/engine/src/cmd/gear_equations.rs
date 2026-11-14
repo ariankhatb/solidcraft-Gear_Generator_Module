@@ -373,7 +373,7 @@ pub(super) fn redraw(s: &mut Session, id: u64, def: &SketchDef) -> Result<()> {
         sk.view = view;
         Ok(((), Left::Unsolved))
     })
-    .and_then(|()| draw(s, id, def));
+    .and_then(|_| draw(s, id, def));
     if let Err(e) = cleared {
         s.execute("sketch.cancel", &json!({})).ok();
         return Err(e);

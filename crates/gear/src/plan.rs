@@ -13,6 +13,9 @@ use crate::involute::{
 };
 use crate::octoid::Crown;
 use crate::worm::Hob;
+use crate::spline::SplineStandard;
+
+mod extras;
 
 /// Gear set types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
@@ -32,6 +35,16 @@ pub enum Kind {
     Worm,
     Cycloidal,
     CycloidalDrive,
+    /// Roller chain sprocket (or a pair joined by the chain).
+    Sprocket,
+    /// Timing belt pulley (or a pair joined by the belt).
+    Pulley,
+    /// Involute spline shaft and hub.
+    Spline,
+    /// Face (crown) gear with its spur pinion.
+    FaceGear,
+    /// Elliptical gear and its conjugate (non-circular pair).
+    Elliptical,
 }
 
 /// How the axes of a set lie, for grouping types in a picker.
@@ -41,10 +54,12 @@ pub enum Axes {
     Intersecting,
     Crossed,
     Special,
+    /// Chains and belts.
+    Wrapped,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 14] = [
+    pub const ALL: [Kind; 19] = [
         Kind::Spur,
         Kind::Helical,
         Kind::Herringbone,
@@ -59,6 +74,11 @@ impl Kind {
         Kind::Worm,
         Kind::Cycloidal,
         Kind::CycloidalDrive,
+        Kind::Sprocket,
+        Kind::Pulley,
+        Kind::Spline,
+        Kind::FaceGear,
+        Kind::Elliptical,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -76,6 +96,11 @@ impl Kind {
             Kind::Worm => "worm",
             Kind::Cycloidal => "cycloidal",
             Kind::CycloidalDrive => "cycloidal_drive",
+            Kind::Sprocket => "sprocket",
+            Kind::Pulley => "pulley",
+            Kind::Spline => "spline",
+            Kind::FaceGear => "face_gear",
+            Kind::Elliptical => "elliptical",
         }
     }
     pub fn label(self) -> &'static str {
@@ -94,14 +119,20 @@ impl Kind {
             Kind::Worm => "Worm and wheel",
             Kind::Cycloidal => "Cycloidal (clock) gears",
             Kind::CycloidalDrive => "Cycloidal drive",
+            Kind::Sprocket => "Chain sprocket",
+            Kind::Pulley => "Timing pulley",
+            Kind::Spline => "Involute spline",
+            Kind::FaceGear => "Face (crown) gear",
+            Kind::Elliptical => "Elliptical pair",
         }
     }
     pub fn axes(self) -> Axes {
         match self {
             Kind::Spur | Kind::Helical | Kind::Herringbone | Kind::Internal | Kind::Rack | Kind::Pair | Kind::Planetary => Axes::Parallel,
-            Kind::Bevel | Kind::SpiralBevel => Axes::Intersecting,
+            Kind::Bevel | Kind::SpiralBevel | Kind::FaceGear => Axes::Intersecting,
             Kind::Hypoid | Kind::CrossedHelical | Kind::Worm => Axes::Crossed,
-            Kind::Cycloidal | Kind::CycloidalDrive => Axes::Special,
+            Kind::Cycloidal | Kind::CycloidalDrive | Kind::Spline | Kind::Elliptical => Axes::Special,
+            Kind::Sprocket | Kind::Pulley => Axes::Wrapped,
         }
     }
     pub fn parse(s: &str) -> Option<Kind> {
@@ -109,11 +140,27 @@ impl Kind {
     }
     /// Involute tooth form (module, pressure angle, shift, rack apply).
     pub fn involute(self) -> bool {
-        !matches!(self, Kind::Cycloidal | Kind::CycloidalDrive)
+        !matches!(self, Kind::Cycloidal | Kind::CycloidalDrive | Kind::Sprocket | Kind::Pulley)
     }
     /// Makes two (or more) meshing members.
     pub fn is_set(self) -> bool {
-        matches!(self, Kind::Pair | Kind::Planetary | Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical | Kind::Worm | Kind::Cycloidal | Kind::CycloidalDrive)
+        matches!(
+            self,
+            Kind::Pair
+                | Kind::Planetary
+                | Kind::Bevel
+                | Kind::SpiralBevel
+                | Kind::Hypoid
+                | Kind::CrossedHelical
+                | Kind::Worm
+                | Kind::Cycloidal
+                | Kind::CycloidalDrive
+                | Kind::Sprocket
+                | Kind::Pulley
+                | Kind::Spline
+                | Kind::FaceGear
+                | Kind::Elliptical
+        )
     }
 }
 
@@ -174,8 +221,38 @@ pub struct Spec {
     pub origin: [f64; 3],
     /// Body name prefix.
     pub name: String,
+    /// Chain sprockets: the chain (an id from [`crate::sprocket::CHAINS`], or "custom" for the
+    /// four sizes below), strands (1 simplex, 2 duplex, 3 triplex) and the ISO 606 tooth side
+    /// chamfer. `teeth2` > 0 adds a driven sprocket at `center_distance`.
+    pub chain: &'static str,
+    pub chain_pitch: f64,
+    pub roller_diameter: f64,
+    /// The chain's width between its inner plates.
+    pub roller_width: f64,
+    /// The transverse pitch between strands.
+    pub strand_pitch: f64,
+    pub strands: u32,
+    pub side_chamfer: bool,
+    /// Timing pulleys: the belt (an id from [`crate::pulley::BELTS`]) and flanges; `face_width`
+    /// is the belt's width. `teeth2` > 0 adds a second pulley at `center_distance`.
+    pub belt: &'static str,
+    pub flanges: bool,
+    /// Involute splines: the standard, DIN 5480's reference diameter (0: module × (teeth +
+    /// 1.1)), a fillet root instead of a flat one. `face_width` is the hub's length.
+    pub spline_standard: SplineStandard,
+    pub spline_diameter: f64,
+    pub fillet_root: bool,
+    /// Face gear: where the teeth start (0: at the undercut limit); `face_width` is their length.
+    pub inner_diameter: f64,
+    /// Elliptical pair: the ellipse's eccentricity (0 a circle); `teeth` on each gear.
+    pub ellipse_eccentricity: f64,
     /// The load to rate the set for (default: none, not rated).
     pub load: crate::strength::Load,
+    /// Pair and planetary: plan a print test coupon instead of the set (a few teeth of each
+    /// member at the true centre distance, and a base to hold them; see [`crate::coupon`]).
+    pub coupon: bool,
+    /// Teeth on each coupon piece (3 to 40; one more where that centres them on the mesh).
+    pub coupon_teeth: u32,
 }
 
 impl Default for Spec {
@@ -218,7 +295,23 @@ impl Default for Spec {
             only: 0,
             origin: [0.0; 3],
             name: String::new(),
+            chain: "08b",
+            chain_pitch: 12.7,
+            roller_diameter: 8.51,
+            roller_width: 7.75,
+            strand_pitch: 13.92,
+            strands: 1,
+            side_chamfer: true,
+            belt: "gt2_2",
+            flanges: true,
+            spline_standard: SplineStandard::Din5480,
+            spline_diameter: 0.0,
+            fillet_root: false,
+            inner_diameter: 0.0,
+            ellipse_eccentricity: 0.3,
             load: crate::strength::Load::default(),
+            coupon: false,
+            coupon_teeth: 4,
         }
     }
 }
@@ -279,6 +372,32 @@ impl Spec {
             }
             Kind::CycloidalDrive => {
                 s.face_width = 8.0;
+            }
+            Kind::Sprocket => {
+                s.teeth = 17;
+                s.teeth2 = 0;
+            }
+            Kind::Pulley => {
+                s.teeth = 20;
+                s.teeth2 = 0;
+                s.face_width = 6.0;
+            }
+            Kind::Spline => {
+                s.module = 1.25;
+                s.teeth = 18;
+                s.pressure_angle = 30.0;
+                s.face_width = 20.0;
+            }
+            Kind::Elliptical => {
+                s.module = 2.0;
+                s.teeth = 30;
+                s.face_width = 8.0;
+            }
+            Kind::FaceGear => {
+                s.module = 2.0;
+                s.teeth = 18;
+                s.teeth2 = 40;
+                s.face_width = 5.0;
             }
             _ => {}
         }
@@ -427,6 +546,8 @@ pub struct Plan {
     pub preview: Vec<PreviewGear>,
     /// What the 2D preview shows, when it is not the gears' own plane.
     pub preview_note: String,
+    /// Which preview members mesh (parallel-axis sets; see [`crate::mesh2d::check_mesh`]).
+    pub meshes: Vec<crate::mesh2d::MeshPair>,
     /// Why the set can't be built, found while planning it ([`plan`] returns it as the error).
     refused: Option<String>,
 }
@@ -464,7 +585,11 @@ pub fn check(s: &Spec) -> Result<(), String> {
     if s.kind != Kind::CycloidalDrive && s.kind != Kind::Rack && !(min..=2000).contains(&s.teeth) {
         return Err(format!("teeth must be between {min} and 2000"));
     }
-    if s.kind.is_set() && !matches!(s.kind, Kind::CycloidalDrive | Kind::Worm) && !(min..=2000).contains(&s.teeth2) && !(s.kind == Kind::Cycloidal && s.teeth2 == 0) {
+    if s.kind.is_set()
+        && !matches!(s.kind, Kind::CycloidalDrive | Kind::Worm | Kind::Spline | Kind::Elliptical)
+        && !(min..=2000).contains(&s.teeth2)
+        && !(matches!(s.kind, Kind::Cycloidal | Kind::Sprocket | Kind::Pulley) && s.teeth2 == 0)
+    {
         return Err(format!("mating teeth must be between {min} and 2000"));
     }
     if matches!(s.kind, Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical) && !(5.0..=175.0).contains(&s.shaft_angle) {
@@ -527,7 +652,9 @@ pub fn check(s: &Spec) -> Result<(), String> {
     if s.holes > 360 {
         return Err("lightening holes must be 360 or fewer".into());
     }
-    if s.kind.involute() {
+    if s.kind == Kind::Spline {
+        // A spline has its own tooth proportions (checked with its other fields).
+    } else if s.kind.involute() {
         // The cutter that makes the teeth must have a tip: its flanks meet at a point when the
         // dedendum is too deep for the pressure angle.
         let tip = PI / 4.0 - s.rack.dedendum * s.pressure_angle.to_radians().tan();
@@ -559,12 +686,15 @@ pub fn check(s: &Spec) -> Result<(), String> {
         }
     }
     crate::strength::check(&s.load)?;
-    Ok(())
+    extras::check(s)
 }
 
 /// The plan for a spec.
 pub fn plan(s: &Spec) -> Result<Plan, String> {
     check(s)?;
+    if crate::coupon::applies(s) {
+        return crate::coupon::plan(s);
+    }
     let mut p = Plan::default();
     match s.kind {
         Kind::Spur | Kind::Helical | Kind::Herringbone => single(s, &mut p),
@@ -578,12 +708,21 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
         Kind::Worm => worm(s, &mut p),
         Kind::Cycloidal => cycloidal(s, &mut p),
         Kind::CycloidalDrive => drive(s, &mut p),
+        Kind::Sprocket => extras::sprocket(s, &mut p),
+        Kind::Pulley => extras::pulley(s, &mut p),
+        Kind::Spline => extras::spline(s, &mut p),
+        Kind::FaceGear => extras::face_gear(s, &mut p),
+        Kind::Elliptical => extras::elliptical(s, &mut p),
     }
     if let Some(why) = p.refused.take() {
         return Err(why);
     }
     if s.load.rated() {
         crate::strength::rate(s, &mut p);
+    }
+    p.meshes = crate::mesh2d::topology(s, &p.preview);
+    if s.coupon {
+        p.warn("a test coupon is made for gear pairs and planetary sets: this is the whole set");
     }
     if p.bodies.is_empty() {
         return Err("nothing to build with these choices".into());

@@ -80,3 +80,29 @@ fn every_type_builds() {
         }
     }
 }
+
+#[test]
+fn sprockets_pulleys_splines_and_face_gears_build() {
+    for (p, bodies) in [
+        (json!({"type": "sprocket", "chain": "06b", "teeth": 13, "side_chamfer": false}), 1),
+        (json!({"type": "pulley", "teeth": 16, "flanges": false}), 1),
+        (json!({"type": "spline", "module": 1, "teeth": 12, "spline_diameter": 14}), 2),
+        (json!({"type": "face_gear", "module": 1, "teeth": 12, "teeth2": 40, "face_width": 4}), 2),
+    ] {
+        let mut s = Session::default();
+        let r = run(&mut s, "gear.create", p.clone());
+        let made = r["bodies"].as_array().unwrap();
+        assert_eq!(made.len(), bodies, "{p}: {r}");
+        for b in made {
+            assert!(volume(&mut s, b.as_str().unwrap()) > 0.0, "{p} {b}");
+        }
+    }
+}
+
+#[test]
+fn unknown_chain_and_belt_are_refused() {
+    let mut s = Session::default();
+    for p in [json!({"type": "sprocket", "chain": "99x"}), json!({"type": "pulley", "belt": "gt9"}), json!({"type": "sprocket", "strands": 9})] {
+        assert!(s.execute("gear.calculate", &p).is_err(), "{p}");
+    }
+}

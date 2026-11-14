@@ -7,24 +7,47 @@
 //! - [`hub`]: bores (round, DIN 6885 keyway, D flat, hex, square), hubs, lightening holes.
 //! - [`plan`]: a gear set ([`plan::Spec`]: spur, helical, herringbone, internal, rack, pair,
 //!   planetary, straight and spiral bevel, hypoid, crossed helical, worm, cycloidal, cycloidal
-//!   drive) as bodies of solid steps, with facts, warnings and a 2D meshing preview.
+//!   drive, chain sprocket, timing pulley, involute spline, face gear) as bodies of solid steps,
+//!   with facts, warnings and a 2D meshing preview.
+//! - [`sprocket`], [`pulley`], [`wrap`]: ISO 606 roller chain sprockets, timing belt pulleys, and
+//!   the chain or belt between two of them.
+//! - [`spline`]: DIN 5480 and ANSI B92.1 involute splines; [`face_gear`]: face gears cut by a
+//!   spur pinion; [`elliptic`]: a centre-pivoted elliptical gear and its conjugate.
+//! - [`coupon`]: a print test coupon of a pair or planetary set (a few teeth of each member at
+//!   the true centre distance), asked for with `Spec::coupon`.
+//! - [`design`]: design by goal (ranked tooth counts, modules and shifts for a ratio, size and
+//!   load) and ratio splitting for multi-stage gearboxes.
+//! - [`mesh2d`]: a 2D mesh checker (overlap and loss of contact over a tooth pitch) for the
+//!   parallel-axis sets, behind the window's mesh verdict and the mesh tests.
+//! - [`sheet`]: a design sheet (Markdown) of a planned set and a gear profile as a DXF.
 //! - [`strength`]: load capacity (ISO 6336 Method B simplified, Lewis; simplified bevel and
 //!   worm): forces, stresses and safety factors for a given torque or power.
 //!
 //! Pure math with no dependencies: the engine turns a plan into sketches and features, the
 //! window draws its preview from the same plan.
 
+pub mod coupon;
 pub mod cycloid;
+pub mod elliptic;
+pub mod face_gear;
+pub mod design;
 pub mod geom;
 pub mod hub;
 pub mod involute;
+pub mod mesh2d;
 pub mod mesh3d;
 pub mod octoid;
 pub mod plan;
+pub mod pulley;
+pub mod spline;
+pub mod sprocket;
+pub mod sheet;
 pub mod strength;
 pub mod worm;
+pub mod wrap;
 
 pub use geom::{Outline, Region, Seg, V2};
+pub use mesh2d::{MeshPair, MeshResult, Verdict, check_mesh};
 pub use plan::{Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit, plan};
 
 #[cfg(test)]
@@ -35,8 +58,12 @@ mod sweep_tests;
 mod tests;
 
 #[cfg(test)]
-mod mesh2d;
+mod coupon_tests;
 #[cfg(test)]
 mod mesh3d_tests;
 #[cfg(test)]
 mod mesh_tests;
+#[cfg(test)]
+mod tests_extras;
+#[cfg(test)]
+mod tools_tests;

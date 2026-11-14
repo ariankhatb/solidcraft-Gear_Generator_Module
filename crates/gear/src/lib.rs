@@ -6,7 +6,7 @@
 //! - [`cycloid`]: cycloidal (clock) teeth and the cycloidal drive disc.
 //! - [`hub`]: bores (round, DIN 6885 keyway, D flat, hex, square), hubs, lightening holes.
 //! - [`plan`]: a gear set ([`plan::Spec`]: spur, helical, herringbone, internal, rack, pair,
-//!   planetary, straight and spiral bevel, hypoid, crossed helical, worm, cycloidal, cycloidal
+//!   planetary, straight and spiral bevel, hypoid ([`hypoid`]), crossed helical, worm, cycloidal, cycloidal
 //!   drive) as bodies of solid steps, with facts, warnings and a 2D meshing preview.
 //!
 //! Pure math with no dependencies: the engine turns a plan into sketches and features, the
@@ -15,6 +15,7 @@
 pub mod cycloid;
 pub mod geom;
 pub mod hub;
+pub mod hypoid;
 pub mod involute;
 pub mod plan;
 

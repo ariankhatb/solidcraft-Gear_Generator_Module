@@ -80,3 +80,37 @@ fn every_type_builds() {
         }
     }
 }
+
+#[test]
+fn hypoid_parameters_reach_the_spec() {
+    let p: crate::schema::gear::GearParams =
+        serde_json::from_value(json!({"type": "hypoid", "ring_diameter": 200, "teeth2": 40, "hand": "right", "cutter_radius": 80, "offset": 0})).unwrap();
+    let s = crate::gear_spec_of(&p).unwrap();
+    assert!((s.module - 5.0).abs() < 1e-12);
+    assert!(!s.left_hand);
+    assert_eq!(s.cutter_radius, 80.0);
+    assert_eq!(s.offset, 0.0);
+    // Zero offset survives the round trip (it is not the hypoid's default).
+    let back: crate::schema::gear::GearParams = serde_json::from_value(crate::gear_params_of(&s)).unwrap();
+    assert_eq!(crate::gear_spec_of(&back).unwrap(), s);
+    let mut session = Session::default();
+    let r = run(&mut session, "gear.calculate", json!({"type": "hypoid"}));
+    let fact = |label: &str| r["facts"].as_array().unwrap().iter().find(|f| f["label"].as_str().unwrap().starts_with(label)).map(|f| f["value"].as_f64().unwrap());
+    assert!(fact("pinion mean spiral angle").unwrap() > fact("gear mean spiral angle").unwrap());
+    assert_eq!(fact("offset"), Some(25.0));
+}
+
+/// The default hypoid set builds both members, as the Gear Generator window previews and creates
+/// it (slow: run with --ignored).
+#[test]
+#[ignore]
+fn the_default_hypoid_set_builds() {
+    let mut s = Session::default();
+    let p = crate::gear_params_of(&solidcraft_gear::Spec::defaults_for(solidcraft_gear::Kind::Hypoid));
+    let r = run(&mut s, "gear.create", p);
+    let bodies = r["bodies"].as_array().unwrap();
+    assert_eq!(bodies.len(), 2, "{r}");
+    for b in bodies {
+        assert!(volume(&mut s, b.as_str().unwrap()) > 0.0);
+    }
+}

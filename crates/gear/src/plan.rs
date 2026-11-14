@@ -84,7 +84,7 @@ impl Kind {
             Kind::Planetary => "Planetary set",
             Kind::Bevel => "Straight bevel",
             Kind::SpiralBevel => "Spiral bevel",
-            Kind::Hypoid => "Hypoid (offset bevel)",
+            Kind::Hypoid => "Hypoid (offset spiral bevel)",
             Kind::CrossedHelical => "Crossed helical",
             Kind::Worm => "Worm and wheel",
             Kind::Cycloidal => "Cycloidal (clock) gears",
@@ -138,11 +138,16 @@ pub struct Spec {
     /// reach it).
     pub center_distance: f64,
     pub shaft_angle: f64,
+    /// Spiral bevel: the mean spiral angle; hypoid: the pinion's mean spiral angle.
     pub spiral_angle: f64,
-    /// Hypoid offset between the axes (0: from equal spiral angles).
+    /// Hypoid offset between the axes (0: a spiral bevel pair).
     pub offset: f64,
-    /// Hypoid: where the face starts along the line of contact, from the throat (mm).
+    /// No longer used (the old hyperboloid hypoid builder's face position).
     pub face_start: f64,
+    /// Hypoid: the pinion's spiral is left-handed (the gear's right-handed), as in car axles.
+    pub left_hand: bool,
+    /// Hypoid: the face-milling cutter's radius (0: a standard size for the gear).
+    pub cutter_radius: f64,
     /// Worm threads (starts), pitch diameter (0: 10 modules) and length (0: enough to engage).
     pub starts: u32,
     pub worm_diameter: f64,
@@ -192,6 +197,8 @@ impl Default for Spec {
             spiral_angle: 35.0,
             offset: 0.0,
             face_start: 0.0,
+            left_hand: true,
+            cutter_radius: 0.0,
             starts: 1,
             worm_diameter: 0.0,
             worm_length: 0.0,
@@ -244,12 +251,15 @@ impl Spec {
                 s.spiral_angle = 35.0;
             }
             Kind::Hypoid => {
-                s.teeth = 12;
-                s.teeth2 = 36;
-                s.module = 2.0;
-                s.face_width = 14.0;
-                s.offset = 0.0;
-                s.face_start = 20.0;
+                // A car axle: 41:10, ring gear about Ø200, pinion 25 mm below centre.
+                s.teeth = 10;
+                s.teeth2 = 41;
+                s.module = 5.0;
+                s.face_width = 30.0;
+                s.offset = 25.0;
+                s.spiral_angle = 50.0;
+                // The ring gear's centre hole (it bolts to a carrier).
+                s.bore2 = Bore { kind: crate::hub::BoreKind::Round, diameter: 80.0, ..Bore::default() };
             }
             Kind::CrossedHelical => {
                 s.teeth = 15;
@@ -393,10 +403,10 @@ pub struct Plan {
 }
 
 impl Plan {
-    fn fact(&mut self, label: impl Into<String>, value: f64, unit: Unit) {
+    pub(crate) fn fact(&mut self, label: impl Into<String>, value: f64, unit: Unit) {
         self.facts.push(Fact { label: label.into(), value, unit });
     }
-    fn warn(&mut self, w: impl Into<String>) {
+    pub(crate) fn warn(&mut self, w: impl Into<String>) {
         let w = w.into();
         if !self.warnings.contains(&w) {
             self.warnings.push(w);
@@ -456,7 +466,7 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
         Kind::Pair => pair(s, &mut p),
         Kind::Planetary => planetary(s, &mut p),
         Kind::Bevel | Kind::SpiralBevel => bevel(s, &mut p),
-        Kind::Hypoid => hypoid(s, &mut p),
+        Kind::Hypoid => crate::hypoid::build(s, &mut p)?,
         Kind::CrossedHelical => crossed(s, &mut p),
         Kind::Worm => worm(s, &mut p),
         Kind::Cycloidal => cycloidal(s, &mut p),
@@ -1028,98 +1038,6 @@ fn hub_steps_centered(s: &Spec, bore: &Bore, rf: f64, face: f64, steps: &mut Vec
             other => other,
         });
     }
-}
-
-/// Hypoid (offset bevel) gears on hyperboloid pitch surfaces with straight, skewed teeth: each
-/// section is the throat section turned and scaled, so every tooth line is a ruling.
-fn hypoid(s: &Spec, p: &mut Plan) {
-    let sigma = s.shaft_angle.to_radians();
-    let (z1, z2) = (f64::from(s.teeth), f64::from(s.teeth2));
-    let mn = s.module;
-    let span = |g1: f64| -> f64 { mn / 2.0 * (z1 / g1.cos() + z2 / (sigma - g1).cos()) };
-    let lo = 1e-3_f64.max(sigma - 80f64.to_radians());
-    let hi = (sigma - 1e-3).min(80f64.to_radians());
-    // The smallest offset these tooth counts allow, and the angle at it.
-    let (mut a, mut b) = (lo, hi);
-    for _ in 0..100 {
-        let (m1, m2) = (a + (b - a) / 3.0, b - (b - a) / 3.0);
-        if span(m1) < span(m2) { b = m2 } else { a = m1 }
-    }
-    let g_min = 0.5 * (a + b);
-    let e_min = span(g_min);
-    let g1 = if s.offset > 0.0 {
-        if s.offset < e_min {
-            p.warn(format!("the offset must be at least {} for these teeth; using that", mm(e_min)));
-            g_min
-        } else {
-            // The solution with the pinion's larger spiral angle.
-            let (mut lo2, mut hi2) = (g_min, hi);
-            if span(hi2) < s.offset {
-                p.warn("the offset is too large for these teeth; using the largest that works");
-                hi2
-            } else {
-                for _ in 0..100 {
-                    let mid = 0.5 * (lo2 + hi2);
-                    if span(mid) < s.offset { lo2 = mid } else { hi2 = mid }
-                }
-                0.5 * (lo2 + hi2)
-            }
-        }
-    } else {
-        sigma / 2.0
-    };
-    let g2 = sigma - g1;
-    let gear1 = s.involute(s.teeth, s.shift, g1.to_degrees());
-    let gear2 = s.involute(s.teeth2, -s.shift, g2.to_degrees());
-    let (r1, r2) = (gear1.r(), gear2.r());
-    let e = r1 + r2 + (gear1.shift + gear2.shift) * mn;
-    let (o1, f1) = external_outline(&gear1, 0.0);
-    let (o2, f2) = external_outline(&gear2, PI / z2);
-    tooth_warnings(p, "pinion", &gear1, &f1);
-    tooth_warnings(p, "gear", &gear2, &f2);
-    p.fact("ratio", z2 / z1, Unit::None);
-    p.fact("offset", e, Unit::Mm);
-    p.fact("smallest offset for these teeth", e_min, Unit::Mm);
-    p.fact("pinion spiral angle (throat)", g1.to_degrees(), Unit::Deg);
-    p.fact("gear spiral angle (throat)", g2.to_degrees(), Unit::Deg);
-    p.fact("pinion throat diameter", 2.0 * r1, Unit::Mm);
-    p.fact("gear throat diameter", 2.0 * r2, Unit::Mm);
-    // Along the line of contact (a common ruling) from u0 to u1.
-    let (u0, u1) = (s.face_start, s.face_start + s.face_width);
-    let member = |o: &Outline, r0: f64, g: f64| -> Vec<Step> {
-        let k = g.tan() / r0;
-        let section = |z: f64| -> (Outline, f64) {
-            let t = z * k;
-            (o.map(&|q: V2| V2::new(q.x - t * q.y, q.y + t * q.x), false), z)
-        };
-        let (za, zb) = (u0 * g.cos(), u1 * g.cos());
-        vec![Step::Loft { sections: vec![section(za), section(zb)], op: Op::New }]
-    };
-    let mut flare = |who: &str, r0: f64, g: f64| {
-        let k = g.tan() / r0;
-        let at = |u: f64| r0 * (1.0 + (u * g.cos() * k).powi(2)).sqrt();
-        p.fact(format!("{who} pitch diameter at the face"), 2.0 * at(u0), Unit::Mm);
-        p.fact(format!("{who} pitch diameter at the face end"), 2.0 * at(u1), Unit::Mm);
-    };
-    flare("pinion", r1, g1);
-    flare("gear", r2, g2);
-    if wanted(s, 1) {
-        let mut steps = member(&o1, r1, g1);
-        if let Some(b) = s.bore.outline() {
-            steps.push(Step::Prism { region: Region { outer: vec![b], holes: vec![] }, z0: u0.min(u1) * g1.cos() - 1.0, height: (u1 - u0).abs() * g1.cos() + 2.0, twist: 0.0, op: Op::Cut });
-        }
-        p.bodies.push(Body { name: name(s, &format!("Hypoid pinion z{}", s.teeth)), frame: Frame::at(s.origin), steps });
-    }
-    if wanted(s, 2) {
-        let mut steps = member(&o2, r2, g2);
-        if let Some(b) = s.bore2.outline() {
-            steps.push(Step::Prism { region: Region { outer: vec![b], holes: vec![] }, z0: u0.min(u1) * g2.cos() - 1.0, height: (u1 - u0).abs() * g2.cos() + 2.0, twist: 0.0, op: Op::Cut });
-        }
-        p.bodies.push(Body { name: name(s, &format!("Hypoid gear z{}", s.teeth2)), frame: crossed_frame2(s.origin, e, sigma), steps });
-    }
-    let _ = (f1, f2);
-    p.preview_note = "throat sections (the gears' axes cross without meeting)".into();
-    side_by_side(p, o1, r1, o2, r2, z1 / z2);
 }
 
 fn worm(s: &Spec, p: &mut Plan) {

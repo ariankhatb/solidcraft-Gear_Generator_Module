@@ -15,7 +15,7 @@ use super::CommandSpec;
 use super::sketch::{Left, edit_solved, ids_of};
 use super::sketch_import::add_geometry;
 use crate::params::bad;
-use crate::schema::gear::{BoreParams, BoreType, GearFact, GearParams, GearResult, GearType, RackStandard};
+use crate::schema::gear::{BoreParams, BoreType, GearFact, GearParams, GearResult, GearType, RackStandard, SpiralHand};
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{EngineError, Result, Session};
 
@@ -31,7 +31,7 @@ pub static COMMANDS: &[CommandSpec] = &[
             "type?: spur|helical|herringbone|internal|rack|pair|planetary|bevel|spiral_bevel|hypoid|crossed_helical|worm|cycloidal|cycloidal_drive; \
              module? (mm) | diametral_pitch?; teeth?, teeth2? (mate or planet), ring_teeth?, planets?; pressure_angle?, helix_angle? (deg, sign = hand); \
              profile_shift?, profile_shift2?; rack?: iso53_a|iso53_b|iso53_c|iso53_d|agma_full_depth|stub, addendum?, dedendum?, root_radius? (coefficients); \
-             backlash? (mm); face_width?; center_distance? (pair: gear 2's shift reaches it); shaft_angle?, spiral_angle? (deg); offset?, face_start? (hypoid, mm); \
+             backlash? (mm); face_width?; center_distance? (pair: gear 2's shift reaches it); shaft_angle?, spiral_angle? (deg); offset?, ring_diameter?, cutter_radius? (hypoid, mm), hand?: left|right (hypoid pinion); \
              starts?, worm_diameter?, worm_length? (worm); rim?; rack_teeth?, rack_height?; pins?, pin_circle?, pin_diameter?, eccentricity? (cycloidal drive); \
              bore?, bore2?: {type?: round|keyway|d_flat|hex|square|none, diameter, key_width?, key_depth?, flat?}; hub_diameter?, hub_length?; holes?, hole_diameter?; \
              only?: 1|2|3 (one member); origin?: [x,y,z]; name?. Returns bodies, group, facts (diameters, ratio, centre distance, contact ratio, span and over-pins \
@@ -147,6 +147,10 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     set!(spiral_angle, p.spiral_angle);
     set!(offset, p.offset);
     set!(face_start, p.face_start);
+    set!(cutter_radius, p.cutter_radius);
+    if let Some(h) = p.hand {
+        s.left_hand = h == SpiralHand::Left;
+    }
     set!(starts, p.starts);
     set!(worm_diameter, p.worm_diameter);
     set!(worm_length, p.worm_length);
@@ -166,6 +170,12 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     if let Some(n) = &p.name {
         s.name = n.clone();
     }
+    if let Some(d) = p.ring_diameter {
+        if !(d.is_finite() && d > 0.0) {
+            return Err("`ring_diameter` must be greater than 0".into());
+        }
+        s.module = d / f64::from(s.teeth2.max(1));
+    }
     s.bore = bore_of(&p.bore);
     s.bore2 = bore_of(&p.bore2);
     let finite = [
@@ -181,6 +191,7 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
         s.spiral_angle,
         s.offset,
         s.face_start,
+        s.cutter_radius,
         s.worm_diameter,
         s.worm_length,
         s.rim,
@@ -200,7 +211,7 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     if finite.iter().chain(s.origin.iter()).any(|v| !v.is_finite()) {
         return Err("every number must be finite".into());
     }
-    if [s.backlash, s.center_distance, s.offset, s.worm_diameter, s.worm_length, s.rim, s.rack_height, s.hub_diameter, s.hub_length, s.hole_diameter, s.bore.diameter, s.bore2.diameter]
+    if [s.backlash, s.center_distance, s.offset, s.cutter_radius, s.worm_diameter, s.worm_length, s.rim, s.rack_height, s.hub_diameter, s.hub_length, s.hole_diameter, s.bore.diameter, s.bore2.diameter]
         .iter()
         .any(|v| *v < 0.0)
     {
@@ -248,8 +259,11 @@ pub fn params_of(s: &Spec) -> Value {
         center_distance: (s.center_distance > 0.0).then_some(s.center_distance),
         shaft_angle: Some(s.shaft_angle),
         spiral_angle: Some(s.spiral_angle),
-        offset: (s.offset > 0.0).then_some(s.offset),
-        face_start: Some(s.face_start),
+        offset: (s.offset > 0.0 || s.kind == Kind::Hypoid).then_some(s.offset),
+        face_start: (s.face_start != 0.0).then_some(s.face_start),
+        hand: (s.kind == Kind::Hypoid).then_some(if s.left_hand { SpiralHand::Left } else { SpiralHand::Right }),
+        ring_diameter: None,
+        cutter_radius: (s.cutter_radius > 0.0).then_some(s.cutter_radius),
         starts: Some(s.starts),
         worm_diameter: (s.worm_diameter > 0.0).then_some(s.worm_diameter),
         worm_length: (s.worm_length > 0.0).then_some(s.worm_length),
@@ -464,34 +478,96 @@ fn build_body(s: &mut Session, body: &Body, features: &mut Vec<u64>, warnings: &
         let label = format!("{} {}", body.name, i + 1);
         let reply = match step {
             Step::Prism { region, z0, height, twist, op } => {
-                let (id, _loops) = sketch_loops(s, &format!("{label} profile"), f.world([0.0, 0.0, *z0]), x, y, &region_loops(region), features)?;
-                let mut pick = json!({"sketch": id});
-                if let Some(p) = profiles_of(region) {
-                    // Picks are checked against the sketch's profiles, which a command run inside
-                    // another has not worked out yet.
-                    s.refresh();
-                    pick["profiles"] = p;
-                }
-                if twist.abs() < 1e-12 {
-                    s.execute("solid.extrude", &merge(merge(pick, json!({"distance": height})), feature_params(*op, &name, &body.name)))?
-                } else {
-                    // The path: a line up the axis, on the plane through it and x.
-                    let path = sketch_with(s, &format!("{label} path"), f.world([0.0, 0.0, *z0]), z, x, &[Geom2::Line(Vec2::new(0.0, 0.0), Vec2::new(*height, 0.0))], features)?;
-                    let curve = first_curve(s, path)?;
-                    s.execute(
-                        "solid.sweep",
-                        &merge(merge(pick, json!({"path_sketch": path, "path": [curve], "twist": format!("{} deg", twist.to_degrees())})), feature_params(*op, &name, &body.name)),
-                    )?
+                let mut made = Vec::new();
+                let run = |s: &mut Session, made: &mut Vec<u64>| -> Result<Value> {
+                    let (id, _loops) = sketch_loops(s, &format!("{label} profile"), f.world([0.0, 0.0, *z0]), x, y, &region_loops(region), made)?;
+                    let mut pick = json!({"sketch": id});
+                    if let Some(p) = profiles_of(region) {
+                        // Picks are checked against the sketch's profiles, which a command run
+                        // inside another has not worked out yet.
+                        s.refresh();
+                        pick["profiles"] = p;
+                    }
+                    if twist.abs() < 1e-12 {
+                        s.execute("solid.extrude", &merge(merge(pick, json!({"distance": height})), feature_params(*op, &name, &body.name)))
+                    } else {
+                        // The path: a line up the axis, on the plane through it and x.
+                        let path = sketch_with(s, &format!("{label} path"), f.world([0.0, 0.0, *z0]), z, x, &[Geom2::Line(Vec2::new(0.0, 0.0), Vec2::new(*height, 0.0))], made)?;
+                        let curve = first_curve(s, path)?;
+                        s.execute(
+                            "solid.sweep",
+                            &merge(merge(pick, json!({"path_sketch": path, "path": [curve], "twist": format!("{} deg", twist.to_degrees())})), feature_params(*op, &name, &body.name)),
+                        )
+                    }
+                };
+                match run(s, &mut made) {
+                    Ok(r) => {
+                        features.extend(made);
+                        r
+                    }
+                    // A hub, web or bore the kernel won't combine: the gear is still worth having.
+                    Err(e) if *op != Op::New => {
+                        if !made.is_empty() {
+                            s.execute("timeline.delete", &json!({"features": made})).ok();
+                        }
+                        let what = if *op == Op::Cut { "cut" } else { "joined" };
+                        warnings.push(format!("{}: step {} could not be {what} ({e}); it is left out", body.name, i + 1));
+                        continue;
+                    }
+                    Err(e) => return Err(e),
                 }
             }
             Step::Loft { sections, op } => {
-                let mut ids = Vec::new();
-                for (k, (o, h)) in sections.iter().enumerate() {
-                    let mut g = Vec::new();
-                    geometry(o, &mut g);
-                    ids.push(json!({"sketch": sketch_with(s, &format!("{label} section {}", k + 1), f.world([0.0, 0.0, *h]), x, y, &g, features)?}));
+                // All the sections, then (if the kernel refuses them) every other one, then the
+                // two ends: a coarser twist beats no gear.
+                let n = sections.len();
+                let mut tries: Vec<Vec<usize>> = vec![(0..n).collect()];
+                if n > 3 {
+                    let mut every_other: Vec<usize> = (0..n).step_by(2).collect();
+                    if every_other.last() != Some(&(n - 1)) {
+                        every_other.push(n - 1);
+                    }
+                    tries.push(every_other);
                 }
-                s.execute("solid.loft", &merge(json!({"sections": ids}), feature_params(*op, &name, &body.name)))?
+                if n > 2 {
+                    tries.push(vec![0, n - 1]);
+                }
+                let mut done = None;
+                let mut last_err = None;
+                for (t, pick) in tries.iter().enumerate() {
+                    let mut made = Vec::new();
+                    let mut ids = Vec::new();
+                    let mut attempt = || -> Result<Value> {
+                        for &k in pick {
+                            let (o, h) = &sections[k];
+                            let mut g = Vec::new();
+                            geometry(o, &mut g);
+                            ids.push(json!({"sketch": sketch_with(s, &format!("{label} section {}", k + 1), f.world([0.0, 0.0, *h]), x, y, &g, &mut made)?}));
+                        }
+                        s.execute("solid.loft", &merge(json!({"sections": ids}), feature_params(*op, &name, &body.name)))
+                    };
+                    match attempt() {
+                        Ok(r) => {
+                            features.extend(made);
+                            if t > 0 {
+                                warnings.push(format!("{}: the loft through all {n} sections failed; built through {} of them", body.name, pick.len()));
+                            }
+                            done = Some(r);
+                            break;
+                        }
+                        Err(e) => {
+                            if !made.is_empty() {
+                                s.execute("timeline.delete", &json!({"features": made})).ok();
+                            }
+                            last_err = Some(e);
+                        }
+                    }
+                }
+                match (done, last_err) {
+                    (Some(r), _) => r,
+                    (None, Some(e)) => return Err(e),
+                    (None, None) => continue,
+                }
             }
             Step::Revolve { profile, op } => {
                 // A blank that trims (a bevel's back and front cones): the kernel sometimes

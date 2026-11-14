@@ -47,6 +47,16 @@ New requirements:
   regenerated in place, keeping stable references (body names, feature ids/names, group) so
   features built on it don't break. This replaces the native parametric feature.
 
+Added later the same day:
+- **Clearance and more parameters**: expose clearance as its own setting (tip/root clearance
+  coefficient c*, plus radial/axial clearance for printed sets), and other tooth parameters that
+  are currently hidden or fixed (to be listed: tip shortening, root fillet radius, tip rounding,
+  face-width offset between mates, per-gear backlash vs. total backlash).
+- **Colour-code and label the gears**: each member (gear 1, gear 2, sun, planets, ring, worm,
+  wheel...) gets its own colour and a label, used consistently in the 2D preview, the 3D view
+  preview and that member's settings section in the window (coloured section header/marker).
+  Hovering or editing a member's settings highlights that gear in the previews, and vice versa.
+
 Decisions:
 - The native parametric `FeatureKind::Gear` work (branch `gear-parametric`) is **paused, not
   needed**. Re-point that agent ("timeline rebuilder") at regenerate-in-place with stable

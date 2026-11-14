@@ -115,3 +115,26 @@ All of these branched before the strength/robust/mesh2d merges, so each needs
 - Picture: `solidcraft-cli.exe snapshot script.json --out x.png --view iso --no-grid`.
 - Drive the app: start with `--control 7979`; token in `%LOCALAPPDATA%\SolidCraft\control\7979.token`
   (Store Python can't read it: read it in PowerShell and pass it in); `ui.start {command:"gear.create"}`, `ui.screenshot {path}`.
+
+## After the restart (2026-11-14, evening)
+
+Rule from the user: **one rebuild at a time**. No agent builds or checks the engine, UI or app;
+agents only run `cargo test --release -p solidcraft-gear`. The only exception is the builder
+window agent, which may run a single `cargo check -p solidcraft-ui-egui` when nothing else is
+compiling. The integrator does one full build when a large batch is ready.
+
+Agents running (fresh agents; branches merge `gear-generator` first):
+
+| Worktree / branch | Job |
+|---|---|
+| `solidcraft-mesh3d` / `gear-mesh3d` | pure-math 3D mesh checker (`mesh3d.rs`); fix spiral bevel, worm + throated wheel, verify bevel and crossed helical |
+| `solidcraft-hypoid` / `gear-hypoid` | real spiral hypoid from existing step kinds, proved with a 3D check |
+| `solidcraft-body` / `gear-body` | shafts and dual shafts, chamfers, tunable 3D-print profile, clearance and tooth parameters, hub hardware |
+| `solidcraft-axes` / `gear-axes` | owns `gear_window.rs`: axis-first builder, regenerate in place (`gear.update`), colour-coding and highlight, preview sync |
+| `solidcraft-extras` / `gear-extras` | sprockets, timing pulleys, splines, face gear |
+| `solidcraft-tools` / `gear-tools` | public mesh-check API for a window badge, print test coupon, design-by-goal, design sheet and DXF |
+
+`gear-parametric` stays paused. Merged worktrees (strength, robust, mesh2d) were removed.
+Integration order when they report: body, tools, extras (gear crate, additive) -> mesh3d ->
+hypoid -> axes last (it wires the UI for everyone's new fields), then one build, kernel overlap
+check on every set, screenshots, launch.

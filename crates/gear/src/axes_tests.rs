@@ -166,16 +166,17 @@ fn helical_pairs_and_cycloidal_gears_reach_the_distance() {
 
 #[test]
 fn bevels_meet_at_the_apex() {
-    for (deg, o2) in [(90.0f64, [0.0, 0.0, 12.0]), (60.0, [0.0, 0.0, 12.0]), (120.0, [0.0, 0.0, 12.0])] {
+    // (120° at ratio 2 would need a 90° crown gear, which the builder refuses: ratio 1 there.)
+    for (deg, o2, ratio) in [(90.0f64, [0.0, 0.0, 12.0], 2u32), (60.0, [0.0, 0.0, 12.0], 2), (120.0, [0.0, 0.0, 12.0], 1)] {
         let a1 = axis([0.0, 0.0, -40.0], [0.0, 0.0, 1.0]);
         let r = deg.to_radians();
         // Axis 2 leaves the apex (0, 0, 12) at `deg` from the ray gear 1 sits on (−z).
         let side2 = [r.sin() * 0.6, r.sin() * 0.8, -r.cos()];
         let a2 = axis([o2[0] + 30.0 * side2[0], o2[1] + 30.0 * side2[1], o2[2] + 30.0 * side2[2]], side2);
         for kind in [Kind::Bevel, Kind::SpiralBevel] {
-            let s = solve(&a1, Some(&a2), Some(kind), &Spec::defaults_for(kind), &Drive { ratio: Some(2.0), teeth_free: true, teeth2_free: true, ..Drive::default() }).unwrap();
+            let s = solve(&a1, Some(&a2), Some(kind), &Spec::defaults_for(kind), &Drive { ratio: Some(f64::from(ratio)), teeth_free: true, teeth2_free: true, ..Drive::default() }).unwrap();
             assert!(close(s.spec.shaft_angle, deg, 1e-6), "{deg}: {}", s.spec.shaft_angle);
-            assert_eq!(s.spec.teeth2, 2 * s.spec.teeth);
+            assert_eq!(s.spec.teeth2, ratio * s.spec.teeth);
             let p = on_axes(&s, &a1, &a2);
             // Each gear's large end is the cone distance from the apex, on its own side.
             let re = fact(&s, "outer cone distance");

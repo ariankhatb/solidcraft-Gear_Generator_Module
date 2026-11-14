@@ -159,6 +159,9 @@ pub struct PreviewState {
     pub error: Option<String>,
     /// A preview is being computed.
     pub busy: bool,
+    /// What is shown (the scene, or the error) was computed for the inputs as they are now. False
+    /// while the last good preview stands in for inputs still being computed.
+    pub current: bool,
     /// Extent of the preview scene.
     pub bounds: Aabb3,
     /// Time the last preview took (ms), for `ui.inspect`.
@@ -215,6 +218,7 @@ impl PreviewState {
         self.mirror_decided = None;
         self.sketches.clear();
         self.busy = false;
+        self.current = false;
         self.rolled_back = false;
         self.hide_scene();
     }
@@ -476,12 +480,14 @@ pub fn update(app: &mut SolveApp, ctx: &egui::Context) {
         if let Some(job) = job {
             app.preview.apply(key, job);
             app.preview.busy = false;
+            app.preview.current = true;
             return;
         }
         let scratch = app.session.scratch();
         spawn(&mut app.preview, key, scratch, cmds, colors, tool, Arc::new(Progress::default()));
     }
     app.preview.busy = app.preview.running.is_some();
+    app.preview.current = app.preview.shown_key == Some(key);
     if app.preview.busy {
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
@@ -576,7 +582,8 @@ pub fn compute(s: &Session, cmds: &[(String, Value)], colors: Colors) -> Job {
             let p = s.preview(cmds).map_err(|e| e.to_string())?;
             let guard =
                 |f: &dyn Fn() -> Built| std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|_| "the preview failed".to_string());
-            let mut b = guard(&|| build(&p.before, &p.after, colors))?;
+            let tints = body_tints(cmds);
+            let mut b = guard(&|| build_tinted(&p.before, &p.after, colors, &tints))?;
             b.bounds = state_bounds(&p.after);
             // The radius a previewed fillet used when it reduced the one asked for (a new
             // fillet or an edited one: the feature the replies name).
@@ -819,6 +826,28 @@ fn same(a: &Mesh, b: &Mesh) -> bool {
 /// The preview scene: changed and new bodies (new surface tinted) and, as a ghost, the old
 /// version of changed or removed bodies.
 pub fn build(before: &ModelState, after: &ModelState, c: Colors) -> Built {
+    build_tinted(before, after, c, &[])
+}
+
+/// The colours a previewed command asks for its bodies, by body name: `ui.preview_tints` of its
+/// parameters, `{"<body>": [r, g, b, a]}` (the Gear Generator gives each member of a set its
+/// own colour, the one its outline and its settings have in the window).
+fn body_tints(cmds: &[(String, Value)]) -> Vec<(String, [u8; 4])> {
+    let mut tints = Vec::new();
+    for (_, params) in cmds {
+        let Some(asked) = params.get("ui").and_then(|ui| ui.get("preview_tints")).and_then(Value::as_object) else { continue };
+        for (body, color) in asked {
+            if let Ok(color) = serde_json::from_value::<[u8; 4]>(color.clone()) {
+                tints.push((body.clone(), color));
+            }
+        }
+    }
+    tints
+}
+
+/// [`build`], with the bodies named in `tints` drawn whole in their own colour instead of the
+/// new-body and new-surface colours.
+pub fn build_tinted(before: &ModelState, after: &ModelState, c: Colors, tints: &[(String, [u8; 4])]) -> Built {
     let mut sc = GpuScene::default();
     let added_color = sc.color(c.added);
     let added_plane = sc.color([c.added[0], c.added[1], c.added[2], 64]);
@@ -877,10 +906,11 @@ pub fn build(before: &ModelState, after: &ModelState, c: Colors) -> Built {
             }
             _ => Vec::new(),
         };
-        let kept = if old.is_some() { body_color } else { new_body };
+        let own = tints.iter().find(|(name, _)| *name == a.name).map(|(_, color)| sc.color(*color));
+        let kept = own.unwrap_or(if old.is_some() { body_color } else { new_body });
         for (t, f) in am.triangles.iter().zip(&am.tri_face) {
             let new = new_face.get(*f as usize).copied().unwrap_or(false);
-            let col = if new && c.tint_new { added_color } else { kept };
+            let col = if new && c.tint_new && own.is_none() { added_color } else { kept };
             let through = cut && new;
             for k in t {
                 let i = *k as usize;

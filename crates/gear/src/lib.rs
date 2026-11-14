@@ -10,6 +10,8 @@
 //!   drive) as bodies of solid steps, with facts, warnings and a 2D meshing preview.
 //! - [`axes`]: axis-first design: how two shaft axes lie (parallel, intersecting, skew), which
 //!   gear families fit them, and a set sized and placed on them from a ratio and one size.
+//! - [`strength`]: load capacity (ISO 6336 Method B simplified, Lewis; simplified bevel and
+//!   worm): forces, stresses and safety factors for a given torque or power.
 //!
 //! Pure math with no dependencies: the engine turns a plan into sketches and features, the
 //! window draws its preview from the same plan.
@@ -20,6 +22,7 @@ pub mod geom;
 pub mod hub;
 pub mod involute;
 pub mod plan;
+pub mod strength;
 
 pub use geom::{Outline, Region, Seg, V2};
 pub use plan::{Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit, plan};
@@ -27,4 +30,13 @@ pub use plan::{Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit,
 #[cfg(test)]
 mod axes_tests;
 #[cfg(test)]
+mod accuracy_tests;
+#[cfg(test)]
+mod sweep_tests;
+#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod mesh2d;
+#[cfg(test)]
+mod mesh_tests;

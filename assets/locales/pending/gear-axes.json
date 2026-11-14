@@ -1,26 +1,42 @@
 {
   "ar": {
-    "cmd.gear_from_axes": "تروس من المحاور"
+    "cmd.gear_from_axes": "تروس من المحاور",
+    "cmd.gear_update": "تحديث التروس",
+    "cmd.gear_inspect": "فحص التروس"
   },
   "de": {
-    "cmd.gear_from_axes": "Zahnräder aus Achsen"
+    "cmd.gear_from_axes": "Zahnräder aus Achsen",
+    "cmd.gear_update": "Zahnräder aktualisieren",
+    "cmd.gear_inspect": "Zahnräder untersuchen"
   },
   "en": {
-    "cmd.gear_from_axes": "Gears From Axes"
+    "cmd.gear_from_axes": "Gears From Axes",
+    "cmd.gear_update": "Update Gears",
+    "cmd.gear_inspect": "Inspect Gears"
   },
   "he": {
-    "cmd.gear_from_axes": "גלגלי שיניים מצירים"
+    "cmd.gear_from_axes": "גלגלי שיניים מצירים",
+    "cmd.gear_update": "עדכון גלגלי שיניים",
+    "cmd.gear_inspect": "בדיקת גלגלי שיניים"
   },
   "ja": {
-    "cmd.gear_from_axes": "軸から歯車"
+    "cmd.gear_from_axes": "軸から歯車",
+    "cmd.gear_update": "歯車を更新",
+    "cmd.gear_inspect": "歯車を調べる"
   },
   "ko": {
-    "cmd.gear_from_axes": "축에서 기어"
+    "cmd.gear_from_axes": "축에서 기어",
+    "cmd.gear_update": "기어 업데이트",
+    "cmd.gear_inspect": "기어 검사"
   },
   "vi": {
-    "cmd.gear_from_axes": "Bánh răng từ các trục"
+    "cmd.gear_from_axes": "Bánh răng từ các trục",
+    "cmd.gear_update": "Cập nhật bánh răng",
+    "cmd.gear_inspect": "Kiểm tra bánh răng"
   },
   "zh": {
-    "cmd.gear_from_axes": "由轴线生成齿轮"
+    "cmd.gear_from_axes": "由轴线生成齿轮",
+    "cmd.gear_update": "更新齿轮",
+    "cmd.gear_inspect": "检查齿轮"
   }
 }

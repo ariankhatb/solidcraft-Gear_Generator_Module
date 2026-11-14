@@ -1,21 +1,46 @@
-//! The Gear Generator window (`gear.create`'s ribbon button): pick a gear type, set its
-//! numbers, watch the set mesh in an animated 2D preview with its key figures and warnings, see
-//! the solids previewed in the view, and Create them as one undo step.
+//! The Gear Generator window (`gear.create`'s ribbon button).
 //!
-//! The Axes step at the top makes it axis-first: pick the two shafts in the model (or enter
-//! them) and the window says how they lie, offers the gear types that fit, works out what the
-//! axes decide (centre distance, shaft angle, offset, and the module or teeth left free) and
-//! builds the gears on them.
+//! Axis-first: the Axes step at the top holds the two shafts (picked in the model or entered;
+//! axis 1 starts as world Z). The window says how they lie, offers the gear types that fit, works
+//! out what the axes decide (centre distance, shaft angle, offset, and the module or teeth left
+//! free; shown read-only) and builds the gears on them, while the ratio, teeth and module that
+//! stay free are the user's to drive.
+//!
+//! Each member of a set (gear 1, gear 2, sun, planets, ring, worm, wheel…) has one colour: its
+//! outline in the 2D preview, its name there, the marker on its settings section, and its body in
+//! the view's preview. Pointing at a member's section (or changing a number in it) lights the
+//! member in the 2D preview; pointing at a member there lights its section.
+//!
+//! The 2D preview turns every member with the motion the gear crate's mesh tests prove
+//! ([`solidcraft_gear::PreviewGear::place`]). With Turn off, or after Reset, it shows the pose
+//! the bodies are built in, which is what the view's preview shows. The view's preview is only
+//! ever the one computed for the numbers in the window: while they change, and until the new one
+//! is ready, it is taken down and the window says "updating".
+//!
+//! Opened with a gear body (or anything of a set) selected, or from the set's history folder,
+//! the window is filled from what the set was made with and its main button is Update:
+//! `gear.update` regenerates the set where it stands.
+//!
+//! The settings column is built from one function per section ([`params`] lists them): a new
+//! `Spec` field gets its controls by adding rows to the section it belongs to, or a new section
+//! function to that list.
 
 use egui::{Color32, Pos2, Sense, Stroke, Ui, Vec2, pos2, vec2};
+use serde_json::{Value, json};
+use solidcraft_gear::axes::{self, Axis, Derived, Drive, Relation, Solved};
 use solidcraft_gear::geom::{Region, V2};
 use solidcraft_gear::hub::{Bore, BoreKind};
 use solidcraft_gear::involute::BasicRack;
-use solidcraft_gear::axes::{self, Axis, Derived, Drive, Relation, Solved};
 use solidcraft_gear::plan::{Axes, Kind, Plan, Spec, Unit};
 
 use crate::SolveApp;
 use crate::ui_kit;
+
+/// How long the numbers must stand still before the view's preview is computed for them (ms):
+/// a dragged value would otherwise start a build of the whole set at every step.
+const SETTLE_MS: f64 = 250.0;
+/// How long a member stays lit in the 2D preview after one of its numbers changed (ms).
+const EDIT_GLOW_MS: f64 = 1200.0;
 
 /// A picked or entered shaft axis, and where it came from.
 #[derive(Clone, Debug, PartialEq)]
@@ -44,7 +69,18 @@ pub struct AxesStep {
 
 impl Default for AxesStep {
     fn default() -> Self {
-        AxesStep { slots: [None, None], use_ratio: false, ratio: 2.0, auto_module: true, use_cone: false, cone: 40.0, flip1: false, flip2: false, swap: false, along: 0.0 }
+        AxesStep {
+            slots: [Some(Slot { axis: Axis::Z, label: "world Z".into() }), None],
+            use_ratio: false,
+            ratio: 2.0,
+            auto_module: true,
+            use_cone: false,
+            cone: 40.0,
+            flip1: false,
+            flip2: false,
+            swap: false,
+            along: 0.0,
+        }
     }
 }
 
@@ -75,6 +111,70 @@ impl AxesStep {
             along: self.along,
         }
     }
+
+    /// The step as kept with a set, for the window to be filled from again.
+    fn to_json(&self) -> Value {
+        let slot = |s: &Option<Slot>| s.as_ref().map(|s| json!({"origin": s.axis.origin, "dir": s.axis.dir, "label": s.label}));
+        json!({
+            "slots": [slot(&self.slots[0]), slot(&self.slots[1])],
+            "use_ratio": self.use_ratio,
+            "ratio": self.ratio,
+            "auto_module": self.auto_module,
+            "use_cone": self.use_cone,
+            "cone": self.cone,
+            "flip1": self.flip1,
+            "flip2": self.flip2,
+            "swap": self.swap,
+            "along": self.along,
+        })
+    }
+
+    fn from_json(v: &Value) -> Option<AxesStep> {
+        let slot = |v: &Value| -> Option<Slot> {
+            let origin: [f64; 3] = serde_json::from_value(v.get("origin")?.clone()).ok()?;
+            let dir: [f64; 3] = serde_json::from_value(v.get("dir")?.clone()).ok()?;
+            Some(Slot { axis: Axis::new(origin, dir)?, label: v.get("label").and_then(Value::as_str).unwrap_or("stored").to_string() })
+        };
+        let slots = v.get("slots")?.as_array()?;
+        let flag = |k: &str| v.get(k).and_then(Value::as_bool).unwrap_or(false);
+        let number = |k: &str, or: f64| v.get(k).and_then(Value::as_f64).filter(|x| x.is_finite()).unwrap_or(or);
+        Some(AxesStep {
+            slots: [slots.first().and_then(slot), slots.get(1).and_then(slot)],
+            use_ratio: flag("use_ratio"),
+            ratio: number("ratio", 2.0),
+            auto_module: flag("auto_module"),
+            use_cone: flag("use_cone"),
+            cone: number("cone", 40.0),
+            flip1: flag("flip1"),
+            flip2: flag("flip2"),
+            swap: flag("swap"),
+            along: number("along", 0.0),
+        })
+    }
+}
+
+/// What the window shows or hides besides the set's own numbers.
+#[derive(Clone, Debug, PartialEq)]
+struct Opts {
+    /// Module given as diametral pitch (teeth per inch).
+    inch: bool,
+    /// Show the basic rack's coefficients.
+    advanced: bool,
+    /// Designing for FDM printing: nozzle width (mm) the tooth tips are checked against.
+    printing: bool,
+    nozzle: f64,
+    /// Show the load inputs for the strength rating.
+    load_open: bool,
+}
+
+/// The set being edited (the window's main button is then Update).
+#[derive(Clone, Debug, PartialEq)]
+struct Editing {
+    /// The set's history folder.
+    group: u64,
+    name: String,
+    /// Its bodies' names, in build order.
+    bodies: Vec<String>,
 }
 
 /// What the window holds between frames.
@@ -100,19 +200,27 @@ pub struct GearWindow {
     /// The plan for what is built, or why there is none; recomputed when an input changes.
     plan: Result<Plan, String>,
     planned: Option<(Spec, AxesStep)>,
+    /// When the inputs last changed (ms): the view's preview waits for them to settle.
+    changed_ms: f64,
     /// Filled triangles of each preview gear, in its own coordinates.
     meshes: Vec<GearMesh>,
-    /// Whether the set turns in the preview, and how far it has turned (driver radians).
+    /// Whether the set turns in the 2D preview, whether that is paused, and how far it has
+    /// turned (driver radians; 0 is the pose the bodies are built in).
     pub animate: bool,
+    paused: bool,
     turned: f64,
     speed: f64,
     /// Show the result in the view as the numbers change.
     pub preview_3d: bool,
-    /// Module given as diametral pitch (teeth per inch).
-    inch: bool,
-    /// Show the basic rack's coefficients.
-    advanced: bool,
-    /// The last create's error.
+    opts: Opts,
+    /// The member whose settings section the pointer is over, the member under the pointer in
+    /// the 2D preview, and the member whose numbers last changed (with when, ms).
+    hover_section: Option<usize>,
+    hover_preview: Option<usize>,
+    edited: Option<(usize, f64)>,
+    /// The set this window regenerates, when it was opened on one.
+    editing: Option<Editing>,
+    /// The last create's or update's error.
     error: Option<String>,
 }
 
@@ -120,6 +228,68 @@ struct GearMesh {
     fill: Vec<[V2; 3]>,
     holes: Vec<Vec<[V2; 3]>>,
     outlines: Vec<Vec<V2>>,
+    /// The farthest outline point from the gear's own centre.
+    radius: f64,
+}
+
+/// One colour per member of a set, used wherever the member shows.
+const PALETTE: [Color32; 6] = [
+    Color32::from_rgb(86, 140, 220),
+    Color32::from_rgb(232, 146, 64),
+    Color32::from_rgb(96, 180, 120),
+    Color32::from_rgb(196, 110, 190),
+    Color32::from_rgb(210, 190, 80),
+    Color32::from_rgb(120, 170, 190),
+];
+
+fn member_color(m: usize) -> Color32 {
+    PALETTE[m % PALETTE.len()]
+}
+
+/// The members of a set of this type, as their settings sections are headed.
+fn members(k: Kind) -> &'static [&'static str] {
+    match k {
+        Kind::Planetary => &["Sun", "Planets", "Ring"],
+        Kind::Worm => &["Wheel", "Worm"],
+        Kind::Hypoid => &["Pinion", "Gear"],
+        Kind::Cycloidal => &["Wheel", "Pinion"],
+        Kind::CycloidalDrive => &["Disc", "Ring pins"],
+        Kind::Pair | Kind::Bevel | Kind::SpiralBevel | Kind::CrossedHelical => &["Gear 1", "Gear 2"],
+        Kind::Internal => &["Ring gear"],
+        Kind::Rack => &["Rack"],
+        // A single gear (spur, helical, herringbone), and any family added later until it
+        // names its members here.
+        _ => &["Gear"],
+    }
+}
+
+/// The member a 2D preview outline belongs to (the `i`-th of the plan's, called `name`).
+fn member_of_outline(k: Kind, i: usize, name: &str) -> usize {
+    match k {
+        Kind::Planetary if name.starts_with("planet") => 1,
+        Kind::Planetary if name == "ring" => 2,
+        Kind::Planetary => 0,
+        _ => i.min(members(k).len() - 1),
+    }
+}
+
+/// The member a built body belongs to (the `i`-th of the plan's, called `name`; `only` as in
+/// the spec: one member built alone).
+fn member_of_body(k: Kind, only: u8, i: usize, name: &str) -> usize {
+    let last = members(k).len() - 1;
+    match k {
+        Kind::Planetary if name.contains("Planet ") => 1,
+        Kind::Planetary if name.contains("Ring z") => 2,
+        Kind::Planetary => 0,
+        _ if only > 0 => usize::from(only - 1).min(last),
+        _ => i.min(last),
+    }
+}
+
+/// A spec from `gear.create` parameters (as the window keeps its typed numbers with a set).
+fn spec_from(v: &Value) -> Option<Spec> {
+    let p: solidcraft_engine::schema::gear::GearParams = serde_json::from_value(v.clone()).ok()?;
+    solidcraft_engine::gear_spec_of(&p).ok()
 }
 
 impl GearWindow {
@@ -136,17 +306,73 @@ impl GearWindow {
             last_relation: None,
             plan: Err(String::new()),
             planned: None,
+            changed_ms: 0.0,
             meshes: Vec::new(),
             animate: true,
+            paused: false,
             turned: 0.0,
             speed: 0.4,
             preview_3d: true,
-            inch: false,
-            advanced: false,
+            opts: Opts { inch: false, advanced: false, printing: false, nozzle: 0.4, load_open: false },
+            hover_section: None,
+            hover_preview: None,
+            edited: None,
+            editing: None,
             error: None,
         };
         w.replan();
+        w.changed_ms = 0.0;
         w
+    }
+
+    /// The window on a set the design keeps: filled from the window's own state where the set
+    /// was made here (typed numbers, axes, options), otherwise from the set's parameters, placed
+    /// by its stored frame.
+    fn on_set(group: u64, name: &str, bodies: &[String], request: &Value, params: &Value) -> Self {
+        let mut w = GearWindow::new();
+        let kept = request.get("ui").filter(|ui| ui.get("window").is_some());
+        match kept.and_then(|ui| Some((spec_from(ui.get("typed")?)?, AxesStep::from_json(ui.get("axes")?)?, ui))) {
+            Some((spec, axes, ui)) => {
+                w.spec = spec;
+                w.axes = axes;
+                let flag = |k: &str| ui.get(k).and_then(Value::as_bool).unwrap_or(false);
+                w.opts.inch = flag("inch");
+                w.opts.printing = flag("printing");
+                w.opts.nozzle = ui.get("nozzle").and_then(Value::as_f64).filter(|n| n.is_finite() && *n > 0.0).unwrap_or(0.4);
+            }
+            // Made by a script, or by a window that kept nothing: the set as it is, where it is.
+            None => {
+                if let Some(spec) = spec_from(params) {
+                    w.spec = spec;
+                }
+                w.axes = AxesStep { slots: [None, None], auto_module: false, ..AxesStep::default() };
+            }
+        }
+        for (i, slot) in w.axes.slots.iter().enumerate() {
+            if let Some(s) = slot {
+                w.entered[i] = (s.axis.origin, s.axis.dir);
+            }
+        }
+        // The type is the set's: the axes are not asked for another.
+        w.last_relation = w.axes.relation().as_ref().map(Relation::name);
+        w.opts.load_open = w.spec.load.torque > 0.0 || w.spec.load.power > 0.0;
+        w.editing = Some(Editing { group, name: name.to_string(), bodies: bodies.to_vec() });
+        w.planned = None;
+        w.replan();
+        w.changed_ms = 0.0;
+        w
+    }
+
+    /// The window's own state, kept with the set it makes (`ui` of `gear.create`).
+    fn ui_state(&self) -> Value {
+        json!({
+            "window": 1,
+            "typed": solidcraft_engine::gear_params_of(&self.spec),
+            "axes": self.axes.to_json(),
+            "inch": self.opts.inch,
+            "printing": self.opts.printing,
+            "nozzle": self.opts.nozzle,
+        })
     }
 
     fn replan(&mut self) {
@@ -156,6 +382,7 @@ impl GearWindow {
             return;
         }
         self.planned = Some(key);
+        self.changed_ms = crate::now_ms();
         self.solved = None;
         // With an axis, the set is sized and placed on the axes; what is built is the solved
         // spec, and `spec` stays what was typed.
@@ -178,9 +405,43 @@ impl GearWindow {
         };
     }
 
-    /// The command the view previews while the window is open.
-    pub fn preview_commands(&self) -> Option<Vec<(String, serde_json::Value)>> {
-        (self.preview_3d && self.plan.is_ok()).then(|| vec![("gear.create".to_string(), solidcraft_engine::gear_params_of(&self.built))])
+    /// Whether the numbers have stood still long enough for the view's preview to follow.
+    fn settled(&self) -> bool {
+        (crate::now_ms() - self.changed_ms).abs() >= SETTLE_MS
+    }
+
+    /// The command and parameters that make (or regenerate) the set as the window shows it.
+    fn command(&self, ui: Value) -> (String, Value) {
+        let mut params = solidcraft_engine::gear_params_of(&self.built);
+        params["ui"] = ui;
+        match &self.editing {
+            Some(e) => {
+                params["group"] = json!(e.group);
+                // Everything the set is now is in these parameters: nothing of the old request stays.
+                params["reset"] = json!(true);
+                ("gear.update".to_string(), params)
+            }
+            None => ("gear.create".to_string(), params),
+        }
+    }
+
+    /// Each body's colour in the view's preview: its member's.
+    fn tints(&self) -> Value {
+        let Ok(plan) = &self.plan else { return json!({}) };
+        let kept = self.editing.as_ref().map(|e| &e.bodies).filter(|names| names.len() == plan.bodies.len());
+        let mut tints = serde_json::Map::new();
+        for (i, body) in plan.bodies.iter().enumerate() {
+            let name = kept.and_then(|names| names.get(i)).unwrap_or(&body.name);
+            let color = member_color(member_of_body(self.built.kind, self.built.only, i, &body.name));
+            tints.insert(name.clone(), json!(color.to_srgba_unmultiplied()));
+        }
+        Value::Object(tints)
+    }
+
+    /// The command the view previews while the window is open: none while the numbers are
+    /// still changing, so the view never shows a set other than the one in the window.
+    pub fn preview_commands(&self) -> Option<Vec<(String, Value)>> {
+        (self.preview_3d && self.plan.is_ok() && self.settled()).then(|| vec![self.command(json!({"preview_tints": self.tints()}))])
     }
 
     /// A new type starts from its own defaults, keeping the tooth form and hub choices.
@@ -200,6 +461,7 @@ impl GearWindow {
         s.bore2 = keep.bore2;
         s.origin = keep.origin;
         s.name = keep.name;
+        s.load = keep.load;
         self.spec = s;
         self.turned = 0.0;
     }
@@ -218,6 +480,18 @@ impl GearWindow {
             self.switch_kind(axes::natural(Some(&rel)));
         }
     }
+
+    /// The member to light up: the one whose section the pointer is over, else the one under
+    /// the pointer in the 2D preview, else the one whose numbers just changed.
+    fn lit(&self) -> Option<usize> {
+        let recent = self.edited.filter(|(_, at)| (crate::now_ms() - at).abs() < EDIT_GLOW_MS).map(|(m, _)| m);
+        self.hover_section.or(self.hover_preview).or(recent)
+    }
+
+    /// How far the 2D preview has turned: 0 (the pose the bodies are built in) with Turn off.
+    fn pose(&self) -> f64 {
+        if self.animate { self.turned } else { 0.0 }
+    }
 }
 
 impl Default for GearWindow {
@@ -226,10 +500,29 @@ impl Default for GearWindow {
     }
 }
 
+/// Opens the window: on the gear set something selected belongs to (to regenerate it), else for
+/// a new set. A window already open stays as it is.
 pub fn open(app: &mut SolveApp) {
-    if app.gear_window.is_none() {
-        app.gear_window = Some(GearWindow::new());
+    if app.gear_window.is_some() {
+        return;
     }
+    app.gear_window = Some(match solidcraft_engine::gear_selected_set(&app.session) {
+        Some(set) => GearWindow::on_set(set.group, &set.name, &set.bodies, &set.request, &set.params),
+        None => GearWindow::new(),
+    });
+}
+
+/// Whether a history folder is a gear set the window can be opened on.
+pub fn is_set(app: &SolveApp, group: u64) -> bool {
+    solidcraft_engine::gear_sets(&app.session).iter().any(|set| set.group == group)
+}
+
+/// Opens the window on the gear set of a history folder.
+pub fn open_group(app: &mut SolveApp, group: u64) -> Result<(), String> {
+    let sets = solidcraft_engine::gear_sets(&app.session);
+    let set = sets.iter().find(|set| set.group == group).ok_or_else(|| "That folder is not a gear set the Gear Generator made".to_string())?;
+    app.gear_window = Some(GearWindow::on_set(set.group, &set.name, &set.bodies, &set.request, &set.params));
+    Ok(())
 }
 
 /// Triangles filling a region: the outer outlines by ear clipping, the holes likewise (drawn
@@ -249,7 +542,8 @@ fn mesh_of(r: &Region) -> GearMesh {
         holes.push(triangulate(&p));
         outlines.push(p);
     }
-    GearMesh { fill, holes, outlines }
+    let radius = outlines.iter().flatten().map(|q| q.len()).fold(0.0, f64::max);
+    GearMesh { fill, holes, outlines, radius }
 }
 
 /// Drops repeated points and the closing duplicate.
@@ -300,22 +594,47 @@ fn inside(q: V2, a: V2, b: V2, c: V2) -> bool {
     (b - a).cross(q - a) >= 0.0 && (c - b).cross(q - b) >= 0.0 && (a - c).cross(q - c) >= 0.0
 }
 
+/// Where the view's preview stands against the numbers in the window.
+#[derive(Clone, Copy, PartialEq)]
+enum ViewState {
+    /// Not asked for, or there is no set to show.
+    Off,
+    /// The numbers changed: the preview for them is on its way, and nothing older is shown.
+    Updating,
+    /// The view shows the set these numbers make.
+    Current,
+}
+
 pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let Some(mut w) = app.gear_window.take() else { return };
     w.replan();
     let title = solidcraft_ui_text::tr_label("Gear Generator");
     let create = solidcraft_ui_text::tr("ui.create");
     let close = solidcraft_ui_text::tr("ui.close");
+    let primary: &str = if w.editing.is_some() { "Update" } else { &create };
     let valid = w.plan.is_ok();
     let preview_error = app.preview.error.clone();
-    let preview_busy = app.preview.busy;
-    let (closed, action) = ui_kit::Window::new(egui::Id::unique("sc_gear_window"), "gear", title).fields().cards(3.0).actions(create, close, None).show(ctx, valid, |ui| {
-        body(ui, &mut w, preview_busy, preview_error.as_deref());
+    let view = if !(w.preview_3d && valid) {
+        ViewState::Off
+    } else if !w.settled() || app.preview.busy || !app.preview.current {
+        ViewState::Updating
+    } else {
+        ViewState::Current
+    };
+    let (closed, action) = ui_kit::Window::new(egui::Id::unique("sc_gear_window"), "gear", title).fields().cards(3.0).actions(primary, &close, None).show(ctx, valid, |ui| {
+        body(ui, &mut w, view, preview_error.as_deref());
     });
-    if w.animate {
+    if w.animate && !w.paused {
         let dt = ctx.input(|i| i.stable_dt).min(0.1) as f64;
         w.turned += dt * w.speed;
         ctx.request_repaint();
+    } else if !w.animate {
+        w.turned = 0.0;
+    }
+    if view == ViewState::Updating || w.lit().is_some() {
+        // The preview starts once the numbers settle, and an edit's glow fades: both need a
+        // frame without the pointer moving.
+        ctx.request_repaint_after(std::time::Duration::from_millis(80));
     }
     if closed || action == ui_kit::Action::Cancel {
         return;
@@ -324,16 +643,32 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         capture(app, &mut w, slot);
     }
     if action == ui_kit::Action::Ok {
-        let params = solidcraft_engine::gear_params_of(&w.built);
-        match app.run("gear.create", params) {
-            Ok(_) => {
-                w.error = None;
+        let (command, params) = w.command(w.ui_state());
+        match app.run(&command, params) {
+            Ok(reply) => {
+                if w.editing.is_some() {
+                    report_update(app, &reply);
+                }
                 return;
             }
             Err(e) => w.error = Some(e),
         }
     }
     app.gear_window = Some(w);
+}
+
+/// Says how an update went: in place or rebuilt, and which features built on the gears now fail.
+fn report_update(app: &mut SolveApp, reply: &Value) {
+    let broken: Vec<&str> = reply.get("broken").and_then(Value::as_array).map(|b| b.iter().filter_map(|f| f.get("feature").and_then(Value::as_str)).collect()).unwrap_or_default();
+    let how = match reply.get("updated").and_then(Value::as_str) {
+        Some("in_place") => "Gears updated in place",
+        _ => "Gears rebuilt under the same names",
+    };
+    if broken.is_empty() {
+        app.set_status(how, false);
+    } else {
+        app.set_status(format!("{how}; built on them and failing now: {}", broken.join(", ")), true);
+    }
 }
 
 /// Fills an axis slot from what is selected in the view: a construction or origin axis, a
@@ -394,7 +729,7 @@ fn axes_step(ui: &mut Ui, w: &mut GearWindow) {
                     }
                 }
                 None => {
-                    ui.weak(if i == 0 { "not set: the gear goes at Centre at, on world Z" } else { "not set" });
+                    ui.weak(if i == 0 { "not set: the set goes where Centre at says, on world Z" } else { "not set: one gear, or a set built about axis 1" });
                 }
             }
         });
@@ -422,7 +757,9 @@ fn axes_step(ui: &mut Ui, w: &mut GearWindow) {
     if w.axes.slots[0].is_none() && w.axes.slots[1].is_some() {
         ui.colored_label(ui.visuals().warn_fg_color, "Set Axis 1 too: gear 1 turns about it");
     }
-    let Some(a1) = w.axes.axis(0) else { return };
+    if w.axes.axis(0).is_none() {
+        return;
+    }
     let rel = w.axes.relation();
     let two = rel.is_some() && w.spec.kind.is_set() && !matches!(w.spec.kind, Kind::Planetary | Kind::CycloidalDrive);
     ui.horizontal_wrapped(|ui| {
@@ -470,7 +807,6 @@ fn axes_step(ui: &mut Ui, w: &mut GearWindow) {
             ui.add(egui::DragValue::new(&mut a.along).speed(0.5).max_decimals(3).suffix(" mm")).on_hover_text("How far along axis 1 from its picked point the gear sits");
         }
     });
-    let _ = a1;
     if let Some(s) = &w.solved {
         for n in &s.notes {
             ui.label(egui::RichText::new(n).small().weak());
@@ -478,7 +814,17 @@ fn axes_step(ui: &mut Ui, w: &mut GearWindow) {
     }
 }
 
-fn body(ui: &mut Ui, w: &mut GearWindow, busy: bool, view_error: Option<&str>) {
+fn body(ui: &mut Ui, w: &mut GearWindow, view: ViewState, view_error: Option<&str>) {
+    if let Some(e) = w.editing.clone() {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new(format!("Editing {}", e.name)).strong());
+            ui.label(egui::RichText::new("Update regenerates the set where it stands: its bodies keep their names, and its sketches and features their ids where the build steps stay the same").small().weak());
+            if ui.small_button("New set instead").on_hover_text("Leave that set as it is and make another from these numbers").clicked() {
+                w.editing = None;
+            }
+        });
+        ui.add_space(4.0);
+    }
     axes_step(ui, w);
     ui.add_space(4.0);
     type_picker(ui, w);
@@ -493,24 +839,55 @@ fn body(ui: &mut Ui, w: &mut GearWindow, busy: bool, view_error: Option<&str>) {
         ui.add_space(8.0);
         ui.vertical(|ui| {
             ui.set_width((full - left - 8.0).max(200.0));
-            preview(ui, w);
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut w.animate, "Turn");
-                ui.add(egui::Slider::new(&mut w.speed, 0.05..=2.0).show_value(false)).on_hover_text("How fast the preview turns");
-                ui.checkbox(&mut w.preview_3d, "Preview in view");
-                if w.preview_3d && busy {
-                    ui.spinner();
-                }
-            });
-            if let Some(e) = view_error.filter(|_| w.preview_3d) {
-                ui.colored_label(ui.visuals().error_fg_color, format!("View preview: {e}"));
-            }
+            w.hover_preview = preview(ui, w);
+            motion_row(ui, w);
+            view_row(ui, w, view, view_error);
             if let Some(e) = &w.error {
                 ui.colored_label(ui.visuals().error_fg_color, e);
             }
             facts(ui, w);
         });
     });
+}
+
+/// Turn, pause, speed, and back to the pose the bodies are built in.
+fn motion_row(ui: &mut Ui, w: &mut GearWindow) {
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut w.animate, "Turn").on_hover_text("Turn the set in this preview. Off: the pose the bodies are built in, which is what the view shows");
+        if w.animate {
+            if ui.small_button(if w.paused { "Go on" } else { "Pause" }).on_hover_text(if w.paused { "Go on turning" } else { "Hold this pose" }).clicked() {
+                w.paused = !w.paused;
+            }
+            ui.add(egui::Slider::new(&mut w.speed, 0.05..=2.0).show_value(false)).on_hover_text("How fast the preview turns");
+            if w.paused && w.turned != 0.0 && ui.small_button("Reset to build pose").on_hover_text("Back to the pose the bodies are built in").clicked() {
+                w.turned = 0.0;
+            }
+        }
+        if w.pose() == 0.0 {
+            ui.label(egui::RichText::new("build pose").small().weak()).on_hover_text("The set as it is built: the view's preview shows this pose");
+        }
+    });
+}
+
+/// The view's preview: on or off, and whether it shows the numbers in the window yet.
+fn view_row(ui: &mut Ui, w: &mut GearWindow, view: ViewState, view_error: Option<&str>) {
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut w.preview_3d, "Preview in view");
+        match view {
+            ViewState::Off => {}
+            ViewState::Updating => {
+                ui.spinner();
+                ui.label(egui::RichText::new("updating…").small()).on_hover_text("The view's preview is being built for these numbers; nothing older is shown meanwhile");
+            }
+            ViewState::Current if view_error.is_none() => {
+                ui.label(egui::RichText::new("✓ the view shows these numbers").small().weak());
+            }
+            ViewState::Current => {}
+        }
+    });
+    if let Some(e) = view_error.filter(|_| view == ViewState::Current) {
+        ui.colored_label(ui.visuals().error_fg_color, format!("View preview: {e}"));
+    }
 }
 
 fn type_picker(ui: &mut Ui, w: &mut GearWindow) {
@@ -574,230 +951,461 @@ fn count(ui: &mut Ui, label: &str, tip: &str, v: &mut u32, range: std::ops::Rang
 }
 
 fn heading(ui: &mut Ui, text: &str) {
-    ui.add_space(4.0);
+    ui.add_space(6.0);
     ui.label(egui::RichText::new(text).strong());
 }
 
+/// A member's section header: its colour marker and its name, on a band of its colour while the
+/// member is lit.
+fn member_header(ui: &mut Ui, label: &str, color: Color32, lit: bool) {
+    ui.add_space(6.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
+    let painter = ui.painter();
+    if lit {
+        painter.rect_filled(rect, 4.0, color.gamma_multiply(0.25));
+    }
+    let side = if lit { 14.0 } else { 11.0 };
+    let mark = egui::Rect::from_center_size(pos2(rect.left() + 11.0, rect.center().y), vec2(side, side));
+    painter.rect_filled(mark, 3.0, color);
+    let ink = if lit { ui.visuals().strong_text_color() } else { ui.visuals().text_color() };
+    painter.text(pos2(rect.left() + 26.0, rect.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(14.0), ink);
+}
+
+/// What a settings section works on: the numbers as typed (`s`), the set as built (`b`: what
+/// the axes decided is read from here), which of them the axes decided (`d`), and the window's
+/// options (`o`).
+struct Cx<'a> {
+    s: &'a mut Spec,
+    b: &'a Spec,
+    d: Derived,
+    k: Kind,
+    /// The set is placed by the Axes step (no "Centre at").
+    on_axes: bool,
+    o: &'a mut Opts,
+}
+
+/// The settings column. One function per section, in this order; a member's rows go in
+/// [`section_member`], which is drawn once per member under that member's coloured header.
+///
+/// EXTENSION POINTS. Controls for new `Spec` fields go where the field belongs:
+/// - one number for the whole set (a new family's size, a mesh option): [`section_set`];
+/// - something each gear has for itself (teeth, shift, bore, material; integral shafts and
+///   dual shafts, per-gear chamfers, per-gear hub hardware): [`section_member`], or the
+///   per-member stubs [`member_shafts`], [`member_chamfers`], [`member_hardware`] it calls;
+/// - the tooth form (rack, clearance, tip relief, crowning): [`section_tooth_form`];
+/// - printing (print profile, XY compensation, elephant-foot relief): [`section_print`];
+/// - hubs, holes and other shared body features: [`section_body`];
+/// - inputs only one family has (hypoid cutter data, a new family's own): [`section_family`];
+/// - the strength rating: [`section_load`]; what is built and where: [`section_output`].
 fn params(ui: &mut Ui, w: &mut GearWindow) {
     // What the axes decided is shown from the solved set, read-only.
     let d: Derived = w.solved.as_ref().map(|s| s.derived).unwrap_or_default();
     let b = w.built.clone();
-    let on_axes = w.axes.axis(0).is_some();
-    let s = &mut w.spec;
-    let k = s.kind;
+    let lit = w.lit();
+    let k = w.spec.kind;
+    let mut cx = Cx { s: &mut w.spec, b: &b, d, k, on_axes: w.axes.slots[0].is_some(), o: &mut w.opts };
+    let mut hovered = None;
+    let mut edited = None;
     egui::ScrollArea::vertical().id_salt("gear_params").max_height(470.0).auto_shrink([false, true]).show(ui, |ui| {
-        heading(ui, "Teeth");
-        if k == Kind::CycloidalDrive {
-            count(ui, "Ring pins", "The disc gets one lobe fewer; the reduction is pins − 1", &mut s.pins, 3..=200);
-            num(ui, "Pin circle Ø", "Diameter through the pin centres", &mut s.pin_circle, 1.0..=5000.0, 0.5, " mm");
-            num(ui, "Pin Ø", "", &mut s.pin_diameter, 0.1..=500.0, 0.1, " mm");
-            num(ui, "Eccentricity", "Offset of the disc's bearing; under pin circle radius ÷ pins", &mut s.eccentricity, 0.01..=100.0, 0.05, " mm");
-            num(ui, "Clearance", "Taken off the disc round the pins", &mut s.backlash, 0.0..=5.0, 0.01, " mm");
+        section_set(ui, &mut cx);
+        section_family(ui, &mut cx);
+        for (m, label) in members(k).iter().enumerate() {
+            let before = cx.s.clone();
+            let section = ui.scope(|ui| {
+                member_header(ui, label, member_color(m), lit == Some(m));
+                section_member(ui, &mut cx, m);
+                member_shafts(ui, &mut cx, m);
+                member_chamfers(ui, &mut cx, m);
+                member_hardware(ui, &mut cx, m);
+            });
+            if ui.rect_contains_pointer(section.response.rect) {
+                hovered = Some(m);
+            }
+            if *cx.s != before {
+                edited = Some(m);
+            }
+        }
+        section_tooth_form(ui, &mut cx);
+        section_print(ui, &mut cx);
+        section_body(ui, &mut cx);
+        section_load(ui, &mut cx);
+        section_output(ui, &mut cx);
+    });
+    w.hover_section = hovered;
+    if let Some(m) = edited {
+        w.edited = Some((m, crate::now_ms()));
+    }
+}
+
+/// The numbers the whole set shares: module, angles, centre distance, backlash, face width.
+fn section_set(ui: &mut Ui, cx: &mut Cx<'_>) {
+    let (b, d, k) = (cx.b, cx.d, cx.k);
+    let s = &mut *cx.s;
+    let o = &mut *cx.o;
+    heading(ui, if k.is_set() { "Whole set" } else { "Size" });
+    if k == Kind::CycloidalDrive {
+        num(ui, "Pin circle Ø", "Diameter through the pin centres", &mut s.pin_circle, 1.0..=5000.0, 0.5, " mm");
+        num(ui, "Eccentricity", "Offset of the disc's bearing; under pin circle radius ÷ pins", &mut s.eccentricity, 0.01..=100.0, 0.05, " mm");
+        num(ui, "Clearance", "Taken off the disc round the pins", &mut s.backlash, 0.0..=5.0, 0.01, " mm");
+        num(ui, "Thickness", "", &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
+        return;
+    }
+    let module = if k == Kind::Worm { "Axial module" } else { "Module" };
+    if d.module {
+        locked(ui, module, mm(b.module));
+    } else if o.inch {
+        let mut dp = 25.4 / s.module;
+        row(ui, "Diametral pitch", "Teeth per inch of pitch diameter", |ui| {
+            if ui.add(egui::DragValue::new(&mut dp).range(0.5..=200.0).speed(0.1).max_decimals(3)).changed() {
+                s.module = 25.4 / dp;
+            }
+            ui.checkbox(&mut o.inch, "inch");
+        });
+    } else {
+        row(ui, module, "Pitch diameter ÷ teeth (mm)", |ui| {
+            ui.add(egui::DragValue::new(&mut s.module).range(0.05..=100.0).speed(0.01).max_decimals(4).suffix(" mm"));
+            ui.checkbox(&mut o.inch, "inch");
+        });
+    }
+    if k.involute() {
+        num(ui, "Pressure angle", "Normal pressure angle; 20° is standard, 14.5° older, 25° stronger", &mut s.pressure_angle, 5.0..=45.0, 0.1, "°");
+    }
+    if matches!(k, Kind::Helical | Kind::Herringbone | Kind::Internal | Kind::Rack | Kind::Pair | Kind::Planetary) {
+        num(ui, "Helix angle", "0 for straight teeth; the sign is the hand (gear 2 gets the opposite)", &mut s.helix, -60.0..=60.0, 0.2, "°");
+    }
+    if matches!(k, Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical) {
+        if d.shaft_angle {
+            locked(ui, "Shaft angle", format!("{:.3}°", b.shaft_angle));
+        } else {
+            num(ui, "Shaft angle", "Angle between the axes", &mut s.shaft_angle, 5.0..=175.0, 0.5, "°");
+        }
+    }
+    if k == Kind::SpiralBevel {
+        num(ui, "Spiral angle", "Mean spiral angle; 35° is usual", &mut s.spiral_angle, 0.0..=60.0, 0.5, "°");
+    }
+    if k == Kind::Pair && d.center_distance {
+        let a = if b.center_distance > 0.0 { b.center_distance } else { b.module * f64::from(b.teeth + b.teeth2) / 2.0 / b.helix.to_radians().cos() };
+        locked(ui, "Centre distance", mm(a));
+    } else if k == Kind::Pair {
+        let mut fixed = s.center_distance > 0.0;
+        row(ui, "Centre distance", "Set it to have gear 2's shift worked out", |ui| {
+            if ui.checkbox(&mut fixed, "").changed() {
+                s.center_distance = if fixed { s.module * f64::from(s.teeth + s.teeth2) / 2.0 / (s.helix.to_radians().cos()) } else { 0.0 };
+            }
+            if fixed {
+                ui.add(egui::DragValue::new(&mut s.center_distance).range(0.1..=1e5).speed(0.05).max_decimals(4).suffix(" mm"));
+            }
+        });
+    }
+    num(ui, "Backlash", "Taken off each tooth at the pitch circle", &mut s.backlash, 0.0..=5.0, 0.005, " mm");
+    num(ui, "Face width", "", &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
+}
+
+/// Inputs only one family has. EXTENSION POINT: a new family's own inputs, or more of an
+/// existing family's (hypoid cutter radius, pinion offset side, worm throat), go here under a
+/// `if k == Kind::…` of their own.
+fn section_family(ui: &mut Ui, cx: &mut Cx<'_>) {
+    let (b, d, k) = (cx.b, cx.d, cx.k);
+    let s = &mut *cx.s;
+    if k == Kind::Hypoid {
+        if d.offset {
+            locked(ui, "Offset", mm(b.offset));
+        } else {
+            num(ui, "Offset", "Distance between the axes; 0 for equal spiral angles", &mut s.offset, 0.0..=5000.0, 0.5, " mm");
+        }
+        num(ui, "Face start", "Where the teeth start along the line of contact, from the throat; larger looks more like a bevel", &mut s.face_start, -5000.0..=5000.0, 0.5, " mm");
+    }
+}
+
+/// One member's own numbers (member `m` of [`members`]): teeth, profile shift, bore, material,
+/// and what only that member has (the worm's starts and diameter, the ring's rim, the rack's
+/// length, the pins).
+fn section_member(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
+    let (b, d, k) = (cx.b, cx.d, cx.k);
+    let rated = k.involute() && k != Kind::Rack && (cx.o.load_open || cx.s.load.torque > 0.0 || cx.s.load.power > 0.0);
+    let s = &mut *cx.s;
+    match (k, m) {
+        (Kind::CycloidalDrive, 0) => {
             count(ui, "Output holes", "Holes for the output pins (0: none)", &mut s.holes, 0..=24);
             if s.holes > 0 {
                 num(ui, "Output pin Ø", "0: 15% of the pin circle", &mut s.hole_diameter, 0.0..=500.0, 0.1, " mm");
             }
-        } else {
-            if d.module {
-                locked(ui, if k == Kind::Worm { "Axial module" } else { "Module" }, mm(b.module));
-            } else if w.inch {
-                let mut dp = 25.4 / s.module;
-                row(ui, "Diametral pitch", "Teeth per inch of pitch diameter", |ui| {
-                    if ui.add(egui::DragValue::new(&mut dp).range(0.5..=200.0).speed(0.1).max_decimals(3)).changed() {
-                        s.module = 25.4 / dp;
-                    }
-                    ui.checkbox(&mut w.inch, "inch");
-                });
+            bore(ui, "Bearing bore", "bore1", &mut s.bore);
+        }
+        (Kind::CycloidalDrive, _) => {
+            count(ui, "Pins", "The disc gets one lobe fewer; the reduction is pins − 1", &mut s.pins, 3..=200);
+            num(ui, "Pin Ø", "", &mut s.pin_diameter, 0.1..=500.0, 0.1, " mm");
+        }
+        (Kind::Rack, _) => {
+            count(ui, "Teeth along", "", &mut s.rack_teeth, 1..=2000);
+            num(ui, "Profile shift x", "Profile shift coefficient: positive thickens the root", &mut s.shift, -1.5..=1.5, 0.01, "");
+            num(ui, "Height below pitch", "0: 3 modules", &mut s.rack_height, 0.0..=1000.0, 0.1, " mm");
+        }
+        (Kind::Worm, 1) => {
+            count(ui, "Starts", "Threads on the worm; ratio = wheel teeth ÷ starts", &mut s.starts, 1..=12);
+            if d.worm_diameter {
+                locked(ui, "Pitch Ø", mm(b.worm_diameter));
             } else {
-                row(ui, if k == Kind::Worm { "Axial module" } else { "Module" }, "Pitch diameter ÷ teeth (mm)", |ui| {
-                    ui.add(egui::DragValue::new(&mut s.module).range(0.05..=100.0).speed(0.01).max_decimals(4).suffix(" mm"));
-                    ui.checkbox(&mut w.inch, "inch");
-                });
+                num(ui, "Pitch Ø", "0: 10 modules", &mut s.worm_diameter, 0.0..=5000.0, 0.1, " mm");
             }
-            let (t1, t2) = match k {
-                Kind::Planetary => ("Sun teeth", Some("Planet teeth")),
-                Kind::Worm => ("Wheel teeth", None),
-                Kind::Hypoid => ("Pinion teeth", Some("Gear teeth")),
-                Kind::Pair | Kind::Bevel | Kind::SpiralBevel | Kind::CrossedHelical => ("Gear 1 teeth", Some("Gear 2 teeth")),
-                Kind::Cycloidal => ("Wheel teeth", Some("Pinion teeth (0: none)")),
-                _ => ("Teeth", None),
-            };
-            if k == Kind::Rack {
-                count(ui, "Teeth along", "", &mut s.rack_teeth, 1..=2000);
-            } else if d.teeth {
-                locked(ui, t1, b.teeth.to_string());
+            num(ui, "Length", "0: enough to engage the wheel", &mut s.worm_length, 0.0..=10000.0, 0.5, " mm");
+            let mut left = s.helix < 0.0;
+            row(ui, "Hand", "", |ui| {
+                ui.radio_value(&mut left, false, "right");
+                ui.radio_value(&mut left, true, "left");
+            });
+            s.helix = if left { -1.0 } else { 0.0 };
+            bore(ui, "Bore", "bore2", &mut s.bore2);
+            if rated {
+                material(ui, "Material", "gear_mat2", &mut s.load.material2);
+            }
+        }
+        (Kind::Planetary, 2) => {
+            let mut ring = if s.teeth3 > 0 { s.teeth3 } else { s.teeth + 2 * s.teeth2 };
+            row(ui, "Teeth", "Sun + 2 × planet for standard gears", |ui| {
+                if ui.add(egui::DragValue::new(&mut ring).range(6..=4000).speed(0.2)).changed() {
+                    s.teeth3 = ring;
+                }
+                if ui.small_button("auto").clicked() {
+                    s.teeth3 = 0;
+                }
+            });
+            num(ui, "Rim", "Beyond the roots; 0: 3 modules", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
+            if rated {
+                ring_material(ui, &mut s.load.material3);
+            }
+        }
+        (_, 0) => {
+            if d.teeth {
+                locked(ui, "Teeth", b.teeth.to_string());
             } else {
-                count(ui, t1, "", &mut s.teeth, 3..=2000);
+                count(ui, "Teeth", "", &mut s.teeth, 3..=2000);
             }
-            if let Some(t2) = t2 {
-                if d.teeth2 {
-                    locked(ui, t2, b.teeth2.to_string());
-                } else {
-                    count(ui, t2, "", &mut s.teeth2, if k == Kind::Cycloidal { 0..=2000 } else { 3..=2000 });
-                }
-            }
-            if k == Kind::Planetary {
-                let mut ring = if s.teeth3 > 0 { s.teeth3 } else { s.teeth + 2 * s.teeth2 };
-                row(ui, "Ring teeth", "Sun + 2 × planet for standard gears", |ui| {
-                    if ui.add(egui::DragValue::new(&mut ring).range(6..=4000).speed(0.2)).changed() {
-                        s.teeth3 = ring;
-                    }
-                    if ui.small_button("auto").clicked() {
-                        s.teeth3 = 0;
-                    }
-                });
-                count(ui, "Planets", "(sun + ring) ÷ planets whole spaces them evenly", &mut s.planets, 1..=24);
-            }
-            if k == Kind::Worm {
-                count(ui, "Worm starts", "Threads on the worm; ratio = wheel teeth ÷ starts", &mut s.starts, 1..=12);
-                if d.worm_diameter {
-                    locked(ui, "Worm pitch Ø", mm(b.worm_diameter));
-                } else {
-                    num(ui, "Worm pitch Ø", "0: 10 modules", &mut s.worm_diameter, 0.0..=5000.0, 0.1, " mm");
-                }
-                num(ui, "Worm length", "0: enough to engage the wheel", &mut s.worm_length, 0.0..=10000.0, 0.5, " mm");
-                let mut left = s.helix < 0.0;
-                row(ui, "Hand", "", |ui| {
-                    ui.radio_value(&mut left, false, "right");
-                    ui.radio_value(&mut left, true, "left");
-                });
-                s.helix = if left { -1.0 } else { 0.0 };
-            }
-            if k.involute() {
-                num(ui, "Pressure angle", "Normal pressure angle; 20° is standard, 14.5° older, 25° stronger", &mut s.pressure_angle, 5.0..=45.0, 0.1, "°");
-            }
-            if matches!(k, Kind::Helical | Kind::Herringbone | Kind::Internal | Kind::Rack | Kind::Pair | Kind::Planetary) {
-                num(ui, "Helix angle", "0 for straight teeth; the sign is the hand (gear 2 gets the opposite)", &mut s.helix, -60.0..=60.0, 0.2, "°");
-            }
-            if matches!(k, Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical) {
-                if d.shaft_angle {
-                    locked(ui, "Shaft angle", format!("{:.3}°", b.shaft_angle));
-                } else {
-                    num(ui, "Shaft angle", "Angle between the axes", &mut s.shaft_angle, 5.0..=175.0, 0.5, "°");
+            if k.involute() && k != Kind::Worm {
+                num(ui, if k.is_set() { "Shift x₁" } else { "Profile shift x" }, "Profile shift coefficient: positive thickens the root and avoids undercut", &mut s.shift, -1.5..=1.5, 0.01, "");
+                if k == Kind::Pair && d.center_distance && d.shift {
+                    locked(ui, "  x₁ (auto while 0)", format!("{:.4}", b.shift));
                 }
             }
             if k == Kind::CrossedHelical {
                 if d.helix {
-                    locked(ui, "Gear 1 helix", format!("{:.3}°", b.helix));
+                    locked(ui, "Helix", format!("{:.3}°", b.helix));
                 } else {
-                    num(ui, "Gear 1 helix", "Gear 2 takes the rest of the shaft angle", &mut s.helix, -75.0..=75.0, 0.5, "°");
+                    num(ui, "Helix", "Gear 2 takes the rest of the shaft angle", &mut s.helix, -75.0..=75.0, 0.5, "°");
                 }
             }
-            if k == Kind::SpiralBevel {
-                num(ui, "Spiral angle", "Mean spiral angle; 35° is usual", &mut s.spiral_angle, 0.0..=60.0, 0.5, "°");
+            if k == Kind::Internal {
+                num(ui, "Rim", "Beyond the roots; 0: 3 modules", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
             }
-            if k == Kind::Hypoid {
-                if d.offset {
-                    locked(ui, "Offset", mm(b.offset));
-                } else {
-                    num(ui, "Offset", "Distance between the axes; 0 for equal spiral angles", &mut s.offset, 0.0..=5000.0, 0.5, " mm");
-                }
-                num(ui, "Face start", "Where the teeth start along the line of contact, from the throat; larger looks more like a bevel", &mut s.face_start, -5000.0..=5000.0, 0.5, " mm");
+            bore(ui, "Bore", "bore1", &mut s.bore);
+            if rated {
+                material(ui, "Material", "gear_mat1", &mut s.load.material);
             }
-            if k.involute() && k != Kind::Worm {
-                num(ui, if k.is_set() { "Shift x₁" } else { "Profile shift x" }, "Profile shift coefficient: positive thickens the root and avoids undercut", &mut s.shift, -1.5..=1.5, 0.01, "");
-                if k == Kind::Pair && d.center_distance {
-                    locked(ui, "Shift x₂", format!("{:.4}", b.shift2));
-                    if d.shift {
-                        locked(ui, "  x₁ (auto while 0)", format!("{:.4}", b.shift));
-                    }
-                } else if matches!(k, Kind::Pair | Kind::Planetary | Kind::CrossedHelical) {
-                    num(ui, "Shift x₂", "Gear 2's (planets') profile shift", &mut s.shift2, -1.5..=1.5, 0.01, "");
-                }
+        }
+        (_, _) => {
+            if d.teeth2 {
+                locked(ui, "Teeth", b.teeth2.to_string());
+            } else if k == Kind::Cycloidal {
+                count(ui, "Teeth", "0: no pinion", &mut s.teeth2, 0..=2000);
+            } else {
+                count(ui, "Teeth", "", &mut s.teeth2, 3..=2000);
+            }
+            if k == Kind::Planetary {
+                count(ui, "Planets", "(sun + ring) ÷ planets whole spaces them evenly", &mut s.planets, 1..=24);
             }
             if k == Kind::Pair && d.center_distance {
-                let a = if b.center_distance > 0.0 { b.center_distance } else { b.module * f64::from(b.teeth + b.teeth2) / 2.0 / b.helix.to_radians().cos() };
-                locked(ui, "Centre distance", mm(a));
-            } else if k == Kind::Pair {
-                let mut fixed = s.center_distance > 0.0;
-                row(ui, "Centre distance", "Set it to have gear 2's shift worked out", |ui| {
-                    if ui.checkbox(&mut fixed, "").changed() {
-                        s.center_distance = if fixed { s.module * f64::from(s.teeth + s.teeth2) / 2.0 / (s.helix.to_radians().cos()) } else { 0.0 };
-                    }
-                    if fixed {
-                        ui.add(egui::DragValue::new(&mut s.center_distance).range(0.1..=1e5).speed(0.05).max_decimals(4).suffix(" mm"));
-                    }
-                });
+                locked(ui, "Shift x₂", format!("{:.4}", b.shift2));
+            } else if matches!(k, Kind::Pair | Kind::Planetary | Kind::CrossedHelical) {
+                num(ui, "Shift x₂", "This gear's profile shift", &mut s.shift2, -1.5..=1.5, 0.01, "");
             }
-            if k != Kind::CycloidalDrive {
-                num(ui, "Backlash", "Taken off each tooth at the pitch circle", &mut s.backlash, 0.0..=5.0, 0.005, " mm");
-            }
-            if k.involute() {
-                row(ui, "Basic rack", "Tooth proportions", |ui| {
-                    let current = BasicRack::STANDARDS.iter().find(|(_, r)| *r == s.rack).map(|(n, _)| *n).unwrap_or("custom");
-                    egui::ComboBox::from_id_salt("gear_rack").selected_text(current).show_ui(ui, |ui| {
-                        for (n, r) in BasicRack::STANDARDS {
-                            ui.selectable_value(&mut s.rack, *r, *n);
-                        }
-                    });
-                    ui.toggle_value(&mut w.advanced, "…");
-                });
-                if w.advanced {
-                    num(ui, "  Addendum ×m", "", &mut s.rack.addendum, 0.3..=2.0, 0.01, "");
-                    num(ui, "  Dedendum ×m", "", &mut s.rack.dedendum, 0.5..=2.5, 0.01, "");
-                    num(ui, "  Root radius ×m", "The cutter's tip radius; makes the root fillet", &mut s.rack.root_radius, 0.0..=0.6, 0.01, "");
-                }
+            bore(ui, "Bore", "bore2", &mut s.bore2);
+            if rated {
+                material(ui, "Material", "gear_mat2", &mut s.load.material2);
             }
         }
-        heading(ui, "Body");
-        num(ui, if k == Kind::CycloidalDrive { "Thickness" } else { "Face width" }, "", &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
-        if matches!(k, Kind::Internal | Kind::Planetary) {
-            num(ui, "Ring rim", "Beyond the roots; 0: 3 modules", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
-        }
-        if k == Kind::Rack {
-            num(ui, "Height below pitch", "0: 3 modules", &mut s.rack_height, 0.0..=1000.0, 0.1, " mm");
-        }
-        if k != Kind::Rack && k != Kind::CycloidalDrive {
-            bore(ui, "Bore", "bore1", &mut s.bore);
-            if k.is_set() {
-                let who = match k {
-                    Kind::Planetary => "Planet bore",
-                    Kind::Worm => "Worm bore",
-                    _ => "Gear 2 bore",
-                };
-                bore(ui, who, "bore2", &mut s.bore2);
+    }
+}
+
+/// EXTENSION POINT: a member's integral shaft, or one on each side (diameter, length, end
+/// features), once `Spec` carries them. Member `m` as in [`members`]; rows go under that
+/// member's header.
+fn member_shafts(_ui: &mut Ui, _cx: &mut Cx<'_>, _m: usize) {}
+
+/// EXTENSION POINT: a member's chamfers (tooth edges on both faces, bore and hub edges), once
+/// `Spec` carries them.
+fn member_chamfers(_ui: &mut Ui, _cx: &mut Cx<'_>, _m: usize) {}
+
+/// EXTENSION POINT: a member's hub hardware (set screws, nut traps, heat-set inserts, bearing
+/// pockets), once `Spec` carries it.
+fn member_hardware(_ui: &mut Ui, _cx: &mut Cx<'_>, _m: usize) {}
+
+/// The tooth form: the basic rack and its coefficients, and the clearance. EXTENSION POINT:
+/// tip relief, crowning, tip rounding and a separate root fillet go here.
+fn section_tooth_form(ui: &mut Ui, cx: &mut Cx<'_>) {
+    if !cx.k.involute() {
+        return;
+    }
+    let s = &mut *cx.s;
+    let o = &mut *cx.o;
+    heading(ui, "Tooth form");
+    row(ui, "Basic rack", "Tooth proportions", |ui| {
+        let current = BasicRack::STANDARDS.iter().find(|(_, r)| *r == s.rack).map(|(n, _)| *n).unwrap_or("custom");
+        egui::ComboBox::from_id_salt("gear_rack").selected_text(current).show_ui(ui, |ui| {
+            for (n, r) in BasicRack::STANDARDS {
+                ui.selectable_value(&mut s.rack, *r, *n);
             }
-            if !matches!(k, Kind::Internal | Kind::Hypoid) {
-                num(ui, "Hub Ø", "On the back face; 0: none", &mut s.hub_diameter, 0.0..=5000.0, 0.2, " mm");
-                if s.hub_diameter > 0.0 {
-                    num(ui, "Hub length", "", &mut s.hub_length, 0.0..=5000.0, 0.2, " mm");
-                }
-            }
-            if matches!(k, Kind::Spur | Kind::Helical | Kind::Herringbone | Kind::Pair | Kind::Planetary | Kind::Cycloidal) {
-                count(ui, "Lightening holes", "Through the web between hub and rim", &mut s.holes, 0..=24);
-                if s.holes > 0 {
-                    num(ui, "Hole Ø", "0: to fit", &mut s.hole_diameter, 0.0..=1000.0, 0.2, " mm");
-                }
-            }
-        } else if k == Kind::CycloidalDrive {
-            bore(ui, "Bearing bore", "bore1", &mut s.bore);
-        }
-        if k.is_set() {
-            row(ui, "Build", "Make every member, or just one", |ui| {
-                let names: &[&str] = match k {
-                    Kind::Planetary => &["all", "sun", "planets", "ring"],
-                    Kind::Worm => &["both", "wheel", "worm"],
-                    Kind::CycloidalDrive => &["both", "disc", "pins"],
-                    Kind::Hypoid => &["both", "pinion", "gear"],
-                    _ => &["both", "gear 1", "gear 2"],
-                };
-                egui::ComboBox::from_id_salt("gear_only").selected_text(names.get(s.only as usize).copied().unwrap_or("all")).show_ui(ui, |ui| {
-                    for (i, n) in names.iter().enumerate() {
-                        ui.selectable_value(&mut s.only, i as u8, *n);
-                    }
-                });
-            });
-        }
-        row(ui, "Name", "Put in front of the bodies' names", |ui| {
-            ui.add(egui::TextEdit::singleline(&mut s.name).desired_width(150.0));
         });
-        if !on_axes {
-            row(ui, "Centre at", "Where gear 1's centre goes", |ui| {
-                for v in &mut s.origin {
-                    ui.add(egui::DragValue::new(v).speed(0.5).max_decimals(3));
+        ui.toggle_value(&mut o.advanced, "…");
+    });
+    if o.advanced {
+        num(ui, "  Addendum ×m", "", &mut s.rack.addendum, 0.3..=2.0, 0.01, "");
+        num(ui, "  Dedendum ×m", "", &mut s.rack.dedendum, 0.5..=2.5, 0.01, "");
+        num(ui, "  Root radius ×m", "The cutter's tip radius; makes the root fillet", &mut s.rack.root_radius, 0.0..=0.6, 0.01, "");
+    }
+    let mut clearance = s.rack.dedendum - s.rack.addendum;
+    row(ui, "Clearance ×m", "Gap between a tooth tip and the mating root, in modules (0.25 standard; 0.3 or more for printed gears)", |ui| {
+        if ui.add(egui::DragValue::new(&mut clearance).range(0.05..=1.0).speed(0.005).max_decimals(3)).changed() {
+            s.rack.dedendum = s.rack.addendum + clearance;
+        }
+    });
+}
+
+/// Designing for FDM printing: the print preset and the nozzle the tooth tips are checked
+/// against. EXTENSION POINT: the print profile's own fields (XY compensation, elephant-foot
+/// relief, minimum tip thickness, printer presets) go here.
+fn section_print(ui: &mut Ui, cx: &mut Cx<'_>) {
+    if !cx.k.involute() {
+        return;
+    }
+    let s = &mut *cx.s;
+    let o = &mut *cx.o;
+    row(ui, "3D printing", "Tooth form and checks for FDM printing", |ui| {
+        if ui.toggle_value(&mut o.printing, "print preset").clicked() && o.printing {
+            // Stronger, more forgiving teeth: 25° pressure angle, extra clearance, a full root
+            // fillet, and backlash a printer can hold.
+            s.pressure_angle = 25.0;
+            s.rack = BasicRack::standard("print_fdm").unwrap_or(s.rack);
+            s.backlash = s.backlash.max(0.15);
+        }
+    });
+    if o.printing {
+        num(ui, "  Nozzle width", "Tooth tips thinner than two extrusion widths print badly", &mut o.nozzle, 0.1..=2.0, 0.05, " mm");
+    }
+}
+
+/// What the bodies share besides their teeth: hub and lightening holes. EXTENSION POINT:
+/// other shared body features (web thickness, spokes) go here.
+fn section_body(ui: &mut Ui, cx: &mut Cx<'_>) {
+    let k = cx.k;
+    let s = &mut *cx.s;
+    let hub = !matches!(k, Kind::Rack | Kind::CycloidalDrive | Kind::Internal | Kind::Hypoid);
+    let holes = matches!(k, Kind::Spur | Kind::Helical | Kind::Herringbone | Kind::Pair | Kind::Planetary | Kind::Cycloidal);
+    if !(hub || holes) {
+        return;
+    }
+    heading(ui, "Body");
+    if hub {
+        num(ui, "Hub Ø", "On the back face; 0: none", &mut s.hub_diameter, 0.0..=5000.0, 0.2, " mm");
+        if s.hub_diameter > 0.0 {
+            num(ui, "Hub length", "", &mut s.hub_length, 0.0..=5000.0, 0.2, " mm");
+        }
+    }
+    if holes {
+        count(ui, "Lightening holes", "Through the web between hub and rim", &mut s.holes, 0..=24);
+        if s.holes > 0 {
+            num(ui, "Hole Ø", "0: to fit", &mut s.hole_diameter, 0.0..=1000.0, 0.2, " mm");
+        }
+    }
+}
+
+/// The load the set is rated for (the strength rating shows among the facts); each member's
+/// material is in its own section while this is open or a load is set.
+fn section_load(ui: &mut Ui, cx: &mut Cx<'_>) {
+    let k = cx.k;
+    if !k.involute() || k == Kind::Rack {
+        return;
+    }
+    let o = &mut *cx.o;
+    let l = &mut cx.s.load;
+    ui.add_space(6.0);
+    ui.toggle_value(&mut o.load_open, egui::RichText::new("Load (strength rating)").strong());
+    if o.load_open {
+        num(ui, "Torque", "On the driving member; 0: not rated (or give power and speed)", &mut l.torque, 0.0..=1e6, 0.1, " N·m");
+        num(ui, "Power", "Used when the torque is 0", &mut l.power, 0.0..=1e5, 0.01, " kW");
+        num(ui, "Speed", "Of the driving member", &mut l.speed, 0.0..=1e6, 10.0, " rpm");
+        num(ui, "Application factor", "1.0 smooth; 1.25 light shocks; 1.5 moderate; 1.75+ heavy", &mut l.application_factor, 1.0..=3.0, 0.05, "");
+        num(ui, "Life", "Required life; 0: unlimited", &mut l.life_hours, 0.0..=1e7, 100.0, " h");
+        ui.label(egui::RichText::new("Each gear's material is in its own section above").small().weak());
+    }
+}
+
+/// What is built and where: one member alone, the name, and the centre when no axis places the
+/// set.
+fn section_output(ui: &mut Ui, cx: &mut Cx<'_>) {
+    let k = cx.k;
+    let on_axes = cx.on_axes;
+    let s = &mut *cx.s;
+    heading(ui, "Build");
+    if k.is_set() {
+        row(ui, "Members", "Make every member, or just one", |ui| {
+            let names: &[&str] = match k {
+                Kind::Planetary => &["all", "sun", "planets", "ring"],
+                Kind::Worm => &["both", "wheel", "worm"],
+                Kind::CycloidalDrive => &["both", "disc", "pins"],
+                Kind::Hypoid => &["both", "pinion", "gear"],
+                Kind::Cycloidal => &["both", "wheel", "pinion"],
+                _ => &["both", "gear 1", "gear 2"],
+            };
+            egui::ComboBox::from_id_salt("gear_only").selected_text(names.get(s.only as usize).copied().unwrap_or("all")).show_ui(ui, |ui| {
+                for (i, n) in names.iter().enumerate() {
+                    ui.selectable_value(&mut s.only, i as u8, *n);
                 }
             });
-        }
+        });
+    }
+    row(ui, "Name", "Put in front of the bodies' names", |ui| {
+        ui.add(egui::TextEdit::singleline(&mut s.name).desired_width(150.0));
+    });
+    if on_axes {
+        return;
+    }
+    if s.placement.is_some() {
+        // A set reopened without its axes stands where it was built.
+        row(ui, "Placed", "The set keeps the place and direction it was built with", |ui| {
+            ui.label(egui::RichText::new("as built").monospace());
+            if ui.small_button("at a centre instead").on_hover_text("Forget the stored frame: the set goes on world Z at Centre at (or pick its axes above)").clicked() {
+                s.placement = None;
+            }
+        });
+    } else {
+        row(ui, "Centre at", "Where gear 1's centre goes", |ui| {
+            for v in &mut s.origin {
+                ui.add(egui::DragValue::new(v).speed(0.5).max_decimals(3));
+            }
+        });
+    }
+}
+
+fn material(ui: &mut Ui, label: &str, id: &str, m: &mut solidcraft_gear::strength::Material) {
+    row(ui, label, "Sets the allowable contact and root stress", |ui| {
+        egui::ComboBox::from_id_salt(id).width(170.0).selected_text(m.data().label).show_ui(ui, |ui| {
+            for (k, d) in solidcraft_gear::strength::MATERIALS {
+                ui.selectable_value(m, *k, d.label);
+            }
+        });
+    });
+}
+
+/// The planetary ring's material: the planets' unless one is chosen.
+fn ring_material(ui: &mut Ui, m: &mut Option<solidcraft_gear::strength::Material>) {
+    row(ui, "Material", "Sets the allowable contact and root stress", |ui| {
+        let current = m.map(|m| m.data().label).unwrap_or("as the planets");
+        egui::ComboBox::from_id_salt("gear_mat3").width(170.0).selected_text(current).show_ui(ui, |ui| {
+            ui.selectable_value(m, None, "as the planets");
+            for (k, d) in solidcraft_gear::strength::MATERIALS {
+                ui.selectable_value(m, Some(*k), d.label);
+            }
+        });
     });
 }
 
@@ -830,12 +1438,21 @@ fn facts(ui: &mut Ui, w: &GearWindow) {
             ui.colored_label(ui.visuals().error_fg_color, e);
         }
         Ok(p) => {
+            if w.opts.printing {
+                for f in p.facts.iter().filter(|f| f.label.ends_with("tip land") && f.value < 2.0 * w.opts.nozzle) {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        format!("⚠ {} {:.2} mm is under two nozzle widths ({:.2} mm): use a larger module or a finer nozzle", f.label, f.value, 2.0 * w.opts.nozzle),
+                    );
+                }
+            }
             for warn in &p.warnings {
                 ui.colored_label(ui.visuals().warn_fg_color, format!("⚠ {warn}"));
             }
             egui::ScrollArea::vertical().id_salt("gear_facts").max_height(170.0).auto_shrink([false, true]).show(ui, |ui| {
                 egui::Grid::new("gear_facts_grid").num_columns(2).striped(true).spacing([12.0, 2.0]).min_col_width(200.0).show(ui, |ui| {
-                    for f in &p.facts {
+                    // What the axes fixed first, then the set's own numbers.
+                    for f in w.solved.iter().flat_map(|s| s.facts.iter()).chain(p.facts.iter()) {
                         ui.add(egui::Label::new(egui::RichText::new(&f.label).small()).wrap_mode(egui::TextWrapMode::Extend));
                         let v = match f.unit {
                             Unit::Mm => format!("{:.3} mm", f.value),
@@ -851,29 +1468,25 @@ fn facts(ui: &mut Ui, w: &GearWindow) {
     }
 }
 
-const PALETTE: [Color32; 6] = [
-    Color32::from_rgb(86, 140, 220),
-    Color32::from_rgb(232, 146, 64),
-    Color32::from_rgb(96, 180, 120),
-    Color32::from_rgb(196, 110, 190),
-    Color32::from_rgb(210, 190, 80),
-    Color32::from_rgb(120, 170, 190),
-];
-
-fn preview(ui: &mut Ui, w: &GearWindow) {
+/// The 2D preview: every member in its colour, turned by the motion the gear crate's mesh
+/// tests prove, the lit member brighter. Returns the member under the pointer.
+fn preview(ui: &mut Ui, w: &GearWindow) -> Option<usize> {
     let side = ui.available_width().min(420.0);
-    let (rect, _) = ui.allocate_exact_size(vec2(side, side * 0.82), Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(vec2(side, side * 0.82), Sense::hover());
     let painter = ui.painter_at(rect);
     let bg = ui.visuals().extreme_bg_color;
     painter.rect_filled(rect, 6.0, bg);
-    let Ok(plan) = &w.plan else { return };
+    let Ok(plan) = &w.plan else { return None };
+    let kind = w.built.kind;
+    let turned = w.pose();
     // Fit every gear (at any turn: its largest radius about its centre) in the box.
     let (mut lo, mut hi) = (V2::new(f64::MAX, f64::MAX), V2::new(f64::MIN, f64::MIN));
     for (g, m) in plan.preview.iter().zip(&w.meshes) {
         if g.slide == 0.0 && g.speed != 0.0 {
-            let r = m.outlines.iter().flatten().map(|q| q.len()).fold(0.0, f64::max);
-            lo = V2::new(lo.x.min(g.center.x - r), lo.y.min(g.center.y - r));
-            hi = V2::new(hi.x.max(g.center.x + r), hi.y.max(g.center.y + r));
+            // A centre that goes round the origin sweeps a circle about that instead.
+            let (c, r) = if g.orbit != 0.0 { (V2::ZERO, m.radius + g.center.len()) } else { (g.center, m.radius) };
+            lo = V2::new(lo.x.min(c.x - r), lo.y.min(c.y - r));
+            hi = V2::new(hi.x.max(c.x + r), hi.y.max(c.y + r));
         } else {
             for q in m.outlines.iter().flatten() {
                 let p = g.center + *q;
@@ -883,28 +1496,48 @@ fn preview(ui: &mut Ui, w: &GearWindow) {
         }
     }
     if !(lo.x.is_finite() && hi.x > lo.x) {
-        return;
+        return None;
     }
     let margin = 12.0;
     let scale = ((rect.width() - 2.0 * margin) as f64 / (hi.x - lo.x)).min((rect.height() - 2.0 * margin) as f64 / (hi.y - lo.y).max(1e-9));
     let mid = (lo + hi) * 0.5;
     let c = rect.center();
     let to_screen = |p: V2| -> Pos2 { pos2(c.x + ((p.x - mid.x) * scale) as f32, c.y - ((p.y - mid.y) * scale) as f32) };
+    // The member under the pointer: of the outlines the pointer is within, the smallest (a
+    // planet rather than the ring round it).
+    let pointer = response.hover_pos().map(|p| V2::new(mid.x + f64::from(p.x - c.x) / scale, mid.y - f64::from(p.y - c.y) / scale));
+    let mut under: Option<(f64, usize)> = None;
+    if let Some(p) = pointer {
+        for (i, (g, m)) in plan.preview.iter().zip(&w.meshes).enumerate() {
+            let reach = if g.slide == 0.0 {
+                (p.dist(g.place(V2::ZERO, turned)) <= m.radius).then_some(m.radius)
+            } else {
+                // A sliding member (a rack, a worm's section): the box of its outline where it is.
+                let pts = m.outlines.iter().flatten().map(|q| g.place(*q, turned));
+                let (lo, hi) = pts.fold((V2::new(f64::MAX, f64::MAX), V2::new(f64::MIN, f64::MIN)), |(lo, hi), q| (V2::new(lo.x.min(q.x), lo.y.min(q.y)), V2::new(hi.x.max(q.x), hi.y.max(q.y))));
+                (p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y).then_some(lo.dist(hi) / 2.0)
+            };
+            if let Some(reach) = reach
+                && under.is_none_or(|(least, _)| reach < least)
+            {
+                under = Some((reach, member_of_outline(kind, i, &g.name)));
+            }
+        }
+    }
+    let under = under.map(|(_, member)| member);
+    let lit = w.lit().or(under);
     let stroke_color = ui.visuals().text_color();
     for (i, (g, m)) in plan.preview.iter().zip(&w.meshes).enumerate() {
-        let angle = g.speed * w.turned;
-        let slide = g.slide * w.turned;
-        let place = |q: V2| -> Pos2 {
-            let q = if g.slide != 0.0 {
-                // A rack: slides; the worm's section slides along its own axis (+y).
-                if g.name == "worm" { q + V2::new(0.0, wrap_slide(slide, g)) } else { q + V2::new(wrap_slide(slide, g), 0.0) }
-            } else {
-                q.rot(angle)
-            };
-            to_screen(g.center + q)
+        let place = |q: V2| -> Pos2 { to_screen(g.place(q, turned)) };
+        let member = member_of_outline(kind, i, &g.name);
+        let color = member_color(member);
+        // The lit member stands out; the others step back while one is lit.
+        let (strength, line) = match lit {
+            Some(l) if l == member => (0.95, 2.2),
+            Some(_) => (0.32, 1.0),
+            None => (0.55, 1.0),
         };
-        let color = PALETTE[i % PALETTE.len()];
-        let fill = color.gamma_multiply(0.55);
+        let fill = color.gamma_multiply(strength);
         let mut mesh = egui::Mesh::default();
         for t in &m.fill {
             let base = mesh.vertices.len() as u32;
@@ -930,7 +1563,7 @@ fn preview(ui: &mut Ui, w: &GearWindow) {
             if let Some(f) = pts.first().copied() {
                 pts.push(f);
             }
-            painter.add(egui::Shape::line(pts, Stroke::new(1.0, color.gamma_multiply(0.9).lerp_to_gamma(stroke_color, 0.3))));
+            painter.add(egui::Shape::line(pts, Stroke::new(line, color.gamma_multiply(0.9).lerp_to_gamma(stroke_color, 0.3))));
         }
         if g.pitch_radius > 0.0 {
             dashed_circle(&painter, to_screen(g.center), (g.pitch_radius * scale) as f32, Stroke::new(0.8, stroke_color.gamma_multiply(0.35)));
@@ -939,17 +1572,19 @@ fn preview(ui: &mut Ui, w: &GearWindow) {
         if g.slide == 0.0 && g.speed != 0.0 {
             painter.circle_filled(place(V2::polar(g.pitch_radius.max(1.0) * 0.35, 0.0)), 2.5, stroke_color.gamma_multiply(0.6));
         }
-        painter.circle_filled(to_screen(g.center), 2.0, stroke_color.gamma_multiply(0.6));
+        let at = to_screen(if g.slide == 0.0 { g.place(V2::ZERO, turned) } else { g.center });
+        painter.circle_filled(at, 2.0, stroke_color.gamma_multiply(0.6));
+        // The member's name in its own colour, on a chip so it reads over the gear.
+        let font = egui::FontId::proportional(if lit == Some(member) { 12.5 } else { 11.0 });
+        let galley = painter.layout_no_wrap(g.name.clone(), font, color.lerp_to_gamma(stroke_color, 0.55));
+        let pos = at + vec2(-galley.size().x / 2.0, 5.0);
+        painter.rect_filled(egui::Rect::from_min_size(pos, galley.size()).expand(2.0), 3.0, bg.gamma_multiply(0.8));
+        painter.galley(pos, galley, stroke_color);
     }
     if !plan.preview_note.is_empty() {
         painter.text(rect.left_bottom() + vec2(8.0, -6.0), egui::Align2::LEFT_BOTTOM, &plan.preview_note, egui::FontId::proportional(11.0), stroke_color.gamma_multiply(0.6));
     }
-}
-
-/// A sliding member moves on by whole tooth pitches only, so it stays in view and its teeth
-/// keep meshing.
-fn wrap_slide(s: f64, g: &solidcraft_gear::PreviewGear) -> f64 {
-    if g.period > 0.0 { s.rem_euclid(g.period) - g.period / 2.0 } else { 0.0 }
+    under
 }
 
 fn dashed_circle(p: &egui::Painter, c: Pos2, r: f32, stroke: Stroke) {

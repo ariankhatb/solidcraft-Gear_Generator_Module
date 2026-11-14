@@ -216,3 +216,76 @@ fn sets_are_built_on_intersecting_and_skew_axes() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Sets kept with the design: gear.inspect and gear.update (written without a test run: the
+// engine's tests were not allowed to run on the branch that added them)
+// ---------------------------------------------------------------------------------------------
+
+/// A set is kept with what it was asked for, found by its folder or by a body, and gone with
+/// an undo of the command that made it.
+#[test]
+fn a_set_is_kept_and_inspected() {
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 10, "ui": {"note": "mine"}}));
+    let group = r["group"].as_u64().unwrap();
+    let body = r["bodies"][0].as_str().unwrap().to_string();
+    let by_group = run(&mut s, "gear.inspect", json!({"group": group}));
+    let set = &by_group["sets"][0];
+    assert_eq!(set["request"]["teeth"], 20, "{by_group}");
+    assert_eq!(set["request"]["ui"]["note"], "mine");
+    assert_eq!(set["params"]["module"].as_f64(), Some(2.0));
+    assert_eq!(set["bodies"][0], body.as_str());
+    assert!(!set["features"].as_array().unwrap().is_empty());
+    assert_eq!(run(&mut s, "gear.inspect", json!({"body": body}))["sets"][0]["group"].as_u64(), Some(group));
+    assert_eq!(run(&mut s, "gear.inspect", json!({}))["sets"].as_array().unwrap().len(), 1);
+    assert!(s.execute("gear.inspect", &json!({"body": "nope"})).is_err());
+    // `group`, `body` and `reset` belong to gear.update.
+    assert!(s.execute("gear.create", &json!({"group": group})).is_err());
+    run(&mut s, "edit.undo", json!({}));
+    assert!(run(&mut s, "gear.inspect", json!({}))["sets"].as_array().unwrap().is_empty());
+}
+
+/// Changing a number regenerates the set in place: the same body, folder and features, another
+/// size, one undo step.
+#[test]
+fn an_update_changes_the_set_in_place() {
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 10}));
+    let group = r["group"].as_u64().unwrap();
+    let body = r["bodies"][0].as_str().unwrap().to_string();
+    let features = run(&mut s, "gear.inspect", json!({"group": group}))["sets"][0]["features"].clone();
+    let before = volume(&mut s, &body);
+    let u = run(&mut s, "gear.update", json!({"group": group, "face_width": 20, "teeth": 24}));
+    assert_eq!(u["updated"], "in_place", "{u}");
+    assert_eq!(u["bodies"][0], body.as_str(), "the body keeps its name");
+    assert_eq!(u["group"].as_u64(), Some(group));
+    let after = volume(&mut s, &body);
+    assert!(after > before * 2.5, "{before} -> {after}");
+    let set = run(&mut s, "gear.inspect", json!({"body": body}))["sets"][0].clone();
+    assert_eq!(set["features"], features, "the sketches and features keep their ids");
+    assert_eq!((set["request"]["teeth"].as_u64(), set["request"]["face_width"].as_f64()), (Some(24), Some(20.0)));
+    run(&mut s, "edit.undo", json!({}));
+    assert!((volume(&mut s, &body) - before).abs() < 1e-6);
+    assert!(s.execute("gear.update", &json!({"face_width": 20})).is_err(), "which set?");
+    assert!(s.execute("gear.update", &json!({"group": group, "teeth": 1})).is_err());
+}
+
+/// A change of structure (another type: other bodies) rebuilds the set in the same folder.
+#[test]
+fn an_update_that_changes_the_steps_rebuilds_under_the_same_names() {
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 10}));
+    let group = r["group"].as_u64().unwrap();
+    let body = r["bodies"][0].as_str().unwrap().to_string();
+    let before = volume(&mut s, &body);
+    let u = run(&mut s, "gear.update", json!({"body": body, "type": "pair", "teeth2": 30}));
+    assert_eq!(u["updated"], "rebuilt", "{u}");
+    assert!(u["rebuilt_because"].as_str().is_some());
+    assert_eq!(u["bodies"].as_array().unwrap().len(), 2);
+    assert_eq!(u["group"].as_u64(), Some(group), "{u}");
+    let _ = before;
+    // And back to one gear, with everything else as it was last asked.
+    let u = run(&mut s, "gear.update", json!({"group": group, "type": "spur", "teeth2": null}));
+    assert_eq!(u["bodies"].as_array().unwrap().len(), 1, "{u}");
+}

@@ -933,6 +933,13 @@ pub(crate) fn tick_playback(app: &mut SolveApp, ctx: &egui::Context) {
 
 /// A folder's Edit Holes item, when it holds holes only: one Hole dialog for all of them.
 pub(crate) fn edit_holes_item(app: &mut SolveApp, ui: &mut egui::Ui, folder: u64) {
+    // A gear set's folder: the Gear Generator, filled from what the set was made with.
+    if crate::gear_window::is_set(app, folder) && crate::ui_kit::menu::button(ui, "Edit Gears", "gear").clicked() {
+        if let Err(why) = crate::gear_window::open_group(app, folder) {
+            app.set_status(why, true);
+        }
+        ui.close();
+    }
     if crate::hole_folder::holes(app, folder).is_none() {
         return;
     }

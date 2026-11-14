@@ -93,6 +93,8 @@ pub enum RackStandard {
     Iso53D,
     AgmaFullDepth,
     Stub,
+    /// For FDM 3D printing: dedendum 1.3, full root fillet.
+    PrintFdm,
 }
 
 /// How a gear is bored.
@@ -105,6 +107,22 @@ pub enum BoreType {
     DFlat,
     Hex,
     Square,
+}
+
+/// A gear material for the strength rating (representative allowable stresses).
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GearMaterial {
+    SteelNormalized,
+    SteelThroughHardened,
+    SteelCaseHardened,
+    SteelNitrided,
+    CastIron,
+    Bronze,
+    Pom,
+    Pa66,
+    Pla,
+    Petg,
 }
 
 /// A bore through a gear's axis.
@@ -300,6 +318,97 @@ pub struct GearParams {
     /// to; not with `axis1`).
     #[serde(default)]
     pub placement: Option<PlacementParams>,
+    /// Strength rating: input torque in N·m on the driving member (gear 1, sun, ring of an
+    /// internal set; the worm of a worm set). Wins over `power`. Without a torque or power the
+    /// set is not rated.
+    #[serde(default)]
+    pub torque: Option<f64>,
+    /// Strength rating: input power in kW (needs `speed`).
+    #[serde(default)]
+    pub power: Option<f64>,
+    /// Strength rating: speed of the driving member in rpm.
+    #[serde(default)]
+    pub speed: Option<f64>,
+    /// Strength rating: gear 1's material (default steel_through_hardened).
+    #[serde(default)]
+    pub material: Option<GearMaterial>,
+    /// Strength rating: gear 2's material (mate, planets, internal set's pinion, worm).
+    #[serde(default)]
+    pub material2: Option<GearMaterial>,
+    /// Strength rating: the planetary ring's material (default: as gear 2).
+    #[serde(default)]
+    pub material3: Option<GearMaterial>,
+    /// Strength rating: application factor KA (default 1; 1.25 light, 1.5 moderate, 1.75 heavy
+    /// shocks).
+    #[serde(default)]
+    pub application_factor: Option<f64>,
+    /// Strength rating: required life in hours (default: unlimited).
+    #[serde(default)]
+    pub life_hours: Option<f64>,
+    /// Strength rating: ISO 1328 accuracy grade 5..12 for the dynamic factor (default 7).
+    #[serde(default)]
+    pub accuracy_grade: Option<u8>,
+    /// `gear.update` and `gear.inspect` only: the set, by the timeline folder `gear.create`
+    /// made for it.
+    #[serde(default)]
+    pub group: Option<u64>,
+    /// `gear.update` and `gear.inspect` only: the set, by the name of one of its bodies.
+    #[serde(default)]
+    pub body: Option<String>,
+    /// `gear.update` only: true starts from the type's defaults instead of the parameters the
+    /// set was last made with (otherwise the parameters given here are laid over those, and a
+    /// `null` takes one away).
+    #[serde(default)]
+    pub reset: Option<bool>,
+    /// A front end's own state, kept with the set as it is and given back by `gear.inspect`
+    /// (the Gear Generator window keeps its typed values and picked axes here). Not read by the
+    /// engine.
+    #[serde(default)]
+    pub ui: Option<Value>,
+}
+
+/// `gear.inspect`: which set (neither: every set in the design).
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct GearInspectParams {
+    /// The set's timeline folder.
+    #[serde(default)]
+    pub group: Option<u64>,
+    /// The name of one of the set's bodies.
+    #[serde(default)]
+    pub body: Option<String>,
+}
+
+/// A feature outside the set that worked before `gear.update` and fails after it.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GearBroken {
+    pub feature: String,
+    pub error: String,
+}
+
+/// A gear set kept in the design: what `gear.create` or `gear.update` last made it from.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct GearSet {
+    /// The set's timeline folder.
+    pub group: u64,
+    /// The folder's name.
+    pub name: String,
+    /// The set's bodies.
+    pub bodies: Vec<String>,
+    /// The set's features (sketches and solids), in build order.
+    pub features: Vec<u64>,
+    /// The parameters as they were given (axis references, ratio and `ui` included).
+    pub request: Value,
+    /// The set they came to, as plain `gear.create` parameters: every value explicit, placed
+    /// by `placement` when it is not at the world's origin frame.
+    pub params: Value,
+}
+
+/// What `gear.inspect` found: the set asked for, or every set in the design.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GearInspectResult {
+    pub sets: Vec<GearSet>,
 }
 
 /// One number describing the set.
@@ -311,8 +420,8 @@ pub struct GearFact {
     pub unit: String,
 }
 
-/// What `gear.create` made, or what `gear.calculate` worked out.
-#[derive(Debug, Serialize, JsonSchema)]
+/// What `gear.create` or `gear.update` made, or what `gear.calculate` worked out.
+#[derive(Debug, Default, Serialize, JsonSchema)]
 pub struct GearResult {
     /// The bodies made (empty for `gear.calculate`).
     pub bodies: Vec<String>,
@@ -329,6 +438,19 @@ pub struct GearResult {
     /// Axis-first: how the set was sized to its axes (module and teeth chosen, shifts, angles).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// `gear.update`: how the set was regenerated. "in_place": every sketch and feature kept
+    /// its id and name, and the sketches' curves their ids as far as the new outline has as
+    /// many; "rebuilt": the set's features were deleted and made again (new feature ids) under
+    /// the same body names, in the same folder and place in the history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<String>,
+    /// `gear.update`: why the set could not be regenerated in place, when it was rebuilt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rebuilt_because: Option<String>,
+    /// `gear.update`: features outside the set that worked before and fail now (what was built
+    /// on a face or edge the new gear no longer has).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub broken: Vec<GearBroken>,
 }
 
 /// A line in space.

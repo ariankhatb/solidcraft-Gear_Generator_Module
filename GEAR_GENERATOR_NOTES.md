@@ -286,3 +286,8 @@ bugs." Steps: merge each agent branch as it lands (gear tests + cargo check afte
 release build → kernel overlap check on every kind, engine gear tests, renders, window
 screenshots (Simple and Advanced) via the control channel → fix and rebuild until clean →
 summary for the user.
+- Merged `gear-simple` (design-by-outputs `simple.rs`: Simple/solve/outputs_of/auto_kind/schematic).
+  TODO at integration: pairs (and planetary) can't be herringbone — `pair()` checks
+  `s.kind == Kind::Herringbone`; add `Spec.herringbone: bool` (+ `GearParams.herringbone`, window
+  toggle) so a pair builds herringbone teeth. `sweep_tests::big_gears_plan_quickly` (50 ms) is
+  flaky under load; passes alone.

@@ -15,7 +15,8 @@ use super::CommandSpec;
 use super::sketch::{Left, edit_solved, ids_of};
 use super::sketch_import::add_geometry;
 use crate::params::bad;
-use crate::schema::gear::{BoreParams, BoreType, GearFact, GearParams, GearResult, GearType, RackStandard};
+use crate::schema::gear::{BoreParams, BoreType, GearFact, GearMaterial, GearParams, GearResult, GearType, RackStandard};
+use solidcraft_gear::strength::Material;
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{EngineError, Result, Session};
 
@@ -30,12 +31,14 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params(
             "type?: spur|helical|herringbone|internal|rack|pair|planetary|bevel|spiral_bevel|hypoid|crossed_helical|worm|cycloidal|cycloidal_drive; \
              module? (mm) | diametral_pitch?; teeth?, teeth2? (mate or planet), ring_teeth?, planets?; pressure_angle?, helix_angle? (deg, sign = hand); \
-             profile_shift?, profile_shift2?; rack?: iso53_a|iso53_b|iso53_c|iso53_d|agma_full_depth|stub, addendum?, dedendum?, root_radius? (coefficients); \
+             profile_shift?, profile_shift2?; rack?: iso53_a|iso53_b|iso53_c|iso53_d|agma_full_depth|stub|print_fdm, addendum?, dedendum?, root_radius? (coefficients); \
              backlash? (mm); face_width?; center_distance? (pair: gear 2's shift reaches it); shaft_angle?, spiral_angle? (deg); offset?, face_start? (hypoid, mm); \
              starts?, worm_diameter?, worm_length? (worm); rim?; rack_teeth?, rack_height?; pins?, pin_circle?, pin_diameter?, eccentricity? (cycloidal drive); \
              bore?, bore2?: {type?: round|keyway|d_flat|hex|square|none, diameter, key_width?, key_depth?, flat?}; hub_diameter?, hub_length?; holes?, hole_diameter?; \
-             only?: 1|2|3 (one member); origin?: [x,y,z]; name?. Returns bodies, group, facts (diameters, ratio, centre distance, contact ratio, span and over-pins \
-             measurements) and warnings (undercut, pointed teeth, low contact ratio, interference)",
+             only?: 1|2|3 (one member); origin?: [x,y,z]; name?; strength rating: torque? (N·m) | power? (kW), speed? (rpm) on the driver, \
+             material?, material2?, material3?: steel_normalized|steel_through_hardened|steel_case_hardened|steel_nitrided|cast_iron|bronze|pom|pa66|pla|petg, \
+             application_factor?, life_hours?, accuracy_grade? (5..12). Returns bodies, group, facts (diameters, ratio, centre distance, contact ratio, span and over-pins \
+             measurements; with a load: forces, stresses, safety factors SF and SH) and warnings (undercut, pointed teeth, low contact ratio, interference, SF < 1.4, SH < 1)",
         ),
     CommandSpec::new("gear.calculate", "Gear Calculator", crate::checked!("gear.calculate", calculate))
         .noundo()
@@ -62,13 +65,14 @@ const KINDS: [(GearType, Kind); 14] = [
     (GearType::CycloidalDrive, Kind::CycloidalDrive),
 ];
 
-const RACKS: [(RackStandard, &str); 6] = [
+const RACKS: [(RackStandard, &str); 7] = [
     (RackStandard::Iso53A, "iso53_a"),
     (RackStandard::Iso53B, "iso53_b"),
     (RackStandard::Iso53C, "iso53_c"),
     (RackStandard::Iso53D, "iso53_d"),
     (RackStandard::AgmaFullDepth, "agma_full_depth"),
     (RackStandard::Stub, "stub"),
+    (RackStandard::PrintFdm, "print_fdm"),
 ];
 
 const BORES: [(BoreType, BoreKind); 6] = [
@@ -79,6 +83,27 @@ const BORES: [(BoreType, BoreKind); 6] = [
     (BoreType::Hex, BoreKind::Hex),
     (BoreType::Square, BoreKind::Square),
 ];
+
+const MATERIALS: [(GearMaterial, Material); 10] = [
+    (GearMaterial::SteelNormalized, Material::SteelNormalized),
+    (GearMaterial::SteelThroughHardened, Material::SteelThroughHardened),
+    (GearMaterial::SteelCaseHardened, Material::SteelCaseHardened),
+    (GearMaterial::SteelNitrided, Material::SteelNitrided),
+    (GearMaterial::CastIron, Material::CastIron),
+    (GearMaterial::Bronze, Material::Bronze),
+    (GearMaterial::Pom, Material::Pom),
+    (GearMaterial::Pa66, Material::Pa66),
+    (GearMaterial::Pla, Material::Pla),
+    (GearMaterial::Petg, Material::Petg),
+];
+
+fn material_of(m: GearMaterial) -> Material {
+    MATERIALS.iter().find(|(g, _)| *g == m).map(|(_, k)| *k).unwrap_or_default()
+}
+
+fn material_param(m: Material) -> Option<GearMaterial> {
+    MATERIALS.iter().find(|(_, k)| *k == m).map(|(g, _)| *g)
+}
 
 fn bore_of(b: &Option<BoreParams>) -> Bore {
     let Some(b) = b else { return Bore::default() };
@@ -168,6 +193,33 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     }
     s.bore = bore_of(&p.bore);
     s.bore2 = bore_of(&p.bore2);
+    // Strength rating (the gear crate checks the ranges).
+    let load = &mut s.load;
+    if let Some(v) = p.torque {
+        load.torque = v;
+    }
+    if let Some(v) = p.power {
+        load.power = v;
+    }
+    if let Some(v) = p.speed {
+        load.speed = v;
+    }
+    if let Some(m) = p.material {
+        load.material = material_of(m);
+    }
+    if let Some(m) = p.material2 {
+        load.material2 = material_of(m);
+    }
+    load.material3 = p.material3.map(material_of);
+    if let Some(v) = p.application_factor {
+        load.application_factor = v;
+    }
+    if let Some(v) = p.life_hours {
+        load.life_hours = v;
+    }
+    if let Some(v) = p.accuracy_grade {
+        load.quality = v;
+    }
     let finite = [
         s.module,
         s.pressure_angle,
@@ -269,6 +321,15 @@ pub fn params_of(s: &Spec) -> Value {
         only: (s.only > 0).then_some(s.only),
         origin: (s.origin != [0.0; 3]).then_some(s.origin),
         name: (!s.name.is_empty()).then(|| s.name.clone()),
+        torque: (s.load.torque > 0.0).then_some(s.load.torque),
+        power: (s.load.power > 0.0).then_some(s.load.power),
+        speed: (s.load.speed > 0.0).then_some(s.load.speed),
+        material: material_param(s.load.material),
+        material2: material_param(s.load.material2),
+        material3: s.load.material3.and_then(material_param),
+        application_factor: (s.load.application_factor != 1.0).then_some(s.load.application_factor),
+        life_hours: (s.load.life_hours > 0.0).then_some(s.load.life_hours),
+        accuracy_grade: (s.load.quality != 7).then_some(s.load.quality),
     };
     serde_json::to_value(p).map(strip_nulls).unwrap_or(Value::Null)
 }

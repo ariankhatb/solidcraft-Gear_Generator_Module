@@ -1,128 +1,182 @@
-//! The 3D sets mesh: no shared volume in several poses of their motion, and little free play.
+//! The 3D sets mesh, proved with the checker in `mesh3d`: through two tooth pitches no surface
+//! point of one member is inside the other and the flanks stay in contact (or a backlash
+//! apart); half a pitch out of phase they collide. Run with `--nocapture` for every case's
+//! numbers.
 
-use std::f64::consts::TAU;
+use std::f64::consts::{PI, TAU};
 
-use crate::mesh3d::{Solid, overlap, play};
+use crate::mesh3d::{Pair, Run, Stat};
 use crate::plan::{Kind, Spec, plan};
 
-/// What a set measures: the worst shared volume over `poses` steps of one tooth pitch, and the
-/// free play of member 2 as an arc at its pitch radius (back, forward), worst (largest) over the poses.
-pub struct Measured {
-    pub overlap: f64,
-    pub play: Option<(f64, f64)>,
+/// Driver angles per run (two tooth pitches).
+const STEPS: usize = 16;
+
+pub struct Row {
+    pub label: String,
+    pub m: f64,
+    pub backlash: f64,
+    pub run: Run,
+    /// Member 2 turned half a pitch out of phase.
+    pub off: Stat,
+    pub warnings: Vec<String>,
 }
 
-/// `r2`: member 2's pitch radius for turning its play into an arc.
-pub fn measure(s: &Spec, poses: usize, r2: f64, cell: f64) -> Measured {
-    let p = plan(s).unwrap();
-    assert_eq!(p.bodies.len(), 2);
-    let mut a = Solid::new(&p.bodies[0]);
-    let mut b = Solid::new(&p.bodies[1]);
-    let (z1, z2) = match s.kind {
-        Kind::Worm => (f64::from(s.teeth), f64::from(s.starts)),
-        _ => (f64::from(s.teeth), f64::from(s.teeth2)),
-    };
-    let sign = if s.kind == Kind::Worm && s.helix < 0.0 { 1.0 } else { -1.0 };
-    let mut worst = 0.0f64;
-    let mut pl: Option<(f64, f64)> = Some((0.0, 0.0));
-    for i in 0..poses {
-        let turn = TAU / z1 * i as f64 / poses as f64;
-        a.spin = turn;
-        b.spin = sign * turn * z1 / z2;
-        worst = worst.max(overlap(&a, &b, cell));
-        let reach = TAU / z2 * 0.5;
-        match (play(&a, &mut b, cell * 1.5, 0.02, reach), pl) {
-            (Some((x, y)), Some((px, py))) => pl = Some((px.max(x * r2), py.max(y * r2))),
-            _ => pl = None,
-        }
-    }
-    Measured { overlap: worst, play: pl }
-}
-
-fn sets() -> Vec<(String, Spec)> {
-    let mut v = Vec::new();
-    let d = Spec::defaults_for;
-    let mut add = |n: &str, s: Spec| v.push((n.to_string(), s));
-    add("worm default", d(Kind::Worm));
-    add("worm 2-start z41", Spec { starts: 2, teeth: 41, ..d(Kind::Worm) });
-    add("worm 4-start q8 left", Spec { starts: 4, teeth: 36, worm_diameter: 16.0, helix: -1.0, ..d(Kind::Worm) });
-    add("worm left backlash", Spec { helix: -1.0, backlash: 0.1, teeth: 25, module: 3.0, ..d(Kind::Worm) });
-    add("worm 3-start backlash shift", Spec { starts: 3, backlash: 0.1, shift: 0.3, pressure_angle: 25.0, ..d(Kind::Worm) });
-    add("bevel default", d(Kind::Bevel));
-    add("bevel mitre", Spec { teeth: 24, teeth2: 24, ..d(Kind::Bevel) });
-    add("bevel 60deg", Spec { teeth: 16, teeth2: 40, shaft_angle: 60.0, ..d(Kind::Bevel) });
-    add("bevel 120deg backlash", Spec { teeth: 18, teeth2: 27, shaft_angle: 120.0, backlash: 0.1, ..d(Kind::Bevel) });
-    add("bevel 13:31 m3 backlash", Spec { teeth: 13, teeth2: 31, module: 3.0, backlash: 0.1, face_width: 15.0, ..d(Kind::Bevel) });
-    add("spiral default", d(Kind::SpiralBevel));
-    add("spiral left 20deg", Spec { spiral_angle: -20.0, teeth: 15, teeth2: 31, ..d(Kind::SpiralBevel) });
-    add("spiral 60deg shaft", Spec { shaft_angle: 60.0, teeth: 19, teeth2: 28, ..d(Kind::SpiralBevel) });
-    add("spiral 120deg backlash", Spec { shaft_angle: 120.0, backlash: 0.1, spiral_angle: 30.0, teeth: 20, teeth2: 29, ..d(Kind::SpiralBevel) });
-    add("spiral mitre 45deg backlash", Spec { teeth: 21, teeth2: 21, spiral_angle: 45.0, backlash: 0.1, ..d(Kind::SpiralBevel) });
-    add("crossed default", d(Kind::CrossedHelical));
-    add("crossed 30/60", Spec { helix: 30.0, teeth: 18, teeth2: 23, ..d(Kind::CrossedHelical) });
-    add("crossed 60deg shaft", Spec { shaft_angle: 60.0, helix: 20.0, teeth: 17, teeth2: 29, ..d(Kind::CrossedHelical) });
-    add("crossed 120deg backlash", Spec { shaft_angle: 120.0, helix: 50.0, backlash: 0.1, teeth: 16, teeth2: 24, ..d(Kind::CrossedHelical) });
-    add("crossed opposite hands", Spec { shaft_angle: 30.0, helix: 50.0, teeth: 20, teeth2: 20, backlash: 0.1, ..d(Kind::CrossedHelical) });
-    v
-}
-
-/// The arc (mm) member 2 moves at its pitch radius per radian of its spin (a worm: its thread's
-/// travel along the axis).
-fn arc(s: &Spec) -> f64 {
-    let m = s.module;
+/// Member 2's turn per radian of member 1's (bodies in plan order), and half a pitch of member 2.
+fn motion(s: &Spec) -> (f64, f64, f64) {
     match s.kind {
-        Kind::Worm => m * f64::from(s.starts) / 2.0,
-        Kind::CrossedHelical => m * f64::from(s.teeth2) / 2.0 / (s.shaft_angle - s.helix).to_radians().cos(),
-        _ => m * f64::from(s.teeth2) / 2.0,
+        // Wheel first, then the worm: a right-hand worm turned forwards carries the wheel back.
+        Kind::Worm => {
+            let hand = if s.helix < 0.0 { -1.0 } else { 1.0 };
+            (-hand * f64::from(s.teeth) / f64::from(s.starts), PI / f64::from(s.starts), TAU / f64::from(s.teeth))
+        }
+        _ => (-f64::from(s.teeth) / f64::from(s.teeth2), PI / f64::from(s.teeth2), TAU / f64::from(s.teeth)),
     }
 }
 
-/// The default sets share no volume as planned (quick: one pose, a coarser grid).
-#[test]
-fn default_sets_do_not_interfere() {
-    for k in [Kind::Worm, Kind::Bevel, Kind::SpiralBevel, Kind::CrossedHelical] {
-        let p = plan(&Spec::defaults_for(k)).unwrap();
-        let (a, b) = (Solid::new(&p.bodies[0]), Solid::new(&p.bodies[1]));
-        let v = overlap(&a, &b, 0.12);
-        assert!(v < 0.05, "{k:?}: {v} mm³ shared");
-    }
-}
-
-/// Every set, through four steps of a tooth pitch: no shared volume, and member 2 can turn only
-/// by about the backlash either way before it does (so the teeth are in mesh, not merely apart).
-/// Slow without optimisation: `cargo test --release -p solidcraft-gear -- --ignored`.
-#[test]
-#[ignore]
-fn sets_mesh_through_their_motion() {
-    let mut bad = Vec::new();
-    for (n, s) in sets() {
-        let m = measure(&s, 4, arc(&s), 0.08);
-        let line = format!("{n}: shared {:.4} mm³, play {:?} mm", m.overlap, m.play);
-        eprintln!("{line}");
-        // Each member's teeth are thinned by the backlash, so up to twice that shows as play
-        // (a worm's thread by half), plus the grid's resolution.
-        // Crossed helicals touch at a point (the grid needs a deeper bite to see it) and their
-        // backlash is across the teeth, more along the pitch circle of a steep helix.
-        let most = if s.kind == Kind::CrossedHelical { 0.05 + 2.0 * s.backlash } else { 0.03 + 1.2 * s.backlash };
-        let ok = m.overlap < 0.02 && m.play.is_some_and(|(x, y)| x <= most && y <= most && (s.backlash == 0.0 || x + y > 0.5 * s.backlash));
-        if !ok {
-            bad.push(line);
+pub fn measure(label: &str, s: &Spec) -> Row {
+    let p = plan(s).unwrap_or_else(|e| panic!("{label}: {e}"));
+    assert_eq!(p.bodies.len(), 2, "{label}");
+    let m = s.module;
+    let mut pair = Pair::new(&p.bodies[0], &p.bodies[1], 0.03 * m, 0.1 * m);
+    let (ratio, half, pitch) = motion(s);
+    let run = pair.run(ratio, 0.0, 0.0, 2.0 * pitch, STEPS);
+    let off = pair.at(0.0, half);
+    if std::env::var("MESH3D_WHERE").is_ok() {
+        for (what, place, at) in [("deepest", run.place, run.at), ("nearest", run.gap_place, run.gap_at)] {
+            pair.a.spin = at;
+            pair.b.spin = ratio * at;
+            let (la, lb) = (pair.a.local(place), pair.b.local(place));
+            for e in [0.005, 0.02, 0.05] {
+                let around: Vec<[f64; 3]> = (0..6).map(|i| { let mut q = place; q[i / 2] += if i % 2 == 0 { e } else { -e }; q }).collect();
+                eprintln!("    +-{e}: in body 1 {:?} in body 2 {:?}", around.iter().map(|q| pair.a.contains(*q) as u8).collect::<Vec<_>>(), around.iter().map(|q| pair.b.contains(*q) as u8).collect::<Vec<_>>());
+            }
+            eprintln!("  {label}: {what} at driver {at:.4}: body 1 r {:.3} z {:.3}, body 2 r {:.3} z {:.3} (z ranges {:?} {:?})", la[0].hypot(la[1]), la[2], lb[0].hypot(lb[1]), lb[2], pair.a.z, pair.b.z);
         }
     }
-    assert!(bad.is_empty(), "{bad:#?}");
+    Row { label: label.to_string(), m, backlash: s.backlash, run, off, warnings: p.warnings }
 }
 
-/// Half a tooth out of phase, every set collides: the check does see teeth that are misplaced.
+/// A flank is a spline within `PROFILE_TOLERANCE` of its curve and the checker's surfaces are
+/// facets of about a thirtieth of a module, so two flanks in contact may read as crossing by
+/// this much (× m).
+const DEPTH: f64 = 2.0e-3;
+/// How far beyond the backlash the flanks may be from touching at any step (× m).
+const GAP: f64 = 2.5e-3;
+
+impl Row {
+    pub fn show(&self) {
+        let r = &self.run;
+        eprintln!(
+            "{:<44} pen {:>8.5} m  gap {:>8.5}..{:>8.5} m (backlash {:.3} mm)  vol {:>7.4} mm3 | half pitch off: pen {:>6.3} mm vol {:>8.2} mm3{}",
+            self.label,
+            r.penetration / self.m,
+            r.gap_min / self.m,
+            r.gap_max / self.m,
+            self.backlash,
+            r.volume,
+            self.off.penetration,
+            self.off.volume,
+            if self.warnings.is_empty() { String::new() } else { format!("  ! {}", self.warnings.join(" | ")) }
+        );
+    }
+    /// No penetration at any step, contact (a backlash apart at most) at every step, and a
+    /// collision half a pitch out of phase.
+    pub fn check(&self) {
+        self.show();
+        let (r, m) = (&self.run, self.m);
+        assert!(r.penetration <= DEPTH * m, "{}: flanks cross by {} mm at driver angle {}", self.label, r.penetration, r.at);
+        // Backlash is set along the pitch circle (a worm's along its axis); square to the flanks
+        // each side's share comes out less.
+        assert!(r.gap_max <= 0.5 * self.backlash + GAP * m, "{}: flanks {} mm apart", self.label, r.gap_max);
+        assert!(r.gap_min >= 0.25 * self.backlash - GAP * m, "{}: flanks only {} mm apart, backlash {}", self.label, r.gap_min, self.backlash);
+        assert!(self.off.penetration > 0.1 * m && self.off.volume > 0.02 * m * m * m, "{}: half a pitch out of phase should collide: {:?}", self.label, self.off);
+    }
+}
+
+fn d(k: Kind) -> Spec {
+    Spec::defaults_for(k)
+}
+
+fn bevels() -> Vec<(&'static str, Spec)> {
+    vec![
+        ("bevel default 20:30", d(Kind::Bevel)),
+        ("bevel mitre 24:24", Spec { teeth: 24, teeth2: 24, ..d(Kind::Bevel) }),
+        ("bevel 60deg 16:40", Spec { teeth: 16, teeth2: 40, shaft_angle: 60.0, ..d(Kind::Bevel) }),
+        ("bevel 120deg 18:27 backlash", Spec { teeth: 18, teeth2: 27, shaft_angle: 120.0, backlash: 0.1, ..d(Kind::Bevel) }),
+        ("bevel 13:31 m3 backlash", Spec { teeth: 13, teeth2: 31, module: 3.0, backlash: 0.1, face_width: 15.0, ..d(Kind::Bevel) }),
+    ]
+}
+
+fn spirals() -> Vec<(&'static str, Spec)> {
+    vec![
+        ("spiral default 17:34 35deg", d(Kind::SpiralBevel)),
+        ("spiral left 20deg 15:31", Spec { spiral_angle: -20.0, teeth: 15, teeth2: 31, ..d(Kind::SpiralBevel) }),
+        ("spiral 60deg shaft 19:28", Spec { shaft_angle: 60.0, teeth: 19, teeth2: 28, ..d(Kind::SpiralBevel) }),
+        ("spiral 120deg shaft 20:29 backlash", Spec { shaft_angle: 120.0, backlash: 0.1, spiral_angle: 30.0, teeth: 20, teeth2: 29, ..d(Kind::SpiralBevel) }),
+        ("spiral mitre 45deg 21:21 backlash", Spec { teeth: 21, teeth2: 21, spiral_angle: 45.0, backlash: 0.1, ..d(Kind::SpiralBevel) }),
+    ]
+}
+
+fn crossed() -> Vec<(&'static str, Spec)> {
+    vec![
+        ("crossed default 15:25 45/45", d(Kind::CrossedHelical)),
+        ("crossed 30/60 18:23", Spec { helix: 30.0, teeth: 18, teeth2: 23, ..d(Kind::CrossedHelical) }),
+        ("crossed 60deg shaft 17:29", Spec { shaft_angle: 60.0, helix: 20.0, teeth: 17, teeth2: 29, ..d(Kind::CrossedHelical) }),
+        ("crossed 120deg shaft 16:24 backlash", Spec { shaft_angle: 120.0, helix: 50.0, backlash: 0.1, teeth: 16, teeth2: 24, ..d(Kind::CrossedHelical) }),
+        ("crossed opposite hands 20:20 backlash", Spec { shaft_angle: 30.0, helix: 50.0, teeth: 20, teeth2: 20, backlash: 0.1, ..d(Kind::CrossedHelical) }),
+    ]
+}
+
+fn worms() -> Vec<(&'static str, Spec)> {
+    vec![
+        ("worm default 1:30", d(Kind::Worm)),
+        ("worm 2-start z41", Spec { starts: 2, teeth: 41, ..d(Kind::Worm) }),
+        ("worm 4-start q8 left", Spec { starts: 4, teeth: 36, worm_diameter: 16.0, helix: -1.0, ..d(Kind::Worm) }),
+        ("worm left m3 z25 backlash", Spec { helix: -1.0, backlash: 0.1, teeth: 25, module: 3.0, ..d(Kind::Worm) }),
+        ("worm 3-start 25deg shift backlash", Spec { starts: 3, backlash: 0.1, shift: 0.3, pressure_angle: 25.0, ..d(Kind::Worm) }),
+    ]
+}
+
+fn all(sets: Vec<(&'static str, Spec)>) {
+    let rows: Vec<Row> = sets.iter().map(|(n, s)| measure(n, s)).collect();
+    for r in &rows {
+        r.show();
+    }
+    for r in &rows {
+        r.check();
+    }
+}
+
+#[test]
+fn straight_bevels_mesh() {
+    all(bevels());
+}
+
+#[test]
+fn spiral_bevels_mesh() {
+    all(spirals());
+}
+
+#[test]
+fn crossed_helicals_mesh() {
+    all(crossed());
+}
+
+#[test]
+fn worms_mesh() {
+    all(worms());
+}
+
 #[test]
 #[ignore]
-fn half_a_tooth_out_of_phase_collides() {
-    for (n, s) in sets() {
-        let p = plan(&s).unwrap();
-        let (a, mut b) = (Solid::new(&p.bodies[0]), Solid::new(&p.bodies[1]));
-        let z2 = if s.kind == Kind::Worm { f64::from(s.starts) } else { f64::from(s.teeth2) };
-        b.spin = TAU / z2 / 2.0;
-        let v = overlap(&a, &b, 0.1);
-        eprintln!("{n}: {v:.2} mm³ out of phase");
-        assert!(v > 1.0, "{n}: {v}");
+fn probe() {
+    for (label, s) in [
+        ("x 120 j0", Spec { shaft_angle: 120.0, helix: 50.0, teeth: 16, teeth2: 24, ..d(Kind::CrossedHelical) }),
+        ("x 120 j.1", Spec { shaft_angle: 120.0, helix: 50.0, backlash: 0.1, teeth: 16, teeth2: 24, ..d(Kind::CrossedHelical) }),
+        ("x 120 60/60 j.1", Spec { shaft_angle: 120.0, helix: 60.0, backlash: 0.1, teeth: 16, teeth2: 24, ..d(Kind::CrossedHelical) }),
+        ("x 90 45 j.1", Spec { backlash: 0.1, ..d(Kind::CrossedHelical) }),
+        ("x 90 30/60 j.1", Spec { helix: 30.0, backlash: 0.1, teeth: 18, teeth2: 23, ..d(Kind::CrossedHelical) }),
+        ("x 90 30/60 j.1 stub", Spec { helix: 30.0, backlash: 0.1, teeth: 18, teeth2: 23, rack: crate::involute::BasicRack { addendum: 0.8, dedendum: 1.0, root_radius: 0.3 }, ..d(Kind::CrossedHelical) }),    ] {
+        measure(label, &s).show();
     }
 }

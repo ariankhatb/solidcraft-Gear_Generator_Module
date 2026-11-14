@@ -1,22 +1,105 @@
 //! The Gear Generator window (`gear.create`'s ribbon button): pick a gear type, set its
 //! numbers, watch the set mesh in an animated 2D preview with its key figures and warnings, see
 //! the solids previewed in the view, and Create them as one undo step.
+//!
+//! The Axes step at the top makes it axis-first: pick the two shafts in the model (or enter
+//! them) and the window says how they lie, offers the gear types that fit, works out what the
+//! axes decide (centre distance, shaft angle, offset, and the module or teeth left free) and
+//! builds the gears on them.
 
 use egui::{Color32, Pos2, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use solidcraft_gear::geom::{Region, V2};
 use solidcraft_gear::hub::{Bore, BoreKind};
 use solidcraft_gear::involute::BasicRack;
+use solidcraft_gear::axes::{self, Axis, Derived, Drive, Relation, Solved};
 use solidcraft_gear::plan::{Axes, Kind, Plan, Spec, Unit};
 
 use crate::SolveApp;
 use crate::ui_kit;
 
+/// A picked or entered shaft axis, and where it came from.
+#[derive(Clone, Debug, PartialEq)]
+struct Slot {
+    axis: Axis,
+    label: String,
+}
+
+/// The Axes step: the two shafts and what drives the solve on them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxesStep {
+    slots: [Option<Slot>; 2],
+    /// Choose the tooth counts to give `ratio` (gear 2 ÷ gear 1), instead of the counts typed.
+    use_ratio: bool,
+    ratio: f64,
+    /// Choose a standard module to suit the axes, instead of the one typed.
+    auto_module: bool,
+    /// Bevels: size by the outer cone distance instead of the module.
+    use_cone: bool,
+    cone: f64,
+    flip1: bool,
+    flip2: bool,
+    swap: bool,
+    along: f64,
+}
+
+impl Default for AxesStep {
+    fn default() -> Self {
+        AxesStep { slots: [None, None], use_ratio: false, ratio: 2.0, auto_module: true, use_cone: false, cone: 40.0, flip1: false, flip2: false, swap: false, along: 0.0 }
+    }
+}
+
+impl AxesStep {
+    /// Axis 1, or axis 2 once axis 1 is set.
+    fn axis(&self, i: usize) -> Option<Axis> {
+        self.slots[0].as_ref()?;
+        self.slots.get(i)?.as_ref().map(|s| s.axis)
+    }
+
+    /// How the two axes lie, as the solver sees them (swapped when asked).
+    fn relation(&self) -> Option<Relation> {
+        let (a1, a2) = (self.axis(0)?, self.axis(1)?);
+        Some(if self.swap { axes::relate(&a2, &a1) } else { axes::relate(&a1, &a2) })
+    }
+
+    fn drive(&self) -> Drive {
+        Drive {
+            ratio: self.use_ratio.then_some(self.ratio),
+            module_free: self.auto_module,
+            teeth_free: self.use_ratio,
+            teeth2_free: self.use_ratio,
+            starts_free: false,
+            cone_distance: self.use_cone.then_some(self.cone),
+            flip1: self.flip1,
+            flip2: self.flip2,
+            swap: self.swap,
+            along: self.along,
+        }
+    }
+}
+
 /// What the window holds between frames.
 pub struct GearWindow {
+    /// The numbers as typed.
     pub spec: Spec,
-    /// The plan for `spec`, or why there is none; recomputed when the spec changes.
+    /// The Axes step.
+    pub axes: AxesStep,
+    /// What is built: `spec`, or with an axis set, the set solved on the axes.
+    built: Spec,
+    /// The solve on the axes, when there is one.
+    solved: Option<Solved>,
+    /// The slot a "Use selection" click asked to fill; taken up after the window is drawn, where
+    /// the design is at hand.
+    capture: Option<usize>,
+    /// Each slot's typed origin and direction, and whether its entry rows are open.
+    manual: [bool; 2],
+    entered: [([f64; 3], [f64; 3]); 2],
+    /// Why the last "Use selection" took nothing.
+    axes_note: Option<String>,
+    /// How the axes lay last frame, to notice a change.
+    last_relation: Option<&'static str>,
+    /// The plan for what is built, or why there is none; recomputed when an input changes.
     plan: Result<Plan, String>,
-    planned: Option<Spec>,
+    planned: Option<(Spec, AxesStep)>,
     /// Filled triangles of each preview gear, in its own coordinates.
     meshes: Vec<GearMesh>,
     /// Whether the set turns in the preview, and how far it has turned (driver radians).
@@ -43,6 +126,14 @@ impl GearWindow {
     pub fn new() -> Self {
         let mut w = GearWindow {
             spec: Spec::defaults_for(Kind::Spur),
+            axes: AxesStep::default(),
+            built: Spec::defaults_for(Kind::Spur),
+            solved: None,
+            capture: None,
+            manual: [false; 2],
+            entered: [([0.0; 3], [0.0, 0.0, 1.0]); 2],
+            axes_note: None,
+            last_relation: None,
             plan: Err(String::new()),
             planned: None,
             meshes: Vec::new(),
@@ -59,11 +150,28 @@ impl GearWindow {
     }
 
     fn replan(&mut self) {
-        if self.planned.as_ref() == Some(&self.spec) {
+        self.settle_kind();
+        let key = (self.spec.clone(), self.axes.clone());
+        if self.planned.as_ref() == Some(&key) {
             return;
         }
-        self.planned = Some(self.spec.clone());
-        self.plan = solidcraft_gear::plan(&self.spec);
+        self.planned = Some(key);
+        self.solved = None;
+        // With an axis, the set is sized and placed on the axes; what is built is the solved
+        // spec, and `spec` stays what was typed.
+        let built = match self.axes.axis(0) {
+            None => Ok(self.spec.clone()),
+            Some(a1) => axes::solve(&a1, self.axes.axis(1).as_ref(), Some(self.spec.kind), &self.spec, &self.axes.drive()).map(|solved| {
+                let spec = solved.spec.clone();
+                self.solved = Some(solved);
+                spec
+            }),
+        };
+        self.plan = built.and_then(|b| {
+            let plan = solidcraft_gear::plan(&b);
+            self.built = b;
+            plan
+        });
         self.meshes = match &self.plan {
             Ok(p) => p.preview.iter().map(|g| mesh_of(&g.region)).collect(),
             Err(_) => Vec::new(),
@@ -72,7 +180,43 @@ impl GearWindow {
 
     /// The command the view previews while the window is open.
     pub fn preview_commands(&self) -> Option<Vec<(String, serde_json::Value)>> {
-        (self.preview_3d && self.plan.is_ok()).then(|| vec![("gear.create".to_string(), solidcraft_engine::gear_params_of(&self.spec))])
+        (self.preview_3d && self.plan.is_ok()).then(|| vec![("gear.create".to_string(), solidcraft_engine::gear_params_of(&self.built))])
+    }
+
+    /// A new type starts from its own defaults, keeping the tooth form and hub choices.
+    fn switch_kind(&mut self, k: Kind) {
+        if self.spec.kind == k {
+            return;
+        }
+        let keep = self.spec.clone();
+        let mut s = Spec::defaults_for(k);
+        if k.involute() == keep.kind.involute() && !matches!(k, Kind::Hypoid | Kind::Worm | Kind::Cycloidal) {
+            s.module = keep.module;
+            s.pressure_angle = keep.pressure_angle;
+            s.rack = keep.rack;
+            s.backlash = keep.backlash;
+        }
+        s.bore = keep.bore;
+        s.bore2 = keep.bore2;
+        s.origin = keep.origin;
+        s.name = keep.name;
+        self.spec = s;
+        self.turned = 0.0;
+    }
+
+    /// Keeps the type one the axes allow: when how the axes lie changes, a type that doesn't
+    /// span both of them gives way to the natural one (a pair for parallel axes, bevels for
+    /// intersecting ones…); a single gear picked afterwards stays.
+    fn settle_kind(&mut self) {
+        let rel = self.axes.relation();
+        let name = rel.as_ref().map(Relation::name);
+        let changed = name != self.last_relation;
+        self.last_relation = name;
+        let Some(rel) = rel else { return };
+        let fits = axes::candidates(Some(&rel)).into_iter().any(|c| c.kind == self.spec.kind && c.fits);
+        if !fits || (changed && !self.spec.kind.is_set()) {
+            self.switch_kind(axes::natural(Some(&rel)));
+        }
     }
 }
 
@@ -176,8 +320,11 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     if closed || action == ui_kit::Action::Cancel {
         return;
     }
+    if let Some(slot) = w.capture.take() {
+        capture(app, &mut w, slot);
+    }
     if action == ui_kit::Action::Ok {
-        let params = solidcraft_engine::gear_params_of(&w.spec);
+        let params = solidcraft_engine::gear_params_of(&w.built);
         match app.run("gear.create", params) {
             Ok(_) => {
                 w.error = None;
@@ -189,7 +336,151 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     app.gear_window = Some(w);
 }
 
+/// Fills an axis slot from what is selected in the view: a construction or origin axis, a
+/// straight or round edge, a cylinder, cone or torus face, or a straight sketch line. With two
+/// such items selected, slot 1 takes the first and slot 2 the second.
+fn capture(app: &SolveApp, w: &mut GearWindow, slot: usize) {
+    use solidcraft_engine::Sel;
+    let found: Vec<Slot> = app
+        .session
+        .selection
+        .iter()
+        .filter_map(|sel| {
+            let (o, d) = crate::dialogs::axis_of(app, sel)?;
+            let axis = Axis::new([o.x, o.y, o.z], [d.x, d.y, d.z])?;
+            let label = match sel {
+                Sel::Axis { name } => format!("axis {name}"),
+                Sel::Edge { body, .. } => format!("edge of {body}"),
+                Sel::Face { body, .. } => format!("face of {body}"),
+                _ => "sketch line".to_string(),
+            };
+            Some(Slot { axis, label })
+        })
+        .collect();
+    let Some(pick) = found.get(slot.min(found.len().saturating_sub(1))).cloned() else {
+        w.axes_note = Some("Nothing selected has an axis: select a construction axis, a straight or round edge, a cylinder face or a sketch line in the view, then press Use selection".into());
+        return;
+    };
+    w.axes_note = None;
+    set_slot(w, slot, pick);
+}
+
+fn set_slot(w: &mut GearWindow, slot: usize, pick: Slot) {
+    w.entered[slot] = (pick.axis.origin, pick.axis.dir);
+    w.axes.slots[slot] = Some(pick);
+}
+
+/// The Axes step: two slots for the shafts, how they lie, and what drives the solve on them.
+fn axes_step(ui: &mut Ui, w: &mut GearWindow) {
+    ui.label(egui::RichText::new("Axes").strong()).on_hover_text("Start from the shafts: pick the two axes and the gears are sized and placed on them");
+    for i in 0..2 {
+        ui.horizontal(|ui| {
+            ui.add_sized([110.0, 18.0], egui::Label::new(egui::RichText::new(if i == 0 { "Axis 1" } else { "Axis 2" }).small().weak()));
+            if ui.small_button("Use selection").on_hover_text("Take the axis of what is selected in the view: a construction or origin axis, a straight or round edge, a cylinder face, a sketch line").clicked() {
+                w.capture = Some(i);
+            }
+            for (name, dir) in [("X", [1.0, 0.0, 0.0]), ("Y", [0.0, 1.0, 0.0]), ("Z", [0.0, 0.0, 1.0])] {
+                if ui.small_button(name).on_hover_text(format!("World {name} through the origin")).clicked() {
+                    set_slot(w, i, Slot { axis: Axis { origin: [0.0; 3], dir }, label: format!("world {name}") });
+                }
+            }
+            ui.toggle_value(&mut w.manual[i], "Enter").on_hover_text("Type a point on the axis and its direction");
+            match &w.axes.slots[i] {
+                Some(s) => {
+                    let (o, d) = (s.axis.origin, s.axis.dir);
+                    ui.label(&s.label).on_hover_text(format!("through ({:.3}, {:.3}, {:.3}) along ({:.4}, {:.4}, {:.4})", o[0], o[1], o[2], d[0], d[1], d[2]));
+                    if ui.small_button("✕").on_hover_text("Clear this axis").clicked() {
+                        w.axes.slots[i] = None;
+                    }
+                }
+                None => {
+                    ui.weak(if i == 0 { "not set: the gear goes at Centre at, on world Z" } else { "not set" });
+                }
+            }
+        });
+        if w.manual[i] {
+            ui.horizontal(|ui| {
+                ui.add_sized([110.0, 18.0], egui::Label::new(egui::RichText::new("  point, direction").small().weak()));
+                let (o, d) = &mut w.entered[i];
+                let mut changed = false;
+                for v in o.iter_mut() {
+                    changed |= ui.add(egui::DragValue::new(v).speed(0.5).max_decimals(3)).changed();
+                }
+                ui.label("→");
+                for v in d.iter_mut() {
+                    changed |= ui.add(egui::DragValue::new(v).speed(0.01).max_decimals(4)).changed();
+                }
+                if changed && let Some(axis) = Axis::new(*o, *d) {
+                    w.axes.slots[i] = Some(Slot { axis, label: "entered".into() });
+                }
+            });
+        }
+    }
+    if let Some(note) = &w.axes_note {
+        ui.colored_label(ui.visuals().warn_fg_color, note);
+    }
+    if w.axes.slots[0].is_none() && w.axes.slots[1].is_some() {
+        ui.colored_label(ui.visuals().warn_fg_color, "Set Axis 1 too: gear 1 turns about it");
+    }
+    let Some(a1) = w.axes.axis(0) else { return };
+    let rel = w.axes.relation();
+    let two = rel.is_some() && w.spec.kind.is_set() && !matches!(w.spec.kind, Kind::Planetary | Kind::CycloidalDrive);
+    ui.horizontal_wrapped(|ui| {
+        ui.add_sized([110.0, 18.0], egui::Label::new(egui::RichText::new("Relation").small().weak()));
+        let text = match &rel {
+            Some(r) => r.describe(),
+            None => "one axis: the gear turns about it".to_string(),
+        };
+        ui.label(egui::RichText::new(text).strong());
+        // What the solve made of it, where that says more (which rays the bevels sit on).
+        if let (Some(Relation::Intersecting { .. }), Some(s)) = (&rel, &w.solved) {
+            ui.label(format!("shaft angle {:.2}°", s.spec.shaft_angle));
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        ui.add_sized([110.0, 18.0], egui::Label::new(egui::RichText::new("Drive").small().weak()));
+        let a = &mut w.axes;
+        if two {
+            ui.checkbox(&mut a.use_ratio, "Ratio").on_hover_text("Choose the tooth counts for this ratio (gear 2 ÷ gear 1; worm: wheel teeth ÷ starts) instead of typing them");
+            if a.use_ratio {
+                ui.add(egui::DragValue::new(&mut a.ratio).range(0.05..=500.0).speed(0.01).max_decimals(4));
+            }
+            match &rel {
+                Some(Relation::Intersecting { .. }) => {
+                    ui.checkbox(&mut a.use_cone, "Cone distance").on_hover_text("Size the bevels by the distance from where the axes meet to their large ends, instead of by the module");
+                    if a.use_cone {
+                        ui.add(egui::DragValue::new(&mut a.cone).range(1.0..=1e5).speed(0.2).max_decimals(3).suffix(" mm"));
+                    }
+                    ui.checkbox(&mut a.flip1, "Flip 1").on_hover_text("Gear 1 on the other side of where the axes meet");
+                    ui.checkbox(&mut a.flip2, "Flip 2").on_hover_text("Gear 2 on the other side of where the axes meet");
+                }
+                _ => {
+                    ui.checkbox(&mut a.auto_module, "Standard module").on_hover_text("Choose the ISO 54 module that suits the axes, instead of the one typed");
+                    if matches!(rel, Some(Relation::Skew { .. })) {
+                        ui.checkbox(&mut a.flip1, "Other angle").on_hover_text("Read the shaft angle the other way round (its supplement)");
+                    }
+                }
+            }
+            ui.checkbox(&mut a.swap, "Swap").on_hover_text("Gear 1 on axis 2 and gear 2 on axis 1");
+        } else {
+            ui.checkbox(&mut a.flip1, "Flip").on_hover_text("Face the other way along the axis");
+        }
+        if !matches!(rel, Some(Relation::Intersecting { .. } | Relation::Skew { .. })) || !two {
+            ui.label("Along axis");
+            ui.add(egui::DragValue::new(&mut a.along).speed(0.5).max_decimals(3).suffix(" mm")).on_hover_text("How far along axis 1 from its picked point the gear sits");
+        }
+    });
+    let _ = a1;
+    if let Some(s) = &w.solved {
+        for n in &s.notes {
+            ui.label(egui::RichText::new(n).small().weak());
+        }
+    }
+}
+
 fn body(ui: &mut Ui, w: &mut GearWindow, busy: bool, view_error: Option<&str>) {
+    axes_step(ui, w);
+    ui.add_space(4.0);
     type_picker(ui, w);
     ui.add_space(6.0);
     let full = ui.available_width();
@@ -223,30 +514,41 @@ fn body(ui: &mut Ui, w: &mut GearWindow, busy: bool, view_error: Option<&str>) {
 }
 
 fn type_picker(ui: &mut Ui, w: &mut GearWindow) {
-    for (axes, label) in [(Axes::Parallel, "Parallel axes"), (Axes::Intersecting, "Intersecting axes"), (Axes::Crossed, "Crossed axes"), (Axes::Special, "Special")] {
+    // With the axes set, the types that can't sit on them are greyed, with why.
+    let fit = w.axes.axis(0).map(|_| axes::candidates(w.axes.relation().as_ref()));
+    let mut pick = None;
+    for (group, label) in [(Axes::Parallel, "Parallel axes"), (Axes::Intersecting, "Intersecting axes"), (Axes::Crossed, "Crossed axes"), (Axes::Special, "Special")] {
         ui.horizontal_wrapped(|ui| {
             ui.add_sized([110.0, 18.0], egui::Label::new(egui::RichText::new(label).small().weak()));
-            for k in Kind::ALL.iter().copied().filter(|k| k.axes() == axes) {
-                if ui.selectable_label(w.spec.kind == k, k.label()).clicked() && w.spec.kind != k {
-                    // A new type starts from its own defaults, keeping the hub choices.
-                    let keep = w.spec.clone();
-                    let mut s = Spec::defaults_for(k);
-                    if k.involute() == keep.kind.involute() && !matches!(k, Kind::Hypoid | Kind::Worm | Kind::Cycloidal) {
-                        s.module = keep.module;
-                        s.pressure_angle = keep.pressure_angle;
-                        s.rack = keep.rack;
-                        s.backlash = keep.backlash;
-                    }
-                    s.bore = keep.bore;
-                    s.bore2 = keep.bore2;
-                    s.origin = keep.origin;
-                    s.name = keep.name;
-                    w.spec = s;
-                    w.turned = 0.0;
+            for k in Kind::ALL.iter().copied().filter(|k| k.axes() == group) {
+                let c = fit.as_ref().and_then(|f| f.iter().find(|c| c.kind == k));
+                let fits = c.is_none_or(|c| c.fits);
+                let r = ui.add_enabled_ui(fits, |ui| ui.selectable_label(w.spec.kind == k, k.label())).inner;
+                let r = match c {
+                    Some(c) => r.on_hover_text(&c.reason).on_disabled_hover_text(&c.reason),
+                    None => r,
+                };
+                if r.clicked() {
+                    pick = Some(k);
                 }
             }
         });
     }
+    if let Some(k) = pick {
+        w.switch_kind(k);
+    }
+}
+
+/// A row whose value the axes decided: shown, not editable.
+fn locked(ui: &mut Ui, label: &str, value: String) {
+    row(ui, label, "Worked out from the axes", |ui| {
+        ui.label(egui::RichText::new(value).monospace());
+        ui.label(egui::RichText::new("from the axes").small().weak());
+    });
+}
+
+fn mm(v: f64) -> String {
+    format!("{v:.3} mm")
 }
 
 fn row(ui: &mut Ui, label: &str, tip: &str, add: impl FnOnce(&mut Ui)) {
@@ -277,6 +579,10 @@ fn heading(ui: &mut Ui, text: &str) {
 }
 
 fn params(ui: &mut Ui, w: &mut GearWindow) {
+    // What the axes decided is shown from the solved set, read-only.
+    let d: Derived = w.solved.as_ref().map(|s| s.derived).unwrap_or_default();
+    let b = w.built.clone();
+    let on_axes = w.axes.axis(0).is_some();
     let s = &mut w.spec;
     let k = s.kind;
     egui::ScrollArea::vertical().id_salt("gear_params").max_height(470.0).auto_shrink([false, true]).show(ui, |ui| {
@@ -292,7 +598,9 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
                 num(ui, "Output pin Ø", "0: 15% of the pin circle", &mut s.hole_diameter, 0.0..=500.0, 0.1, " mm");
             }
         } else {
-            if w.inch {
+            if d.module {
+                locked(ui, if k == Kind::Worm { "Axial module" } else { "Module" }, mm(b.module));
+            } else if w.inch {
                 let mut dp = 25.4 / s.module;
                 row(ui, "Diametral pitch", "Teeth per inch of pitch diameter", |ui| {
                     if ui.add(egui::DragValue::new(&mut dp).range(0.5..=200.0).speed(0.1).max_decimals(3)).changed() {
@@ -316,11 +624,17 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
             };
             if k == Kind::Rack {
                 count(ui, "Teeth along", "", &mut s.rack_teeth, 1..=2000);
+            } else if d.teeth {
+                locked(ui, t1, b.teeth.to_string());
             } else {
                 count(ui, t1, "", &mut s.teeth, 3..=2000);
             }
             if let Some(t2) = t2 {
-                count(ui, t2, "", &mut s.teeth2, if k == Kind::Cycloidal { 0..=2000 } else { 3..=2000 });
+                if d.teeth2 {
+                    locked(ui, t2, b.teeth2.to_string());
+                } else {
+                    count(ui, t2, "", &mut s.teeth2, if k == Kind::Cycloidal { 0..=2000 } else { 3..=2000 });
+                }
             }
             if k == Kind::Planetary {
                 let mut ring = if s.teeth3 > 0 { s.teeth3 } else { s.teeth + 2 * s.teeth2 };
@@ -336,7 +650,11 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
             }
             if k == Kind::Worm {
                 count(ui, "Worm starts", "Threads on the worm; ratio = wheel teeth ÷ starts", &mut s.starts, 1..=12);
-                num(ui, "Worm pitch Ø", "0: 10 modules", &mut s.worm_diameter, 0.0..=5000.0, 0.1, " mm");
+                if d.worm_diameter {
+                    locked(ui, "Worm pitch Ø", mm(b.worm_diameter));
+                } else {
+                    num(ui, "Worm pitch Ø", "0: 10 modules", &mut s.worm_diameter, 0.0..=5000.0, 0.1, " mm");
+                }
                 num(ui, "Worm length", "0: enough to engage the wheel", &mut s.worm_length, 0.0..=10000.0, 0.5, " mm");
                 let mut left = s.helix < 0.0;
                 row(ui, "Hand", "", |ui| {
@@ -352,25 +670,45 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
                 num(ui, "Helix angle", "0 for straight teeth; the sign is the hand (gear 2 gets the opposite)", &mut s.helix, -60.0..=60.0, 0.2, "°");
             }
             if matches!(k, Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical) {
-                num(ui, "Shaft angle", "Angle between the axes", &mut s.shaft_angle, 5.0..=175.0, 0.5, "°");
+                if d.shaft_angle {
+                    locked(ui, "Shaft angle", format!("{:.3}°", b.shaft_angle));
+                } else {
+                    num(ui, "Shaft angle", "Angle between the axes", &mut s.shaft_angle, 5.0..=175.0, 0.5, "°");
+                }
             }
             if k == Kind::CrossedHelical {
-                num(ui, "Gear 1 helix", "Gear 2 takes the rest of the shaft angle", &mut s.helix, -75.0..=75.0, 0.5, "°");
+                if d.helix {
+                    locked(ui, "Gear 1 helix", format!("{:.3}°", b.helix));
+                } else {
+                    num(ui, "Gear 1 helix", "Gear 2 takes the rest of the shaft angle", &mut s.helix, -75.0..=75.0, 0.5, "°");
+                }
             }
             if k == Kind::SpiralBevel {
                 num(ui, "Spiral angle", "Mean spiral angle; 35° is usual", &mut s.spiral_angle, 0.0..=60.0, 0.5, "°");
             }
             if k == Kind::Hypoid {
-                num(ui, "Offset", "Distance between the axes; 0 for equal spiral angles", &mut s.offset, 0.0..=5000.0, 0.5, " mm");
+                if d.offset {
+                    locked(ui, "Offset", mm(b.offset));
+                } else {
+                    num(ui, "Offset", "Distance between the axes; 0 for equal spiral angles", &mut s.offset, 0.0..=5000.0, 0.5, " mm");
+                }
                 num(ui, "Face start", "Where the teeth start along the line of contact, from the throat; larger looks more like a bevel", &mut s.face_start, -5000.0..=5000.0, 0.5, " mm");
             }
             if k.involute() && k != Kind::Worm {
                 num(ui, if k.is_set() { "Shift x₁" } else { "Profile shift x" }, "Profile shift coefficient: positive thickens the root and avoids undercut", &mut s.shift, -1.5..=1.5, 0.01, "");
-                if matches!(k, Kind::Pair | Kind::Planetary | Kind::CrossedHelical) {
+                if k == Kind::Pair && d.center_distance {
+                    locked(ui, "Shift x₂", format!("{:.4}", b.shift2));
+                    if d.shift {
+                        locked(ui, "  x₁ (auto while 0)", format!("{:.4}", b.shift));
+                    }
+                } else if matches!(k, Kind::Pair | Kind::Planetary | Kind::CrossedHelical) {
                     num(ui, "Shift x₂", "Gear 2's (planets') profile shift", &mut s.shift2, -1.5..=1.5, 0.01, "");
                 }
             }
-            if k == Kind::Pair {
+            if k == Kind::Pair && d.center_distance {
+                let a = if b.center_distance > 0.0 { b.center_distance } else { b.module * f64::from(b.teeth + b.teeth2) / 2.0 / b.helix.to_radians().cos() };
+                locked(ui, "Centre distance", mm(a));
+            } else if k == Kind::Pair {
                 let mut fixed = s.center_distance > 0.0;
                 row(ui, "Centre distance", "Set it to have gear 2's shift worked out", |ui| {
                     if ui.checkbox(&mut fixed, "").changed() {
@@ -453,11 +791,13 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
         row(ui, "Name", "Put in front of the bodies' names", |ui| {
             ui.add(egui::TextEdit::singleline(&mut s.name).desired_width(150.0));
         });
-        row(ui, "Centre at", "Where gear 1's centre goes", |ui| {
-            for v in &mut s.origin {
-                ui.add(egui::DragValue::new(v).speed(0.5).max_decimals(3));
-            }
-        });
+        if !on_axes {
+            row(ui, "Centre at", "Where gear 1's centre goes", |ui| {
+                for v in &mut s.origin {
+                    ui.add(egui::DragValue::new(v).speed(0.5).max_decimals(3));
+                }
+            });
+        }
     });
 }
 

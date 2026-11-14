@@ -1,7 +1,67 @@
 //! `gear.create` and `gear.calculate`: the Gear Generator's parameters and replies.
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+
+use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Value, json};
+
+use super::types::AxisLine;
+
+/// A shaft axis for the axis-first workflow, as `cmd::gear` reads it: any [`AxisLine`] (X, Y, Z,
+/// a construction axis's name, `{origin?, dir}`, or an edge or round face of a body), or a
+/// straight line of a sketch (`{sketch, curve}`). Kept as given, for the handler, which has the
+/// design.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct GearAxis(pub Value);
+
+impl<'de> Deserialize<'de> for GearAxis {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = Value::deserialize(d)?;
+        if v.is_object() && v.get("curve").is_some() {
+            return match (v.get("curve").and_then(Value::as_str), v.get("sketch")) {
+                (Some(_), Some(Value::String(_) | Value::Number(_))) => Ok(GearAxis(v)),
+                _ => Err(D::Error::custom("a sketch line axis is {\"sketch\": id or name, \"curve\": the line's id}")),
+            };
+        }
+        AxisLine::deserialize(v).map(|a| GearAxis(a.0)).map_err(D::Error::custom)
+    }
+}
+
+impl JsonSchema for GearAxis {
+    fn schema_name() -> Cow<'static, str> {
+        "GearAxis".into()
+    }
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let mut schema = AxisLine::json_schema(generator);
+        if let Some(o) = schema.as_object_mut() {
+            o.insert(
+                "description".into(),
+                json!("A shaft axis: X, Y or Z, a construction axis's name, {\"origin\"?: [x, y, z] in mm, \"dir\": [x, y, z]}, a straight or circular edge or a cylinder, cone or torus face of a body ({\"edge\": [x, y, z]} or {\"face\": [x, y, z]}, a point on it), or a straight sketch line ({\"sketch\": id or name, \"curve\": id}). Read once: the gears do not follow the axis afterwards."),
+            );
+            if let Some(Value::Array(forms)) = o.get_mut("anyOf") {
+                forms.push(json!({"type": "object", "properties": {"sketch": {"type": ["string", "integer"]}, "curve": {"type": "string"}}, "required": ["sketch", "curve"]}));
+            }
+        }
+        schema
+    }
+}
+
+/// Where a whole gear set goes: a frame in world coordinates. Gear 1 turns about `z` through
+/// `origin`; the set's own x axis (towards gear 2 for a pair) is `x`.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct PlacementParams {
+    /// A point on gear 1's axis, in mm.
+    pub origin: [f64; 3],
+    /// The set's x direction (made square to `z`).
+    pub x: [f64; 3],
+    /// Gear 1's axis direction.
+    pub z: [f64; 3],
+}
 
 /// The gear set to make.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -204,6 +264,42 @@ pub struct GearParams {
     /// A name put in front of the bodies' and the timeline group's names.
     #[serde(default)]
     pub name: Option<String>,
+    /// Axis-first: the shaft gear 1 turns about. With `axis2`, the set is sized and placed on
+    /// both: the centre distance, shaft angle or offset come from the axes, `type` may be left
+    /// out (a pair for parallel axes, bevels for intersecting ones, a worm or crossed helicals
+    /// for skew ones, a planetary set for one shared line), and `module`, `teeth`, `teeth2` and
+    /// `starts` are chosen where they are not given. Alone, it places a single gear (or gear 1
+    /// of a set). `origin` is not used with it.
+    #[serde(default)]
+    pub axis1: Option<GearAxis>,
+    /// Axis-first: the shaft gear 2 turns about (the worm, for a worm and wheel).
+    #[serde(default)]
+    pub axis2: Option<GearAxis>,
+    /// Axis-first: gear 2's teeth ÷ gear 1's (worm: wheel teeth ÷ starts; cycloidal: wheel ÷
+    /// pinion). Tooth counts that are not given are chosen to give it.
+    #[serde(default)]
+    pub ratio: Option<f64>,
+    /// Axis-first bevels: the outer cone distance in mm (from where the axes meet to the large
+    /// ends' pitch circles); sets the module.
+    #[serde(default)]
+    pub cone_distance: Option<f64>,
+    /// Axis-first: put gear 1 on the other side (bevels: the other ray from the meeting point;
+    /// skew axes: the supplementary shaft angle; otherwise the gear faces the other way).
+    #[serde(default)]
+    pub flip1: Option<bool>,
+    /// Axis-first bevels: put gear 2 on the other ray from the meeting point.
+    #[serde(default)]
+    pub flip2: Option<bool>,
+    /// Axis-first: gear 1 on `axis2` and gear 2 on `axis1`.
+    #[serde(default)]
+    pub swap_axes: Option<bool>,
+    /// Axis-first, parallel or single: how far along `axis1` from its origin the set sits, mm.
+    #[serde(default)]
+    pub along: Option<f64>,
+    /// Where the whole set goes, instead of the world frame at `origin` (what the axes solve
+    /// to; not with `axis1`).
+    #[serde(default)]
+    pub placement: Option<PlacementParams>,
 }
 
 /// One number describing the set.
@@ -230,4 +326,90 @@ pub struct GearResult {
     pub warnings: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_warnings: Vec<String>,
+    /// Axis-first: how the set was sized to its axes (module and teeth chosen, shifts, angles).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+/// A line in space.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GearAxisLine {
+    /// A point on it, in mm.
+    pub origin: [f64; 3],
+    /// Its unit direction.
+    pub dir: [f64; 3],
+}
+
+/// How two shaft axes lie.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GearRelation {
+    /// "single" (one axis), "coincident", "parallel", "intersecting" or "skew".
+    pub kind: String,
+    /// In words: "parallel, 40 mm apart".
+    pub text: String,
+    /// Parallel: the distance between the axes; skew: the offset along their common
+    /// perpendicular. mm.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distance: Option<f64>,
+    /// Intersecting and skew: the angle between the directions as given, in degrees.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub angle: Option<f64>,
+    /// Intersecting: where the axes meet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub apex: Option<[f64; 3]>,
+    /// Parallel and skew: the nearest points, on axis 1 and on axis 2.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub foot1: Option<[f64; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub foot2: Option<[f64; 3]>,
+}
+
+/// Whether a gear type suits the axes.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GearCandidate {
+    #[serde(rename = "type")]
+    pub kind: GearType,
+    pub label: String,
+    pub fits: bool,
+    /// The type used when none is asked for.
+    pub natural: bool,
+    /// Why not, or how it is sized and placed.
+    pub reason: String,
+}
+
+/// A body's placement: its origin, x and z (its axis) in world coordinates.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GearFrame {
+    pub origin: [f64; 3],
+    pub x: [f64; 3],
+    pub z: [f64; 3],
+}
+
+/// What `gear.from_axes` worked out: how the axes lie, which gear types fit, and the set solved
+/// on them.
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GearAxesResult {
+    pub axis1: GearAxisLine,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub axis2: Option<GearAxisLine>,
+    pub relation: GearRelation,
+    /// Every gear type, with whether it fits these axes.
+    pub candidates: Vec<GearCandidate>,
+    /// The type solved (the one asked for, or the natural one).
+    #[serde(rename = "type")]
+    pub kind: GearType,
+    /// Why that type could not be solved on these axes (then `params` is absent).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// The solved set as plain `gear.create` parameters: every value explicit, placed by
+    /// `placement`, no axis references.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<GearParams>,
+    /// Which parameters the axes and the solve decided (their `gear.create` names).
+    pub derived: Vec<String>,
+    /// Where gear 1 and gear 2 turn.
+    pub frames: Vec<GearFrame>,
+    pub facts: Vec<GearFact>,
+    pub warnings: Vec<String>,
+    pub notes: Vec<String>,
 }

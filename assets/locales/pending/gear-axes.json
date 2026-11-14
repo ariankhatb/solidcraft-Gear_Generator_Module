@@ -1,0 +1,26 @@
+{
+  "ar": {
+    "cmd.gear_from_axes": "تروس من المحاور"
+  },
+  "de": {
+    "cmd.gear_from_axes": "Zahnräder aus Achsen"
+  },
+  "en": {
+    "cmd.gear_from_axes": "Gears From Axes"
+  },
+  "he": {
+    "cmd.gear_from_axes": "גלגלי שיניים מצירים"
+  },
+  "ja": {
+    "cmd.gear_from_axes": "軸から歯車"
+  },
+  "ko": {
+    "cmd.gear_from_axes": "축에서 기어"
+  },
+  "vi": {
+    "cmd.gear_from_axes": "Bánh răng từ các trục"
+  },
+  "zh": {
+    "cmd.gear_from_axes": "由轴线生成齿轮"
+  }
+}

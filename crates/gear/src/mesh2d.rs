@@ -1,9 +1,15 @@
-//! A 2D mesh checker for the tests: members are polygonised regions with a rigid motion, and a
-//! pair is probed over driver angles for overlap (area and penetration depth) and for the gap
-//! between the flanks. Conjugate teeth overlap nowhere and stay in (near) contact throughout.
+//! A 2D mesh checker: members are polygonised regions with a rigid motion, and a pair is probed
+//! over driver angles for overlap (area and penetration depth) and for the gap between the
+//! flanks. Conjugate teeth overlap nowhere and stay in (near) contact throughout.
+//!
+//! [`check_mesh`] runs it at reduced cost over a plan's meshing pairs ([`MeshPair`], which the
+//! plan lists in `Plan::meshes`) for a live verdict in the window; the tests use the finer
+//! [`Member::new`] and [`run`] directly.
+
+use std::f64::consts::TAU;
 
 use crate::geom::{Outline, Region, Seg, V2, natural_spline};
-use crate::plan::PreviewGear;
+use crate::plan::{Kind, Plan, PreviewGear, Spec};
 
 /// A rigid motion against the driver angle t: turned `speed`·t about a centre that goes round
 /// the origin `orbit`·t and slides `slide`·t along +x.
@@ -54,14 +60,19 @@ pub struct Member {
 /// ([`natural_spline`]), sampled finely and thinned to chords that stray no more than `tol`
 /// (`Outline::polyline` gives a spline a fixed few chords a span, whose sag would show up here
 /// as flanks crossing).
-fn polygon(o: &Outline, tol: f64) -> Vec<V2> {
+pub fn polygon(o: &Outline, tol: f64) -> Vec<V2> {
+    polygon_n(o, tol, 32)
+}
+
+/// As [`polygon`], with `per_span` samples of each spline span to thin from.
+fn polygon_n(o: &Outline, tol: f64, per_span: usize) -> Vec<V2> {
     let mut out: Vec<V2> = Vec::new();
     for s in &o.segs {
         let mut pts = Vec::new();
         match s {
             Seg::Spline(p) => {
                 let mut fine = Vec::new();
-                natural_spline(p, 32, &mut fine);
+                natural_spline(p, per_span, &mut fine);
                 let mut i = 0;
                 pts.push(fine[0]);
                 while i + 1 < fine.len() {
@@ -98,11 +109,17 @@ impl Member {
     /// `cell`: the grid's cell size; distances are exact up to it, and edges are no longer than
     /// half of it. `tol`: chord tolerance of arcs.
     pub fn new(region: &Region, motion: Motion, cell: f64, tol: f64) -> Member {
+        Member::build(region, motion, cell, tol, 32)
+    }
+
+    /// As [`Member::new`], with `per_span` samples of each spline span to thin from (fewer is
+    /// faster to build and good to a few 1e-4 of a module).
+    pub fn build(region: &Region, motion: Motion, cell: f64, tol: f64, per_span: usize) -> Member {
         let mut loops = Vec::new();
         let mut edges = Vec::new();
         for (outlines, hole) in [(&region.outer, false), (&region.holes, true)] {
             for o in outlines {
-                let mut p = polygon(o, tol);
+                let mut p = polygon_n(o, tol, per_span);
                 if p.len() < 3 {
                     continue;
                 }
@@ -329,4 +346,146 @@ pub fn run(a: &Member, b: &Member, t0: f64, t1: f64, steps: usize) -> Stat {
         s.merge(&probe(a, b, t0 + (t1 - t0) * i as f64 / steps as f64));
     }
     s
+}
+
+// ---------------------------------------------------------------------------------------------
+// The plan's meshes, checked for the window.
+
+/// Two members of a plan's preview that mesh (indices into `Plan::preview`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeshPair {
+    pub a: usize,
+    pub b: usize,
+    /// `b` surrounds `a` (a ring gear round a planet or pinion, a pin ring round its disc).
+    pub internal: bool,
+    /// The driver angle after which the mesh repeats (one tooth pitch of the driver; radians).
+    pub period: f64,
+    /// The flank gap the set is meant to have (its backlash; mm).
+    pub slack: f64,
+    /// The length tolerances scale with (the module; the pin radius of a cycloidal drive; mm).
+    pub scale: f64,
+}
+
+/// Which preview members mesh, for a parallel-axis set (none for the others: their preview is
+/// not the plane the teeth mesh in).
+pub fn topology(s: &Spec, preview: &[PreviewGear]) -> Vec<MeshPair> {
+    let n = preview.len();
+    let pair = |a: usize, b: usize, internal: bool, teeth: u32| MeshPair { a, b, internal, period: TAU / f64::from(teeth.max(1)), slack: s.backlash, scale: s.module };
+    match s.kind {
+        Kind::Pair | Kind::Cycloidal if n == 2 => vec![pair(0, 1, false, s.teeth)],
+        // Sun first, ring last, the planets between.
+        Kind::Planetary if n >= 3 => (1..n - 1).flat_map(|k| [pair(0, k, false, s.teeth), pair(k, n - 1, true, s.teeth)]).collect(),
+        Kind::CycloidalDrive if n == 2 => vec![MeshPair { a: 0, b: 1, internal: true, period: TAU / f64::from(s.pins.max(1)), slack: s.backlash / 2.0, scale: s.pin_diameter / 2.0 }],
+        Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical | Kind::Worm => Vec::new(),
+        // A rack with a pinion on it, should a set come to have both: the first sliding member
+        // against the first turning one.
+        _ => {
+            let rack = preview.iter().position(|g| g.slide != 0.0 && g.period > 0.0);
+            let pinion = preview.iter().position(|g| g.slide == 0.0 && g.speed != 0.0 && g.pitch_radius > 0.0);
+            match (pinion, rack) {
+                (Some(a), Some(b)) => vec![MeshPair { a, b, internal: false, period: preview[b].period / preview[a].pitch_radius, slack: s.backlash, scale: s.module }],
+                _ => Vec::new(),
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// No overlap, and the flanks touch (or stay the backlash apart) all the way round.
+    Ok,
+    /// The members cut into each other.
+    Interferes,
+    /// The flanks come apart at some angle (or never meet).
+    NoContact,
+}
+
+/// What [`check_mesh`] found for one [`MeshPair`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshResult {
+    pub a: usize,
+    pub b: usize,
+    /// Deepest the members cut into each other over a tooth pitch (mm; 0 when they never do).
+    pub penetration_mm: f64,
+    /// Smallest and largest, over the pitch, of the least gap between the members (mm).
+    pub gap_min_mm: f64,
+    pub gap_max_mm: f64,
+    pub verdict: Verdict,
+    /// One line to show: who, the verdict and the number behind it.
+    pub message: String,
+}
+
+/// Driver angles probed over one tooth pitch by [`check_mesh`].
+pub const CHECK_STEPS: usize = 12;
+/// Overlap deeper than this is interference (× the pair's scale): above what the coarse
+/// polygons and the fitted flanks can cross by on their own.
+pub const CHECK_DEPTH: f64 = 3e-3;
+/// Flanks further apart than the backlash plus this have lost contact (× the pair's scale).
+pub const CHECK_GAP: f64 = 6e-3;
+
+/// Checks every meshing pair of a plan in its preview plane over one tooth pitch: overlap and
+/// loss of contact. Coarser than the tests' sweep (about 1e-3 of a module) and fast enough to
+/// call on every edit (debounce it all the same).
+///
+/// Sets whose axes are not parallel give an empty list: their preview is a side-by-side
+/// picture, not the plane the teeth mesh in.
+pub fn check_mesh(plan: &Plan) -> Vec<MeshResult> {
+    // HOOK (mesh3d): bevel, hypoid, crossed helical and worm sets have no `Plan::meshes`; when
+    // the 3D checker (`mesh3d.rs`) lands, call it here for plans whose `meshes` is empty and
+    // append its results (same `MeshResult`, with `a` and `b` as it documents them).
+    let n = plan.preview.len();
+    let pairs: Vec<&MeshPair> = plan.meshes.iter().filter(|m| m.a < n && m.b < n && m.a != m.b && m.scale > 0.0 && m.period > 0.0).collect();
+    let mut members: Vec<Option<Member>> = (0..n).map(|_| None).collect();
+    for m in &pairs {
+        for i in [m.a, m.b] {
+            if members[i].is_none() {
+                let g = &plan.preview[i];
+                // Bores and lightening holes play no part, and cost time: only a member that
+                // surrounds another keeps its holes (a ring's teeth are one).
+                let surrounds = pairs.iter().any(|q| q.internal && q.b == i);
+                let region = if surrounds { g.region.clone() } else { Region { outer: g.region.outer.clone(), holes: Vec::new() } };
+                members[i] = Some(Member::build(&region, Motion::of(g), 0.25 * m.scale, 1e-4 * m.scale, 8));
+            }
+        }
+    }
+    pairs
+        .iter()
+        .map(|m| {
+            let (a, b) = (members[m.a].as_ref().unwrap(), members[m.b].as_ref().unwrap());
+            // Either side of the drawn position: a coupon's few teeth are centred on it.
+            let mut s = probe(a, b, -0.5 * m.period);
+            for i in 1..CHECK_STEPS {
+                s.merge(&probe(a, b, m.period * (i as f64 / CHECK_STEPS as f64 - 0.5)));
+            }
+            let (na, nb) = (&plan.preview[m.a].name, &plan.preview[m.b].name);
+            let depth = if s.depth.is_finite() { s.depth } else { 0.0 };
+            let gap_min = if s.gap_min.is_finite() { s.gap_min } else { 0.0 };
+            let gap_max = if s.gap_max.is_finite() { s.gap_max } else { gap_min };
+            let (verdict, message) = if depth > CHECK_DEPTH * m.scale {
+                (Verdict::Interferes, format!("{na} and {nb} interfere: they overlap by {depth:.3} mm"))
+            } else if gap_max > m.slack + CHECK_GAP * m.scale {
+                (Verdict::NoContact, format!("{na} and {nb} lose contact: up to {gap_max:.3} mm apart"))
+            } else if m.slack > 0.0 {
+                (Verdict::Ok, format!("{na} and {nb} mesh: no overlap, flanks {gap_min:.3} to {gap_max:.3} mm apart"))
+            } else {
+                (Verdict::Ok, format!("{na} and {nb} mesh: no overlap, flanks in contact"))
+            };
+            MeshResult { a: m.a, b: m.b, penetration_mm: depth, gap_min_mm: gap_min, gap_max_mm: gap_max, verdict, message }
+        })
+        .collect()
+}
+
+/// The worst verdict of a plan's meshes (interference before lost contact), or none when the
+/// plan has no mesh to check.
+pub fn worst(results: &[MeshResult]) -> Option<Verdict> {
+    let has = |v: Verdict| results.iter().any(|r| r.verdict == v);
+    if results.is_empty() {
+        None
+    } else if has(Verdict::Interferes) {
+        Some(Verdict::Interferes)
+    } else if has(Verdict::NoContact) {
+        Some(Verdict::NoContact)
+    } else {
+        Some(Verdict::Ok)
+    }
 }

@@ -376,6 +376,13 @@ pub struct GearParams {
     /// Strength rating: ISO 1328 accuracy grade 5..12 for the dynamic factor (default 7).
     #[serde(default)]
     pub accuracy_grade: Option<u8>,
+    /// Pair and planetary: build a print test coupon instead of the set (a few teeth of each
+    /// member at the true centre distance, on a base with pegs and fences). Default false.
+    #[serde(default)]
+    pub coupon: Option<bool>,
+    /// Teeth on each coupon piece, 3..40 (default 4).
+    #[serde(default)]
+    pub coupon_teeth: Option<u32>,
 }
 
 /// One number describing the set.

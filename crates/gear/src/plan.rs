@@ -417,6 +417,8 @@ pub struct Plan {
     pub preview: Vec<PreviewGear>,
     /// What the 2D preview shows, when it is not the gears' own plane.
     pub preview_note: String,
+    /// Which preview members mesh (parallel-axis sets; see [`crate::mesh2d::check_mesh`]).
+    pub meshes: Vec<crate::mesh2d::MeshPair>,
     /// Why the set can't be built, found while planning it ([`plan`] returns it as the error).
     refused: Option<String>,
 }
@@ -575,6 +577,7 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
     if s.load.rated() {
         crate::strength::rate(s, &mut p);
     }
+    p.meshes = crate::mesh2d::topology(s, &p.preview);
     if p.bodies.is_empty() {
         return Err("nothing to build with these choices".into());
     }

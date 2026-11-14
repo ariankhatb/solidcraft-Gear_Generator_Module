@@ -8,6 +8,8 @@
 //! - [`plan`]: a gear set ([`plan::Spec`]: spur, helical, herringbone, internal, rack, pair,
 //!   planetary, straight and spiral bevel, hypoid, crossed helical, worm, cycloidal, cycloidal
 //!   drive) as bodies of solid steps, with facts, warnings and a 2D meshing preview.
+//! - [`mesh2d`]: a 2D mesh checker (overlap and loss of contact over a tooth pitch) for the
+//!   parallel-axis sets, behind the window's mesh verdict and the mesh tests.
 //! - [`strength`]: load capacity (ISO 6336 Method B simplified, Lewis; simplified bevel and
 //!   worm): forces, stresses and safety factors for a given torque or power.
 //!
@@ -18,10 +20,12 @@ pub mod cycloid;
 pub mod geom;
 pub mod hub;
 pub mod involute;
+pub mod mesh2d;
 pub mod plan;
 pub mod strength;
 
 pub use geom::{Outline, Region, Seg, V2};
+pub use mesh2d::{MeshPair, MeshResult, Verdict, check_mesh};
 pub use plan::{Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit, plan};
 
 #[cfg(test)]
@@ -32,6 +36,6 @@ mod sweep_tests;
 mod tests;
 
 #[cfg(test)]
-mod mesh2d;
-#[cfg(test)]
 mod mesh_tests;
+#[cfg(test)]
+mod tools_tests;

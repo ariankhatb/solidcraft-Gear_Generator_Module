@@ -60,7 +60,7 @@ pub static COMMANDS: &[CommandSpec] = &[
              strands? (1…4), side_chamfer?; teeth2 > 0 and center_distance? for a pair (even links); pulley: belt?: gt2_2|gt2_3|gt2_5|htd_3m|htd_5m|htd_8m|t2_5|t5|t10|mxl|xl, \
              flanges?, face_width = belt width; spline: spline_standard?: din5480|ansi_b92, spline_diameter? (DIN reference Ø; default module × (teeth + 1.1)), fillet_root?, backlash = flank clearance, face_width = length; \
              face_gear: teeth (pinion), teeth2 (face gear), inner_diameter? (default: the undercut limit), face_width = tooth length; elliptical: ellipse_eccentricity? (0…0.7), teeth on each gear; \
-             only?: 1|2|3 (one member); origin?: [x,y,z]; name?. Axis-first: axis1?, axis2?: X|Y|Z | construction axis name | {origin?, dir} | {edge|face: [x,y,z]} | \
+             only?: 1|2|3 (one member); origin?: [x,y,z]; coupon?: bool, coupon_teeth? (pair, planetary: a print test coupon instead of the set); name?. Axis-first: axis1?, axis2?: X|Y|Z | construction axis name | {origin?, dir} | {edge|face: [x,y,z]} | \
              {sketch, curve} (the shafts: the set is sized and placed on them, type? defaults to what fits, module/teeth/teeth2/starts not given are chosen), \
              ratio? (teeth2 ÷ teeth), cone_distance? (bevels, mm), flip1?, flip2?, swap_axes?, along? (mm along axis1); placement?: {origin, x, z}; \
              strength rating: torque? (N·m) | power? (kW), speed? (rpm) on the driver, \
@@ -288,6 +288,8 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     set!(holes, p.holes);
     set!(hole_diameter, p.hole_diameter);
     set!(only, p.only);
+    set!(coupon, p.coupon);
+    set!(coupon_teeth, p.coupon_teeth);
     set!(origin, p.origin);
     if let Some(n) = &p.name {
         s.name = n.clone();
@@ -495,6 +497,8 @@ fn explicit_params(s: &Spec) -> GearParams {
         application_factor: (s.load.application_factor != 1.0).then_some(s.load.application_factor),
         life_hours: (s.load.life_hours > 0.0).then_some(s.load.life_hours),
         accuracy_grade: (s.load.quality != 7).then_some(s.load.quality),
+        coupon: s.coupon.then_some(true),
+        coupon_teeth: (s.coupon && s.coupon_teeth != 4).then_some(s.coupon_teeth),
         ..GearParams::default()
     };
     with_extras(s, p)

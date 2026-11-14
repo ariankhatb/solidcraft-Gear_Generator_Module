@@ -250,6 +250,11 @@ pub struct Spec {
     pub ellipse_eccentricity: f64,
     /// The load to rate the set for (default: none, not rated).
     pub load: crate::strength::Load,
+    /// Pair and planetary: plan a print test coupon instead of the set (a few teeth of each
+    /// member at the true centre distance, and a base to hold them; see [`crate::coupon`]).
+    pub coupon: bool,
+    /// Teeth on each coupon piece (3 to 40; one more where that centres them on the mesh).
+    pub coupon_teeth: u32,
 }
 
 impl Default for Spec {
@@ -308,6 +313,8 @@ impl Default for Spec {
             inner_diameter: 0.0,
             ellipse_eccentricity: 0.3,
             load: crate::strength::Load::default(),
+            coupon: false,
+            coupon_teeth: 4,
         }
     }
 }
@@ -543,6 +550,8 @@ pub struct Plan {
     pub preview: Vec<PreviewGear>,
     /// What the 2D preview shows, when it is not the gears' own plane.
     pub preview_note: String,
+    /// Which preview members mesh (parallel-axis sets; see [`crate::mesh2d::check_mesh`]).
+    pub meshes: Vec<crate::mesh2d::MeshPair>,
     /// Why the set can't be built, found while planning it ([`plan`] returns it as the error).
     refused: Option<String>,
 }
@@ -687,6 +696,9 @@ pub fn check(s: &Spec) -> Result<(), String> {
 /// The plan for a spec.
 pub fn plan(s: &Spec) -> Result<Plan, String> {
     check(s)?;
+    if crate::coupon::applies(s) {
+        return crate::coupon::plan(s);
+    }
     let mut p = Plan::default();
     match s.kind {
         Kind::Spur | Kind::Helical | Kind::Herringbone => single(s, &mut p),
@@ -711,6 +723,10 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
     }
     if s.load.rated() {
         crate::strength::rate(s, &mut p);
+    }
+    p.meshes = crate::mesh2d::topology(s, &p.preview);
+    if s.coupon {
+        p.warn("a test coupon is made for gear pairs and planetary sets: this is the whole set");
     }
     if p.bodies.is_empty() {
         return Err("nothing to build with these choices".into());

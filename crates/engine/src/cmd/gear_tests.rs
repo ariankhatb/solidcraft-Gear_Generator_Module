@@ -348,3 +348,143 @@ fn unknown_chain_and_belt_are_refused() {
         assert!(s.execute("gear.calculate", &p).is_err(), "{p}");
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Teeth drawn from their formulas (`tooth_curves: equations`).
+// ---------------------------------------------------------------------------------------------
+
+/// The one body a request makes, and its volume.
+fn made(s: &mut Session, p: Value) -> (Value, f64) {
+    let r = run(s, "gear.create", p);
+    let b = r["bodies"][0].as_str().unwrap().to_string();
+    let v = volume(s, &b);
+    (r, v)
+}
+
+fn no_errors(s: &Session) {
+    for r in &s.model.results {
+        assert!(r.error.is_none(), "{}: {:?}", r.name, r.error);
+    }
+}
+
+/// How many equation curves and patterns the design's sketches hold.
+fn formulas(s: &Session) -> (usize, usize) {
+    let mut out = (0, 0);
+    for f in &s.doc.features {
+        if let solidcraft_doc::FeatureKind::Sketch { sketch, .. } = &f.kind {
+            out.0 += sketch.equations.len();
+            out.1 += sketch.patterns.len();
+        }
+    }
+    out
+}
+
+#[test]
+fn a_spur_gear_from_equations_has_the_fitted_gears_volume() {
+    let spur = json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 10});
+    let (_, fitted) = made(&mut Session::default(), spur.clone());
+    let mut s = Session::default();
+    let mut p = spur.clone();
+    p["tooth_curves"] = json!("equations");
+    let (r, eq) = made(&mut s, p);
+    no_errors(&s);
+    assert!((eq / fitted - 1.0).abs() < 1e-3, "equations {eq} vs fitted {fitted}");
+    // One tooth: four equation curves (two fillets, two flanks), and one pattern.
+    assert_eq!(formulas(&s), (4, 1), "{r}");
+    assert!(s.doc.params.is_empty(), "no parameters unless asked");
+}
+
+#[test]
+fn a_parametric_spur_gear_follows_its_tooth_count_parameter_and_undoes() {
+    let (_, fitted20) = made(&mut Session::default(), json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 10}));
+    let (_, fitted24) = made(&mut Session::default(), json!({"type": "spur", "module": 2, "teeth": 24, "face_width": 10}));
+    let mut s = Session::default();
+    let (r, v) = made(&mut s, json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 10, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "G"}));
+    no_errors(&s);
+    assert!((v / fitted20 - 1.0).abs() < 1e-3, "{v} vs {fitted20}");
+    for name in ["G_module", "G_teeth", "G_pressure_angle", "G_shift", "G_backlash", "G_face_width"] {
+        assert!(s.doc.param(name).is_some(), "{name} made: {:?}", s.doc.params.iter().map(|p| &p.name).collect::<Vec<_>>());
+    }
+    let body = r["bodies"][0].as_str().unwrap().to_string();
+    run(&mut s, "parameters.change", json!({"name": "G_teeth", "expression": "24"}));
+    no_errors(&s);
+    let v24 = volume(&mut s, &body);
+    assert!((v24 / fitted24 - 1.0).abs() < 1e-3, "24 teeth by the parameter: {v24} vs {fitted24}");
+    // The face width drives the extrusion.
+    run(&mut s, "parameters.change", json!({"name": "G_face_width", "expression": "5 mm"}));
+    let v5 = volume(&mut s, &body);
+    assert!((v5 / (fitted24 / 2.0) - 1.0).abs() < 1e-3, "half the face: {v5}");
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    let back = volume(&mut s, &body);
+    assert!((back / fitted20 - 1.0).abs() < 1e-3, "undone: {back} vs {fitted20}");
+    assert_eq!(s.doc.param("G_teeth").map(|p| p.expr.trim().to_string()), Some("20".into()));
+}
+
+#[test]
+fn an_update_of_a_parametric_gear_reads_its_parameters_back() {
+    let (_, fitted24) = made(&mut Session::default(), json!({"type": "spur", "module": 2, "teeth": 24, "face_width": 10}));
+    let mut s = Session::default();
+    let (r, _) = made(&mut s, json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 10, "tooth_curves": "equations", "parametric": true}));
+    let group = r["group"].as_u64().unwrap();
+    let kept = run(&mut s, "gear.inspect", json!({"group": group}));
+    let prefix = kept["sets"][0]["request"]["parameter_prefix"].as_str().unwrap().to_string();
+    run(&mut s, "parameters.change", json!({"name": format!("{prefix}_teeth"), "expression": "24"}));
+    let u = run(&mut s, "gear.update", json!({"group": group}));
+    no_errors(&s);
+    let body = u["bodies"][0].as_str().unwrap().to_string();
+    assert!((volume(&mut s, &body) / fitted24 - 1.0).abs() < 1e-3, "{u}");
+    let set = run(&mut s, "gear.inspect", json!({"group": group}));
+    assert_eq!(set["sets"][0]["request"]["teeth"], json!(24), "{set}");
+    assert_eq!(set["sets"][0]["request"]["parameter_prefix"], json!(prefix));
+    // One undo step takes the update back.
+    run(&mut s, "edit.undo", json!({}));
+    no_errors(&s);
+}
+
+#[test]
+fn ring_rack_and_pair_teeth_from_equations_match_the_fitted_ones() {
+    for p in [
+        json!({"type": "internal", "module": 1.5, "teeth": 48, "face_width": 8}),
+        json!({"type": "rack", "module": 2, "rack_teeth": 8, "face_width": 10}),
+        json!({"type": "helical", "module": 2, "teeth": 18, "helix_angle": 20, "face_width": 10}),
+        json!({"type": "pair", "module": 2, "teeth": 17, "teeth2": 31, "face_width": 8}),
+    ] {
+        let mut fs = Session::default();
+        let rf = run(&mut fs, "gear.create", p.clone());
+        let mut q = p.clone();
+        q["tooth_curves"] = json!("equations");
+        q["parametric"] = json!(true);
+        let mut s = Session::default();
+        let r = run(&mut s, "gear.create", q);
+        no_errors(&s);
+        assert!(formulas(&s).1 >= 1, "{p}: a pattern");
+        for (a, b) in rf["bodies"].as_array().unwrap().iter().zip(r["bodies"].as_array().unwrap()) {
+            let (va, vb) = (volume(&mut fs, a.as_str().unwrap()), volume(&mut s, b.as_str().unwrap()));
+            assert!((vb / va - 1.0).abs() < 2e-3, "{p} {b}: equations {vb} vs fitted {va}");
+        }
+    }
+}
+
+#[test]
+fn tuned_tips_and_other_types_stay_fitted_with_a_note() {
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "spur", "tip_round": 0.2, "tooth_curves": "equations"}));
+    assert_eq!(formulas(&s), (0, 0));
+    assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("fitted")), "{r}");
+    let r = run(&mut s, "gear.create", json!({"type": "bevel", "tooth_curves": "equations"}));
+    assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("fitted")), "{r}");
+}
+
+#[test]
+fn a_parametric_ring_keeps_its_rim_profile_through_a_tooth_count_change() {
+    let mut s = Session::default();
+    let (r, v) = made(&mut s, json!({"type": "internal", "module": 1.5, "teeth": 48, "face_width": 8, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "R"}));
+    let body = r["bodies"][0].as_str().unwrap().to_string();
+    // More teeth in the same rim: a bigger tooth circle, less material; the extrusion's profile
+    // is picked by the rim circle, which stays.
+    run(&mut s, "parameters.change", json!({"name": "R_teeth", "expression": "50"}));
+    no_errors(&s);
+    let v50 = volume(&mut s, &body);
+    assert!(v50 < v && v50 > 0.5 * v, "{v} then {v50}");
+}

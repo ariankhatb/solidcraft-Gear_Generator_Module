@@ -293,3 +293,122 @@ fn a_flank_without_a_land_is_refused() {
         assert!(cell_of(&src, 0.0).is_err());
     }
 }
+
+/// Writes a command script that draws a set's teeth the way the engine's equation builder does
+/// (parametric), for trying on the kernel with the CLI: `GEAR_EQ_SCRIPT=out.json GEAR_EQ_KIND=internal
+/// cargo test --release -p solidcraft-gear script_for_the_kernel -- --ignored`.
+#[test]
+#[ignore]
+fn script_for_the_kernel() {
+    use crate::equations::{Quantity, Repeat};
+    use serde_json_lite::*;
+    let path = std::env::var("GEAR_EQ_SCRIPT").unwrap();
+    let kind = Kind::parse(&std::env::var("GEAR_EQ_KIND").unwrap_or("spur".into())).unwrap();
+    let s = Spec::defaults_for(kind);
+    let p = plan(&s).unwrap();
+    let outlines = prism_outlines(&s);
+    let cell = outlines.iter().find_map(|o| cell_for(&p.teeth, o)).unwrap();
+    let pre = "G";
+    let name = |k: &str| format!("{pre}_{k}");
+    let text = |t: &str| render(t, &name);
+    let mut cmds: Vec<String> = Vec::new();
+    for v in &cell.vars.list {
+        let e = if v.input { v.expr.clone() } else { render(&v.expr, &name) };
+        let unit = match v.quantity {
+            Quantity::Length => "mm",
+            Quantity::Angle => "deg",
+            Quantity::Number => "",
+        };
+        cmds.push(cmd("parameters.add", &[("name", s_(&name(&v.key))), ("expression", s_(&e)), ("unit", s_(unit))]));
+    }
+    cmds.push(cmd("sketch.create", &[("plane", s_("XY")), ("name", s_("S"))]));
+    // Curve ids are s1, s2… in order; points p<n> are unknown here, so points get ids by name.
+    let mut cid = Vec::new();
+    for (i, c) in cell.curves.iter().enumerate() {
+        cmds.push(cmd("sketch.equation_curve", &[("x", s_(&text(&c.x))), ("y", s_(&text(&c.y))), ("start", s_(&text(&c.start))), ("end", s_(&text(&c.end))), ("tolerance", n_(c.tolerance))]));
+        cid.push(format!("s{}", i + 1));
+    }
+    let mut made = std::collections::BTreeMap::new();
+    let mut edges_ids = Vec::new();
+    let mut k = 0;
+    let mut end = |e: &End, cmds: &mut Vec<String>| -> String {
+        match e {
+            End::Start(i) => format!("\"{}.start\"", cid[*i]),
+            End::End(i) => format!("\"{}.end\"", cid[*i]),
+            End::Point(i) => {
+                if !made.contains_key(i) {
+                    let id = format!("q{i}");
+                    let at = &cell.points[*i];
+                    cmds.push(cmd("sketch.point", &[("id", s_(&id)), ("point", format!("[{},{}]", s_(&text(&at[0])), s_(&text(&at[1]))))]));
+                    made.insert(*i, id);
+                }
+                s_(&made[i])
+            }
+        }
+    };
+    let mut edge = |e: &Edge, cmds: &mut Vec<String>, k: &mut usize| -> String {
+        *k += 1;
+        let id = format!("e{k}");
+        match e {
+            Edge::Arc(a, b) => {
+                let (a, b) = (end(a, cmds), end(b, cmds));
+                cmds.push(cmd("sketch.arc.center_point", &[("id", s_(&id)), ("center", s_("origin")), ("start", a), ("end", b)]));
+            }
+            Edge::Line(a, b) => {
+                let (a, b) = (end(a, cmds), end(b, cmds));
+                cmds.push(cmd("sketch.line", &[("ids", format!("[{}]", s_(&id))), ("points", format!("[{a},{b}]"))]));
+            }
+        }
+        id
+    };
+    for e in &cell.edges {
+        edges_ids.push(edge(e, &mut cmds, &mut k));
+    }
+    let seeds: Vec<String> = cid.iter().chain(&edges_ids).map(|x| s_(x)).collect();
+    match &cell.repeat {
+        Repeat::Circular { count } => cmds.push(cmd("sketch.pattern.circular", &[("entities", format!("[{}]", seeds.join(","))), ("center", s_("origin")), ("count", s_(&text(count)))])),
+        Repeat::Linear { count, spacing } => cmds.push(cmd(
+            "sketch.pattern.rectangular",
+            &[("entities", format!("[{}]", seeds.join(","))), ("count", s_(&text(count))), ("spacing", s_(&text(spacing))), ("dir", "[1,0]".into())],
+        )),
+    }
+    for e in &cell.closing {
+        edge(e, &mut cmds, &mut k);
+    }
+    cmds.push(cmd("sketch.finish", &[]));
+    let face = name(&cell.face_key);
+    let mut ext = vec![("sketch", s_("S")), ("distance", s_(&face))];
+    if matches!(kind, Kind::Internal) {
+        // The ring: a disc round the teeth, its region picked by a point near its rim.
+        let rr = p.bodies[0].steps.iter().find_map(|st| if let Step::Prism { region, .. } = st { region.outer.first().map(|o| o.max_radius()) } else { None }).unwrap();
+        cmds.insert(cmds.len() - 1, cmd("sketch.circle.center", &[("center", s_("origin")), ("radius", n_(rr))]));
+        ext.push(("profiles", format!("[{{\"point\":[{},0]}}]", rr - 0.5)));
+    }
+    cmds.push(cmd("solid.extrude", &ext));
+    cmds.push(cmd("inspect.measure", &[]));
+    let change = match kind {
+        Kind::Rack => ("rack_teeth", "11"),
+        Kind::Internal => ("teeth", "54"),
+        _ => ("teeth", "24"),
+    };
+    cmds.push(cmd("parameters.change", &[("name", s_(&name(change.0))), ("expression", s_(change.1))]));
+    cmds.push(cmd("inspect.measure", &[]));
+    std::fs::write(path, format!("[\n{}\n]", cmds.join(",\n"))).unwrap();
+    // Expected volumes: the numeric outline's area times the face width, before and after.
+    let o = outlines.iter().find(|o| cell_for(&p.teeth, o).is_some()).unwrap();
+    eprintln!("area {} face {}", o.area(), s.face_width);
+}
+
+/// Just enough JSON writing for the script above.
+mod serde_json_lite {
+    pub fn s_(t: &str) -> String {
+        format!("\"{}\"", t.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+    pub fn n_(v: f64) -> String {
+        format!("{v}")
+    }
+    pub fn cmd(name: &str, kv: &[(&str, String)]) -> String {
+        let body: Vec<String> = kv.iter().map(|(k, v)| format!("\"{k}\":{v}")).collect();
+        format!("{{\"command\":\"{name}\",\"params\":{{{}}}}}", body.join(","))
+    }
+}

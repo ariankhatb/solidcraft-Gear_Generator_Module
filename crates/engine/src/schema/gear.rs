@@ -181,6 +181,17 @@ pub enum RackStandard {
     PrintFdm,
 }
 
+/// How gear teeth are drawn in their sketches.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToothCurves {
+    /// Fit point splines through points computed from the tooth geometry.
+    #[default]
+    Fitted,
+    /// Equation curves of the gear formulas, tip and root arcs, and a pattern.
+    Equations,
+}
+
 /// How a gear is bored.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -682,6 +693,21 @@ pub struct GearParams {
     /// Teeth on each coupon piece, 3..40 (default 4).
     #[serde(default)]
     pub coupon_teeth: Option<u32>,
+    /// How the teeth of planar involute sets (spur, helical, herringbone, internal, pair,
+    /// planetary, rack) are drawn: `fitted` (default) fit point splines through computed points;
+    /// `equations` equation curves of the gear's own formulas (involute, trochoid root fillet)
+    /// with tip and root arcs, one tooth and a circular pattern. Other types are always fitted.
+    #[serde(default)]
+    pub tooth_curves: Option<ToothCurves>,
+    /// With `tooth_curves: equations`: make design parameters (`<prefix>_module`,
+    /// `<prefix>_teeth`, `<prefix>_pressure_angle`, `<prefix>_shift`, `<prefix>_backlash`,
+    /// `<prefix>_face_width`… and derived radii) and draw the teeth, pattern counts and tooth
+    /// extrusions from them, so editing a parameter regenerates the teeth. Default false.
+    #[serde(default)]
+    pub parametric: Option<bool>,
+    /// The design parameters' prefix (default: from the set's name).
+    #[serde(default)]
+    pub parameter_prefix: Option<String>,
     /// `gear.update` and `gear.inspect` only: the set, by the timeline folder `gear.create`
     /// made for it.
     #[serde(default)]

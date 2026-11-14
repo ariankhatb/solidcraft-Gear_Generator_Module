@@ -15,7 +15,8 @@ use super::CommandSpec;
 use super::sketch::{Left, edit_solved, ids_of};
 use super::sketch_import::add_geometry;
 use crate::params::bad;
-use crate::schema::gear::{BoreParams, BoreType, GearFact, GearParams, GearResult, GearType, RackStandard};
+use crate::schema::gear::{BeltProfile, BoreParams, BoreType, ChainSize, GearFact, GearParams, GearResult, GearType, RackStandard, SplineStandardParam};
+use solidcraft_gear::spline::SplineStandard;
 use crate::schema::{TypedContract, output_schema_for};
 use crate::{EngineError, Result, Session};
 
@@ -28,12 +29,16 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&GEAR_CONTRACT)
         .output(output_schema_for::<GearResult>)
         .params(
-            "type?: spur|helical|herringbone|internal|rack|pair|planetary|bevel|spiral_bevel|hypoid|crossed_helical|worm|cycloidal|cycloidal_drive; \
+            "type?: spur|helical|herringbone|internal|rack|pair|planetary|bevel|spiral_bevel|hypoid|crossed_helical|worm|cycloidal|cycloidal_drive|sprocket|pulley|spline|face_gear|elliptical; \
              module? (mm) | diametral_pitch?; teeth?, teeth2? (mate or planet), ring_teeth?, planets?; pressure_angle?, helix_angle? (deg, sign = hand); \
              profile_shift?, profile_shift2?; rack?: iso53_a|iso53_b|iso53_c|iso53_d|agma_full_depth|stub, addendum?, dedendum?, root_radius? (coefficients); \
              backlash? (mm); face_width?; center_distance? (pair: gear 2's shift reaches it); shaft_angle?, spiral_angle? (deg); offset?, face_start? (hypoid, mm); \
              starts?, worm_diameter?, worm_length? (worm); rim?; rack_teeth?, rack_height?; pins?, pin_circle?, pin_diameter?, eccentricity? (cycloidal drive); \
              bore?, bore2?: {type?: round|keyway|d_flat|hex|square|none, diameter, key_width?, key_depth?, flat?}; hub_diameter?, hub_length?; holes?, hole_diameter?; \
+             sprocket: chain?: 04b|05b|06b|08b|10b|12b|16b|20b|24b|ansi25|ansi35|ansi40|ansi50|ansi60|ansi80|ansi100|ansi120|custom (chain_pitch?, roller_diameter?, roller_width?, strand_pitch?), \
+             strands? (1…4), side_chamfer?; teeth2 > 0 and center_distance? for a pair (even links); pulley: belt?: gt2_2|gt2_3|gt2_5|htd_3m|htd_5m|htd_8m|t2_5|t5|t10|mxl|xl, \
+             flanges?, face_width = belt width; spline: spline_standard?: din5480|ansi_b92, spline_diameter? (DIN reference Ø), fillet_root?, face_width = length; \
+             face_gear: teeth (pinion), teeth2 (face gear), inner_diameter? (default: the undercut limit), face_width = tooth length; elliptical: ellipse_eccentricity? (0…0.7), teeth on each gear; \
              only?: 1|2|3 (one member); origin?: [x,y,z]; name?. Returns bodies, group, facts (diameters, ratio, centre distance, contact ratio, span and over-pins \
              measurements) and warnings (undercut, pointed teeth, low contact ratio, interference)",
         ),
@@ -45,7 +50,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params("the same as gear.create; builds nothing: returns the facts and warnings gear.create would"),
 ];
 
-const KINDS: [(GearType, Kind); 14] = [
+const KINDS: [(GearType, Kind); 19] = [
     (GearType::Spur, Kind::Spur),
     (GearType::Helical, Kind::Helical),
     (GearType::Herringbone, Kind::Herringbone),
@@ -60,7 +65,49 @@ const KINDS: [(GearType, Kind); 14] = [
     (GearType::Worm, Kind::Worm),
     (GearType::Cycloidal, Kind::Cycloidal),
     (GearType::CycloidalDrive, Kind::CycloidalDrive),
+    (GearType::Sprocket, Kind::Sprocket),
+    (GearType::Pulley, Kind::Pulley),
+    (GearType::Spline, Kind::Spline),
+    (GearType::FaceGear, Kind::FaceGear),
+    (GearType::Elliptical, Kind::Elliptical),
 ];
+
+const CHAINS: [(ChainSize, &str); 18] = [
+    (ChainSize::B04, "04b"),
+    (ChainSize::B05, "05b"),
+    (ChainSize::B06, "06b"),
+    (ChainSize::B08, "08b"),
+    (ChainSize::B10, "10b"),
+    (ChainSize::B12, "12b"),
+    (ChainSize::B16, "16b"),
+    (ChainSize::B20, "20b"),
+    (ChainSize::B24, "24b"),
+    (ChainSize::Ansi25, "ansi25"),
+    (ChainSize::Ansi35, "ansi35"),
+    (ChainSize::Ansi40, "ansi40"),
+    (ChainSize::Ansi50, "ansi50"),
+    (ChainSize::Ansi60, "ansi60"),
+    (ChainSize::Ansi80, "ansi80"),
+    (ChainSize::Ansi100, "ansi100"),
+    (ChainSize::Ansi120, "ansi120"),
+    (ChainSize::Custom, solidcraft_gear::sprocket::CUSTOM),
+];
+
+const BELTS: [(BeltProfile, &str); 11] = [
+    (BeltProfile::Gt2_2, "gt2_2"),
+    (BeltProfile::Gt2_3, "gt2_3"),
+    (BeltProfile::Gt2_5, "gt2_5"),
+    (BeltProfile::Htd3m, "htd_3m"),
+    (BeltProfile::Htd5m, "htd_5m"),
+    (BeltProfile::Htd8m, "htd_8m"),
+    (BeltProfile::T2_5, "t2_5"),
+    (BeltProfile::T5, "t5"),
+    (BeltProfile::T10, "t10"),
+    (BeltProfile::Mxl, "mxl"),
+    (BeltProfile::Xl, "xl"),
+];
+
+const SPLINES: [(SplineStandardParam, SplineStandard); 2] = [(SplineStandardParam::Din5480, SplineStandard::Din5480), (SplineStandardParam::AnsiB92, SplineStandard::AnsiB92)];
 
 const RACKS: [(RackStandard, &str); 6] = [
     (RackStandard::Iso53A, "iso53_a"),
@@ -168,6 +215,26 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     }
     s.bore = bore_of(&p.bore);
     s.bore2 = bore_of(&p.bore2);
+    if let Some(c) = p.chain {
+        s.chain = CHAINS.iter().find(|(k, _)| *k == c).map(|(_, id)| *id).unwrap_or("08b");
+    }
+    set!(chain_pitch, p.chain_pitch);
+    set!(roller_diameter, p.roller_diameter);
+    set!(roller_width, p.roller_width);
+    set!(strand_pitch, p.strand_pitch);
+    set!(strands, p.strands);
+    set!(side_chamfer, p.side_chamfer);
+    if let Some(b) = p.belt {
+        s.belt = BELTS.iter().find(|(k, _)| *k == b).map(|(_, id)| *id).unwrap_or("gt2_2");
+    }
+    set!(flanges, p.flanges);
+    if let Some(st) = p.spline_standard {
+        s.spline_standard = SPLINES.iter().find(|(k, _)| *k == st).map(|(_, v)| *v).unwrap_or_default();
+    }
+    set!(spline_diameter, p.spline_diameter);
+    set!(fillet_root, p.fillet_root);
+    set!(inner_diameter, p.inner_diameter);
+    set!(ellipse_eccentricity, p.ellipse_eccentricity);
     let finite = [
         s.module,
         s.pressure_angle,
@@ -196,12 +263,38 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
         s.rack.addendum,
         s.rack.dedendum,
         s.rack.root_radius,
+        s.chain_pitch,
+        s.roller_diameter,
+        s.roller_width,
+        s.strand_pitch,
+        s.spline_diameter,
+        s.inner_diameter,
+        s.ellipse_eccentricity,
     ];
     if finite.iter().chain(s.origin.iter()).any(|v| !v.is_finite()) {
         return Err("every number must be finite".into());
     }
-    if [s.backlash, s.center_distance, s.offset, s.worm_diameter, s.worm_length, s.rim, s.rack_height, s.hub_diameter, s.hub_length, s.hole_diameter, s.bore.diameter, s.bore2.diameter]
-        .iter()
+    if [
+        s.backlash,
+        s.center_distance,
+        s.offset,
+        s.worm_diameter,
+        s.worm_length,
+        s.rim,
+        s.rack_height,
+        s.hub_diameter,
+        s.hub_length,
+        s.hole_diameter,
+        s.bore.diameter,
+        s.bore2.diameter,
+        s.chain_pitch,
+        s.roller_diameter,
+        s.roller_width,
+        s.strand_pitch,
+        s.spline_diameter,
+        s.inner_diameter,
+    ]
+    .iter()
         .any(|v| *v < 0.0)
     {
         return Err("lengths must not be negative".into());
@@ -269,8 +362,51 @@ pub fn params_of(s: &Spec) -> Value {
         only: (s.only > 0).then_some(s.only),
         origin: (s.origin != [0.0; 3]).then_some(s.origin),
         name: (!s.name.is_empty()).then(|| s.name.clone()),
+        chain: None,
+        chain_pitch: None,
+        roller_diameter: None,
+        roller_width: None,
+        strand_pitch: None,
+        strands: None,
+        side_chamfer: None,
+        belt: None,
+        flanges: None,
+        spline_standard: None,
+        spline_diameter: None,
+        fillet_root: None,
+        inner_diameter: None,
+        ellipse_eccentricity: None,
     };
+    let p = with_extras(s, p);
     serde_json::to_value(p).map(strip_nulls).unwrap_or(Value::Null)
+}
+
+/// The fields only sprockets, pulleys, splines and face gears use, for those types.
+fn with_extras(s: &Spec, mut p: GearParams) -> GearParams {
+    match s.kind {
+        Kind::Sprocket => {
+            p.chain = CHAINS.iter().find(|(_, id)| *id == s.chain).map(|(k, _)| *k);
+            p.chain_pitch = Some(s.chain_pitch);
+            p.roller_diameter = Some(s.roller_diameter);
+            p.roller_width = Some(s.roller_width);
+            p.strand_pitch = Some(s.strand_pitch);
+            p.strands = Some(s.strands);
+            p.side_chamfer = Some(s.side_chamfer);
+        }
+        Kind::Pulley => {
+            p.belt = BELTS.iter().find(|(_, id)| *id == s.belt).map(|(k, _)| *k);
+            p.flanges = Some(s.flanges);
+        }
+        Kind::Spline => {
+            p.spline_standard = SPLINES.iter().find(|(_, v)| *v == s.spline_standard).map(|(k, _)| *k);
+            p.spline_diameter = Some(s.spline_diameter);
+            p.fillet_root = Some(s.fillet_root);
+        }
+        Kind::FaceGear => p.inner_diameter = (s.inner_diameter > 0.0).then_some(s.inner_diameter),
+        Kind::Elliptical => p.ellipse_eccentricity = Some(s.ellipse_eccentricity),
+        _ => {}
+    }
+    p
 }
 
 fn strip_nulls(v: Value) -> Value {

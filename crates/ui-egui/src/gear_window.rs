@@ -11,6 +11,9 @@ use solidcraft_gear::plan::{Axes, Kind, Plan, Spec, Unit};
 use crate::SolveApp;
 use crate::ui_kit;
 
+#[path = "gear_window_drives.rs"]
+mod drives;
+
 /// What the window holds between frames.
 pub struct GearWindow {
     pub spec: Spec,
@@ -223,7 +226,7 @@ fn body(ui: &mut Ui, w: &mut GearWindow, busy: bool, view_error: Option<&str>) {
 }
 
 fn type_picker(ui: &mut Ui, w: &mut GearWindow) {
-    for (axes, label) in [(Axes::Parallel, "Parallel axes"), (Axes::Intersecting, "Intersecting axes"), (Axes::Crossed, "Crossed axes"), (Axes::Special, "Special")] {
+    for (axes, label) in [(Axes::Parallel, "Parallel axes"), (Axes::Intersecting, "Intersecting axes"), (Axes::Crossed, "Crossed axes"), (Axes::Special, "Special"), (Axes::Wrapped, "Chain and belt")] {
         ui.horizontal_wrapped(|ui| {
             ui.add_sized([110.0, 18.0], egui::Label::new(egui::RichText::new(label).small().weak()));
             for k in Kind::ALL.iter().copied().filter(|k| k.axes() == axes) {
@@ -231,7 +234,10 @@ fn type_picker(ui: &mut Ui, w: &mut GearWindow) {
                     // A new type starts from its own defaults, keeping the hub choices.
                     let keep = w.spec.clone();
                     let mut s = Spec::defaults_for(k);
-                    if k.involute() == keep.kind.involute() && !matches!(k, Kind::Hypoid | Kind::Worm | Kind::Cycloidal) {
+                    if k.involute() == keep.kind.involute()
+                        && !matches!(k, Kind::Hypoid | Kind::Worm | Kind::Cycloidal | Kind::Spline)
+                        && keep.kind != Kind::Spline
+                    {
                         s.module = keep.module;
                         s.pressure_angle = keep.pressure_angle;
                         s.rack = keep.rack;
@@ -281,7 +287,9 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
     let k = s.kind;
     egui::ScrollArea::vertical().id_salt("gear_params").max_height(470.0).auto_shrink([false, true]).show(ui, |ui| {
         heading(ui, "Teeth");
-        if k == Kind::CycloidalDrive {
+        if drives::wrapped_rows(ui, s) {
+            // A sprocket's or pulley's rows.
+        } else if k == Kind::CycloidalDrive {
             count(ui, "Ring pins", "The disc gets one lobe fewer; the reduction is pins − 1", &mut s.pins, 3..=200);
             num(ui, "Pin circle Ø", "Diameter through the pin centres", &mut s.pin_circle, 1.0..=5000.0, 0.5, " mm");
             num(ui, "Pin Ø", "", &mut s.pin_diameter, 0.1..=500.0, 0.1, " mm");
@@ -312,6 +320,8 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
                 Kind::Hypoid => ("Pinion teeth", Some("Gear teeth")),
                 Kind::Pair | Kind::Bevel | Kind::SpiralBevel | Kind::CrossedHelical => ("Gear 1 teeth", Some("Gear 2 teeth")),
                 Kind::Cycloidal => ("Wheel teeth", Some("Pinion teeth (0: none)")),
+                Kind::FaceGear => ("Pinion teeth", Some("Face gear teeth")),
+                Kind::Elliptical => ("Teeth (each)", None),
                 _ => ("Teeth", None),
             };
             if k == Kind::Rack {
@@ -345,6 +355,7 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
                 });
                 s.helix = if left { -1.0 } else { 0.0 };
             }
+            drives::extra_rows(ui, s);
             if k.involute() {
                 num(ui, "Pressure angle", "Normal pressure angle; 20° is standard, 14.5° older, 25° stronger", &mut s.pressure_angle, 5.0..=45.0, 0.1, "°");
             }
@@ -364,7 +375,7 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
                 num(ui, "Offset", "Distance between the axes; 0 for equal spiral angles", &mut s.offset, 0.0..=5000.0, 0.5, " mm");
                 num(ui, "Face start", "Where the teeth start along the line of contact, from the throat; larger looks more like a bevel", &mut s.face_start, -5000.0..=5000.0, 0.5, " mm");
             }
-            if k.involute() && k != Kind::Worm {
+            if k.involute() && !matches!(k, Kind::Worm | Kind::Spline | Kind::FaceGear | Kind::Elliptical) {
                 num(ui, if k.is_set() { "Shift x₁" } else { "Profile shift x" }, "Profile shift coefficient: positive thickens the root and avoids undercut", &mut s.shift, -1.5..=1.5, 0.01, "");
                 if matches!(k, Kind::Pair | Kind::Planetary | Kind::CrossedHelical) {
                     num(ui, "Shift x₂", "Gear 2's (planets') profile shift", &mut s.shift2, -1.5..=1.5, 0.01, "");
@@ -382,9 +393,10 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
                 });
             }
             if k != Kind::CycloidalDrive {
-                num(ui, "Backlash", "Taken off each tooth at the pitch circle", &mut s.backlash, 0.0..=5.0, 0.005, " mm");
+                let (label, tip) = if k == Kind::Spline { ("Clearance", "Between the flanks at the pitch circle") } else { ("Backlash", "Taken off each tooth at the pitch circle") };
+                num(ui, label, tip, &mut s.backlash, 0.0..=5.0, 0.005, " mm");
             }
-            if k.involute() {
+            if k.involute() && k != Kind::Spline {
                 row(ui, "Basic rack", "Tooth proportions", |ui| {
                     let current = BasicRack::STANDARDS.iter().find(|(_, r)| *r == s.rack).map(|(n, _)| *n).unwrap_or("custom");
                     egui::ComboBox::from_id_salt("gear_rack").selected_text(current).show_ui(ui, |ui| {
@@ -402,30 +414,52 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
             }
         }
         heading(ui, "Body");
-        num(ui, if k == Kind::CycloidalDrive { "Thickness" } else { "Face width" }, "", &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
+        let face_label = match k {
+            Kind::CycloidalDrive => Some("Thickness"),
+            Kind::Sprocket => None,
+            Kind::Pulley => Some("Belt width"),
+            Kind::Spline => Some("Hub length"),
+            Kind::FaceGear => Some("Tooth length"),
+            _ => Some("Face width"),
+        };
+        if let Some(label) = face_label {
+            num(ui, label, "", &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
+        }
         if matches!(k, Kind::Internal | Kind::Planetary) {
             num(ui, "Ring rim", "Beyond the roots; 0: 3 modules", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
+        }
+        if k == Kind::Spline {
+            num(ui, "Hub outside Ø", "0: from the hub wall", &mut s.hub_diameter, 0.0..=5000.0, 0.2, " mm");
+            if s.hub_diameter <= 0.0 {
+                num(ui, "Hub wall", "Beyond the hub's roots; 0: 3 modules or a quarter of the diameter", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
+            }
+        }
+        if k == Kind::FaceGear {
+            num(ui, "Base thickness", "Below the tooth spaces; 0: 2.5 modules", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
         }
         if k == Kind::Rack {
             num(ui, "Height below pitch", "0: 3 modules", &mut s.rack_height, 0.0..=1000.0, 0.1, " mm");
         }
         if k != Kind::Rack && k != Kind::CycloidalDrive {
-            bore(ui, "Bore", "bore1", &mut s.bore);
-            if k.is_set() {
+            bore(ui, if k == Kind::Spline { "Shaft bore" } else { "Bore" }, "bore1", &mut s.bore);
+            if k.is_set() && k != Kind::Spline && !(matches!(k, Kind::Sprocket | Kind::Pulley) && s.teeth2 == 0) {
                 let who = match k {
                     Kind::Planetary => "Planet bore",
                     Kind::Worm => "Worm bore",
+                    Kind::FaceGear => "Pinion bore",
+                    Kind::Sprocket => "Sprocket 2 bore",
+                    Kind::Pulley => "Pulley 2 bore",
                     _ => "Gear 2 bore",
                 };
                 bore(ui, who, "bore2", &mut s.bore2);
             }
-            if !matches!(k, Kind::Internal | Kind::Hypoid) {
+            if !matches!(k, Kind::Internal | Kind::Hypoid | Kind::Spline | Kind::Elliptical) {
                 num(ui, "Hub Ø", "On the back face; 0: none", &mut s.hub_diameter, 0.0..=5000.0, 0.2, " mm");
                 if s.hub_diameter > 0.0 {
                     num(ui, "Hub length", "", &mut s.hub_length, 0.0..=5000.0, 0.2, " mm");
                 }
             }
-            if matches!(k, Kind::Spur | Kind::Helical | Kind::Herringbone | Kind::Pair | Kind::Planetary | Kind::Cycloidal) {
+            if matches!(k, Kind::Spur | Kind::Helical | Kind::Herringbone | Kind::Pair | Kind::Planetary | Kind::Cycloidal | Kind::Sprocket) {
                 count(ui, "Lightening holes", "Through the web between hub and rim", &mut s.holes, 0..=24);
                 if s.holes > 0 {
                     num(ui, "Hole Ø", "0: to fit", &mut s.hole_diameter, 0.0..=1000.0, 0.2, " mm");
@@ -434,13 +468,18 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
         } else if k == Kind::CycloidalDrive {
             bore(ui, "Bearing bore", "bore1", &mut s.bore);
         }
-        if k.is_set() {
+        if k.is_set() && !(matches!(k, Kind::Sprocket | Kind::Pulley) && s.teeth2 == 0) {
             row(ui, "Build", "Make every member, or just one", |ui| {
                 let names: &[&str] = match k {
                     Kind::Planetary => &["all", "sun", "planets", "ring"],
                     Kind::Worm => &["both", "wheel", "worm"],
                     Kind::CycloidalDrive => &["both", "disc", "pins"],
                     Kind::Hypoid => &["both", "pinion", "gear"],
+                    Kind::Sprocket => &["both", "sprocket 1", "sprocket 2"],
+                    Kind::Pulley => &["both", "pulley 1", "pulley 2"],
+                    Kind::Spline => &["both", "shaft", "hub"],
+                    Kind::FaceGear => &["both", "face gear", "pinion"],
+                    Kind::Elliptical => &["both", "gear 1", "gear 2"],
                     _ => &["both", "gear 1", "gear 2"],
                 };
                 egui::ComboBox::from_id_salt("gear_only").selected_text(names.get(s.only as usize).copied().unwrap_or("all")).show_ui(ui, |ui| {

@@ -7,19 +7,33 @@
 //! - [`hub`]: bores (round, DIN 6885 keyway, D flat, hex, square), hubs, lightening holes.
 //! - [`plan`]: a gear set ([`plan::Spec`]: spur, helical, herringbone, internal, rack, pair,
 //!   planetary, straight and spiral bevel, hypoid, crossed helical, worm, cycloidal, cycloidal
-//!   drive) as bodies of solid steps, with facts, warnings and a 2D meshing preview.
+//!   drive, chain sprocket, timing pulley, involute spline, face gear) as bodies of solid steps,
+//!   with facts, warnings and a 2D meshing preview.
+//! - [`sprocket`], [`pulley`], [`wrap`]: ISO 606 roller chain sprockets, timing belt pulleys, and
+//!   the chain or belt between two of them.
+//! - [`spline`]: DIN 5480 and ANSI B92.1 involute splines; [`face_gear`]: face gears cut by a
+//!   spur pinion; [`elliptic`]: a centre-pivoted elliptical gear and its conjugate.
 //!
 //! Pure math with no dependencies: the engine turns a plan into sketches and features, the
 //! window draws its preview from the same plan.
 
 pub mod cycloid;
+pub mod elliptic;
+pub mod face_gear;
 pub mod geom;
 pub mod hub;
 pub mod involute;
 pub mod plan;
+pub mod pulley;
+pub mod spline;
+pub mod sprocket;
+pub mod wrap;
 
 pub use geom::{Outline, Region, Seg, V2};
 pub use plan::{Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit, plan};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tests_extras;

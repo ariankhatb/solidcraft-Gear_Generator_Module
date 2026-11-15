@@ -98,6 +98,10 @@ fn problems(h: &Harness, what: &str) -> Vec<String> {
         if !win.expand(1.0).contains_rect(c.shown) {
             bad.push(format!("{what}: `{}` at {:?} is outside the window {win:?}", c.label, c.shown));
         }
+        // Laid out wider than the window: cut off at its edge.
+        if c.rect.right() > win.right() + 1.0 || c.rect.left() < win.left() - 1.0 {
+            bad.push(format!("{what}: `{}` at {:?} runs past the window's edge {win:?}", c.label, c.rect));
+        }
     }
     for (i, a) in shown.iter().enumerate() {
         for b in &shown[i + 1..] {

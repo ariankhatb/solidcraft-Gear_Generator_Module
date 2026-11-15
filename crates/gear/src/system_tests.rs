@@ -309,7 +309,9 @@ fn a_gearbox_whose_branches_disagree_is_reported() {
 /// −2θ and the output +(2·25/15)θ; every mesh checks clean at the assembled zero and through a
 /// tooth pitch.
 pub(crate) fn gaerbox_circles() -> Vec<Circle> {
-    let a = 30f64.to_radians();
+    // ±45.98° round the input: the two Ø25s clear each other, the output reaches both, and the
+    // loop's teeth close (the train planner refuses a loop that isn't a whole number of teeth).
+    let a = 45.98f64.to_radians();
     let (cx, cy) = (22.5 * a.cos(), 22.5 * a.sin());
     let x0 = cx + (400.0 - cy * cy).sqrt();
     vec![
@@ -342,3 +344,4 @@ fn the_gaerbox_drawn_as_circles_turns_and_meshes() {
     }
     assert_eq!(check_mesh(&p).len(), 4, "four meshes");
 }
+

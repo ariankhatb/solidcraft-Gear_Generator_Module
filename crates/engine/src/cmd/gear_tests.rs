@@ -1509,7 +1509,9 @@ fn a_ten_gear_sketch_system_turns_every_gear_from_any_driver() {
 /// turns each countershaft −60° and the output +100°.
 #[test]
 fn the_gaerbox_power_split_turns_by_its_teeth() {
-    let a = 30f64.to_radians();
+    // ±45.98° round the input: the two Ø25s clear each other, the output reaches both, and the
+    // loop's teeth close (the train planner refuses a loop that isn't a whole number of teeth).
+    let a = 45.98f64.to_radians();
     let (cx, cy) = (22.5 * a.cos(), 22.5 * a.sin());
     let x0 = cx + (400.0 - cy * cy).sqrt();
     let mut s = Session::default();

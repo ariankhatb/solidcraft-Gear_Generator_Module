@@ -16,6 +16,7 @@ use crate::worm::Hob;
 use crate::spline::SplineStandard;
 
 pub(crate) mod extras;
+pub mod left_out;
 pub mod bevel_planet;
 
 pub use bevel_planet::BevelPlanetMode;
@@ -942,9 +943,7 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
         Kind::Elliptical => extras::elliptical(s, &mut p),
         Kind::BevelPlanetary => bevel_planet::build(s, &mut p),
     }
-    if !s.kind.tuned_teeth() {
-        extras::left_out(s, &mut p);
-    }
+    left_out::left_out(s, &mut p);
     if let Some(why) = p.refused.take() {
         return Err(why);
     }
@@ -1637,9 +1636,6 @@ fn bevel_hub(s: &Spec, bore: &Bore, max_r: f64, back: f64, steps: &mut Vec<Step>
     }
     if let (Some(b), Some(z)) = (built, front) {
         crate::body::shaft_ends(&b, bore, back, hub_l, z, 0.0, steps, p, who);
-    }
-    if s.tooth_chamfer_front.size > 0.0 || s.tooth_chamfer_back.size > 0.0 || s.bore_chamfer > 0.0 || s.hub_chamfer > 0.0 {
-        p.warn("chamfers are not built on bevel gears (their ends are cones)");
     }
 }
 

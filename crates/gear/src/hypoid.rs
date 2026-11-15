@@ -262,8 +262,58 @@ impl Setup {
     }
 }
 
-/// The hypoid set a spec describes.
+/// The least mean spiral angle of the ring gear (degrees). The offset takes the offset angle off
+/// the pinion's spiral angle to give the ring gear's; below this its teeth barely spiral (or wind
+/// the other way, the pinion's hand), the pinion's teeth come to a point and ISO 23509's limit
+/// curvature can no longer be met, so a larger offset is refused.
+pub const LEAST_RING_SPIRAL: f64 = 10.0;
+
+/// The hypoid set a spec describes. An offset that leaves the ring gear's spiral angle under
+/// [`LEAST_RING_SPIRAL`] is refused, naming the largest that works for these sizes.
 pub fn design(s: &Spec) -> Result<Design, String> {
+    let d = design_iso(s)?;
+    let least = LEAST_RING_SPIRAL.to_radians();
+    if s.offset < 1e-3 || d.beta2 >= least {
+        return Ok(d);
+    }
+    // The ring gear's spiral angle falls as the offset grows: halve towards the largest offset
+    // that keeps it, and whose pinion still has teeth (the offset that is named works).
+    let fits = |e: f64| {
+        let t = Spec { offset: e, ..s.clone() };
+        design_iso(&t).is_ok_and(|d| d.beta2 >= least && work_out_design(&t, d).map_or_else(|e| e.contains("twist too fast to loft"), |_| true))
+    };
+    let (mut lo, mut hi) = (0.0, s.offset);
+    for _ in 0..14 {
+        let mid = 0.5 * (lo + hi);
+        if fits(mid) { lo = mid } else { hi = mid }
+    }
+    let most = (lo * 100.0).floor() / 100.0;
+    Err(if most > 0.0 {
+        format!(
+            "offset too large: use at most {} mm with these sizes ({} mm asked): the ring gear's spiral angle would be {}°, under the {}° it needs (a larger pinion spiral angle allows more)",
+            mm(most),
+            mm(s.offset),
+            mm(d.beta2.to_degrees()),
+            mm(LEAST_RING_SPIRAL)
+        )
+    } else if s.spiral_angle < LEAST_RING_SPIRAL + 1.0 {
+        format!(
+            "a pinion spiral angle of {}° leaves no room for an offset: any offset takes the ring gear's spiral angle under {}°; raise the spiral angle, or use offset 0 (a spiral bevel pair)",
+            mm(s.spiral_angle),
+            mm(LEAST_RING_SPIRAL)
+        )
+    } else {
+        format!(
+            "offset too large: no offset works with these sizes ({} mm asked; the ring gear's spiral angle would be {}°, under the {}° it needs): use offset 0 (a spiral bevel pair) or a larger pinion spiral angle",
+            mm(s.offset),
+            mm(d.beta2.to_degrees()),
+            mm(LEAST_RING_SPIRAL)
+        )
+    })
+}
+
+/// [`design`] without the ring gear spiral angle's limit.
+fn design_iso(s: &Spec) -> Result<Design, String> {
     let first = design_with(s, None)?;
     if s.offset < 1e-3 {
         return Ok(first);
@@ -408,9 +458,7 @@ fn design_with(s: &Spec, fix: Option<(f64, f64)>) -> Result<Design, String> {
     // ISO 23509's limit pressure angle.
     let (td1, td2) = (delta1.tan(), d2.tan());
     let alpha_lim = (-(td1 * td2 / t.eps.cos()) * (cone_m1 * beta1.sin() - cone_m2 * beta2.sin()) / (cone_m1 * td1 + cone_m2 * td2)).atan();
-    if beta2 < 10f64.to_radians() && e > 0.0 {
-        warnings.push(format!("the ring gear's spiral angle is only {}°: raise the pinion's spiral angle or lower the offset", mm(beta2.to_degrees())));
-    }
+    // (A ring gear spiral angle under `LEAST_RING_SPIRAL` is refused by `design`.)
     if e > 0.25 * de2 {
         warnings.push("an offset over a quarter of the ring gear's diameter is more than hypoid sets usually use".into());
     }
@@ -1220,7 +1268,11 @@ pub(crate) fn work_out(s: &Spec) -> Result<Set, String> {
 }
 
 fn work_out_at(s: &Spec) -> Result<Set, String> {
-    let d = design(s)?;
+    work_out_design(s, design(s)?)
+}
+
+/// [`work_out_at`] for a design already worked out (`design_iso`'s, when `design` checks an offset).
+fn work_out_design(s: &Spec, d: Design) -> Result<Set, String> {
     let form = Form::new(s, &d)?;
     // The pinion is cut by the ring gear without its backlash, so the backlash stays between
     // the two (cut by the thinned gear, the pinion would grow into it).
@@ -1778,6 +1830,34 @@ mod tests {
         assert!(e.starts_with("offset too large: use at most"), "{e}");
         s.teeth = 50;
         assert!(crate::plan(&s).unwrap_err().contains("more teeth"));
+    }
+
+    /// An offset that turns the ring gear's spiral angle under `LEAST_RING_SPIRAL` (or the other
+    /// way round) is refused, naming the largest offset that works; that one plans.
+    #[test]
+    fn an_offset_that_unwinds_the_ring_gear_is_refused_with_the_most_that_works() {
+        let mut s = spec();
+        s.offset = 80.0;
+        let e = crate::plan(&s).unwrap_err();
+        assert!(e.starts_with("offset too large: use at most") && e.contains("spiral angle would be -8."), "{e}");
+        let most: f64 = e["offset too large: use at most ".len()..].split(' ').next().unwrap().parse().unwrap();
+        assert!((20.0..80.0).contains(&most), "{most}");
+        // The offset named works (the ring gear's centre hole aside, which is sized for 25 mm).
+        let t = Spec { offset: most, bore2: Default::default(), ..s.clone() };
+        let d = design(&t).unwrap();
+        assert!(d.beta2 >= LEAST_RING_SPIRAL.to_radians(), "{}", d.beta2.to_degrees());
+        let p = crate::plan(&t).unwrap_or_else(|e| panic!("{most} mm: {e}"));
+        assert!(!p.bodies.is_empty());
+        // A little more is refused the same way, or by the pinion's teeth.
+        assert!(crate::plan(&Spec { offset: most + 1.0, ..t.clone() }).is_err());
+        // The default set and every offset up to it are untouched.
+        for e in [0.0, 10.0, 25.0, 40.0] {
+            assert!(design(&Spec { offset: e, ..spec() }).is_ok(), "{e}");
+        }
+        // A pinion spiral angle under the limit leaves no offset at all.
+        let e = design(&Spec { spiral_angle: 8.0, offset: 5.0, ..spec() }).unwrap_err();
+        assert!(e.contains("leaves no room for an offset"), "{e}");
+        assert!(design(&Spec { spiral_angle: 8.0, offset: 0.0, ..spec() }).is_ok());
     }
 
     // -----------------------------------------------------------------------------------------

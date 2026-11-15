@@ -339,7 +339,22 @@ fn design_with(s: &Spec, fix: Option<(f64, f64)>) -> Result<Design, String> {
     let u = z2 / z1;
     let d2 = fix.map_or_else(|| (u * sigma.sin()).atan2(1.0 + u * sigma.cos()), |f| f.0);
     if !(10f64.to_radians()..=85f64.to_radians()).contains(&d2) {
-        return Err(format!("a ring gear pitch cone angle of {}° isn't built (10° to 85°): change the shaft angle or the tooth counts", mm(d2.to_degrees())));
+        // The shaft angles that keep the ring gear's pitch cone between 10° and 85°.
+        let cone = |sg: f64| (u * sg.sin()).atan2(1.0 + u * sg.cos());
+        let edge = |want: f64| {
+            let (mut lo, mut hi) = (1e-3, PI - 1e-3);
+            for _ in 0..60 {
+                let mid = 0.5 * (lo + hi);
+                if cone(mid) < want { lo = mid } else { hi = mid }
+            }
+            lo.to_degrees()
+        };
+        let (least, most) = (edge(10f64.to_radians()).ceil(), edge(85f64.to_radians()).floor());
+        return Err(if d2 > 85f64.to_radians() {
+            format!("shaft angle too large: use at most {most}° with these teeth (the ring gear would be a crown gear, pitch cone {}°)", mm(d2.to_degrees()))
+        } else {
+            format!("shaft angle too small: use at least {least}° with these teeth (ring gear pitch cone {}°)", mm(d2.to_degrees()))
+        });
     }
     let de2 = s.module * z2;
     let re2 = de2 / 2.0;
@@ -362,9 +377,9 @@ fn design_with(s: &Spec, fix: Option<(f64, f64)>) -> Result<Design, String> {
             if setup.solve(mid).is_some() { lo = mid } else { hi = mid }
         }
         return Err(format!(
-            "an offset of {} mm is too large for this ring gear, these teeth and this spiral angle: the most that works is {} mm (a larger ring gear or a larger spiral angle allows more)",
-            mm(e),
-            mm((lo * 100.0).floor() / 100.0)
+            "offset too large: use at most {} mm here ({} mm asked; a larger ring gear or spiral angle allows more)",
+            mm((lo * 100.0).floor() / 100.0),
+            mm(e)
         ));
     };
     let beta1 = setup.beta1;
@@ -512,10 +527,156 @@ pub(crate) struct Form {
 
 /// Fit points up each side of a ring gear tooth section, and of a pinion tooth section.
 const GEAR_SIDE: usize = 10;
-const PINION_SIDE: usize = 12;
-/// Sections along each member's axis.
-const GEAR_SECTIONS: usize = 11;
+const PINION_SIDE: usize = 8;
+/// Sections along each member's axis: the ring gear's; the pinion's worked out exactly (its
+/// lofted sections are more, see [`LOFT_COUNTS`]).
+const GEAR_SECTIONS: usize = 19;
 const PINION_SECTIONS: usize = 9;
+/// The most curves the kernel's loft takes, all its sections together (SMLib's `MAX_CURVES`).
+const KERNEL_CURVES: usize = 16_384;
+/// How many sections the pinion may be lofted through (the kernel takes at most 50): the fewest
+/// the kernel lines up tooth to tooth ([`slips`]), each between the exact ones interpolated.
+const LOFT_COUNTS: [usize; 7] = [9, 13, 17, 25, 33, 41, 49];
+
+/// The start of each segment of an outline as the kernel's loft splits it (a fit point spline:
+/// one cubic per span).
+pub(crate) fn corners(o: &Outline) -> Vec<V2> {
+    let mut out = Vec::new();
+    for s in &o.segs {
+        match s {
+            Seg::Line(a, _) => out.push(*a),
+            Seg::Arc { a, b, ccw, .. } => out.push(if *ccw { *a } else { *b }),
+            Seg::Spline(p) => out.extend_from_slice(&p[..p.len() - 1]),
+            Seg::Circle(c, r) => out.push(*c + V2::new(*r, 0.0)),
+        }
+    }
+    out
+}
+
+/// How the kernel's loft lines its sections up (`loft_numbered_loops`): each section is
+/// restarted at the segment whose corners best match the section before (the largest sum of dot
+/// products of their directions from the centroid, here the axis), the first matched with the
+/// last. Returns each section's restart, in the order given. Sections of `teeth`-fold symmetric
+/// outlines are only tried within one tooth (a whole tooth further fits the same).
+pub(crate) fn restarts(sections: &[Outline], teeth: usize) -> Vec<usize> {
+    let rings: Vec<Vec<V2>> = sections.iter().map(corners).collect();
+    let m = rings[0].len();
+    let per = if teeth > 0 && m % teeth == 0 { m / teeth } else { m };
+    let mut dirs: Vec<V2> = rings[rings.len() - 1].clone();
+    let mut out = Vec::with_capacity(rings.len());
+    for r in &rings {
+        if r.len() != m {
+            out.push(usize::MAX);
+            continue;
+        }
+        let fit = |k: usize| -> f64 { dirs.iter().enumerate().map(|(i, d)| r[(i + k) % m].dot(*d)).sum() };
+        let base = out.last().copied().filter(|k| *k != usize::MAX).unwrap_or(0);
+        let mut best = (f64::NEG_INFINITY, base);
+        for j in 0..per {
+            // Round the previous restart, so a tie keeps it.
+            let k = (base + j + m - per / 2) % m;
+            let v = fit(k);
+            if v > best.0 + 1e-9 * v.abs() {
+                best = (v, k);
+            }
+        }
+        out.push(best.1);
+        dirs = (0..m).map(|i| r[(i + best.1) % m]).collect();
+    }
+    out
+}
+
+/// Whether the kernel would pair a tooth's segments in one section with others than the same
+/// tooth's same segments in the next (in either order of the sections): the loft between them
+/// would then cut across the flanks.
+pub(crate) fn slips(sections: &[Outline], teeth: usize) -> bool {
+    let m = corners(&sections[0]).len();
+    let per = if teeth > 0 && m % teeth == 0 { m / teeth } else { m };
+    let bad = |k: &[usize]| k.iter().any(|v| *v == usize::MAX) || k.windows(2).any(|w| (w[1] + m - w[0]) % per != 0);
+    let rev: Vec<Outline> = sections.iter().rev().cloned().collect();
+    bad(&restarts(sections, teeth)) || bad(&restarts(&rev, teeth))
+}
+
+/// For `n` ≥ 4 evenly spaced stations, the matrix taking values to a cubic spline's second
+/// derivatives (per unit spacing) with not-a-knot ends: rows M[0] − 2 M[1] + M[2] = 0 (and the
+/// same at the far end) and M[i−1] + 4 M[i] + M[i+1] = 6 (y[i−1] − 2 y[i] + y[i+1]).
+pub(crate) fn spline_matrix(n: usize) -> Vec<Vec<f64>> {
+    let mut out = vec![vec![0.0f64; n]; n];
+    for j in 0..n {
+        let mut a = vec![vec![0.0f64; n + 1]; n];
+        a[0][0] = 1.0;
+        a[0][1] = -2.0;
+        a[0][2] = 1.0;
+        a[n - 1][n - 3] = 1.0;
+        a[n - 1][n - 2] = -2.0;
+        a[n - 1][n - 1] = 1.0;
+        let y = |i: usize| if i == j { 1.0 } else { 0.0 };
+        for i in 1..n - 1 {
+            a[i][i - 1] = 1.0;
+            a[i][i] = 4.0;
+            a[i][i + 1] = 1.0;
+            a[i][n] = 6.0 * (y(i - 1) - 2.0 * y(i) + y(i + 1));
+        }
+        // Gauss-Jordan with partial pivoting.
+        for c in 0..n {
+            let p = (c..n).max_by(|x, y| a[*x][c].abs().total_cmp(&a[*y][c].abs())).unwrap_or(c);
+            a.swap(c, p);
+            for r in 0..n {
+                if r != c && a[r][c] != 0.0 {
+                    let f = a[r][c] / a[c][c];
+                    for k in c..=n {
+                        a[r][k] -= f * a[c][k];
+                    }
+                }
+            }
+        }
+        for i in 0..n {
+            out[i][j] = a[i][n] / a[i][i];
+        }
+    }
+    out
+}
+
+/// The cubic spline (not-a-knot) through `y` at evenly spaced stations, at `u` (0 to
+/// `y.len() − 1`), `m` being [`spline_matrix`] of their number.
+fn spline_at(m: &[Vec<f64>], y: &[f64], u: f64) -> f64 {
+    let n = y.len();
+    let k = (u.floor().max(0.0) as usize).min(n - 2);
+    let t = u - k as f64;
+    let a = 1.0 - t;
+    let dd = |i: usize| -> f64 { m[i].iter().zip(y).map(|(w, v)| w * v).sum() };
+    a * y[k] + t * y[k + 1] + ((a * a * a - a) * dd(k) + (t * t * t - t) * dd(k + 1)) / 6.0
+}
+
+/// `n` sections through the exact ones (evenly spaced along the axis, the ends kept): each fit
+/// point's radius and side angles on a cubic spline through the exact sections'.
+fn dense(zeta: &[f64], teeth: &[Teeth], n: usize) -> (Vec<f64>, Vec<Teeth>) {
+    let e = zeta.len();
+    let length = zeta[e - 1];
+    let m = spline_matrix(e.max(4));
+    let mut zs = Vec::with_capacity(n);
+    let mut out = Vec::with_capacity(n);
+    for j in 0..n {
+        let u = (e - 1) as f64 * j as f64 / (n - 1) as f64;
+        let k = u.round() as usize;
+        zs.push(length * j as f64 / (n - 1) as f64);
+        if (u - k as f64).abs() < 1e-9 {
+            let t = &teeth[k];
+            out.push(Teeth { r: t.r.clone(), lo: t.lo.clone(), hi: t.hi.clone(), pointed: t.pointed, undercut: t.undercut });
+            continue;
+        }
+        let at = |f: &dyn Fn(&Teeth) -> &Vec<f64>, i: usize| spline_at(&m, &teeth.iter().map(|t| f(t)[i]).collect::<Vec<_>>(), u);
+        let side = teeth[0].r.len();
+        out.push(Teeth {
+            r: (0..side).map(|i| at(&|t| &t.r, i)).collect(),
+            lo: (0..side).map(|i| at(&|t| &t.lo, i)).collect(),
+            hi: (0..side).map(|i| at(&|t| &t.hi, i)).collect(),
+            pointed: false,
+            undercut: false,
+        });
+    }
+    (zs, out)
+}
 
 impl Form {
     fn new(s: &Spec, d: &Design) -> Result<Form, String> {
@@ -524,7 +685,7 @@ impl Form {
         let (ha, hf, c) = (d.ha2, d.hf2, d.clearance);
         if (ha + c) * sd > 0.5 * hap || hf * cd > 0.5 * d.rm2 {
             return Err(format!(
-                "the teeth are too tall for this ring gear (pitch cone angle {}°, mean cone distance {} mm): use a smaller module (a smaller ring gear diameter per tooth) or more teeth",
+                "teeth too tall: use a smaller module or more teeth (ring gear pitch cone {}°, mean cone distance {} mm)",
                 mm(d.delta2.to_degrees()),
                 mm(d.cone_m2)
             ));
@@ -543,7 +704,7 @@ impl Form {
         let least = ha * (tan_lo + tan_hi) + 0.3 * d.mmn;
         if most < least {
             return Err(format!(
-                "the teeth come to a point: a pressure angle of {}° is too much for teeth this deep (use a smaller pressure angle or a stub tooth form)",
+                "teeth come to a point: use a smaller pressure angle or a stub tooth form ({}° is too much here)",
                 mm(s.pressure_angle)
             ));
         }
@@ -920,7 +1081,7 @@ impl Carve<'_> {
     }
     /// The pinion's teeth on the plane `zeta`: the tooth nearest `near` (any, if `None`).
     fn section(&self, zeta: f64, near: Option<f64>) -> Result<Teeth, String> {
-        let gone = || "the ring gear leaves no pinion tooth: use a smaller offset, a larger spiral angle or fewer, larger teeth".to_string();
+        let gone = || "no pinion tooth left: use a smaller offset, a larger spiral angle or fewer, larger teeth".to_string();
         let (r_root, a_root) = self.clear(zeta, Blank::Tips).ok_or_else(gone)?;
         let (r_tip, _) = self.clear(zeta, Blank::Roots).ok_or_else(gone)?;
         let depth = r_tip - r_root;
@@ -1029,6 +1190,11 @@ pub(crate) struct Set {
     /// Heights of the pinion's sections along its axis, and its teeth there.
     zeta: Vec<f64>,
     teeth: Vec<Teeth>,
+    /// The sections the pinion is lofted through: the exact ones and more between.
+    loft_z: Vec<f64>,
+    loft: Vec<Teeth>,
+    /// How many sections the ring gear is lofted through.
+    gear_n: usize,
 }
 
 /// Works the set out in the design frame.
@@ -1094,18 +1260,61 @@ pub(crate) fn work_out(s: &Spec) -> Result<Set, String> {
         };
         let t = carve.section(*z, near)?;
         if !sound(&t.r, &t.lo, &t.hi, carve.pitch) {
-            return Err("these numbers don't make a pinion tooth that can be drawn: use a smaller offset or face width, or fewer, larger teeth".into());
+            return Err("pinion tooth can't be drawn: use a smaller offset or face width, or fewer, larger teeth".into());
         }
         teeth.push(t);
     }
-    for j in 0..GEAR_SECTIONS {
-        let z = form.z_lo + (form.z_hi - form.z_lo) * j as f64 / (GEAR_SECTIONS - 1) as f64;
-        let (r, lo, hi) = form.sides(z);
-        if !sound(&r, &lo, &hi, form.pitch) {
-            return Err("these numbers don't make a ring gear tooth that can be drawn: use a smaller face width or fewer, larger teeth".into());
+    // The ring gear: GEAR_SECTIONS sections where the kernel takes that many curves, more if it
+    // needs them to line the sections up tooth to tooth.
+    let per_section = s.teeth2 as usize * 2 * GEAR_SIDE;
+    let most = (KERNEL_CURVES / per_section).min(50);
+    let first = GEAR_SECTIONS.min(most);
+    if first < 4 {
+        return Err(format!("too many ring gear teeth to loft: use at most {}", KERNEL_CURVES / (4 * 2 * GEAR_SIDE)));
+    }
+    let mut gear_n = None;
+    for n in std::iter::once(first).chain(LOFT_COUNTS.into_iter().filter(|n| *n > first && *n <= most)) {
+        let mut gear = Vec::new();
+        for j in 0..n {
+            let z = form.z_lo + (form.z_hi - form.z_lo) * j as f64 / (n - 1) as f64;
+            let (r, lo, hi) = form.sides(z);
+            if !sound(&r, &lo, &hi, form.pitch) {
+                return Err("ring gear tooth can't be drawn: use a smaller face width or fewer, larger teeth".into());
+            }
+            gear.push(teeth_outline(&r, &lo, &hi, s.teeth2));
+        }
+        if !slips(&gear, s.teeth2 as usize) {
+            gear_n = Some(n);
+            break;
         }
     }
-    Ok(Set { d, form, op, xp, zp, heel_first, zeta, teeth })
+    let Some(gear_n) = gear_n else {
+        return Err("ring gear teeth twist too fast to loft: use a smaller spiral angle or face width".into());
+    };
+    // The pinion's teeth turn fast along its axis: the kernel would line its sections up
+    // tooth to tooth only when they are close enough, so it gets as many as that takes.
+    let mut lofted = None;
+    let most = KERNEL_CURVES / (s.teeth as usize * 2 * PINION_SIDE);
+    for n in LOFT_COUNTS.into_iter().filter(|n| *n <= most) {
+        let (z, t) = dense(&zeta, &teeth, n);
+        let drawn = t.iter().all(|t| sound(&t.r, &t.lo, &t.hi, carve.pitch));
+        if cfg!(test) && std::env::var("HYPOID_TRACE").is_ok() {
+            let outlines: Vec<Outline> = t.iter().map(|t| teeth_outline(&t.r, &t.lo, &t.hi, s.teeth)).collect();
+            eprintln!("pinion loft of {n}: drawn {drawn}, restarts {:?}", restarts(&outlines, s.teeth as usize));
+        }
+        if !drawn {
+            continue;
+        }
+        let outlines: Vec<Outline> = t.iter().map(|t| teeth_outline(&t.r, &t.lo, &t.hi, s.teeth)).collect();
+        if !slips(&outlines, s.teeth as usize) {
+            lofted = Some((z, t));
+            break;
+        }
+    }
+    let Some((loft_z, loft)) = lofted else {
+        return Err("pinion teeth twist too fast to loft: use a smaller spiral angle, offset or face width".into());
+    };
+    Ok(Set { d, form, op, xp, zp, heel_first, zeta, teeth, loft_z, loft, gear_n })
 }
 
 /// Builds the hypoid set into `p`.
@@ -1149,6 +1358,7 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
     p.fact("gear outer cone distance", d.cone_e2, Unit::Mm);
     p.fact("gear face width", d.b2, Unit::Mm);
     p.fact("pinion toothed length", length, Unit::Mm);
+    p.fact("pinion loft sections", set.loft_z.len() as f64, Unit::None);
     p.fact("mean normal module", d.mmn, Unit::None);
     p.fact("pinion mean addendum", d.ha1, Unit::Mm);
     p.fact("pinion mean dedendum", d.hf1, Unit::Mm);
@@ -1180,8 +1390,8 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
     let world = |q: V3| -> V3 { [q[0] + s.origin[0], q[1] + s.origin[1], q[2] - back + s.origin[2]] };
     let circle = |r: f64| Region { outer: vec![Outline::circle(V2::ZERO, r)], holes: vec![] };
     let mut bodies = Vec::new();
-    let pinion_sections: Vec<(Outline, f64)> = set.zeta.iter().zip(&set.teeth).map(|(z, t)| (teeth_outline(&t.r, &t.lo, &t.hi, s.teeth), *z)).collect();
-    let gear_z: Vec<f64> = (0..GEAR_SECTIONS).map(|j| form.z_lo + (form.z_hi - form.z_lo) * j as f64 / (GEAR_SECTIONS - 1) as f64).collect();
+    let pinion_sections: Vec<(Outline, f64)> = set.loft_z.iter().zip(&set.loft).map(|(z, t)| (teeth_outline(&t.r, &t.lo, &t.hi, s.teeth), *z)).collect();
+    let gear_z: Vec<f64> = (0..set.gear_n).map(|j| form.z_lo + (form.z_hi - form.z_lo) * j as f64 / (set.gear_n - 1) as f64).collect();
     let gear_sections: Vec<(Outline, f64)> = gear_z.iter().map(|z| (form.section(*z), z - back)).collect();
     if wanted(s, 1) {
         // A shank out of the heel, a little into the teeth so the two overlap.
@@ -1220,8 +1430,11 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
     // The 2D preview: both members' middle sections side by side, turning at the set's ratio (the
     // axes are skew, so no one plane shows the mesh itself).
     let mid_p = n / 2;
-    let mid_g = GEAR_SECTIONS / 2;
-    let mut pinion_view = pinion_sections[mid_p].0.clone();
+    let mid_g = set.gear_n / 2;
+    let mut pinion_view = {
+        let t = &set.teeth[mid_p];
+        teeth_outline(&t.r, &t.lo, &t.hi, s.teeth)
+    };
     let mut gear_view = gear_sections[mid_g].0.clone();
     let gear_reach = form.radius(form.tip(gear_z[mid_g]), gear_z[mid_g]);
     let centre = V2::new(gear_reach + tip(mid_p) + 0.5 * d.mmn, 0.0);
@@ -1477,7 +1690,7 @@ mod tests {
         let mut s = spec();
         s.offset = 400.0;
         let e = crate::plan(&s).unwrap_err();
-        assert!(e.contains("too large") && e.contains("the most that works is"), "{e}");
+        assert!(e.starts_with("offset too large: use at most"), "{e}");
         s.teeth = 50;
         assert!(crate::plan(&s).unwrap_err().contains("more teeth"));
     }
@@ -1493,6 +1706,9 @@ mod tests {
         /// A cubic through four sections' matching points, as the kernel's loft through four or
         /// more sections is smooth.
         Smooth,
+        /// One cubic spline through every section's matching points (C², not-a-knot ends), as
+        /// the kernel skins a loft through four or more sections.
+        Spline,
     }
 
     /// Matching polygons on planes up the body's z.
@@ -1501,6 +1717,8 @@ mod tests {
         rings: Vec<Vec<V2>>,
         teeth: usize,
         reach: f64,
+        /// [`spline_matrix`] for these sections (evenly spaced).
+        m: Vec<Vec<f64>>,
     }
 
     /// An outline's points, the same number for every outline of the same make-up.
@@ -1521,8 +1739,8 @@ mod tests {
                             sweep -= TAU;
                         }
                     }
-                    for i in 0..4 {
-                        out.push(*c + V2::polar(c.dist(*a), a0 + sweep * f64::from(i) / 4.0));
+                    for i in 0..8 {
+                        out.push(*c + V2::polar(c.dist(*a), a0 + sweep * f64::from(i) / 8.0));
                     }
                 }
                 Seg::Spline(p) => {
@@ -1541,7 +1759,8 @@ mod tests {
         fn new(z: Vec<f64>, rings: Vec<Vec<V2>>, teeth: usize) -> Stack {
             assert!(rings.iter().all(|r| r.len() == rings[0].len() && r.len() % teeth == 0));
             let reach = rings.iter().flatten().map(|p| p.len()).fold(0.0, f64::max);
-            Stack { z, rings, teeth, reach }
+            let m = if z.len() >= 4 { spline_matrix(z.len()) } else { Vec::new() };
+            Stack { z, rings, teeth, reach, m }
         }
         /// The sections a height lies between, weighted.
         fn weights(&self, z: f64, how: Between) -> Option<Vec<(usize, f64)>> {
@@ -1553,6 +1772,20 @@ mod tests {
             if how == Between::Straight || n < 4 {
                 let u = (z - self.z[k]) / (self.z[k + 1] - self.z[k]);
                 return Some(vec![(k, 1.0 - u), (k + 1, u)]);
+            }
+            if how == Between::Spline {
+                let t = (z - self.z[k]) / (self.z[k + 1] - self.z[k]);
+                let a = 1.0 - t;
+                let (ca, ct) = ((a * a * a - a) / 6.0, (t * t * t - t) / 6.0);
+                return Some(
+                    (0..n)
+                        .map(|j| {
+                            let lin = if j == k { a } else if j == k + 1 { t } else { 0.0 };
+                            (j, lin + ca * self.m[k][j] + ct * self.m[k + 1][j])
+                        })
+                        .filter(|(_, w)| w.abs() > 1e-12)
+                        .collect(),
+                );
             }
             let first = k.saturating_sub(1).min(n - 4);
             Some(
@@ -1627,6 +1860,8 @@ mod tests {
             let mut parts = Vec::new();
             for st in &b.steps {
                 match st {
+                    // Point i of one section goes to point i of the next, as the kernel pairs them
+                    // when it lines them up tooth to tooth (which a test checks).
                     Step::Loft { sections, op } if *op != Op::Cut => parts.push(Stack::new(sections.iter().map(|s| s.1).collect(), sections.iter().map(|s| ring(&s.0)).collect(), teeth)),
                     Step::Taper { outline, z0, height, twist, scale, op } if *op != Op::Cut => {
                         let levels = 13;
@@ -1853,16 +2088,543 @@ mod tests {
             let set = pair(&s);
             let m = set.module;
             let t0 = std::time::Instant::now();
-            let (pen, gap) = set.run(Between::Smooth, 2.0, 32, 0.0);
+            let (pen, gap) = set.run(Between::Spline, 2.0, 32, 0.0);
             eprintln!("hypoid β1 {beta}°: smooth loft: penetration {pen:.5} mm ({:.2e} module), largest least gap {gap:.5} mm, {:.1} s", pen / m, t0.elapsed().as_secs_f64());
             assert!(pen <= 3e-3 * m, "penetration {pen}");
             assert!(gap <= 6e-3 * m, "gap {gap}");
             let (pen, gap) = set.run(Between::Straight, 2.0, 16, 0.0);
             eprintln!("hypoid β1 {beta}°: straight loft: penetration {pen:.5} mm ({:.2e} module), largest least gap {gap:.5} mm", pen / m);
             // Half a pitch out of step, the teeth run into each other.
-            let (pen, _) = set.run(Between::Smooth, 1.0, 6, 0.5);
+            let (pen, _) = set.run(Between::Spline, 1.0, 6, 0.5);
             eprintln!("hypoid β1 {beta}°: half a pitch out of step: penetration {pen:.3} mm");
             assert!(pen > 0.1 * m, "half a pitch out of step only overlaps {pen}");
+        }
+    }
+
+    /// The kernel's loft start alignment (`loft_numbered_loops`) searched over every restart, as
+    /// the kernel does: each section restarted where its corners line up best, by the sum of dot
+    /// products of directions from the centroid, with the section before (the first with the
+    /// last, the "lead" of equal counts). Returns each section's shift.
+    fn kernel_shifts(sections: &[(Outline, f64)]) -> Vec<usize> {
+        let rings: Vec<Vec<V2>> = sections.iter().map(|(o, _)| corners(o)).collect();
+        let m = rings[0].len();
+        let mut dirs = rings[rings.len() - 1].clone();
+        let mut out = Vec::new();
+        for r in &rings {
+            let fit = |k: usize| -> f64 { dirs.iter().enumerate().map(|(i, d)| r[(i + k) % m].dot(*d)).sum() };
+            let k = (0..m).max_by(|a, b| fit(*a).total_cmp(&fit(*b))).unwrap();
+            out.push(k);
+            dirs = (0..m).map(|i| r[(i + k) % m]).collect();
+        }
+        out
+    }
+
+    /// [`kernel_shifts`] in the kernel's canonical order (`loft_reversed`: the sections taken
+    /// last to first when the first-to-last step's largest world component is negative), each
+    /// section's shift in the order given.
+    fn loft_shifts(frame: &Frame, sections: &[(Outline, f64)]) -> Vec<usize> {
+        let step = mul(frame.z, sections[sections.len() - 1].1 - sections[0].1);
+        let big = step.into_iter().max_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap_or(0.0);
+        if big < 0.0 {
+            let rev: Vec<(Outline, f64)> = sections.iter().rev().cloned().collect();
+            let mut k = kernel_shifts(&rev);
+            k.reverse();
+            k
+        } else {
+            kernel_shifts(sections)
+        }
+    }
+
+    /// An ASCII DXF of an outline (lines, arcs, fit point splines), as `sketch.insert_dxf` reads it.
+    fn dxf(o: &Outline) -> String {
+        let mut t = String::from("0\nSECTION\n2\nENTITIES\n");
+        let f = |v: f64| format!("{v:.12}");
+        for s in &o.segs {
+            match s {
+                Seg::Line(a, b) => t += &format!("0\nLINE\n10\n{}\n20\n{}\n11\n{}\n21\n{}\n", f(a.x), f(a.y), f(b.x), f(b.y)),
+                Seg::Arc { c, a, b, ccw } => {
+                    let (from, to) = if *ccw { (*a, *b) } else { (*b, *a) };
+                    t += &format!("0\nARC\n10\n{}\n20\n{}\n40\n{}\n50\n{}\n51\n{}\n", f(c.x), f(c.y), f(c.dist(from)), f((from - *c).angle().to_degrees()), f((to - *c).angle().to_degrees()));
+                }
+                Seg::Spline(p) => {
+                    t += "0\nSPLINE\n71\n3\n";
+                    for q in p {
+                        t += &format!("11\n{}\n21\n{}\n", f(q.x), f(q.y));
+                    }
+                }
+                Seg::Circle(c, r) => t += &format!("0\nCIRCLE\n10\n{}\n20\n{}\n40\n{}\n", f(c.x), f(c.y), f(*r)),
+            }
+        }
+        t + "0\nENDSEC\n0\nEOF\n"
+    }
+
+    /// A CLI script that builds a plan's bodies as `gear.create` does (sketches through
+    /// `sketch.insert_dxf`, lofts and joined prisms; cuts left out), with the pinion turned by
+    /// `turns[k]` pitches and the gear by the matching angle, an interference check after each.
+    fn kernel_script(p: &Plan, s: &Spec, turns: &[f64]) -> String {
+        let mut cmds: Vec<String> = Vec::new();
+        let mut sketch = 0usize;
+        let mut sk = |cmds: &mut Vec<String>, origin: V3, x: V3, y: V3, o: &Outline| -> usize {
+            sketch += 1;
+            cmds.push(format!(r#"{{"command":"sketch.create","params":{{"plane":{{"origin":{origin:?},"x_dir":{x:?},"y_dir":{y:?}}},"project_edges":false}}}}"#));
+            cmds.push(format!(r#"{{"command":"sketch.insert_dxf","params":{{"text":{}}}}}"#, serde_json_escape(&dxf(o))));
+            cmds.push(r#"{"command":"sketch.finish","params":{}}"#.into());
+            sketch
+        };
+        let mut features: Vec<String> = Vec::new();
+        for b in &p.bodies {
+            let f = b.frame;
+            let (x, y) = (f.x, f.y());
+            for (i, st) in b.steps.iter().enumerate() {
+                match st {
+                    Step::Loft { sections, op } => {
+                        let ids: Vec<String> = sections.iter().map(|(o, h)| format!(r#"{{"sketch":{}}}"#, sk(&mut cmds, f.world([0.0, 0.0, *h]), x, y, o))).collect();
+                        assert!(*op == Op::New && i == 0);
+                        features.push(format!(r#"{{"command":"solid.loft","params":{{"sections":[{}],"operation":"new","body_name":"{}"}}}}"#, ids.join(","), b.name));
+                    }
+                    Step::Prism { region, z0, height, twist, op: Op::Join } if *twist == 0.0 && region.holes.is_empty() => {
+                        let id = sk(&mut cmds, f.world([0.0, 0.0, *z0]), x, y, &region.outer[0]);
+                        features.push(format!(r#"{{"command":"solid.extrude","params":{{"sketch":{id},"distance":{height},"operation":"join","targets":["{}"]}}}}"#, b.name));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        cmds.extend(features);
+        let export = std::env::var("HYPOID_EXPORT").ok();
+        let quality = std::env::var("HYPOID_QUALITY").unwrap_or_else(|_| "fine".into());
+        let save = |cmds: &mut Vec<String>, tag: &str| {
+            if let Some(dir) = &export {
+                for (b, file) in p.bodies.iter().zip(["pinion", "gear"]) {
+                    let path = std::path::Path::new(dir).join(format!("{file}{tag}.stl"));
+                    cmds.push(format!(r#"{{"command":"file.export","params":{{"path":{},"bodies":["{}"],"quality":"{quality}"}}}}"#, serde_json_escape(&path.to_string_lossy()), b.name));
+                }
+            } else {
+                cmds.push(r#"{"command":"inspect.interference","params":{"budget_s":240}}"#.into());
+            }
+        };
+        let turn = |cmds: &mut Vec<String>, b: &Body, a: f64| {
+            cmds.push(format!(r#"{{"command":"solid.move","params":{{"bodies":["{}"],"axis":{:?},"origin":{:?},"angle":"{} deg"}}}}"#, b.name, b.frame.z, b.frame.origin, a));
+        };
+        let ratio = f64::from(s.teeth) / f64::from(s.teeth2);
+        let pitch = 360.0 / f64::from(s.teeth);
+        let mut done = 0.0;
+        for (k, t) in turns.iter().enumerate() {
+            let step = (t - done) * pitch;
+            done = *t;
+            if step != 0.0 {
+                for (b, a) in p.bodies.iter().zip([step, -step * ratio]) {
+                    turn(&mut cmds, b, a);
+                }
+            }
+            save(&mut cmds, &format!("_{k}"));
+        }
+        // Out of step: the pinion alone turned on by half a pitch.
+        if std::env::var("HYPOID_SLIP").is_ok() {
+            turn(&mut cmds, &p.bodies[0], 0.5 * pitch);
+            save(&mut cmds, "_slip");
+        }
+        format!("[\n{}\n]\n", cmds.join(",\n"))
+    }
+
+    /// A body's tessellation, for point-in-solid and distance queries.
+    struct Mesh {
+        tris: Vec<[V3; 3]>,
+        lo: V3,
+        cell: f64,
+        dims: [usize; 3],
+        /// Triangles by 3D cell, and by (y, z) column for rays along +x.
+        cells: Vec<Vec<u32>>,
+        columns: Vec<Vec<u32>>,
+    }
+
+    impl Mesh {
+        fn new(tris: Vec<[V3; 3]>, cell: f64) -> Mesh {
+            let mut lo = [f64::MAX; 3];
+            let mut hi = [f64::MIN; 3];
+            for t in &tris {
+                for v in t {
+                    for i in 0..3 {
+                        lo[i] = lo[i].min(v[i]);
+                        hi[i] = hi[i].max(v[i]);
+                    }
+                }
+            }
+            let dims = [0, 1, 2].map(|i| (((hi[i] - lo[i]) / cell).ceil() as usize).max(1) + 1);
+            let mut cells = vec![Vec::new(); dims[0] * dims[1] * dims[2]];
+            let mut columns = vec![Vec::new(); dims[1] * dims[2]];
+            for (k, t) in tris.iter().enumerate() {
+                let c = |i: usize, f: fn(f64, f64) -> f64| ((f(f(t[0][i], t[1][i]), t[2][i]) - lo[i]) / cell) as usize;
+                let (a, b) = ([0, 1, 2].map(|i| c(i, f64::min)), [0, 1, 2].map(|i| c(i, f64::max)));
+                for z in a[2]..=b[2] {
+                    for y in a[1]..=b[1] {
+                        columns[y + dims[1] * z].push(k as u32);
+                        for x in a[0]..=b[0] {
+                            cells[x + dims[0] * (y + dims[1] * z)].push(k as u32);
+                        }
+                    }
+                }
+            }
+            Mesh { tris, lo, cell, dims, cells, columns }
+        }
+        fn index(&self, p: V3) -> Option<[usize; 3]> {
+            let mut out = [0; 3];
+            for i in 0..3 {
+                let c = (p[i] - self.lo[i]) / self.cell;
+                if !(0.0..self.dims[i] as f64).contains(&c) {
+                    return None;
+                }
+                out[i] = c as usize;
+            }
+            Some(out)
+        }
+        /// Whether `p` is inside (a ray along +x crosses the surface an odd number of times).
+        fn inside(&self, p: V3) -> bool {
+            let Some(c) = self.index(p) else { return false };
+            let (py, pz) = (p[1] + 1.234_567e-7, p[2] + 2.345_678e-7);
+            let mut n = 0;
+            for &k in &self.columns[c[1] + self.dims[1] * c[2]] {
+                let t = &self.tris[k as usize];
+                // Barycentric in (y, z).
+                let (ay, az, by, bz, cy, cz) = (t[0][1], t[0][2], t[1][1], t[1][2], t[2][1], t[2][2]);
+                let d = (by - ay) * (cz - az) - (cy - ay) * (bz - az);
+                if d.abs() < 1e-300 {
+                    continue;
+                }
+                let u = ((py - ay) * (cz - az) - (cy - ay) * (pz - az)) / d;
+                let v = ((by - ay) * (pz - az) - (py - ay) * (bz - az)) / d;
+                if u < 0.0 || v < 0.0 || u + v > 1.0 {
+                    continue;
+                }
+                let x = t[0][0] + u * (t[1][0] - t[0][0]) + v * (t[2][0] - t[0][0]);
+                if x > p[0] {
+                    n += 1;
+                }
+            }
+            n % 2 == 1
+        }
+        /// The distance from `p` to the surface, if within one cell.
+        fn distance(&self, p: V3) -> Option<f64> {
+            let c = self.index(p)?;
+            let mut best = f64::INFINITY;
+            for z in c[2].saturating_sub(1)..(c[2] + 2).min(self.dims[2]) {
+                for y in c[1].saturating_sub(1)..(c[1] + 2).min(self.dims[1]) {
+                    for x in c[0].saturating_sub(1)..(c[0] + 2).min(self.dims[0]) {
+                        for &k in &self.cells[x + self.dims[0] * (y + self.dims[1] * z)] {
+                            best = best.min(point_triangle(p, &self.tris[k as usize]));
+                        }
+                    }
+                }
+            }
+            (best <= self.cell).then_some(best)
+        }
+    }
+
+    /// The distance from a point to a triangle.
+    fn point_triangle(p: V3, t: &[V3; 3]) -> f64 {
+        let (a, b, c) = (t[0], t[1], t[2]);
+        let (ab, ac, ap) = (sub(b, a), sub(c, a), sub(p, a));
+        let (d1, d2) = (dot(ab, ap), dot(ac, ap));
+        if d1 <= 0.0 && d2 <= 0.0 {
+            return len(ap);
+        }
+        let bp = sub(p, b);
+        let (d3, d4) = (dot(ab, bp), dot(ac, bp));
+        if d3 >= 0.0 && d4 <= d3 {
+            return len(bp);
+        }
+        let vc = d1 * d4 - d3 * d2;
+        if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+            let v = d1 / (d1 - d3);
+            return len(sub(p, add(a, mul(ab, v))));
+        }
+        let cp = sub(p, c);
+        let (d5, d6) = (dot(ab, cp), dot(ac, cp));
+        if d6 >= 0.0 && d5 <= d6 {
+            return len(cp);
+        }
+        let vb = d5 * d2 - d1 * d6;
+        if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+            let w = d2 / (d2 - d6);
+            return len(sub(p, add(a, mul(ac, w))));
+        }
+        let va = d3 * d6 - d5 * d4;
+        if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+            let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+            return len(sub(p, add(b, mul(sub(c, b), w))));
+        }
+        let n = cross(ab, ac);
+        dot(ap, n).abs() / len(n)
+    }
+
+    /// The kernel's bodies against each other, as their tessellations (`HYPOID_MESH`: a folder
+    /// of `pinion_K.stl`, `gear_K.stl` for each mesh position K, and `_slip` for one out of
+    /// step): the deepest any vertex of one is inside the other, and the least gap.
+    #[test]
+    #[ignore]
+    fn kernel_mesh_interference() {
+        let Ok(dir) = std::env::var("HYPOID_MESH") else { return };
+        let mut tags: Vec<String> = (0..64).map(|k| format!("_{k}")).filter(|t| std::path::Path::new(&dir).join(format!("pinion{t}.stl")).exists()).collect();
+        if std::path::Path::new(&dir).join("pinion_slip.stl").exists() {
+            tags.push("_slip".into());
+        }
+        for tag in tags {
+            let load = |n: &str| stl_tris(&std::path::Path::new(&dir).join(format!("{n}{tag}.stl")));
+            let (pt, gt) = (load("pinion"), load("gear"));
+            let (pm, gm) = (Mesh::new(pt.clone(), 0.6), Mesh::new(gt.clone(), 0.6));
+            let verts = |tris: &[[V3; 3]]| {
+                let mut v: Vec<V3> = tris.iter().flatten().copied().collect();
+                v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                v.dedup();
+                v
+            };
+            let (pv, gv) = (verts(&pt), verts(&gt));
+            let mut pen = (0.0f64, [0.0; 3], "");
+            let mut gap = f64::INFINITY;
+            let mut contact = 0usize;
+            for (vs, other, name) in [(&pv, &gm, "pinion in gear"), (&gv, &pm, "gear in pinion")] {
+                for v in vs.iter() {
+                    let Some(d) = other.distance(*v) else {
+                        if other.inside(*v) {
+                            pen = (f64::INFINITY, *v, name);
+                        }
+                        continue;
+                    };
+                    if other.inside(*v) {
+                        if d > pen.0 {
+                            pen = (d, *v, name);
+                        }
+                    } else {
+                        gap = gap.min(d);
+                        if d < 0.02 {
+                            contact += 1;
+                        }
+                    }
+                }
+            }
+            eprintln!("position{tag}: deepest {:.5} mm ({} at {:?}), least gap {:.5} mm, {contact} vertices within 0.02 mm", pen.0, pen.2, pen.1, gap);
+        }
+    }
+
+    fn serde_json_escape(t: &str) -> String {
+        let mut o = String::from("\"");
+        for c in t.chars() {
+            match c {
+                '"' => o += "\\\"",
+                '\\' => o += "\\\\",
+                '\n' => o += "\\n",
+                c => o.push(c),
+            }
+        }
+        o + "\""
+    }
+
+    /// Writes [`kernel_script`] for the set `HYPOID_SPEC` (`z1,z2,offset,beta,left,sigma`, ring
+    /// gear Ø200) to `HYPOID_SCRIPT`, the pinion at `HYPOID_TURNS` (pitches, comma separated).
+    #[test]
+    #[ignore]
+    fn write_kernel_script() {
+        let Ok(out) = std::env::var("HYPOID_SCRIPT") else { return };
+        let mut s = spec();
+        if let Ok(v) = std::env::var("HYPOID_SPEC") {
+            let f: Vec<&str> = v.split(',').collect();
+            (s.teeth, s.teeth2, s.offset, s.spiral_angle, s.left_hand) = (f[0].parse().unwrap(), f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap(), f[4] == "1");
+            if let Some(g) = f.get(5) {
+                s.shaft_angle = g.parse().unwrap();
+            }
+            if let Some(g) = f.get(6) {
+                s.backlash = g.parse().unwrap();
+            }
+            s.module = 200.0 / f64::from(s.teeth2);
+        }
+        let turns: Vec<f64> = std::env::var("HYPOID_TURNS").map(|v| v.split(',').map(|x| x.parse().unwrap()).collect()).unwrap_or_else(|_| vec![0.0]);
+        let mut p = crate::plan(&s).unwrap();
+        // Every k-th section of body `b` only (`b:k`), to try the kernel on fewer.
+        if let Ok(v) = std::env::var("HYPOID_DECIMATE") {
+            let f: Vec<usize> = v.split(':').map(|x| x.parse().unwrap()).collect();
+            if let Step::Loft { sections, .. } = &mut p.bodies[f[0]].steps[0] {
+                let n = sections.len();
+                *sections = sections.iter().enumerate().filter(|(i, _)| i % f[1] == 0 || *i == n - 1).map(|(_, s)| s.clone()).collect();
+            }
+        }
+        std::fs::write(&out, kernel_script(&p, &s, &turns)).unwrap();
+        for f in &p.facts {
+            if f.label.contains("loft") {
+                eprintln!("{} {}", f.label, f.value);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn print_defaults_dump() {
+        let mut s = spec();
+        s.apply_print_defaults(0.4, 0.2);
+        let d = design(&s).unwrap();
+        let form = Form::new(&s, &d).unwrap();
+        let _ = form;
+        match work_out(&s) {
+            Ok(set) => eprintln!("ok: {} loft sections", set.loft_z.len()),
+            Err(e) => {
+                eprintln!("{e}");
+                // Which counts slip, which can't be drawn.
+                let mut t = s.clone();
+                t.rack = crate::involute::BasicRack::default();
+                eprintln!("with the standard rack: {:?}", work_out(&t).map(|x| x.loft_z.len()));
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn shaft_angles_dump() {
+        for sigma in [60.0, 70.0, 75.0, 90.0, 105.0, 120.0] {
+            let mut s = spec();
+            s.shaft_angle = sigma;
+            match crate::plan(&s) {
+                Ok(p) => {
+                    let f = |l: &str| p.facts.iter().find(|f| f.label.starts_with(l)).map(|f| f.value).unwrap_or(f64::NAN);
+                    let a = p.bodies[0].frame.z;
+                    let angle = dot(a, [0.0, 0.0, 1.0]).clamp(-1.0, 1.0).acos().to_degrees();
+                    eprintln!(
+                        "Σ {sigma}: δ1 {:.2} δ2 {:.2} β2 {:.2} loft {} pinion axis to the gear's {:.2}° warnings {:?}",
+                        f("pinion pitch cone"),
+                        f("gear pitch cone"),
+                        f("gear mean spiral"),
+                        f("pinion loft"),
+                        angle,
+                        p.warnings
+                    );
+                }
+                Err(e) => eprintln!("Σ {sigma}: {e}"),
+            }
+        }
+    }
+
+    /// The kernel lines up every loft's sections tooth to tooth (searched as the kernel does,
+    /// over every restart, in its own order): the walls between sections run along the flanks.
+    #[test]
+    fn the_kernel_lines_the_loft_sections_up_tooth_to_tooth() {
+        for (z1, z2, e, beta, sigma) in [(11, 41, 25.0, 50.0, 90.0), (11, 41, 25.0, 45.0, 90.0), (10, 43, 35.0, 50.0, 90.0), (13, 39, 12.0, 40.0, 90.0), (11, 41, 25.0, 50.0, 70.0)] {
+            let mut s = spec();
+            (s.teeth, s.teeth2, s.offset, s.spiral_angle, s.shaft_angle) = (z1, z2, e, beta, sigma);
+            s.module = 200.0 / f64::from(z2);
+            for left in [true, false] {
+                s.left_hand = left;
+                let p = crate::plan(&s).unwrap_or_else(|e| panic!("{z1}:{z2} Σ {sigma}: {e}"));
+                for (b, teeth) in p.bodies.iter().zip([z1, z2]) {
+                    let Step::Loft { sections, .. } = &b.steps[0] else { panic!() };
+                    let k = loft_shifts(&b.frame, sections);
+                    let per = corners(&sections[0].0).len() / teeth as usize;
+                    eprintln!("{}: Σ {sigma} {} sections, {per} corners a tooth, restarts {:?}", b.name, sections.len(), k);
+                    assert!(k.windows(2).all(|w| (w[1] + per * teeth as usize - w[0]) % per == 0), "{}: the kernel would slip a section: {k:?}", b.name);
+                }
+            }
+        }
+    }
+
+    /// The triangles of a binary STL.
+    fn stl_tris(path: &std::path::Path) -> Vec<[V3; 3]> {
+        let b = std::fs::read(path).unwrap();
+        let n = u32::from_le_bytes([b[80], b[81], b[82], b[83]]) as usize;
+        assert_eq!(b.len(), 84 + 50 * n, "a binary STL");
+        (0..n)
+            .map(|k| {
+                let o = 84 + 50 * k + 12;
+                let p = |vi: usize| {
+                    let f = |i: usize| {
+                        let a = o + 12 * vi + 4 * i;
+                        f64::from(f32::from_le_bytes([b[a], b[a + 1], b[a + 2], b[a + 3]]))
+                    };
+                    [f(0), f(1), f(2)]
+                };
+                [p(0), p(1), p(2)]
+            })
+            .collect()
+    }
+
+    /// The vertices of an STL (binary or ASCII), deduplicated.
+    fn stl_points(path: &std::path::Path) -> Vec<V3> {
+        let b = std::fs::read(path).unwrap();
+        let mut out = Vec::new();
+        let n = u32::from_le_bytes([b[80], b[81], b[82], b[83]]) as usize;
+        if b.len() == 84 + 50 * n {
+            for k in 0..n {
+                let o = 84 + 50 * k + 12;
+                for v in 0..3 {
+                    let f = |i: usize| {
+                        let a = o + 12 * v + 4 * i;
+                        f64::from(f32::from_le_bytes([b[a], b[a + 1], b[a + 2], b[a + 3]]))
+                    };
+                    out.push([f(0), f(1), f(2)]);
+                }
+            }
+        } else {
+            for line in String::from_utf8_lossy(&b).lines() {
+                if let Some(r) = line.trim().strip_prefix("vertex") {
+                    let v: Vec<f64> = r.split_whitespace().map(|x| x.parse().unwrap()).collect();
+                    out.push([v[0], v[1], v[2]]);
+                }
+            }
+        }
+        out.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        out.dedup();
+        out
+    }
+
+    /// How far the kernel's surfaces (an STL's vertices, which lie on them) are from the bodies as
+    /// these tests model them (`Between::Spline`, as the kernel skins a loft). `HYPOID_STL` names
+    /// a folder with `pinion_0.stl` and `gear_0.stl`; `HYPOID_SPEC` optionally gives
+    /// `z1,z2,offset,beta,left(1/0),sigma,backlash` (ring gear Ø200).
+    #[test]
+    #[ignore]
+    fn kernel_surfaces_against_the_model() {
+        let Ok(dir) = std::env::var("HYPOID_STL") else { return };
+        let mut s = spec();
+        if let Ok(v) = std::env::var("HYPOID_SPEC") {
+            let f: Vec<&str> = v.split(',').collect();
+            (s.teeth, s.teeth2, s.offset, s.spiral_angle, s.left_hand) = (f[0].parse().unwrap(), f[1].parse().unwrap(), f[2].parse().unwrap(), f[3].parse().unwrap(), f[4] == "1");
+            if let Some(g) = f.get(5) {
+                s.shaft_angle = g.parse().unwrap();
+            }
+            if let Some(g) = f.get(6) {
+                s.backlash = g.parse().unwrap();
+            }
+            s.module = 200.0 / f64::from(s.teeth2);
+        }
+        let p = crate::plan(&s).unwrap();
+        for (k, file) in [(0usize, "pinion_0.stl"), (1, "gear_0.stl")] {
+            let z = if k == 0 { s.teeth } else { s.teeth2 } as usize;
+            let solid = Solid::of(&p.bodies[k], z);
+            let pts = stl_points(&std::path::Path::new(&dir).join(file));
+            let st = &solid.parts[0];
+            let (z0, z1) = (st.z[0], st.z[st.z.len() - 1]);
+            let every = (pts.len() / 30_000).max(1);
+            let mut errs: Vec<(f64, f64, f64)> = Vec::new();
+            for x in pts.iter().step_by(every) {
+                let (q, lz) = solid.local(*x, 0.0);
+                // The toothed loft's side walls only, away from its end caps.
+                if lz < z0 + 0.05 || lz > z1 - 0.05 {
+                    continue;
+                }
+                if let Some(d) = st.depth(q, lz, Between::Spline) {
+                    errs.push((d, q.len(), lz));
+                }
+            }
+            errs.sort_by(|a, b| a.0.abs().partial_cmp(&b.0.abs()).unwrap());
+            let n = errs.len();
+            let pct = |f: f64| errs[((n as f64 - 1.0) * f) as usize].0.abs();
+            let w = errs[n - 1];
+            eprintln!(
+                "{file} vs Spline: {n} vertices; |error| median {:.5} p90 {:.5} p99 {:.5} max {:.5} mm (signed {:.5}, at r {:.2}, z {:.2})",
+                pct(0.5),
+                pct(0.9),
+                pct(0.99),
+                w.0.abs(),
+                w.0,
+                w.1,
+                w.2
+            );
         }
     }
 
@@ -1874,11 +2636,11 @@ mod tests {
             s.module = 200.0 / f64::from(z2);
             let set = pair(&s);
             let m = set.module;
-            let (pen, gap) = set.run(Between::Smooth, 2.0, 16, 0.0);
+            let (pen, gap) = set.run(Between::Spline, 2.0, 16, 0.0);
             eprintln!("hypoid {z1}:{z2} E {e} β1 {beta}° left {left}: penetration {pen:.5} mm ({:.2e} module), largest least gap {gap:.5} mm", pen / m);
             assert!(pen <= 3e-3 * m, "penetration {pen}");
             assert!(gap <= 6e-3 * m, "gap {gap}");
-            let (pen, _) = set.run(Between::Smooth, 1.0, 4, 0.5);
+            let (pen, _) = set.run(Between::Spline, 1.0, 4, 0.5);
             assert!(pen > 0.1 * m, "half a pitch out of step only overlaps {pen}");
         }
     }

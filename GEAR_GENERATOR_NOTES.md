@@ -436,3 +436,16 @@ sections, cross-section drawing). Engine and UI code not compiled yet.
 Known: the straight bevel planner's own 41:11 pinion interferes (1 mm) on its own (tests use 13);
 hypoid drives want a 45–50° pinion spiral; `requested_icons.txt` needs regenerating for
 `gear_differential`.
+
+### Differential: primitive case (user, 2026-11-15 midday)
+
+"Very primitive, leaving all the material it can — no fancy holes." The case is now plain stock:
+one revolve (a cylinder round the gears, a plain cylindrical journal at each end for the
+bearings) with only the side gears' turning envelope and the axle bore turned out of it, a
+revolved pocket per pinion or element (its own envelope about its axis) and the pin bores.
+Envelopes come from every material part of the planned members (part by part: a whole body's
+`material_points` missed the hub joined after the flat-cone trim) grown by the running
+clearance. The ring is a plain ring fitted on the case (no flange, no bolts); `windows` and
+`ring_bolts` are opt-in. The 895 mm³ case/side gear overlap the kernel found came from the
+flat-cone bevel merge (side gears now end below their frame origin); the plan-level collision
+test catches it on the merged planner.

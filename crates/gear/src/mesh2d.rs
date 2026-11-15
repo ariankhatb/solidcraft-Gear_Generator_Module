@@ -25,9 +25,14 @@ impl Motion {
     pub fn turning(center: V2, speed: f64) -> Motion {
         Motion { center, speed, slide: 0.0, orbit: 0.0 }
     }
-    /// The preview's own motion (a sliding member is not wrapped by its period here).
+    /// The preview's own motion (a sliding member is not wrapped by its period here). A sliding
+    /// member with a period starts half a period back, as [`PreviewGear::place`] draws it (a
+    /// face gear's rack of an even count is built with a space at the middle, and that half
+    /// pitch puts a tooth under the pinion's space): without it the check met the rack half a
+    /// pitch out of phase and read the default face gear as interfering by 0.5 mm.
     pub fn of(g: &PreviewGear) -> Motion {
-        Motion { center: g.center, speed: g.speed, slide: g.slide, orbit: g.orbit }
+        let back = if g.slide != 0.0 && g.period > 0.0 && g.name != "worm" { V2::new(-0.5 * g.period, 0.0) } else { V2::ZERO };
+        Motion { center: g.center + back, speed: g.speed, slide: g.slide, orbit: g.orbit }
     }
     /// (angle, translation): a local point q is at q.rot(angle) + translation.
     fn pose(&self, t: f64) -> (f64, V2) {

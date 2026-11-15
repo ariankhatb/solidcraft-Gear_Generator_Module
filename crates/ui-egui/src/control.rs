@@ -890,10 +890,10 @@ fn ui_edit_folder(app: &mut SolveApp, p: &Value) -> Outcome {
     }) else {
         return err("no such timeline folder");
     };
-    // A gear set's folder opens the Gear Generator on the set.
-    if crate::gear_window::is_set(app, id) {
-        return match crate::gear_window::open_group(app, id) {
-            Ok(()) => ok(json!({"window": "gear", "editing": id})),
+    // A gear set's folder opens the Gears dialog on the set.
+    if crate::dialogs_gear::is_set(app, id) {
+        return match crate::dialogs_gear::open_set(app, id) {
+            Ok(()) => ok(json!({"dialog": "gear", "editing": id})),
             Err(why) => err(why),
         };
     }

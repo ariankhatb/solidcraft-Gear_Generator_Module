@@ -315,6 +315,9 @@ pub struct Spec {
     pub coupon: bool,
     /// Teeth on each coupon piece (3 to 40; one more where that centres them on the mesh).
     pub coupon_teeth: u32,
+    /// Also plan the set's clearance body (keep-out volume for a housing; see
+    /// [`crate::clearance`]): `Plan::clearance`. None: not made.
+    pub clearance_body: Option<crate::clearance::Clearance>,
 }
 
 impl Default for Spec {
@@ -401,6 +404,7 @@ impl Default for Spec {
             hardware2: Hardware::default(),
             coupon: false,
             coupon_teeth: 4,
+            clearance_body: None,
         }
     }
 }
@@ -662,6 +666,10 @@ pub struct Plan {
     /// Which bodies mesh in sets whose axes are not parallel (bevel, hypoid, crossed helical,
     /// worm; see [`crate::mesh3d::check`]), with the whole set's bodies.
     pub meshes3d: Vec<crate::mesh3d::MeshPair3>,
+    /// The set's clearance body, when `Spec::clearance_body` asks for it: one solid of the space
+    /// the assembled set needs (turning envelopes, shafts, bearing seats), in world coordinates,
+    /// built after the gears. Not one of `bodies`.
+    pub clearance: Option<Body>,
     /// Why the set can't be built, found while planning it ([`plan`] returns it as the error).
     refused: Option<String>,
 }
@@ -807,6 +815,9 @@ pub fn check(s: &Spec) -> Result<(), String> {
     }
     crate::strength::check(&s.load)?;
     crate::body::check(s)?;
+    if let Some(c) = &s.clearance_body {
+        crate::clearance::check(c)?;
+    }
     extras::check(s)
 }
 
@@ -814,7 +825,11 @@ pub fn check(s: &Spec) -> Result<(), String> {
 pub fn plan(s: &Spec) -> Result<Plan, String> {
     check(s)?;
     if crate::coupon::applies(s) {
-        return crate::coupon::plan(s);
+        let mut p = crate::coupon::plan(s)?;
+        if s.clearance_body.is_some() {
+            p.warn("a test coupon has no clearance body: it is made for the set itself");
+        }
+        return Ok(p);
     }
     let mut p = Plan::default();
     match s.kind {
@@ -861,6 +876,10 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
         for b in &mut p.bodies {
             b.frame = place.compose(&b.frame);
         }
+    }
+    // The clearance body, from the bodies where they are.
+    if s.clearance_body.is_some() {
+        p.clearance = Some(crate::clearance::clearance_body(s, &mut p)?);
     }
     Ok(p)
 }

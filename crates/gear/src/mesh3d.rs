@@ -276,24 +276,30 @@ pub(crate) fn spline_weights(xs: &[f64], x: f64) -> Vec<f64> {
         _ => {
             let h: Vec<f64> = (0..n - 1).map(|i| xs[i + 1] - xs[i]).collect();
             let k = (0..n - 1).find(|&i| x <= xs[i + 1]).unwrap_or(n - 2);
+            // The spline through the unit value at each point d: its second derivatives, all n
+            // systems (one matrix, n right-hand sides) solved together. Each right-hand side gets
+            // exactly the operations its own solve would, so the weights are the same numbers.
+            let mut a = vec![vec![0.0; 2 * n]; n];
+            a[0][0] = h[1];
+            a[0][1] = -(h[0] + h[1]);
+            a[0][2] = h[0];
+            for i in 1..n - 1 {
+                a[i][i - 1] = h[i - 1];
+                a[i][i] = 2.0 * (h[i - 1] + h[i]);
+                a[i][i + 1] = h[i];
+                for d in 0..n {
+                    let y = |j: usize| if j == d { 1.0 } else { 0.0 };
+                    a[i][n + d] = 6.0 * ((y(i + 1) - y(i)) / h[i] - (y(i) - y(i - 1)) / h[i - 1]);
+                }
+            }
+            a[n - 1][n - 3] = h[n - 2];
+            a[n - 1][n - 2] = -(h[n - 3] + h[n - 2]);
+            a[n - 1][n - 1] = h[n - 3];
+            let ms = solve_many(a, n);
             (0..n)
                 .map(|d| {
-                    // The spline through the unit value at point d: its second derivatives.
                     let y = |i: usize| if i == d { 1.0 } else { 0.0 };
-                    let mut a = vec![vec![0.0; n + 1]; n];
-                    a[0][0] = h[1];
-                    a[0][1] = -(h[0] + h[1]);
-                    a[0][2] = h[0];
-                    for i in 1..n - 1 {
-                        a[i][i - 1] = h[i - 1];
-                        a[i][i] = 2.0 * (h[i - 1] + h[i]);
-                        a[i][i + 1] = h[i];
-                        a[i][n] = 6.0 * ((y(i + 1) - y(i)) / h[i] - (y(i) - y(i - 1)) / h[i - 1]);
-                    }
-                    a[n - 1][n - 3] = h[n - 2];
-                    a[n - 1][n - 2] = -(h[n - 3] + h[n - 2]);
-                    a[n - 1][n - 1] = h[n - 3];
-                    let m = solve(a);
+                    let m = &ms[d];
                     let (t0, t1) = (xs[k + 1] - x, x - xs[k]);
                     let hk = h[k];
                     m[k] * t0.powi(3) / (6.0 * hk) + m[k + 1] * t1.powi(3) / (6.0 * hk) + (y(k) / hk - m[k] * hk / 6.0) * t0 + (y(k + 1) / hk - m[k + 1] * hk / 6.0) * t1
@@ -303,8 +309,9 @@ pub(crate) fn spline_weights(xs: &[f64], x: f64) -> Vec<f64> {
     }
 }
 
-/// Gaussian elimination with partial pivoting of the augmented system `a` (n × n+1).
-fn solve(mut a: Vec<Vec<f64>>) -> Vec<f64> {
+/// Gaussian elimination with partial pivoting of `r` systems with one matrix: `a` is
+/// n × (n + r), the matrix then the right-hand sides; the solutions, one per right-hand side.
+fn solve_many(mut a: Vec<Vec<f64>>, r: usize) -> Vec<Vec<f64>> {
     let n = a.len();
     for c in 0..n {
         let p = (c..n).max_by(|&i, &j| a[i][c].abs().total_cmp(&a[j][c].abs())).unwrap_or(c);
@@ -313,18 +320,18 @@ fn solve(mut a: Vec<Vec<f64>>) -> Vec<f64> {
         if d.abs() < 1e-300 {
             continue;
         }
-        for r in 0..n {
-            if r != c {
-                let f = a[r][c] / d;
+        for row in 0..n {
+            if row != c {
+                let f = a[row][c] / d;
                 if f != 0.0 {
-                    for k in c..=n {
-                        a[r][k] -= f * a[c][k];
+                    for k in c..n + r {
+                        a[row][k] -= f * a[c][k];
                     }
                 }
             }
         }
     }
-    (0..n).map(|i| if a[i][i].abs() < 1e-300 { 0.0 } else { a[i][n] / a[i][i] }).collect()
+    (0..r).map(|d| (0..n).map(|i| if a[i][i].abs() < 1e-300 { 0.0 } else { a[i][n + d] / a[i][i] }).collect()).collect()
 }
 
 /// Corresponding polygons at `zs`, with `sub` more between each two on the spline the kernel's
@@ -556,10 +563,13 @@ impl Part {
     }
 }
 
-/// A planned body as a solid to test points against, with a spin about its own axis.
+/// A planned body as a solid to test points against, with a spin about its own axis. (Clones
+/// share the parts: a clone is a cheap copy to turn differently, as the steps checked at once
+/// need.)
+#[derive(Clone)]
 pub struct Solid {
     pub frame: Frame,
-    parts: Vec<(Part, Op)>,
+    parts: std::sync::Arc<Vec<(Part, Op)>>,
     /// How far the body is turned about its frame's z axis (radians, counter-clockwise).
     pub spin: f64,
     /// A cylinder about the axis that holds the body: radius and z range (frame coordinates).
@@ -581,7 +591,7 @@ impl Solid {
             }
             parts.push((part, op));
         }
-        Solid { frame: body.frame, parts, spin: 0.0, radius, z: zr, h }
+        Solid { frame: body.frame, parts: std::sync::Arc::new(parts), spin: 0.0, radius, z: zr, h }
     }
     /// A world point in the body's own coordinates (its spin undone).
     pub fn local(&self, p: P3) -> P3 {
@@ -605,7 +615,7 @@ impl Solid {
             return false;
         }
         let mut inside = false;
-        for (part, op) in &self.parts {
+        for (part, op) in self.parts.iter() {
             match op {
                 Op::New | Op::Join => inside = inside || part.contains(l),
                 Op::Cut => inside = inside && !part.contains(l),
@@ -613,6 +623,23 @@ impl Solid {
             }
         }
         inside
+    }
+    /// Points on the side surfaces of the parts that add material (the first part and the
+    /// joins), in the body's own coordinates (unturned): round each outline about `h` apart (the
+    /// solid's own spacing) and along each sweep about `hz` apart. Whatever the body sweeps when it
+    /// turns about its axis lies within these points' radii, row by row.
+    pub fn material_points(&self, hz: f64) -> Vec<P3> {
+        let mut out = Vec::new();
+        for (part, op) in &self.parts {
+            if matches!(op, Op::New | Op::Join) {
+                for sheet in part.sheets(self.h, hz, (f64::MIN, f64::MAX)) {
+                    for row in sheet {
+                        out.extend(row);
+                    }
+                }
+            }
+        }
+        out
     }
     /// Is the world point inside the body?
     pub fn contains(&self, p: P3) -> bool {
@@ -745,7 +772,7 @@ impl Surface {
         };
         let eps = 0.02 * h;
         let mut samples = Vec::new();
-        for (part, _) in &solid.parts {
+        for (part, _) in solid.parts.iter() {
             for rows in part.sheets(h, hz, (blo, bhi)) {
                 for w in rows.windows(2) {
                     let (r0, r1) = (&w[0], &w[1]);
@@ -985,16 +1012,16 @@ impl Pair {
     /// `h`: the spacing of the surface samples round the outlines (about 0.03 modules is good);
     /// along the sweeps they are `hz` apart.
     pub fn new(a: &Body, b: &Body, h: f64, hz: f64) -> Pair {
-        let (a, b) = (Solid::new(a, h), Solid::new(b, h));
-        let (sa, sb) = (Surface::of(&a, &b, hz, None), Surface::of(&b, &a, hz, None));
+        let (a, b) = crate::par::join(|| Solid::new(a, h), || Solid::new(b, h));
+        let (sa, sb) = crate::par::join(|| Surface::of(&a, &b, hz, None), || Surface::of(&b, &a, hz, None));
         Pair { a, b, sa, sb }
     }
     /// Like [`Pair::new`] for the motion [`Pair::run`] makes from `t0` to `t1` at `ratio` (no
     /// other turns): only the arcs of the bodies that come round to face each other are sampled.
     pub fn for_run(a: &Body, b: &Body, h: f64, hz: f64, ratio: f64, t0: f64, t1: f64) -> Pair {
-        let (a, b) = (Solid::new(a, h), Solid::new(b, h));
+        let (a, b) = crate::par::join(|| Solid::new(a, h), || Solid::new(b, h));
         let (b0, b1) = (ratio * t0, ratio * t1);
-        let (sa, sb) = (Surface::of(&a, &b, hz, Some((t0.min(t1), t0.max(t1)))), Surface::of(&b, &a, hz, Some((b0.min(b1), b0.max(b1)))));
+        let (sa, sb) = crate::par::join(|| Surface::of(&a, &b, hz, Some((t0.min(t1), t0.max(t1)))), || Surface::of(&b, &a, hz, Some((b0.min(b1), b0.max(b1)))));
         Pair { a, b, sa, sb }
     }
     /// The pair with the first body turned `ta` and the second `tb` about their own axes.
@@ -1007,9 +1034,23 @@ impl Pair {
     /// the second turned `ratio` times as far (plus `offset`).
     pub fn run(&mut self, ratio: f64, offset: f64, t0: f64, t1: f64, steps: usize) -> Run {
         let mut r = Run { penetration: 0.0, at: t0, place: [0.0; 3], gap_place: [0.0; 3], gap_at: t0, gap_min: f64::MAX, gap_max: 0.0, volume: 0.0 };
-        for i in 0..steps {
-            let t = t0 + (t1 - t0) * i as f64 / steps as f64;
-            let s = self.at(t, ratio * t + offset);
+        // The steps at once (each on its own turned copies of the solids), then taken in order.
+        let at = |i: usize| t0 + (t1 - t0) * i as f64 / steps as f64;
+        let (pa, pb, sa, sb) = (&self.a, &self.b, &self.sa, &self.sb);
+        let stats = crate::par::map(steps, |i| {
+            let t = at(i);
+            let (mut a, mut b) = (pa.clone(), pb.clone());
+            a.spin = t;
+            b.spin = ratio * t + offset;
+            mesh_stat(&a, sa, &b, sb)
+        });
+        if steps > 0 {
+            let t = at(steps - 1);
+            self.a.spin = t;
+            self.b.spin = ratio * t + offset;
+        }
+        for (i, s) in stats.into_iter().enumerate() {
+            let t = at(i);
             if s.penetration > r.penetration {
                 r.penetration = s.penetration;
                 r.at = t;

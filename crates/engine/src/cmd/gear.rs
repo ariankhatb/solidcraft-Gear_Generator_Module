@@ -23,6 +23,7 @@ use solidcraft_gear::hub::{Bore, BoreKind, Chamfer, Hardware, Shaft, ShaftEnd};
 use solidcraft_geom::PlaneGeom as _;
 use solidcraft_gear::involute::BasicRack;
 use solidcraft_gear::axes::{self, Axis, Drive, Relation, Solved};
+use solidcraft_gear::clearance::{BearingSize, Clearance, Seat};
 use solidcraft_gear::plan::{Body, Fact, Frame, Kind, Op, Plan, Spec, Step, Unit};
 use solidcraft_gear::sketch_rules;
 use solidcraft_io::Geom2;
@@ -33,7 +34,7 @@ use super::sketch::{Left, edit_solved};
 use super::sketch_import::add_geometry;
 use crate::params::bad;
 use crate::schema::gear::{
-    BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, GearAxesResult, GearAxis, GearAxisLine, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult,
+    BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, SeatAlongParams, SeatPointParams, GearAxesResult, GearAxis, GearAxisLine, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult,
     GearMaterial, GearParams, GearRelation, GearResult, GearSet, GearType, HardwareParams, PlacementParams, RackStandard, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
 };
 use solidcraft_gear::spline::SplineStandard;
@@ -77,7 +78,11 @@ pub static COMMANDS: &[CommandSpec] = &[
              pattern; tooth tuning that has no formula (tip relief, tip rounding, elephant foot, crowning) stays fitted), parametric?: bool (with equations: \
              design parameters <prefix>_module, _teeth, _teeth2, _teeth3, _pressure_angle, _helix, _shift, _backlash, _face_width and derived radii drive the \
              formulas, pattern counts and tooth extrusions: editing one regenerates the teeth; positions, hubs and bores keep their numbers until gear.update, \
-             which reads the parameters back), parameter_prefix? (default from the name). Returns bodies, group, facts (diameters, ratio, centre distance, contact ratio, span and over-pins \
+             which reads the parameters back), parameter_prefix? (default from the name); clearance_body?: {radial? (mm, default 0.5), axial? (0.5), shaft_extension? (past each gear, default 2 × face_width), \
+             ring_as_housing? (default true: an internal ring or pin ring is part of the housing and left out), bearing?: name (608, 6001, 6902, MR105, ...) | {od, width, bore?}, \
+             bearing_fit? (on the diameter), seats?: [{member: 1|2|..., along: mm from the middle of its teeth} | {point: [x,y,z]} (onto the nearest member's axis)], \
+             travel? (rack: its slide, default its length)} (one more body, \"<name> clearance\": every member's swept tooth envelope, shafts and bearing seats \
+             in one solid, to cut a housing with; facts: envelope sizes, the bearing; warnings: seats past a shaft or on the teeth, bearing bore ≠ shaft). Returns bodies (and clearance: the clearance body's name), group, facts (diameters, ratio, centre distance, contact ratio, span and over-pins \
              measurements; with a load: forces, stresses, safety factors SF and SH) and warnings (undercut, pointed teeth, low contact ratio, interference, SF < 1.4, SH < 1)",
         ),
     CommandSpec::new("gear.calculate", "Gear Calculator", crate::checked!("gear.calculate", calculate))
@@ -340,6 +345,81 @@ fn hardware_params(h: &Hardware) -> Option<HardwareParams> {
     })
 }
 
+/// The clearance body's settings from their parameters (the gear crate checks the ranges and
+/// the bearing's name).
+fn clearance_of(p: &ClearanceParams) -> Clearance {
+    let mut c = Clearance::default();
+    if let Some(v) = p.radial {
+        c.radial = v;
+    }
+    if let Some(v) = p.axial {
+        c.axial = v;
+    }
+    if let Some(v) = p.shaft_extension {
+        c.shaft_extension = v;
+    }
+    if let Some(v) = p.ring_as_housing {
+        c.ring_as_housing = v;
+    }
+    match &p.bearing {
+        Some(ClearanceBearing::Named(name)) => c.bearing = Some(name.clone()),
+        Some(ClearanceBearing::Size(b)) => c.bearing_size = Some(BearingSize { bore: b.bore.unwrap_or(0.0), od: b.od, width: b.width }),
+        None => {}
+    }
+    if let Some(v) = p.bearing_fit {
+        c.bearing_fit = v;
+    }
+    if let Some(v) = p.travel {
+        c.travel = v;
+    }
+    c.seats = p
+        .seats
+        .iter()
+        .flatten()
+        .map(|seat| match seat {
+            ClearanceSeat::Along(a) => Seat::Along { member: a.member, along: a.along },
+            ClearanceSeat::Point(q) => Seat::Point(q.point),
+        })
+        .collect();
+    c
+}
+
+fn clearance_params(c: &Clearance) -> ClearanceParams {
+    let bearing = match (&c.bearing, &c.bearing_size) {
+        (Some(name), _) => Some(ClearanceBearing::Named(name.clone())),
+        (None, Some(b)) => Some(ClearanceBearing::Size(BearingSizeParams { od: b.od, width: b.width, bore: (b.bore > 0.0).then_some(b.bore) })),
+        (None, None) => None,
+    };
+    ClearanceParams {
+        radial: Some(c.radial),
+        axial: Some(c.axial),
+        shaft_extension: (c.shaft_extension > 0.0).then_some(c.shaft_extension),
+        ring_as_housing: Some(c.ring_as_housing),
+        bearing,
+        bearing_fit: (c.bearing_fit != 0.0).then_some(c.bearing_fit),
+        seats: (!c.seats.is_empty()).then(|| {
+            c.seats
+                .iter()
+                .map(|seat| match seat {
+                    Seat::Along { member, along } => ClearanceSeat::Along(SeatAlongParams { member: *member, along: *along }),
+                    Seat::Point(p) => ClearanceSeat::Point(SeatPointParams { point: *p }),
+                })
+                .collect()
+        }),
+        travel: (c.travel > 0.0).then_some(c.travel),
+    }
+}
+
+/// The bodies a plan builds, in order: the gears, then its clearance body when it has one.
+fn built_bodies(plan: &Plan) -> Vec<Body> {
+    plan.bodies.iter().chain(plan.clearance.iter()).cloned().collect()
+}
+
+/// The clearance body's name among what was built, when it was.
+fn clearance_name(plan: &Plan, bodies: &[BodyRecord]) -> Option<String> {
+    (plan.clearance.is_some() && bodies.len() > plan.bodies.len()).then(|| bodies[bodies.len() - 1].name.clone())
+}
+
 /// The gear set the parameters describe, starting from the type's defaults.
 pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     let kind = p.kind.map(|k| KINDS.iter().find(|(t, _)| *t == k).map(|(_, k)| *k).unwrap_or(Kind::Spur)).unwrap_or(Kind::Spur);
@@ -447,6 +527,7 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     s.shaft2_back = shaft_of(&p.shaft2_back);
     s.hardware = hardware_of(&p.hardware)?;
     s.hardware2 = hardware_of(&p.hardware2)?;
+    s.clearance_body = p.clearance_body.as_ref().map(clearance_of);
     if let Some(c) = p.chain {
         s.chain = CHAINS.iter().find(|(k, _)| *k == c).map(|(_, id)| *id).unwrap_or("08b");
     }
@@ -674,6 +755,7 @@ fn explicit_params(s: &Spec) -> GearParams {
         hardware2: hardware_params(&s.hardware2),
         coupon: s.coupon.then_some(true),
         coupon_teeth: (s.coupon && s.coupon_teeth != 4).then_some(s.coupon_teeth),
+        clearance_body: s.clearance_body.as_ref().map(clearance_params),
         ..GearParams::default()
     };
     with_extras(s, p)
@@ -1143,10 +1225,11 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
         r.get("group").and_then(Value::as_u64)
     };
     let made = bodies.iter().map(|b| b.name.clone()).collect();
+    let clearance = clearance_name(&plan, &bodies);
     if let Some(group) = group {
         keep(s, &Record { version: RECORD_VERSION, group, name: group_name, request, params: params_of(spec), bodies }, &mut warnings);
     }
-    reply(cmd, GearResult { bodies: made, group, facts: facts(&asked, &plan), warnings, notes: notes(&asked), ..GearResult::default() })
+    reply(cmd, GearResult { bodies: made, group, clearance, facts: facts(&asked, &plan), warnings, notes: notes(&asked), ..GearResult::default() })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1313,10 +1396,11 @@ fn inspect(s: &mut Session, p: &Value) -> Result<Value> {
 /// Why the set can't be regenerated in place (`None`: it can): the new plan has other bodies or
 /// steps than the ones that were built, or something that was built is gone.
 fn must_rebuild(s: &Session, rec: &Record, plan: &Plan, mode: &equations::Mode) -> Option<String> {
-    if rec.bodies.len() != plan.bodies.len() {
-        return Some(format!("the set had {} bodies and now has {}", rec.bodies.len(), plan.bodies.len()));
+    let all = built_bodies(plan);
+    if rec.bodies.len() != all.len() {
+        return Some(format!("the set had {} bodies and now has {}", rec.bodies.len(), all.len()));
     }
-    for (old, new) in rec.bodies.iter().zip(&plan.bodies) {
+    for (old, new) in rec.bodies.iter().zip(&all) {
         if old.steps.len() != new.steps.len() {
             return Some(format!("{} was built in {} steps and now takes {}", old.name, old.steps.len(), new.steps.len()));
         }
@@ -1378,7 +1462,7 @@ fn redraw_sketch(s: &mut Session, id: u64, def: &SketchDef) -> Result<()> {
 fn in_place(s: &mut Session, rec: &Record, plan: &Plan, names: &[String], mode: &equations::Mode) -> Result<Vec<BodyRecord>> {
     let gone = || EngineError::Other("a step of the set is gone".into());
     let mut bodies = Vec::new();
-    for ((old, body), name) in rec.bodies.iter().zip(&plan.bodies).zip(names) {
+    for ((old, body), name) in rec.bodies.iter().zip(&built_bodies(plan)).zip(names) {
         let mut steps = Vec::new();
         for (i, (was, step)) in old.steps.iter().zip(&body.steps).enumerate() {
             let feature = was.feature.ok_or_else(gone)?;
@@ -1546,7 +1630,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     if why.is_some() {
         // Bodies keep their names where the set still has as many; another set of members is
         // named afresh.
-        let keep_names: &[String] = if names.len() == plan.bodies.len() { &names } else { &[] };
+        let keep_names: &[String] = if names.len() == built_bodies(&plan).len() { &names } else { &[] };
         let (bodies, folder) = rebuild(s, &rec, &plan, keep_names, &mut warnings, &mode)?;
         rec.bodies = bodies;
         group = folder;
@@ -1574,11 +1658,13 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
         .filter(|r| worked.contains(&r.id))
         .filter_map(|r| r.error.as_ref().map(|e| GearBroken { feature: r.name.clone(), error: e.clone() }))
         .collect();
+    let clearance = clearance_name(&plan, &rec.bodies);
     reply(
         cmd,
         GearResult {
             bodies: rec.bodies.iter().map(|b| b.name.clone()).collect(),
             group,
+            clearance,
             facts: facts(&asked, &plan),
             warnings,
             notes: notes(&asked),
@@ -1914,10 +2000,13 @@ fn build_set(s: &mut Session, plan: &Plan, names: &[String], warnings: &mut Vec<
     }
     let mut made = Vec::new();
     let mut built = Ok(());
-    for (i, body) in plan.bodies.iter().enumerate() {
+    let gears = plan.bodies.len();
+    for (i, body) in built_bodies(plan).iter().enumerate() {
         let named = Body { name: names.get(i).cloned().unwrap_or_else(|| body.name.clone()), ..body.clone() };
         match build_body(s, &named, warnings, mode) {
             Ok(b) => made.push(b),
+            // The clearance body is worth having, but not at the price of the gears.
+            Err(e) if i >= gears => warnings.push(format!("{}: the clearance body could not be made ({e}); the gears are made without it", named.name)),
             Err(e) => {
                 built = Err(EngineError::Other(format!("{}: {e}", named.name)));
                 break;

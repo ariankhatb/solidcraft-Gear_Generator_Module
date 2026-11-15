@@ -213,6 +213,23 @@ fn reach(step: &Step) -> Option<(f64, f64)> {
     }
 }
 
+/// The z range a body's steps fill, in order: New and Join add theirs, a revolved Intersect (a
+/// bevel's or hypoid's teeth trimmed to their back and front cones) clips what is there so far.
+fn body_reach(steps: &[Step]) -> Option<(f64, f64)> {
+    let mut r: Option<(f64, f64)> = None;
+    for st in steps {
+        if let Some((lo, hi)) = reach(st) {
+            r = Some(r.map_or((lo, hi), |(a, c)| (a.min(lo), c.max(hi))));
+        } else if let (Step::Revolve { profile, op: Op::Intersect }, Some((a, c))) = (st, r)
+            && let Some((lo, hi)) = profile.iter().map(|q| q.y).fold(None, |r: Option<(f64, f64)>, h| Some(r.map_or((h, h), |(x, y)| (x.min(h), y.max(h)))))
+        {
+            let (a, c) = (a.max(lo), c.min(hi));
+            r = (a < c).then_some((a, c));
+        }
+    }
+    r
+}
+
 /// The member a 2D preview outline is, and a body is, as the window counts them.
 fn members_of(kind: Kind, only: u8, plan: &Plan) -> (Vec<Option<usize>>, Vec<usize>) {
     let outlines = plan.preview.iter().enumerate().map(|(i, g)| crate::gear_window::member_of_outline(kind, i, &g.name)).collect();
@@ -248,7 +265,7 @@ pub(crate) fn schematic_of(spec: &Spec, plan: &Plan) -> Schematic {
     for (i, b) in plan.bodies.iter().enumerate() {
         let member = body_member[i];
         let teeth = b.steps.iter().filter_map(|s| toothed(s, tol)).max_by_key(|(n, _)| *n).map(|(_, t)| t);
-        let z = b.steps.iter().filter_map(reach).fold(None, |r: Option<(f64, f64)>, (lo, hi)| Some(r.map_or((lo, hi), |(a, c)| (a.min(lo), c.max(hi))))).unwrap_or((0.0, spec.face_width));
+        let z = body_reach(&b.steps).unwrap_or((0.0, spec.face_width));
         let preview = outline_member.iter().position(|m| *m == Some(member)).and_then(|j| plan.preview.get(j));
         let (pitch, tip, internal, helix) = match &teeth {
             Some(t) => {
@@ -432,7 +449,7 @@ fn cap_hole<'a>(own: Option<&'a [V2]>, bores: &'a [(Vec<V2>, f64, f64)], z: f64)
 fn body_mesh(body: &Body, tol: f64, cap_pts: usize) -> Vec<Tri> {
     let mut b = Builder::default();
     let bores = cuts(body, tol);
-    let (zlo, zhi) = body.steps.iter().filter_map(reach).fold((f64::MAX, f64::MIN), |(a, c), (lo, hi)| (a.min(lo), c.max(hi)));
+    let (zlo, zhi) = body_reach(&body.steps).unwrap_or((f64::MAX, f64::MIN));
     if body.steps.iter().any(|st| matches!(st, Step::Revolve { op: Op::Intersect, .. })) {
         // Trimmed by a revolved blank (a bevel's teeth ending on its back and front cones): the
         // steps' surfaces and the blank's, each triangle kept only where it is on the finished

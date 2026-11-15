@@ -436,8 +436,20 @@ pub(super) fn sync(
 
     // A motion link per mesh, b driven by a: one between the same two joints keeps its place
     // and takes the new ratio; ours that no mesh wants any more go.
-    let joint: Vec<Option<u64>> = records.iter().map(|r| r.joint).collect();
-    let ours: BTreeSet<u64> = joint.iter().flatten().copied().collect();
+    // A member rigid on another (a gear of a cluster built as a body of its own) turns with the
+    // member that holds the cluster's revolute joint: its meshes are linked to that joint.
+    let own_joint: Vec<Option<u64>> = records.iter().map(|r| r.joint).collect();
+    let turning_member = |mut i: usize| {
+        for _ in 0..n {
+            match rigid_to.get(i).copied().flatten() {
+                Some(on) if on != i => i = on,
+                _ => break,
+            }
+        }
+        i
+    };
+    let joint: Vec<Option<u64>> = (0..n).map(|i| own_joint[turning_member(i)]).collect();
+    let ours: BTreeSet<u64> = own_joint.iter().flatten().copied().collect();
     let wanted_pairs: Vec<(u64, u64)> = a
         .links
         .iter()

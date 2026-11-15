@@ -320,7 +320,7 @@ pub struct DifferentialParams {
     /// Case bearings by name ("30207", "6006"...; "" or absent: the smallest that fits).
     #[serde(default)]
     pub bearing: Option<String>,
-    /// Assembly windows in the case between the pinions (default true).
+    /// Assembly windows in the case between the pinions (default false: plain stock).
     #[serde(default)]
     pub windows: Option<bool>,
     /// The drive gear (default spiral_bevel).
@@ -352,6 +352,10 @@ pub struct DifferentialParams {
     /// hypoid) or the ring's middle plane (helical).
     #[serde(default)]
     pub drive_position: Option<f64>,
+    /// A flange with bolt holes on the case and tapped holes in the ring (default false: a plain
+    /// ring on the case).
+    #[serde(default)]
+    pub ring_bolts: Option<bool>,
     /// Ring bolts (0: from the bolt circle) and their size (0: the largest that fits).
     #[serde(default)]
     pub bolts: Option<u32>,

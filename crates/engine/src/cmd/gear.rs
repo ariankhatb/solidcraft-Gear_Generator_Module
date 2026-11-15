@@ -64,7 +64,7 @@ pub static COMMANDS: &[CommandSpec] = &[
              face_gear: teeth (pinion), teeth2 (face gear), inner_diameter? (default: the undercut limit), face_width = tooth length; elliptical: ellipse_eccentricity? (0…0.7), teeth on each gear; \
              differential: differential?: {style?: open|biased|torsen_b|torsen_a, module?, side_teeth?, side_teeth2?, pinion_teeth?, pinions?, face_width?, spiral_angle?, helix_angle?, pressure_angle?, backlash?, friction?, \
              axle_diameter?, pin_diameter?, wall?, washer?, clearance?, bearing? (30207, 32008, 6006...), windows?, drive?: none|spiral_bevel|bevel|hypoid|helical, mount?: bolted|integral, ring_teeth?, drive_pinion_teeth?, \
-             drive_module?, drive_face_width?, drive_spiral_angle?, drive_helix_angle?, drive_offset?, drive_position?, bolts?, bolt_diameter?, keep_out? (default true: the housing's keep-out body)} \
+             drive_module?, drive_face_width?, drive_spiral_angle?, drive_helix_angle?, drive_offset?, drive_position?, ring_bolts? (default false), bolts?, bolt_diameter?, keep_out? (default true: the housing's keep-out body)} \
              or differential_goal?: {style?, drive?, mount?, axle_diameter?, ring_diameter?, ratio?, torque?, pinions?, bias?} (Simple mode: the solver picks teeth and modules); \
              only?: 1|2|3 (one member; differential: 1 the gears, 2 the case, 3 the drive); origin?: [x,y,z]; coupon?: bool, coupon_teeth? (pair, planetary: a print test coupon instead of the set); name?. Axis-first: axis1?, axis2?: X|Y|Z | construction axis name | {origin?, dir} | {edge|face: [x,y,z]} | \
              {sketch, curve} | {sketch, point} (a sketch point: the shaft through it normal to the sketch) (the shafts: the set is sized and placed on them, type? defaults to what fits, module/teeth/teeth2/starts not given are chosen), \
@@ -948,6 +948,7 @@ fn diff_apply(d: &mut solidcraft_gear::diff::Diff, p: &DifferentialParams) {
     put!(drive_helix, p.drive_helix_angle);
     put!(drive_offset, p.drive_offset);
     put!(drive_position, p.drive_position);
+    put!(ring_bolts, p.ring_bolts);
     put!(bolts, p.bolts);
     put!(bolt_diameter, p.bolt_diameter);
     put!(keep_out, p.keep_out);
@@ -985,6 +986,7 @@ fn diff_params(d: &solidcraft_gear::diff::Diff) -> DifferentialParams {
         drive_helix_angle: Some(d.drive_helix),
         drive_offset: Some(d.drive_offset),
         drive_position: Some(d.drive_position),
+        ring_bolts: Some(d.ring_bolts),
         bolts: Some(d.bolts),
         bolt_diameter: Some(d.bolt_diameter),
         keep_out: Some(d.keep_out),

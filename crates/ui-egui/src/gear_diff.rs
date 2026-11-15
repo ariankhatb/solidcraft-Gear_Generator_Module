@@ -274,6 +274,9 @@ pub(crate) fn advanced(ui: &mut Ui, s: &mut Spec) {
         }
         num(ui, "Position along the axle", "Where the pinion's axis crosses the axle (helical: the ring's middle plane), from the set's middle", &mut d.drive_position, -500.0..=500.0, 0.2, " mm");
         if d.mount == Mount::Bolted {
+            ui.checkbox(&mut d.ring_bolts, "Flange and ring bolts").on_hover_text("Off: a plain ring on the case, fixed however you like");
+        }
+        if d.mount == Mount::Bolted && d.ring_bolts {
             count(ui, "Ring bolts", "0: from the bolt circle", &mut d.bolts, 0..=64);
             num(ui, "Bolt size (M)", "0: the largest that fits", &mut d.bolt_diameter, 0.0..=30.0, 1.0, "");
         }

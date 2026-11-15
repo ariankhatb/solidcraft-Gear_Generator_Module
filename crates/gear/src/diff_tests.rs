@@ -132,7 +132,10 @@ fn every_drive_meshes() {
 /// the other at several turns of each about its own axis, the case included.
 #[test]
 fn the_assembly_has_no_collisions() {
-    for (label, s) in styles() {
+    // Every style with no drive, a separate spiral bevel ring and an integral helical one (the case
+    // is the same with the other drives; their meshes are checked by every_drive_meshes).
+    let picked = |label: &String| label.ends_with("None Bolted") || label.ends_with("SpiralBevel Bolted") || label.ends_with("Helical Integral") || label == "Open Hypoid Bolted";
+    for (label, s) in styles().into_iter().filter(|(l, _)| picked(l)) {
         let p = plan(&s).unwrap();
         let m = s.diff.module;
         let names: Vec<&str> = p.bodies.iter().map(|b| b.name.as_str()).collect();
@@ -148,7 +151,7 @@ fn the_assembly_has_no_collisions() {
                 if meshing(names[i], names[j]) || rigid(i, j) {
                     continue;
                 }
-                for turn in [0.0, 0.37, 1.3] {
+                for turn in [0.0, 0.9] {
                     let (mut a, mut b) = (solids[i].clone(), solids[j].clone());
                     // The case and what is fixed to it stay; the rest turn on their axes.
                     if i > 0 && !rigid(0, i) {

@@ -602,7 +602,8 @@ pub(crate) fn check_plan(p: &Plan) -> Result<(), String> {
                 Step::Revolve { profile, op } => {
                     check_polygon(profile, &at, false)?;
                     // A chamfer's triangle stays on its side of the axis.
-                    if *op == Op::Cut && profile.iter().any(|q| q.x <= 0.0) {
+                    // (A pocket turned about its axis, a differential's, closes on it.)
+                    if *op == Op::Cut && profile.iter().any(|q| q.x < 0.0) {
                         return Err(format!("{at}: a revolved cut reaches the axis"));
                     }
                 }

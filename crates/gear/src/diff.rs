@@ -31,22 +31,21 @@
 //!
 //! # The case
 //!
-//! One body turning about the axle (z, the set's origin at the side gears' apex or the middle of
-//! a Torsen set): an outer revolve (bearing journals at both ends with shoulders, cones, a
-//! cylinder round the gears, the drive flange), the inside revolved out of it (axle bores, the
-//! side gears' hub journals, flat thrust faces behind the side gears with room for a washer, and
-//! for bevel styles a sphere about the apex: every bevel member turns about an axis through the
-//! apex, so a sphere round it clears them all), then pin holes along each pinion's axis and
-//! assembly windows between them, or the element gears' pockets.
-//!
-//! # The drive
+//! Plain stock, keeping all the material it can (the maker adds features in the CAD): one body
+//! turning about the axle (z; the set's origin at the side gears' apex or the middle of a Torsen
+//! set), a revolve of a cylinder round the gears with a plain cylindrical journal at each end for
+//! the bearings, out of which only what the gears need to turn is taken: the side gears' turning
+//! envelope (hubs included) and the axle bore, a pocket for each pinion or element (its own
+//! envelope about its axis), and the pin bores. Every envelope is worked out from the planned
+//! members' material, grown by the running clearance. Opt-in: assembly windows (`windows`) and a
+//! bolted ring (`ring_bolts`: flange, through holes, tapped holes in the ring).
+//!//! # The drive
 //!
 //! A ring gear on the case driven by a pinion: spiral or straight bevel and hypoid (axle drives)
 //! or helical (transaxles), planned by the existing planners (`plan()` of a
 //! [`Kind::SpiralBevel`], [`Kind::Bevel`], [`Kind::Hypoid`] or [`Kind::Pair`] spec) and moved so
-//! the ring turns on the axle with its back on the case's flange: bolted (a pilot bore over the
-//! case, tapped holes in the ring, through holes in the flange) or integral (the ring's teeth
-//! joined to the case).
+//! the ring turns on the axle: a separate plain ring fitted on the case's cylinder (with
+//! ring_bolts, on a flange with bolts) or integral (the ring's teeth joined to the case).
 //!
 //! References: Shigley's Mechanical Engineering Design (gear forces, bevel geometry), Dudley's
 //! Handbook of Practical Gear Design (differentials), ISO 23509 (bevel and hypoid geometry, through
@@ -142,7 +141,7 @@ impl DriveKind {
 /// How the ring gear is held on the case.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
 pub enum Mount {
-    /// A separate ring bolted to a flange on the case.
+    /// A separate ring on the case (plainly fitted; with ring_bolts, bolted to a flange).
     #[default]
     Bolted,
     /// The ring's teeth are part of the case.
@@ -159,7 +158,7 @@ impl Mount {
     }
     pub fn label(self) -> &'static str {
         match self {
-            Mount::Bolted => "Bolted to a flange",
+            Mount::Bolted => "Separate ring on the case",
             Mount::Integral => "Integral with the case",
         }
     }
@@ -207,7 +206,7 @@ pub struct Diff {
     /// The case bearings, by name from [`CASE_BEARINGS`] or [`crate::hub::BEARINGS`] ("": the
     /// smallest whose bore takes the side gear hubs).
     pub bearing: String,
-    /// Assembly windows in the case between the pinions (bevel styles).
+    /// Assembly windows in the case between the pinions (bevel styles; off: plain stock).
     pub windows: bool,
     pub drive: DriveKind,
     pub mount: Mount,
@@ -227,7 +226,10 @@ pub struct Diff {
     /// Along the axle from the set's middle: where the drive pinion's axis crosses it (bevel,
     /// hypoid) or the ring's middle plane (helical).
     pub drive_position: f64,
-    /// Ring bolts (0: from the bolt circle) and their size (0: the largest that fits).
+    /// A flange on the case with bolt holes, and tapped holes in the ring (off: the ring is a plain
+    /// ring on the case, fixed however the maker likes). Bolts (0: from the bolt circle) and their
+    /// size (0: the largest that fits).
+    pub ring_bolts: bool,
     pub bolts: u32,
     pub bolt_diameter: f64,
     /// Also make the keep-out body (the space the turning assembly needs, for cutting the axle
@@ -257,7 +259,7 @@ impl Default for Diff {
             washer: 0.0,
             clearance: 0.5,
             bearing: String::new(),
-            windows: true,
+            windows: false,
             drive: DriveKind::SpiralBevel,
             mount: Mount::Bolted,
             ring_teeth: 41,
@@ -268,6 +270,7 @@ impl Default for Diff {
             drive_helix: 25.0,
             drive_offset: 0.0,
             drive_position: 0.0,
+            ring_bolts: false,
             bolts: 0,
             bolt_diameter: 0.0,
             keep_out: false,
@@ -528,22 +531,6 @@ fn least_root(b: &Body, h: f64) -> f64 {
     Solid::new(&first, h).material_points(4.0 * h).iter().map(|q| q[0].hypot(q[1])).fold(f64::INFINITY, f64::min)
 }
 
-/// A body's teeth (its first step) swept a full turn about its own axis: `n` places round, in
-/// world coordinates.
-fn swept_points(b: &Body, h: f64, n: u32) -> Vec<V3> {
-    let first = Body { name: String::new(), frame: b.frame, steps: teeth_steps(b) };
-    let pts = Solid::new(&first, h).material_points(4.0 * h);
-    let mut out = Vec::with_capacity(pts.len() * n as usize);
-    for q in pts {
-        let r = q[0].hypot(q[1]);
-        for k in 0..n {
-            let t = TAU * f64::from(k) / f64::from(n);
-            out.push(b.frame.world([r * t.cos(), r * t.sin(), q[2]]));
-        }
-    }
-    out
-}
-
 /// A name with the set's name in front.
 fn named(s: &Spec, base: &str) -> String {
     if s.name.trim().is_empty() { base.to_string() } else { format!("{} {base}", s.name.trim()) }
@@ -586,17 +573,10 @@ struct Core {
     meshes: Vec<MeshPair3>,
     /// Gear links (body indices in `bodies`, pitch radii).
     links: Vec<(usize, usize, f64, f64)>,
-    /// The inside of the case between the hub bores: (radius, z) from side A's thrust face to
-    /// side B's, starting and ending on the hub bore.
-    cavity: Vec<V2>,
-    /// Radius of the case bores the side gears' hubs turn in, and where they end (A below the
-    /// cavity, B above).
-    hub_bore: f64,
-    hub_end: [f64; 2],
     /// The least outer radius of the case round the gears, and its wall.
     case_r: f64,
     wall: f64,
-    /// Cuts in the case after the inside is turned out (pin holes, pockets, windows).
+    /// Opt-in cuts in the case (assembly windows).
     cuts: Vec<Step>,
     preview: Vec<PreviewGear>,
     preview_note: String,
@@ -718,54 +698,25 @@ fn bevel_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     for (i, back) in [back_a, back_b].into_iter().enumerate() {
         side_hub(&mut bodies[i].steps, back, r_hub, l_hub, axle);
     }
-    // The sphere round the apex that holds every member's teeth.
+    // The sphere round the apex that holds every member's teeth: the pins reach past it.
     let mut reach = 0.0f64;
     for b in &bodies {
         for q in teeth_points(b, h) {
             reach = reach.max(norm(q));
         }
     }
-    let washer = if d.washer > 0.0 { d.washer } else { (0.04 * g.re).clamp(0.8, 2.5) };
-    let (za_face, zb_face) = (-(h_a + washer), h_b + washer);
-    let rs = (reach + clr).max((h_a + washer).hypot(ra_a + clr)).max((h_b + washer).hypot(ra_b + clr));
+    let rs = reach + clr;
     let wall = if d.wall > 0.0 { d.wall } else { (0.15 * rs).max(3.0).max(0.6 * pin) };
-    let hub_bore = r_hub + clr;
-    // The thrust faces behind the side gears reach out only as far as the pinions, turning on
-    // their pins, leave room: past that the cavity is the sphere (the pinions' large-end corners
-    // reach behind the side gears' back planes).
-    let swept: Vec<V3> = bodies[2..].iter().flat_map(|b| swept_points(b, h, 72)).collect();
-    let face_reach = |z_face: f64, sign: f64, ra: f64| {
-        let behind = swept.iter().filter(|q| sign * q[2] > sign * z_face - clr).map(|q| q[0].hypot(q[1])).fold(f64::INFINITY, f64::min);
-        (behind - clr).min(ra + clr).max(hub_bore)
-    };
-    let (rt_a, rt_b) = (face_reach(za_face, -1.0, ra_a), face_reach(zb_face, 1.0, ra_b));
-    if rt_a.min(rt_b) < hub_bore + 1.0 {
-        p.warn("the thrust faces behind the side gears are narrow (the pinions' corners come close to the hubs)");
-    }
-    // The sphere from where it meets each thrust face's rim, as a polygon round it.
-    let (fa0, fb0) = ((-(rs * rs - rt_a * rt_a).max(0.0).sqrt()).atan2(rt_a), (rs * rs - rt_b * rt_b).max(0.0).sqrt().atan2(rt_b));
-    let k = 64;
-    let step = (fb0 - fa0) / f64::from(k);
-    let rr = rs / (0.5 * step).cos();
-    let mut cavity = vec![V2::new(hub_bore, za_face), V2::new(rt_a, za_face), V2::polar(rs, fa0)];
-    for i in 1..k {
-        cavity.push(V2::polar(rr, fa0 + step * f64::from(i)));
-    }
-    cavity.extend([V2::polar(rs, fb0), V2::new(rt_b, zb_face), V2::new(hub_bore, zb_face)]);
-    let hub_end = [-h_a - l_hub - clr, h_b + l_hub + clr];
 
     // Pins: one stub per pinion from the apex out into the case wall (two opposite ones make a
-    // cross shaft), all one body fixed to the case; the case holes along the same axes.
+    // cross shaft), all one body fixed to the case (the case's bores for them follow it).
     let mut cuts = Vec::new();
     let mut pin_steps = Vec::new();
-    let mut axes = Vec::new();
     for b in &bodies[2..] {
         let u = b.frame.z.map(|v| -v);
         let f = Frame { origin: [0.0; 3], x: square_to(u), z: u };
-        axes.push(u);
         let op = if pin_steps.is_empty() { Op::New } else { Op::Join };
         pin_steps.push(Step::Placed { frame: f, step: Box::new(Step::Prism { region: circle(V2::ZERO, pin / 2.0), z0: 0.0, height: rs + 0.7 * wall, twist: 0.0, op }) });
-        cuts.push(Step::Placed { frame: f, step: Box::new(Step::Prism { region: circle(V2::ZERO, pin / 2.0), z0: 0.5 * rs, height: 2.0 * (rs + wall) + 10.0, twist: 0.0, op: Op::Cut }) });
     }
     let near_end = (g.re - g.face) * g.delta_sun.cos().min((PI - g.delta_far).cos());
     if pin / 2.0 + clr > near_end * (sigma.sin()).max(0.2) && (sigma - PI / 2.0).abs() < 1e-6 {
@@ -773,11 +724,10 @@ fn bevel_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     }
     bodies.push(Body { name: named(s, "Pinion pins"), frame: Frame::at([0.0; 3]), steps: pin_steps });
     roles.push(Role::Fixed);
-
     // Windows between the pinions, to put the gears in.
     if d.windows && n >= 1 {
         let ra_p = bodies[2..nb].iter().map(|b| teeth_points(b, h).iter().map(|q| local_of(&b.frame, *q)).map(|l| l[0].hypot(l[1])).fold(0.0, f64::max)).fold(0.0, f64::max);
-        let half_h = (ra_p + clr).min(0.85 * h_a.min(h_b) - washer);
+        let half_h = (ra_p + clr).min(0.85 * h_a.min(h_b));
         let gap = if n == 1 { PI } else { PI / f64::from(n) };
         let half_w = (ra_p + clr).min(rs * (gap - (pin / 2.0 + wall) / rs).max(0.0).sin());
         if half_w > 0.3 * ra_p && half_h > 0.3 * ra_p {
@@ -827,8 +777,6 @@ fn bevel_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
         links.push((i, 1, rp_pitch, rb_pitch));
     }
     p.fact("pinion pin diameter", pin, Unit::Mm);
-    p.fact("case inner sphere diameter", 2.0 * rs, Unit::Mm);
-    p.fact("thrust washer allowance", washer, Unit::Mm);
     p.fact("side gear hub diameter", 2.0 * r_hub, Unit::Mm);
     p.fact("side gear hub length", l_hub, Unit::Mm);
     let preview = sp.preview.iter().map(|g| PreviewGear { name: renamed(&g.name), ..g.clone() }).collect();
@@ -837,9 +785,6 @@ fn bevel_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
         roles,
         meshes,
         links,
-        cavity,
-        hub_bore,
-        hub_end,
         case_r: rs + wall,
         wall,
         cuts,
@@ -986,7 +931,7 @@ fn torsen_b_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
         orbit: 0.0,
     }];
     let gap = d.backlash * d.pa().to_radians().cos() * beta.to_radians().cos();
-    let mut cuts = Vec::new();
+    let cuts = Vec::new();
     let (fs, fe) = (f64::from(zs), f64::from(ze));
     for (k, th) in thetas.iter().enumerate() {
         let (p1, p2, _) = phases(*th);
@@ -1012,21 +957,9 @@ fn torsen_b_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
         links.push((0, i1, ga.r(), e1.r()));
         links.push((i1, i1 + 1, e1.r(), e2.r()));
         links.push((i1 + 1, 1, e2.r(), gb.r()));
-        // Pockets: each element's, from the thrust face at its outer end to a running clearance
-        // past its inner end.
-        let washer = if d.washer > 0.0 { d.washer } else { 1.0 };
-        let (lo1, hi1) = (za_lo - washer, lz / 2.0 + cax);
-        let (lo2, hi2) = (-lz / 2.0 - cax, zb_hi + washer);
-        cuts.push(Step::Prism { region: circle(c1, ra_e + clr), z0: lo1, height: hi1 - lo1, twist: 0.0, op: Op::Cut });
-        cuts.push(Step::Prism { region: circle(c2, ra_e + clr), z0: lo2, height: hi2 - lo2, twist: 0.0, op: Op::Cut });
         preview.push(PreviewGear { name: label(1), region: Region { outer: vec![external_outline(&e1, p1).0], holes: vec![] }, center: c1, speed: -fs / fe, slide: 0.0, pitch_radius: e1.r(), period: 0.0, orbit: 0.0 });
         preview.push(PreviewGear { name: label(2), region: Region { outer: vec![external_outline(&e2, p2).0], holes: vec![] }, center: c2, speed: fs / fe, slide: 0.0, pitch_radius: e2.r(), period: 0.0, orbit: 0.0 });
     }
-    let washer = if d.washer > 0.0 { d.washer } else { 1.0 };
-    let (zf_a, zf_b) = (za_lo - washer, zb_hi + washer);
-    let hub_bore = r_hub + clr;
-    let rc = ra_s + clr;
-    let cavity = vec![V2::new(hub_bore, zf_a), V2::new(rc, zf_a), V2::new(rc, zf_b), V2::new(hub_bore, zf_b)];
     let wall = if d.wall > 0.0 { d.wall } else { (2.0 * m).max(3.0) };
     let case_r = a + ra_e + clr + wall;
 
@@ -1064,9 +997,6 @@ fn torsen_b_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
         roles,
         meshes,
         links,
-        cavity,
-        hub_bore,
-        hub_end: [za_lo - l_hub - clr, zb_hi + l_hub + clr],
         case_r,
         wall,
         cuts,
@@ -1125,7 +1055,7 @@ fn turned_about_z(b: &Body, a: f64) -> Body {
 
 /// Every surface point of a body's material swept a full turn about its own axis (world).
 fn swept_all(b: &Body, h: f64, n: u32) -> Vec<V3> {
-    let pts = Solid::new(b, h).material_points(4.0 * h);
+    let pts = body_points(b, h, 4.0 * h);
     let mut out = Vec::with_capacity(pts.len() * n as usize);
     for q in pts {
         let r = q[0].hypot(q[1]);
@@ -1212,7 +1142,7 @@ fn torsen_a_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     let swept: Vec<V3> = [&e1, &e2].iter().flat_map(|b| swept_all(b, h, 48)).collect();
     let r1 = ra_s + clr;
     let rc = swept.iter().map(|q| q[0].hypot(q[1])).fold(0.0, f64::max) + clr;
-    let ze_reach = swept.iter().map(|q| q[2].abs()).fold(0.0, f64::max) + clr;
+    // (How far the elements reach along the axle is the case layout's to work out.)
     let washer = if d.washer > 0.0 { d.washer } else { 1.0 };
     let near = swept.iter().filter(|q| q[0].hypot(q[1]) < r1 + clr).map(|q| q[2].abs()).fold(0.0, f64::max) + clr;
     let za = (dz + w / 2.0 + washer).max(near);
@@ -1231,7 +1161,7 @@ fn torsen_a_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     let mut roles = vec![Role::Side, Role::Side];
     let mut meshes = Vec::new();
     let mut links = Vec::new();
-    let mut cuts = Vec::new();
+    let cuts = Vec::new();
     let r_j = (0.35 * ge.rf()).max(1.0);
     // The journals end inside the case wall (their far corners too), so the wall takes them.
     let wall = if d.wall > 0.0 { d.wall } else { (2.0 * m).max(3.0).max(3.0 * r_j) };
@@ -1255,9 +1185,6 @@ fn torsen_a_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
         let (mut a, mut b) = (place(&e1), place(&e2));
         a.name = named(s, &format!("Element {}a z{ze}", k + 1));
         b.name = named(s, &format!("Element {}b z{ze}", k + 1));
-        for el in [&a, &b] {
-            cuts.push(Step::Placed { frame: el.frame, step: Box::new(Step::Prism { region: circle(V2::ZERO, r_j), z0: -y_end - 5.0 * m - 20.0, height: 2.0 * (y_end + 5.0 * m + 20.0), twist: 0.0, op: Op::Cut }) });
-        }
         let i1 = bodies.len();
         bodies.push(a);
         bodies.push(b);
@@ -1287,17 +1214,6 @@ fn torsen_a_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
             return Err(format!("{n} element pairs don't fit round the side gears (each spans {}° with its spurs and journals): use fewer pairs or smaller elements", mm((2.0 * half).to_degrees())));
         }
     }
-    let hub_bore = r_hub + clr;
-    let cavity = vec![
-        V2::new(hub_bore, -za),
-        V2::new(r1, -za),
-        V2::new(r1, -ze_reach),
-        V2::new(rc, -ze_reach),
-        V2::new(rc, ze_reach),
-        V2::new(r1, ze_reach),
-        V2::new(r1, za),
-        V2::new(hub_bore, za),
-    ];
     p.fact("element centre distance from the axle", e, Unit::Mm);
     p.fact("element spur gears: teeth", f64::from(z_sp), Unit::None);
     p.fact("element spur gears: module", m_sp, Unit::None);
@@ -1310,9 +1226,6 @@ fn torsen_a_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
         roles,
         meshes,
         links,
-        cavity,
-        hub_bore,
-        hub_end: [-(dz + w / 2.0) - l_hub - clr, dz + w / 2.0 + l_hub + clr],
         case_r: rc + wall,
         wall,
         cuts,
@@ -1378,14 +1291,15 @@ pub(crate) fn drive_spec_for_tests(s: &Spec) -> Option<Spec> {
     drive_spec(s, 0.0)
 }
 
-fn plan_drive(s: &Spec, core: &Core, p: &mut Plan) -> Result<Option<Drive>, String> {
+fn plan_drive(s: &Spec, core: &Core, r_case: f64, p: &mut Plan) -> Result<Option<Drive>, String> {
     let d = &s.diff;
-    let bolted = d.mount == Mount::Bolted;
-    let r_bore = if bolted { core.case_r + (0.002 * core.case_r).max(0.2) } else { 0.0 };
+    let bolted = d.mount == Mount::Bolted && d.ring_bolts;
+    // A separate ring sits on the case's cylinder (a plain fit; it is fixed however the maker likes).
+    let r_bore = if d.mount == Mount::Bolted { r_case } else { 0.0 };
     let Some(sub) = drive_spec(s, r_bore) else { return Ok(None) };
     let what = d.drive.label().to_lowercase();
     let mut sp = crate::plan::plan(&sub).map_err(|e| {
-        if e.contains("bore") { format!("the {what}: the ring gear is too small to go round the case (Ø{}): use a bigger ring gear (more teeth or a bigger module)", mm(2.0 * core.case_r)) } else { format!("the {what}: {e}") }
+        if e.contains("bore") { format!("the {what}: the ring gear is too small to go round the case (Ø{}): use a bigger ring gear (more teeth or a bigger module)", mm(2.0 * r_case)) } else { format!("the {what}: {e}") }
     })?;
     if sp.bodies.len() != 2 {
         return Err(format!("the {what} didn't plan its two gears"));
@@ -1466,7 +1380,6 @@ fn plan_drive(s: &Spec, core: &Core, p: &mut Plan) -> Result<Option<Drive>, Stri
                     mm(2.0 * r_bore),
                     mm(2.0 * root)
                 ));
-                flange = Some((root - 0.5, core.wall));
             }
         }
     }
@@ -1487,8 +1400,160 @@ fn sub_v(a: V3, b: V3) -> V3 {
 // ---------------------------------------------------------------------------------------------
 // The case.
 
-/// The case's outer profile, (radius, z) rising in z, closed to the axis: for the clearance
-/// checks.
+fn axle_bore(d: &Diff) -> f64 {
+    d.axle_diameter / 2.0 + (0.25 * d.clr()).max(0.1)
+}
+
+/// The case as plain stock round the set: what it must clear and how big it is, worked out from
+/// the planned members themselves (before the drive is placed round it).
+struct Layout {
+    /// The inside turned out of the case, top to bottom along the axle: (radius, z) vertices of
+    /// the side gears' turning envelope (hubs included) grown by the running clearance.
+    inner: Vec<V2>,
+    /// Cuts: each pinion's or element's own turning envelope about its axis (a revolve in its
+    /// frame), and the pin bores (the pins' own shape).
+    pockets: Vec<Step>,
+    /// Outer radius round the gears and the z range it runs over.
+    r_o: f64,
+    z: (f64, f64),
+    bearing: (String, (f64, f64, f64)),
+}
+
+/// The most radius about an axis of a cloud of points (z, r), per band `dz` wide from `z0`,
+/// each band taking the points within `reach` of it, grown by `grow`: (band low edge, radius).
+fn bands(pts: &[(f64, f64)], dz: f64, reach: f64, grow: f64) -> Vec<(f64, f64)> {
+    let (lo, hi) = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q.0), a.1.max(q.0)));
+    let (lo, hi) = (lo - reach, hi + reach);
+    let n = (((hi - lo) / dz).ceil() as usize).max(1);
+    let mut own = vec![0.0f64; n];
+    for (z, r) in pts {
+        let k = (((z - lo) / dz).floor() as usize).min(n - 1);
+        own[k] = own[k].max(*r);
+    }
+    let w = (reach / dz).ceil() as usize;
+    (0..n)
+        .map(|k| {
+            let r = own[k.saturating_sub(w)..(k + w + 1).min(n)].iter().fold(0.0f64, |a, b| a.max(*b));
+            (lo + dz * k as f64, if r > 0.0 { r + grow } else { 0.0 })
+        })
+        .collect()
+}
+
+/// The surface points of every part that adds material to a body (each part on its own: a
+/// whole body's points can miss parts joined after others), in the body's own coordinates.
+fn body_points(b: &Body, h: f64, hz: f64) -> Vec<V3> {
+    let mut out = Vec::new();
+    for st in &b.steps {
+        let op = match st {
+            Step::Prism { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => *op,
+            Step::Placed { step, .. } => match step.as_ref() {
+                Step::Prism { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => *op,
+                Step::Placed { .. } => Op::Cut,
+            },
+        };
+        if matches!(op, Op::New | Op::Join) {
+            let mut one = st.clone();
+            set_op(&mut one, Op::New);
+            out.extend(Solid::new(&Body { name: String::new(), frame: Frame::at([0.0; 3]), steps: vec![one] }, h).material_points(hz));
+        }
+    }
+    out
+}
+
+fn case_layout(s: &Spec, core: &Core) -> Result<Layout, String> {
+    let d = &s.diff;
+    let clr = d.clr();
+    let m = d.module;
+    let h = (0.05 * m).clamp(0.02, 0.25);
+    let dz = (0.25 * m).clamp(0.2, 1.0);
+    let ax = axle_bore(d);
+    // The side gears turn on the axle: their envelope, hubs and all.
+    let mut pts = Vec::new();
+    for (b, r) in core.bodies.iter().zip(&core.roles) {
+        if *r == Role::Side {
+            for q in body_points(b, h, dz) {
+                let w = b.frame.world(q);
+                pts.push((w[2], w[0].hypot(w[1])));
+            }
+        }
+    }
+    if pts.is_empty() {
+        return Err("the differential has no side gears to put a case round".into());
+    }
+    let env = bands(&pts, dz, clr + dz, clr);
+    let mut inner = Vec::new();
+    // Top to bottom: each band's radius over its stretch (never under the axle bore).
+    let top = env.last().map_or(0.0, |b| b.0 + dz);
+    inner.push(V2::new(ax, top));
+    for (z0, r) in env.iter().rev() {
+        let r = r.max(ax);
+        inner.push(V2::new(r, z0 + dz));
+        inner.push(V2::new(r, *z0));
+    }
+    inner.push(V2::new(ax, env[0].0));
+    // Merge runs of one radius.
+    inner.dedup_by(|b, a| (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9);
+    let mut simple: Vec<V2> = Vec::new();
+    for q in inner {
+        let n = simple.len();
+        if n >= 2 && (simple[n - 1].x - q.x).abs() < 1e-9 && (simple[n - 2].x - q.x).abs() < 1e-9 {
+            simple[n - 1] = q;
+        } else {
+            simple.push(q);
+        }
+    }
+    let mut zr = (env[0].0, top);
+    let mut reach = env.iter().fold(0.0f64, |a, b| a.max(b.1));
+    // The pinions or elements turn on their own axes in the case: a pocket each, their own
+    // envelope about that axis grown by the clearance.
+    let mut pockets = Vec::new();
+    for (b, r) in core.bodies.iter().zip(&core.roles) {
+        match r {
+            Role::Carried => {
+                let local: Vec<(f64, f64)> = body_points(b, h, dz).iter().map(|q| (q[2], q[0].hypot(q[1]))).collect();
+                let bs = bands(&local, dz, clr + dz, clr);
+                let mut profile = vec![V2::new(0.0, bs[0].0)];
+                for (z0, r) in &bs {
+                    let r = r.max(clr);
+                    profile.push(V2::new(r, *z0));
+                    profile.push(V2::new(r, z0 + dz));
+                }
+                profile.push(V2::new(0.0, bs[bs.len() - 1].0 + dz));
+                pockets.push(Step::Placed { frame: b.frame, step: Box::new(Step::Revolve { profile, op: Op::Cut }) });
+                for q in swept_all(b, h, 36) {
+                    reach = reach.max(q[0].hypot(q[1]));
+                    zr = (zr.0.min(q[2] - clr), zr.1.max(q[2] + clr));
+                }
+            }
+            Role::Fixed => {
+                // The pin bores: the pins themselves.
+                for st in &b.steps {
+                    let mut st = st.clone();
+                    set_op(&mut st, Op::Cut);
+                    pockets.push(st);
+                }
+            }
+            Role::Side => {}
+        }
+    }
+    let wall = core.wall;
+    // The bearings on plain journals at the ends, round the axle bore with a wall.
+    let wall_tr = (0.12 * d.axle_diameter).max(2.0);
+    let need = 2.0 * (ax + wall_tr);
+    let bearing = if d.bearing.trim().is_empty() {
+        pick_bearing(need).ok_or_else(|| format!("no case bearing in the library has a bore of Ø{} or more: give a smaller axle", mm(need)))?
+    } else {
+        let b = case_bearing(&d.bearing).ok_or_else(|| format!("no bearing is called '{}'", d.bearing.trim()))?;
+        if b.0 < need - 1e-9 {
+            return Err(format!("bearing {} has a Ø{} bore: the journal round the axle bore needs Ø{} or more", d.bearing.trim(), mm(b.0), mm(need)));
+        }
+        (d.bearing.trim().to_string(), b)
+    };
+    let r_o = (reach + wall).max(core.case_r).max(bearing.1.0 / 2.0 + 1.0);
+    Ok(Layout { inner: simple, pockets, r_o, z: (zr.0 - wall, zr.1 + wall), bearing })
+}
+
+/// The case's outer profile, (radius, z) rising in z: for the clearance checks.
 struct CaseShape {
     outer: Vec<V2>,
     flange: Option<(f64, f64, f64)>,
@@ -1519,40 +1584,18 @@ impl CaseShape {
     }
 }
 
-fn axle_bore(d: &Diff) -> f64 {
-    d.axle_diameter / 2.0 + (0.25 * d.clr()).max(0.1)
-}
-
-/// The case bearings (named or picked: their bore round the hub journals with a wall) and the
-/// radius of the shoulder they seat against.
-fn case_bearings(d: &Diff, core: &Core) -> Result<((String, (f64, f64, f64)), f64), String> {
-    let wall_tr = (0.12 * d.axle_diameter).max(2.0);
-    let need = 2.0 * (core.hub_bore.max(axle_bore(d)) + wall_tr);
-    let bearing = if d.bearing.trim().is_empty() {
-        pick_bearing(need).ok_or_else(|| format!("no case bearing in the library has a bore of Ø{} or more (for the side gear hubs): give a smaller axle", mm(need)))?
-    } else {
-        let b = case_bearing(&d.bearing).ok_or_else(|| format!("no bearing is called '{}'", d.bearing.trim()))?;
-        if b.0 < need - 1e-9 {
-            return Err(format!("bearing {} has a Ø{} bore: the case journal needs Ø{} or more round the side gear hubs", d.bearing.trim(), mm(b.0), mm(need)));
-        }
-        (d.bearing.trim().to_string(), b)
-    };
-    let (bd, bod, _) = bearing.1;
-    let r_sh = (bd / 2.0 + 0.3 * (bod - bd) / 2.0).max(bd / 2.0 + 1.0);
-    Ok((bearing, r_sh))
-}
-
-fn case_body(s: &Spec, core: &Core, drive: Option<&Drive>, p: &mut Plan) -> Result<(Body, CaseShape), String> {
+/// The case: plain stock (one revolve: a cylinder round the gears with a plain journal at each
+/// end for the bearings), the side gears' envelope and the axle bore turned out of it, a pocket
+/// for each pinion or element and the pin bores; with an integral ring, the ring's teeth joined
+/// to it; with ring bolts asked for, a flange and its holes.
+fn case_body(s: &Spec, core: &Core, lay: &Layout, drive: Option<&Drive>, p: &mut Plan) -> Result<(Body, CaseShape), String> {
     let d = &s.diff;
     let wall = core.wall;
-    let axle_bore = axle_bore(d);
-    let (za, zb) = (core.cavity[0].y, core.cavity[core.cavity.len() - 1].y);
-    let (bearing, r_sh) = case_bearings(d, core)?;
-    let (bd, bod, bw) = bearing.1;
+    let ax = axle_bore(d);
+    let (bd, bod, bw) = lay.bearing.1;
     let r_tr = bd / 2.0;
-    let r_o = core.case_r.max(r_sh + 1.0);
-    // The cylinder round the gears: the thrust walls, the flange and an integral ring inside it.
-    let (mut zc0, mut zc1) = (za - wall, zb + wall);
+    let r_o = lay.r_o;
+    let (mut zc0, mut zc1) = lay.z;
     let mut flange = None;
     if let Some(dr) = drive {
         match d.mount {
@@ -1569,33 +1612,15 @@ fn case_body(s: &Spec, core: &Core, drive: Option<&Drive>, p: &mut Plan) -> Resu
             }
         }
     }
-    let cone = 0.7 * (r_o - r_sh) + 1.0;
-    let shoulder = 2.0;
-    let seat = bw + 3.0;
-    let mut zt0 = zc0 - cone - shoulder - seat;
-    let mut zt1 = zc1 + cone + shoulder + seat;
-    zt0 = zt0.min(core.hub_end[0] - 2.0);
-    zt1 = zt1.max(core.hub_end[1] + 2.0);
-    let s0 = zc0 - cone - shoulder;
-    let s1 = zc1 + cone + shoulder;
-    let outer = vec![
-        V2::new(r_tr, zt0),
-        V2::new(r_tr, s0),
-        V2::new(r_sh, s0),
-        V2::new(r_sh, zc0 - cone),
-        V2::new(r_o, zc0),
-        V2::new(r_o, zc1),
-        V2::new(r_sh, zc1 + cone),
-        V2::new(r_sh, s1),
-        V2::new(r_tr, s1),
-        V2::new(r_tr, zt1),
-    ];
-    // The case in one revolve: the outside up, the inside (axle bores, hub journals, thrust faces,
-    // the cavity) back down, never reaching the axis.
+    let seat = bw + 2.0;
+    let (zt0, zt1) = (zc0 - seat, zc1 + seat);
+    let outer = vec![V2::new(r_tr, zt0), V2::new(r_tr, zc0), V2::new(r_o, zc0), V2::new(r_o, zc1), V2::new(r_tr, zc1), V2::new(r_tr, zt1)];
+    // One revolve: the outside up, the inside (axle bore, the side gears' envelope) back down.
     let mut profile = outer.clone();
-    profile.extend([V2::new(axle_bore, zt1), V2::new(axle_bore, core.hub_end[1]), V2::new(core.hub_bore, core.hub_end[1])]);
-    profile.extend(core.cavity.iter().rev().copied());
-    profile.extend([V2::new(core.hub_bore, core.hub_end[0]), V2::new(axle_bore, core.hub_end[0]), V2::new(axle_bore, zt0)]);
+    profile.push(V2::new(ax, zt1));
+    profile.extend(lay.inner.iter().copied());
+    profile.push(V2::new(ax, zt0));
+    profile.dedup_by(|b, a| (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9);
     let mut steps = Vec::new();
     if let (Some(dr), Mount::Integral) = (drive, d.mount) {
         // The ring's teeth first (its own bore and holes left out), its middle taken out inside
@@ -1603,7 +1628,7 @@ fn case_body(s: &Spec, core: &Core, drive: Option<&Drive>, p: &mut Plan) -> Resu
         for st in &dr.ring.steps {
             let op = match st {
                 Step::Prism { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => *op,
-                Step::Placed { .. } => return Err("the integral mount can't take this ring gear's details (a step in its own frame): use the bolted mount".into()),
+                Step::Placed { .. } => return Err("the integral mount can't take this ring gear's details (a step in its own frame): use the separate ring".into()),
             };
             if op == Op::Cut || op == Op::Intersect {
                 continue;
@@ -1620,6 +1645,7 @@ fn case_body(s: &Spec, core: &Core, drive: Option<&Drive>, p: &mut Plan) -> Resu
     if let Some((rf, f0, f1)) = flange {
         steps.push(Step::Revolve { profile: vec![V2::new(r_o - 0.5, f0), V2::new(rf, f0), V2::new(rf, f1), V2::new(r_o - 0.5, f1)], op: Op::Join });
     }
+    steps.extend(lay.pockets.iter().cloned());
     steps.extend(core.cuts.iter().cloned());
     if let (Some(dr), Some((n, b, rbc))) = (drive, drive.and_then(|x| x.bolts)) {
         let holes = crate::hub::lightening_holes(n, 1.1 * b, rbc, PI / f64::from(n));
@@ -1629,19 +1655,18 @@ fn case_body(s: &Spec, core: &Core, drive: Option<&Drive>, p: &mut Plan) -> Resu
     p.fact("case outside diameter", 2.0 * r_o, Unit::Mm);
     p.fact("case length (journal ends)", zt1 - zt0, Unit::Mm);
     p.fact("case wall", wall, Unit::Mm);
-    p.fact(format!("case bearings {} bore", bearing.0), bd, Unit::Mm);
-    p.fact(format!("case bearings {} outside diameter", bearing.0), bod, Unit::Mm);
-    p.fact(format!("case bearings {} width", bearing.0), bw, Unit::Mm);
-    p.fact("case bearing spread (seat middles)", (s1 + bw / 2.0) - (s0 - bw / 2.0), Unit::Mm);
-    p.fact("axle bore", 2.0 * axle_bore, Unit::Mm);
+    p.fact(format!("case bearings {} bore", lay.bearing.0), bd, Unit::Mm);
+    p.fact(format!("case bearings {} outside diameter", lay.bearing.0), bod, Unit::Mm);
+    p.fact(format!("case bearings {} width", lay.bearing.0), bw, Unit::Mm);
+    p.fact("case bearing spread (seat middles)", (zt1 - zt0) - seat, Unit::Mm);
+    p.fact("axle bore", 2.0 * ax, Unit::Mm);
     if let Some((rf, f0, f1)) = flange {
         p.fact("flange diameter", 2.0 * rf, Unit::Mm);
         p.fact("flange thickness", f1 - f0, Unit::Mm);
     }
     let body = Body { name: named(s, "Differential case"), frame: Frame::at([0.0; 3]), steps };
-    Ok((body, CaseShape { outer, flange, bearing, seats: [s0 - bw / 2.0, s1 + bw / 2.0] }))
+    Ok((body, CaseShape { outer, flange, bearing: lay.bearing.clone(), seats: [zt0 + seat / 2.0, zt1 - seat / 2.0] }))
 }
-
 fn set_op(st: &mut Step, to: Op) {
     match st {
         Step::Prism { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => *op = to,
@@ -1794,10 +1819,10 @@ pub(crate) fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
         Style::TorsenA => torsen_a_core(s, p)?,
     };
     // The case at least clears its bearings' shoulders (the ring's bore goes round it).
-    let (_, r_sh) = case_bearings(d, &core)?;
-    core.case_r = core.case_r.max(r_sh + 1.0);
-    let drive = plan_drive(s, &core, p)?;
-    let (case, shape) = case_body(s, &core, drive.as_ref(), p)?;
+    let lay = case_layout(s, &core)?;
+    core.case_r = lay.r_o;
+    let drive = plan_drive(s, &core, lay.r_o, p)?;
+    let (case, shape) = case_body(s, &core, &lay, drive.as_ref(), p)?;
     if let Some(dr) = &drive {
         let gap = pinion_to_case(&dr.pinion, &shape, (0.05 * d.drive_module).clamp(0.05, 0.5));
         p.fact("drive pinion to case clearance", gap, Unit::Mm);

@@ -252,8 +252,10 @@ pub(crate) fn set_mode(w: &mut GearWindow, k: Kind) {
 fn mode_picker(ui: &mut Ui, w: &mut GearWindow) {
     let mut pick = None;
     for (group, label) in [(Axes::Parallel, "Parallel shafts"), (Axes::Intersecting, "Meeting shafts"), (Axes::Crossed, "Crossed shafts"), (Axes::Wrapped, "Chain and belt"), (Axes::Special, "Special")] {
+        // The group's name on its own row, its kinds wrapped under it.
+        ui.add_space(2.0);
+        ui.label(RichText::new(label).small().weak());
         ui.horizontal_wrapped(|ui| {
-            ui.add_sized([104.0, 18.0], egui::Label::new(RichText::new(label).small().weak()));
             for k in Kind::ALL.iter().copied().filter(|k| k.axes() == group && sketch_rules::sketched(*k)) {
                 if crate::gear_icons::choice(ui, w.spec.kind == k, crate::gear_icons::kind_icon(k), k.label()).clicked() {
                     pick = Some(k);

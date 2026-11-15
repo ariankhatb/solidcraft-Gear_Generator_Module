@@ -1420,8 +1420,9 @@ fn type_picker(ui: &mut Ui, w: &mut GearWindow) {
     let fit = w.axes.axis(0).map(|_| axes::candidates(w.axes.relation().as_ref()));
     let mut pick = None;
     for (group, label) in [(Axes::Parallel, "Parallel axes"), (Axes::Intersecting, "Intersecting axes"), (Axes::Crossed, "Crossed axes"), (Axes::Wrapped, solidcraft_ui_text::tr("gear.window.group_wrapped")), (Axes::Special, "Special")] {
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new(label).small().weak());
         ui.horizontal_wrapped(|ui| {
-            ui.add_sized([110.0, 18.0], egui::Label::new(egui::RichText::new(label).small().weak()));
             for k in Kind::ALL.iter().copied().filter(|k| k.axes() == group) {
                 let c = fit.as_ref().and_then(|f| f.iter().find(|c| c.kind == k));
                 let fits = c.is_none_or(|c| c.fits);

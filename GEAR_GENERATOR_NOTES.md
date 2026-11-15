@@ -347,3 +347,19 @@ rings overlap the housing by design when `ring_as_housing`). Scripts come from t
   the raytrace-cpu feature: unrelated).
 - Still open: `gear.create` ring mode at the default 90° is refused (Simple mode picks 45°;
   Advanced shows the refusal); bevel planetary profile shift is ignored.
+
+## Parametric equation sets: placement, undercut, clearance, cleanup (`gear-eqfix`, 2026-11-15)
+
+- Mates follow parameter edits natively: the plan records `Plan::placing` (working centre
+  distance `<prefix>_mesh_cd` from module, teeth, shifts and helix: inv(aw) by five Newton steps)
+  and the centres of a pair's gear 2 and every planet; their sketches' planes are
+  `PlaneRef::Placed` with origin expressions. Their teeth turn to mesh through phase formulas
+  (`<prefix>_gear2_phase`, `_planet<k>_phase`, `_ring_phase`; `TeethSource::phases`).
+- A tooth count edited into undercut: formula prisms pick their profile by a point (just
+  outside the bore, or the gear's middle; a ring's rim as before), so the fillet/flank
+  crossing loops are not extruded as extra bodies.
+- Clearance body: `Plan::clearance_follow` says how each revolved profile vertex follows (tip
+  envelope `{g<m>_ra}` / `{mesh_cd} + {g2_ra}`, face width stretch, shaft and seat ends); the
+  engine draws those profiles as expression-placed points. Shaft, bore, seat sizes stay numbers.
+- `gear.update` back to fitted / non-parametric deletes the `<prefix>_*` parameters the set made
+  that nothing else uses.

@@ -748,6 +748,11 @@ pub struct Plan {
     /// the assembled set needs (turning envelopes, shafts, bearing seats), in world coordinates,
     /// built after the gears. Not one of `bodies`.
     pub clearance: Option<Body>,
+    /// Where members sit as formulas, for parametric teeth ([`crate::equations::Placing`]).
+    pub placing: crate::equations::Placing,
+    /// How each step's profile of the clearance body follows a parametric set's formulas (one
+    /// entry per vertex of a revolved profile; empty where it stays as numbers).
+    pub clearance_follow: Vec<Vec<crate::clearance::VertexFollow>>,
     /// Why the set can't be built, found while planning it ([`plan`] returns it as the error).
     refused: Option<String>,
 }
@@ -766,6 +771,12 @@ impl Plan {
     pub(crate) fn teeth_source(&mut self, src: crate::equations::TeethSource) {
         if !self.teeth.iter().any(|t| t.who == src.who) {
             self.teeth.push(src);
+        }
+    }
+    /// Gives member `who`'s teeth a phase formula ([`crate::equations::TeethSource::phases`]).
+    pub(crate) fn teeth_phase(&mut self, who: &str, key: &str, tpl: String) {
+        if let Some(t) = self.teeth.iter_mut().find(|t| t.who == who) {
+            t.phases.push((key.to_string(), tpl));
         }
     }
     pub(crate) fn warn(&mut self, w: impl Into<String>) {
@@ -944,6 +955,11 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
         Kind::BevelPlanetary => bevel_planet::build(s, &mut p),
     }
     left_out::left_out(s, &mut p);
+    // The inputs the phase formulas name beyond each member's own.
+    let shared = p.placing.vars.clone();
+    for t in &mut p.teeth {
+        t.extra = shared.clone();
+    }
     if let Some(why) = p.refused.take() {
         return Err(why);
     }
@@ -1132,6 +1148,8 @@ fn ring_source(s: &Spec, who: &str, member: u8, ring: &Internal, f: &ToothFlank)
         backlash: s.backlash,
         face: s.face_width,
         face_key: "face_width".into(),
+        phases: Vec::new(),
+        extra: Default::default(),
     }
 }
 
@@ -1203,6 +1221,8 @@ fn rack(s: &Spec, p: &mut Plan) {
         backlash: s.backlash,
         face: s.face_width,
         face_key: "face_width".into(),
+        phases: Vec::new(),
+        extra: Default::default(),
     });
     let length = PI * g.mt() * f64::from(n);
     p.fact("length", length, Unit::Mm);
@@ -1285,7 +1305,18 @@ fn pair(s: &Spec, p: &mut Plan) {
         // along the helix.
         let mut steps = crate::body::tooth_body(s, &g2, &f2, phase2 + twist_for(&g2, dz2), face2, herring, p, "gear 2");
         hub_steps(s, &s.bore2, f2.rf - s.elephant_foot, face2, &mut steps, p, "gear 2");
+        let index = p.bodies.len();
         p.bodies.push(Body { name: name(s, &format!("Gear z{}", s.teeth2)), frame: Frame::at(s.origin).shifted([a, 0.0, dz2]), steps });
+        // As formulas (parametric teeth): gear 2 at the working centre distance, its teeth
+        // turned to mesh.
+        let mut v = crate::equations::Vars::default();
+        if crate::equations::mesh_vars(&mut v, &g1, &g2, ("teeth2", "shift2")).is_ok_and(|cd| (cd - a).abs() <= 1e-6 * a.max(1.0)) {
+            p.placing.vars = v;
+            p.placing.centres.push((index, "{mesh_cd}".into(), "0 mm".into()));
+            let tw = twist_for(&g2, dz2);
+            let turn = if tw != 0.0 { format!(" + {}", crate::equations::literal(tw, crate::equations::Quantity::Angle)) } else { String::new() };
+            p.teeth_phase("gear 2", "gear2_phase", format!("pi * 1 rad + pi / {{teeth2}} * 1 rad{turn}"));
+        }
     }
     p.preview.push(PreviewGear { name: "gear 1".into(), region: with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore), center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: g1.r(), orbit: 0.0, period: 0.0 });
     p.preview.push(PreviewGear {
@@ -1423,13 +1454,27 @@ fn planetary(s: &Spec, p: &mut Plan) {
         hub_steps(s, &s.bore, f_sun.rf - s.elephant_foot, s.face_width, &mut steps, p, "sun");
         p.bodies.push(Body { name: name(s, &format!("Sun z{zs}")), frame: Frame::at(s.origin), steps });
     }
+    // As formulas (parametric teeth): the planets at the working centre distance, each at its
+    // place round the sun (the same rounding to whole teeth), turned to mesh.
+    let mut placing = crate::equations::Vars::default();
+    let placed = crate::equations::mesh_vars(&mut placing, &sun, &planet, ("teeth2", "shift2")).is_ok_and(|cd| (cd - a).abs() <= 1e-6 * a.max(1.0));
+    placing.input("teeth3", f64::from(zr), crate::equations::Quantity::Number, "ring: number of teeth");
+    let theta = |k: usize| format!("(2 * pi * round({k} * ({{teeth}} + {{teeth3}}) / {n}) / ({{teeth}} + {{teeth3}}))");
     for (k, (th, o, f)) in planets.iter().enumerate() {
         let c = V2::polar(a, *th);
         if wanted(s, 2) {
             // Each planet in its own frame at its centre.
             let mut steps = crate::body::tooth_body(s, &planet, f, mesh_phase(zs, 0.0, zp, *th), s.face_width, false, p, "planet");
             hub_steps(s, &s.bore2, f.rf - s.elephant_foot, s.face_width, &mut steps, p, "planet");
+            let index = p.bodies.len();
             p.bodies.push(Body { name: name(s, &format!("Planet {} z{zp}", k + 1)), frame: Frame::at(s.origin).shifted([c.x, c.y, 0.0]), steps });
+            let t = theta(k);
+            let (x, y) = (format!("{{mesh_cd}} * cos({t} * 1 rad)"), format!("{{mesh_cd}} * sin({t} * 1 rad)"));
+            let at = placing.eval(&x, None).and_then(|x| Ok((x, placing.eval(&y, None)?)));
+            if placed && at.is_ok_and(|(x, y)| (x - c.x).abs() + (y - c.y).abs() <= 1e-6 * a.max(1.0)) {
+                p.placing.centres.push((index, x, y));
+                p.teeth_phase("planet", &format!("planet{}_phase", k + 1), format!("{t} * 1 rad + pi * 1 rad + pi / {{teeth2}} * 1 rad + {{teeth}} / {{teeth2}} * {t} * 1 rad"));
+            }
         }
         p.preview.push(PreviewGear {
             name: format!("planet {}", k + 1),
@@ -1440,6 +1485,12 @@ fn planetary(s: &Spec, p: &mut Plan) {
             pitch_radius: planet.r(),
             orbit: 0.0, period: 0.0,
         });
+    }
+    if placed {
+        p.placing.vars = placing;
+        // (Planet 1 is at 0: the ring meshes with it half a ring tooth on when its tooth count is
+        // even.)
+        p.teeth_phase("ring", "ring_phase", "pi * (1 - mod({teeth2}, 2)) / {teeth3} * 1 rad".into());
     }
     if wanted(s, 3) {
         let mut steps = tooth_steps(ring_region.clone(), s.face_width, twist_for(&ring_gear.gear, s.face_width), false, Op::New);

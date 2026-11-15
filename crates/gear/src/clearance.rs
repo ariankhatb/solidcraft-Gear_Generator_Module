@@ -259,6 +259,92 @@ struct Member {
     shaft_d: Option<f64>,
 }
 
+/// How a vertex of a clearance profile follows a parametric set's design parameters (its teeth
+/// drawn from formulas): the profile is the numbers when planned, moved by how much the
+/// parameters change what made it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VertexFollow {
+    /// The radius moves with a member's tip envelope: (template over the teeth formulas' keys,
+    /// its value when planned). A planet's is its orbit and tip, `{mesh_cd} + {g2_ra}`.
+    pub r: Option<(String, f64)>,
+    /// The position along the axis moves by `k` times the change of the face width: (k, the
+    /// face width's key, its value when planned).
+    pub z: Option<(f64, String, f64)>,
+}
+
+/// What a member's clearance follows in a parametric set: its tip envelope (template and its
+/// value: orbit and tip radius) and its face width (key and value).
+#[derive(Clone, Debug)]
+struct MemberFollow {
+    r_tpl: String,
+    r_at: f64,
+    face_key: String,
+    face: f64,
+}
+
+/// The members of a planar set whose clearance can follow formulas (whole set, plan order):
+/// gears whose teeth have a formula tip radius (`g<member>_ra`), and planets on the centre
+/// distance's formula. Rings, racks and other kinds: none.
+fn member_follows(s: &Spec, p: &Plan, bodies: &[Body]) -> Vec<Option<MemberFollow>> {
+    let n = bodies.len();
+    let ring = s.kind == Kind::Planetary && n >= 3;
+    (0..n)
+        .map(|i| {
+            let member: u8 = match s.kind {
+                Kind::Spur | Kind::Helical | Kind::Herringbone => 1,
+                Kind::Pair => (i + 1) as u8,
+                Kind::Planetary if i == 0 => 1,
+                Kind::Planetary if ring && i == n - 1 => return None,
+                Kind::Planetary => 2,
+                _ => return None,
+            };
+            let src = p.teeth.iter().find(|t| t.member == member)?;
+            let crate::equations::Form::External { f, .. } = &src.form else { return None };
+            let tip = format!("{{g{member}_ra}}");
+            let planet = s.kind == Kind::Planetary && i > 0;
+            let (r_tpl, r_at) = if planet {
+                let cd = p.placing.vars.value("mesh_cd")?;
+                if !p.placing.centres.iter().any(|(k, ..)| *k == i) {
+                    return None;
+                }
+                (format!("{{mesh_cd}} + {tip}"), cd + f.ra)
+            } else {
+                (tip, f.ra)
+            };
+            Some(MemberFollow { r_tpl, r_at, face_key: src.face_key.clone(), face: src.face })
+        })
+        .collect()
+}
+
+/// A group's rules for [`VertexFollow`]: tip envelopes (radius planned, the member's follow,
+/// its z range in the group, how far past the tip a vertex of it may be), the face's stretch
+/// (the teeth's z range in the group, key, value), and band ends that move by a multiple of the
+/// face's change (z, k).
+#[derive(Default)]
+struct GroupFollow {
+    tips: Vec<(f64, MemberFollow, (f64, f64), f64)>,
+    stretch: Option<((f64, f64), String, f64)>,
+    anchors: Vec<(f64, f64)>,
+}
+
+impl GroupFollow {
+    fn vertex(&self, q: V2, reach: f64) -> VertexFollow {
+        let r = self.tips.iter().find(|(at, _, (z0, z1), window)| {
+            let d = q.x - at;
+            d > 0.0 && d <= window + 1e-6 && q.y >= z0 - reach - 1e-6 && q.y <= z1 + reach + 1e-6
+        });
+        let z = self.stretch.as_ref().map(|((t0, t1), key, face)| {
+            let k = match self.anchors.iter().find(|(z, _)| (z - q.y).abs() <= 2e-6) {
+                Some((_, k)) => *k,
+                None if t1 > t0 => ((q.y - t0) / (t1 - t0)).clamp(0.0, 1.0),
+                None => 0.0,
+            };
+            (k, key.clone(), *face)
+        });
+        VertexFollow { r: r.map(|(_, m, ..)| (m.r_tpl.clone(), m.r_at)), z: z.filter(|(k, ..)| *k != 0.0) }
+    }
+}
+
 /// The set's clearance body (see the module notes), named "<set name> clearance". Its facts
 /// (envelope sizes, the bearing) and warnings go into `p`. `p` is the set as planned and placed;
 /// when it is one member of a set (`only`), the whole set is planned for its clearance.
@@ -274,7 +360,10 @@ pub fn clearance_body(s: &Spec, p: &mut Plan) -> Result<Body, String> {
     };
     let mut facts = Vec::new();
     let mut warnings = Vec::new();
-    let body = build(s, &c, bodies, preview, &mut facts, &mut warnings)?;
+    // (Following the formulas: only for the whole set, whose plan holds the bodies' own teeth.)
+    let follows = if s.only == 0 { member_follows(s, p, bodies) } else { vec![None; bodies.len()] };
+    let (body, follow) = build(s, &c, bodies, preview, &follows, &mut facts, &mut warnings)?;
+    p.clearance_follow = follow;
     for (label, value, unit) in facts {
         p.fact(label, value, unit);
     }
@@ -305,7 +394,15 @@ fn bore_of(s: &Spec, role: u8) -> (Bore, bool, f64) {
     (bore, integral, d)
 }
 
-fn build(s: &Spec, c: &Clearance, bodies: &[Body], preview: &[PreviewGear], facts: &mut Vec<(String, f64, Unit)>, warn: &mut Vec<String>) -> Result<Body, String> {
+fn build(
+    s: &Spec,
+    c: &Clearance,
+    bodies: &[Body],
+    preview: &[PreviewGear],
+    follows: &[Option<MemberFollow>],
+    facts: &mut Vec<(String, f64, Unit)>,
+    warn: &mut Vec<String>,
+) -> Result<(Body, Vec<Vec<VertexFollow>>), String> {
     if bodies.is_empty() {
         return Err("clearance: the set has no bodies".into());
     }
@@ -343,7 +440,9 @@ fn build(s: &Spec, c: &Clearance, bodies: &[Body], preview: &[PreviewGear], fact
 
     let mut groups: Vec<Group> = Vec::new();
     let mut prisms: Vec<(Frame, Region, f64, f64)> = Vec::new();
-    for m in members.iter_mut() {
+    // What each group's profile follows (parametric sets), by group.
+    let mut rules: Vec<GroupFollow> = Vec::new();
+    for (mi, m) in members.iter_mut().enumerate() {
         let f = m.body.frame;
         let margin = rad + m.h + 0.002;
         match m.motion {
@@ -440,6 +539,23 @@ fn build(s: &Spec, c: &Clearance, bodies: &[Body], preview: &[PreviewGear], fact
                 push(zg, orbit + q[0].hypot(q[1]), margin);
             }
         }
+        if rules.len() <= gi {
+            rules.resize_with(gi + 1, GroupFollow::default);
+        }
+        let to_group = |z: f64| dot(sub(f.world([0.0, 0.0, z]), g.frame.origin), g.frame.z);
+        let teeth_g = {
+            let (a, b) = (to_group(m.teeth.0), to_group(m.teeth.1));
+            (a.min(b), a.max(b))
+        };
+        if let Some(Some(mf)) = follows.get(mi).filter(|_| !tilted)
+            && (rmax - mf.r_at).abs() <= 1e-6 * mf.r_at.max(1.0)
+        {
+            let rule = &mut rules[gi];
+            rule.tips.push((rmax, mf.clone(), zr, margin + UNDER + OVER));
+            if rule.stretch.is_none() {
+                rule.stretch = Some((teeth_g, mf.face_key.clone(), mf.face));
+            }
+        }
         let what = if orbit > 0.0 { "orbit" } else { "envelope" };
         facts.push((format!("clearance: {} {what} diameter", m.who), 2.0 * (rmax + margin), Unit::Mm));
         facts.push((format!("clearance: {} {what} length", m.who), zr.1 - zr.0 + 2.0 * (ax + m.hz), Unit::Mm));
@@ -456,6 +572,9 @@ fn build(s: &Spec, c: &Clearance, bodies: &[Body], preview: &[PreviewGear], fact
         m.shaft_d = if integral { Some(integral_d) } else { d };
         if let (Some(d), false, false) = (d, integral, m.planet) {
             let band = (zr.0 - ext, zr.1 + ext, d / 2.0 + rad);
+            // Its ends: on past the gear's ends, by twice the face width unless given.
+            let more = if c.shaft_extension > 0.0 { 0.0 } else { 2.0 };
+            rules[gi].anchors.extend([(band.0, -more), (band.1, 1.0 + more)]);
             g.bands.push(band);
             m.shaft = Some(band);
             facts.push((format!("clearance: {} shaft diameter", m.who), d + 2.0 * rad, Unit::Mm));
@@ -513,6 +632,10 @@ fn build(s: &Spec, c: &Clearance, bodies: &[Body], preview: &[PreviewGear], fact
             let f = m.body.frame;
             let centre = dot(sub(f.world([0.0, 0.0, m.mid + along]), g.frame.origin), g.frame.z);
             let (z0, z1) = (centre - b.width / 2.0, centre + b.width / 2.0);
+            // (From the middle of the teeth, which moves by half the face's change.)
+            if let Some(rule) = rules.get_mut(gi) {
+                rule.anchors.extend([(z0, 0.5), (z1, 0.5)]);
+            }
             g.bands.push((z0, z1, r));
             facts.push((format!("clearance: bearing seat {n} on {} at", m.who), along, Unit::Mm));
             match m.shaft {
@@ -548,14 +671,19 @@ fn build(s: &Spec, c: &Clearance, bodies: &[Body], preview: &[PreviewGear], fact
 
     // The body: one revolve per axis (each connected stretch of its profile), the prisms.
     let mut steps = Vec::new();
-    for g in &groups {
+    let mut follow = Vec::new();
+    for (gi, g) in groups.iter().enumerate() {
+        let reach = ax + g.hz;
         for poly in profile(g, ax) {
             let op = if steps.is_empty() { Op::New } else { Op::Join };
+            let rule = rules.get(gi).filter(|r| !r.tips.is_empty());
+            follow.push(rule.map(|r| poly.iter().map(|q| r.vertex(*q, reach)).collect()).unwrap_or_default());
             steps.push(Step::Placed { frame: g.frame, step: Box::new(Step::Revolve { profile: poly, op }) });
         }
     }
     for (frame, region, z0, height) in prisms {
         let op = if steps.is_empty() { Op::New } else { Op::Join };
+        follow.push(Vec::new());
         steps.push(Step::Placed { frame, step: Box::new(Step::Prism { region, z0, height, twist: 0.0, op }) });
     }
     if steps.is_empty() {
@@ -563,7 +691,7 @@ fn build(s: &Spec, c: &Clearance, bodies: &[Body], preview: &[PreviewGear], fact
     }
     facts.push(("clearance: radial".into(), rad, Unit::Mm));
     facts.push(("clearance: axial".into(), ax, Unit::Mm));
-    Ok(Body { name: format!("{} clearance", set_name(s)), frame: Frame::at([0.0; 3]), steps })
+    Ok((Body { name: format!("{} clearance", set_name(s)), frame: Frame::at([0.0; 3]), steps }, follow))
 }
 
 /// The member whose axis is nearest a world point: its index, the point's distance along the

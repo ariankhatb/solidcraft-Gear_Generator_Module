@@ -52,6 +52,14 @@ pub struct TeethSource {
     /// mate of another width).
     pub face: f64,
     pub face_key: String,
+    /// Tooth 0's angle as formulas, where the set can give it (a pair's gear 2, the planets, a
+    /// planetary ring): (key, template), the first whose value is the outline's phase (to a
+    /// whole tooth) drawing the teeth, so a parametric set's members turn to mesh again when
+    /// their tooth counts change. Otherwise the phase is a number.
+    pub phases: Vec<(String, String)>,
+    /// The inputs those templates name that the member's own formulas don't (the set's
+    /// [`Placing::vars`]).
+    pub extra: Vars,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -158,13 +166,13 @@ impl Vars {
     pub fn value(&self, key: &str) -> Option<f64> {
         self.get(key).map(|v| v.value)
     }
-    fn input(&mut self, key: &str, value: f64, quantity: Quantity, comment: &str) {
+    pub(crate) fn input(&mut self, key: &str, value: f64, quantity: Quantity, comment: &str) {
         if self.get(key).is_none() {
             self.list.push(Var { key: key.into(), expr: input_literal(value, quantity), value, quantity, input: true, comment: comment.into() });
         }
     }
     /// Adds a derived variable; its value is its formula's.
-    fn derived(&mut self, key: &str, expr: String, quantity: Quantity, comment: &str) -> Result<f64, String> {
+    pub(crate) fn derived(&mut self, key: &str, expr: String, quantity: Quantity, comment: &str) -> Result<f64, String> {
         let value = self.eval(&expr, None).map_err(|e| format!("{key}: {e}"))?;
         if !value.is_finite() {
             return Err(format!("{key} is not a number"));
@@ -412,6 +420,10 @@ impl Parser<'_> {
                         ("abs", None) => a.abs(),
                         ("atan2", Some(b)) => a.atan2(b),
                         ("hypot", Some(b)) => a.hypot(b),
+                        ("round", None) => a.round(),
+                        ("floor", None) => a.floor(),
+                        ("ceil", None) => a.ceil(),
+                        ("mod", Some(b)) => a.rem_euclid(b),
                         ("min", Some(_)) => args.iter().copied().fold(f64::INFINITY, f64::min),
                         ("max", Some(_)) => args.iter().copied().fold(f64::NEG_INFINITY, f64::max),
                         _ => return Err(format!("unknown function `{id}`")),
@@ -533,6 +545,94 @@ fn fillet_at(v: &Vars, p: &str, t: f64) -> Option<V2> {
     Some(V2::polar(x.hypot(y), th0 + t * m / r - (x / y).atan()))
 }
 
+/// Tooth 0's angle in the formulas: one of the source's phase templates whose value is
+/// `phase` to a whole tooth (as a variable of its own, corrected by those whole teeth), else
+/// `phase` as a number; empty for 0.
+fn phase_text(v: &mut Vars, src: &TeethSource, phase: f64, teeth: u32) -> Result<String, String> {
+    let period = 2.0 * PI / f64::from(teeth.max(1));
+    for (key, tpl) in &src.phases {
+        let look = |k: &str| v.value(k).or_else(|| src.extra.value(k));
+        let Ok(value) = eval(tpl, &look) else { continue };
+        let d = value - phase;
+        let k = (d / period).round();
+        if !((d - k * period).abs() <= 1e-9 * phase.abs().max(1.0)) {
+            continue;
+        }
+        for name in keys(tpl) {
+            if v.get(&name).is_none()
+                && let Some(var) = src.extra.get(&name)
+            {
+                v.list.push(var.clone());
+            }
+        }
+        let (teeth_key, _) = member_keys(src.member);
+        let tpl = if k == 0.0 { tpl.clone() } else { format!("{tpl} - {} * 2 * pi / {{{teeth_key}}} * 1 rad", number(k)) };
+        v.derived(key, tpl, Quantity::Angle, &format!("{}: tooth 0's angle", src.who))?;
+        return Ok(format!("{{{key}}}"));
+    }
+    Ok(if phase.abs() > 0.0 { literal(phase, Quantity::Angle) } else { String::new() })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Where the members sit, as formulas (parametric sets).
+// ---------------------------------------------------------------------------------------------
+
+/// Where a set's members sit, as formulas: the centres (in the set's frame) of a pair's gear 2
+/// and a planetary set's planets, over the variables `vars` (inputs shared with the teeth's
+/// formulas, and the working centre distance worked out from them), so a parametric set's
+/// mates follow its module, tooth counts and shifts.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Placing {
+    pub vars: Vars,
+    /// (index into the plan's bodies, x, y): the body's centre in the set's frame (templates).
+    pub centres: Vec<(usize, String, String)>,
+}
+
+impl Placing {
+    /// A centre's value: (x, y) in mm.
+    pub fn value(&self, x: &str, y: &str) -> Result<(f64, f64), String> {
+        Ok((self.vars.eval(x, None)?, self.vars.eval(y, None)?))
+    }
+}
+
+/// The working centre distance of two external gears as formulas: `{mesh_cd}` in `v`, from the
+/// inputs (module, pressure angle, helix, both tooth counts and shifts; gear 2's under
+/// `keys2`). The working pressure angle solves inv(a) = 2 tan(an) (x1 + x2) / (z1 + z2) +
+/// inv(at) by five Newton steps from (3 inv)^(1/3), which lies above it (tan a - a > a^3 / 3),
+/// so the steps come down to it without overshooting. Returns its value.
+pub fn mesh_vars(v: &mut Vars, g1: &Involute, g2: &Involute, keys2: (&str, &str)) -> Result<f64, String> {
+    v.input("module", g1.module, Quantity::Length, "normal module");
+    v.input("pressure_angle", g1.pressure_angle, Quantity::Angle, "normal pressure angle");
+    let helix = g1.helix != 0.0;
+    if helix {
+        v.input("helix", g1.helix.abs(), Quantity::Angle, "helix angle at the pitch circle");
+    }
+    v.input("teeth", f64::from(g1.teeth), Quantity::Number, "gear 1: number of teeth");
+    v.input("shift", g1.shift, Quantity::Number, "gear 1: profile shift coefficient");
+    v.input(keys2.0, f64::from(g2.teeth), Quantity::Number, "gear 2: number of teeth");
+    v.input(keys2.1, g2.shift, Quantity::Number, "gear 2: profile shift coefficient");
+    let (mt, at) = if helix {
+        v.derived("mesh_mt", "{module} / cos({helix})".into(), Quantity::Length, "transverse module")?;
+        v.derived("mesh_at", "atan(tan({pressure_angle}) / cos({helix}))".into(), Quantity::Angle, "transverse pressure angle")?;
+        ("{mesh_mt}", "{mesh_at}")
+    } else {
+        ("{module}", "{pressure_angle}")
+    };
+    let (z2, x2) = keys2;
+    v.derived(
+        "mesh_inv",
+        format!("2 * tan({{pressure_angle}}) * ({{shift}} + {{{x2}}}) / ({{teeth}} + {{{z2}}}) + tan({at}) - {at} / (1 rad)"),
+        Quantity::Number,
+        "involute of the working pressure angle",
+    )?;
+    v.derived("mesh_aw0", "(3 * max({mesh_inv}, 0.0000001)) ^ (1 / 3) * 1 rad".into(), Quantity::Angle, "working pressure angle, first guess")?;
+    for i in 1..=5 {
+        let w = format!("{{mesh_aw{}}}", i - 1);
+        v.derived(&format!("mesh_aw{i}"), format!("{w} - (tan({w}) - {w} / (1 rad) - {{mesh_inv}}) / tan({w}) ^ 2 * 1 rad"), Quantity::Angle, "working pressure angle, a Newton step on")?;
+    }
+    v.derived("mesh_cd", format!("{mt} * ({{teeth}} + {{{z2}}}) / 2 * cos({at}) / cos({{mesh_aw5}})"), Quantity::Length, "working centre distance")
+}
+
 /// The cell of an external gear, tooth 0 at `phase`.
 fn external(src: &TeethSource, g: &Involute, f: &ToothFlank, phase: f64) -> Result<ToothCell, String> {
     if f.pointed || f.fillet.len() < 2 || f.flank.len() < 2 || f.defect().is_some() {
@@ -595,7 +695,7 @@ fn external(src: &TeethSource, g: &Involute, f: &ToothFlank, phase: f64) -> Resu
     };
     let _ = u1;
     let (tol_flank, tol_fillet) = tolerances(m);
-    let ph = if phase.abs() > 0.0 { literal(phase, Quantity::Angle) } else { String::new() };
+    let ph = phase_text(&mut v, src, phase, g.teeth)?;
     let r_inv = format!("{{{p}rb}} * sqrt(1 + t ^ 2)");
     let a_inv = format!("{{{p}hb}} - t * 1 rad + atan(t)");
     let k = format!("(1 + {{{p}rho}} / hypot(t * {{module}}, {{{p}bc}}))");
@@ -737,7 +837,7 @@ fn internal(src: &TeethSource, ring: &Internal, f: &ToothFlank, phase: f64) -> R
     let ulo = if radial { "0".to_string() } else { format!("sqrt(({rt_key} / {{{p}rb}}) ^ 2 - 1)") };
     let uhi = format!("sqrt(({rr_key} / {{{p}rb}}) ^ 2 - 1)");
     let (tol_flank, _) = tolerances(m);
-    let ph = if phase.abs() > 0.0 { literal(phase, Quantity::Angle) } else { String::new() };
+    let ph = phase_text(&mut v, src, phase, g.teeth)?;
     let r_inv = format!("{{{p}rb}} * sqrt(1 + t ^ 2)");
     let a_inv = format!("{{{p}hs}} - t * 1 rad + atan(t)");
     let curves = vec![

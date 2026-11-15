@@ -848,4 +848,160 @@ fn equal_gears_and_a_second_set_get_distinct_names() {
     let r = run(&mut s, "gear.create", json!({"origin": [60, 0, 0]}));
     assert_eq!(r["bodies"][0].as_str(), Some("Gear z20 (3)"));
     assert!(!s.model.state().bodies.iter().any(|b| b.name.starts_with("Body")));
+
+// ---------------------------------------------------------------------------------------------
+// Parametric sets: what follows a parameter edit besides the teeth
+// ---------------------------------------------------------------------------------------------
+
+/// The overlap volume the kernel finds among `bodies`.
+fn overlap(s: &mut Session, bodies: &[&str]) -> f64 {
+    let i = run(s, "inspect.interference", json!({"bodies": bodies}));
+    i["interferences"].as_array().unwrap().iter().map(|h| h["volume"].as_f64().unwrap_or(0.0)).sum()
+}
+
+/// A parametric pair's gear 2 sits at the centre distance its parameters give: a tooth-count or
+/// module edit moves it, as gear.update would, and the pair still meshes.
+#[test]
+fn a_parametric_pairs_mate_follows_the_centre_distance() {
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 30, "face_width": 8, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "P"}));
+    no_errors(&s);
+    let (g1, g2) = (r["bodies"][0].clone(), r["bodies"][1].clone());
+    assert!((centre(&mut s, &g2)[0] - 50.0).abs() < 1e-3, "{r}");
+    run(&mut s, "parameters.change", json!({"name": "P_teeth", "expression": "24"}));
+    no_errors(&s);
+    let c = centre(&mut s, &g2);
+    assert!((c[0] - 54.0).abs() < 1e-3 && c[1].abs() < 1e-3, "gear 2 at {c:?}, wanted x = 54");
+    let o = overlap(&mut s, &[g1.as_str().unwrap(), g2.as_str().unwrap()]);
+    assert!(o < 0.05, "the pair overlaps by {o} mm³ after the tooth change");
+    run(&mut s, "parameters.change", json!({"name": "P_module", "expression": "2.5 mm"}));
+    no_errors(&s);
+    let c = centre(&mut s, &g2);
+    assert!((c[0] - 67.5).abs() < 1e-3, "gear 2 at {c:?}, wanted x = 67.5");
+    // A profile shift pushes it out by the working centre distance.
+    run(&mut s, "parameters.change", json!({"name": "P_shift", "expression": "0.3"}));
+    no_errors(&s);
+    let shifted = run(&mut s, "gear.calculate", json!({"type": "pair", "module": 2.5, "teeth": 24, "teeth2": 30, "profile_shift": 0.3, "face_width": 8}));
+    let want = fact(&shifted, "centre distance");
+    let c = centre(&mut s, &g2);
+    assert!((c[0] - want).abs() < 1e-3, "gear 2 at {c:?}, wanted x = {want}");
+}
+
+/// A parametric planetary set's planets follow the module and the tooth counts (their places and
+/// their mesh phases).
+#[test]
+fn a_parametric_planetary_sets_planets_follow_their_parameters() {
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "planetary", "module": 1, "teeth": 12, "teeth2": 24, "planets": 3, "face_width": 6, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "S"}));
+    no_errors(&s);
+    let bodies: Vec<String> = names(&r);
+    assert_eq!(bodies.len(), 5, "{r}");
+    let radius = |c: [f64; 3]| c[0].hypot(c[1]);
+    let p1 = json!(bodies[1]);
+    assert!((radius(centre(&mut s, &p1)) - 18.0).abs() < 1e-3);
+    run(&mut s, "parameters.change", json!({"name": "S_module", "expression": "1.25 mm"}));
+    no_errors(&s);
+    let c = centre(&mut s, &p1);
+    assert!((radius(c) - 22.5).abs() < 1e-3, "planet 1 at {c:?}, wanted 22.5 from the sun");
+    run(&mut s, "parameters.change", json!({"name": "S_module", "expression": "1 mm"}));
+    // More sun and ring teeth: the planets go out and turn to mesh again.
+    run(&mut s, "parameters.change", json!({"changes": {"S_teeth": "15", "S_teeth3": "63"}}));
+    no_errors(&s);
+    for p in &bodies[1..4] {
+        let c = centre(&mut s, &json!(p));
+        assert!((radius(c) - 19.5).abs() < 1e-3, "{p} at {c:?}, wanted 19.5 from the sun");
+    }
+    let refs: Vec<&str> = bodies.iter().map(String::as_str).collect();
+    let o = overlap(&mut s, &refs);
+    assert!(o < 0.05, "the set overlaps by {o} mm³ after the tooth change");
+}
+
+/// A tooth count edited into undercut leaves one body (the formulas' fillet and flank overlap
+/// in small loops, which are not extruded).
+#[test]
+fn a_parametric_tooth_count_into_undercut_leaves_one_body() {
+    for (bore, teeth) in [(None, 13), (Some(8.0), 13), (None, 4)] {
+        let mut p = json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 8, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "G", "name": "E"});
+        if let Some(d) = bore {
+            p["bore"] = json!({"type": "round", "diameter": d});
+        }
+        let mut s = Session::default();
+        let (r, _) = made(&mut s, p.clone());
+        let body = r["bodies"][0].as_str().unwrap().to_string();
+        run(&mut s, "parameters.change", json!({"name": "G_teeth", "expression": teeth.to_string()}));
+        no_errors(&s);
+        let all: Vec<String> = s.model.state().bodies.iter().map(|b| b.name.clone()).collect();
+        assert_eq!(all, vec![body.clone()], "bore {bore:?}, {teeth} teeth");
+        let v = volume(&mut s, &body);
+        assert!(v > 0.0);
+        if teeth == 13 {
+            let mut f = p.clone();
+            f["teeth"] = json!(13);
+            for k in ["tooth_curves", "parametric", "parameter_prefix"] {
+                f.as_object_mut().unwrap().remove(k);
+            }
+            let (_, fitted) = made(&mut Session::default(), f);
+            assert!((v / fitted - 1.0).abs() < 2e-3, "bore {bore:?}: {v} vs fitted {fitted}");
+        }
+    }
+}
+
+/// A parametric set's clearance body follows the parameters: its envelope grows with the tip
+/// and the face, as the clearance of the set made with those numbers.
+#[test]
+fn a_parametric_clearance_body_follows_the_parameters() {
+    let base = json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 8, "name": "E", "clearance_body": {}});
+    let clearance_of = |p: Value| {
+        let mut s = Session::default();
+        let r = run(&mut s, "gear.create", p);
+        let name = r["clearance"].as_str().unwrap().to_string();
+        volume(&mut s, &name)
+    };
+    let mut p = base.clone();
+    p["tooth_curves"] = json!("equations");
+    p["parametric"] = json!(true);
+    p["parameter_prefix"] = json!("E");
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", p);
+    no_errors(&s);
+    let name = r["clearance"].as_str().unwrap().to_string();
+    let mut q = base.clone();
+    let v20 = clearance_of(q.clone());
+    assert!((volume(&mut s, &name) / v20 - 1.0).abs() < 1e-6);
+    run(&mut s, "parameters.change", json!({"name": "E_teeth", "expression": "30"}));
+    no_errors(&s);
+    q["teeth"] = json!(30);
+    let v30 = clearance_of(q.clone());
+    let v = volume(&mut s, &name);
+    assert!((v / v30 - 1.0).abs() < 2e-3, "clearance {v} vs the z30 set's {v30}");
+    run(&mut s, "parameters.change", json!({"name": "E_face_width", "expression": "12 mm"}));
+    no_errors(&s);
+    q["face_width"] = json!(12);
+    let v12 = clearance_of(q);
+    let v = volume(&mut s, &name);
+    assert!((v / v12 - 1.0).abs() < 2e-3, "clearance {v} vs the 12 mm set's {v12}");
+    // A housing cut from it does not touch the gear.
+    let gear = r["bodies"][0].as_str().unwrap().to_string();
+    run(&mut s, "solid.box", json!({"length": 90, "width": 90, "height": 20, "center": [0, 0, 6], "body_name": "Housing"}));
+    run(&mut s, "solid.combine", json!({"target": "Housing", "tools": [name], "operation": "cut", "keep_tools": true}));
+    assert!(overlap(&mut s, &["Housing", &gear]) < 1e-3);
+}
+
+/// An equation set made fitted again by gear.update takes away the design parameters it made,
+/// except those something else uses.
+#[test]
+fn an_update_back_to_fitted_teeth_removes_the_sets_parameters() {
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 30, "face_width": 8, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "P"}));
+    let group = r["group"].as_u64().unwrap();
+    assert!(s.doc.params.iter().filter(|p| p.name.starts_with("P_")).count() > 5);
+    run(&mut s, "parameters.add", json!({"name": "Mine", "expression": "P_module * 2", "unit": "mm"}));
+    run(&mut s, "gear.update", json!({"group": group, "tooth_curves": "fitted", "parametric": false}));
+    no_errors(&s);
+    let left: Vec<&str> = s.doc.params.iter().map(|p| p.name.as_str()).filter(|n| n.starts_with("P_")).collect();
+    assert_eq!(left, vec!["P_module"], "only the one Mine uses stays");
+    assert!(s.doc.param("Mine").is_some());
+    assert_eq!(formulas(&s), (0, 0));
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.doc.param("P_teeth").is_some(), "undo brings them back");
 }

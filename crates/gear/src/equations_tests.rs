@@ -1,6 +1,8 @@
 //! The tooth formulas against the exact numeric teeth they stand for.
 
 use crate::equations::{Edge, End, Form, Repeat, TeethSource, ToothCell, cell_for, cell_of, eval, render};
+use std::f64::consts::TAU;
+
 use crate::geom::{Outline, V2};
 use crate::involute::{ToothFlank, rack_outline};
 use crate::plan::{Kind, Spec, Step, plan};
@@ -410,5 +412,176 @@ mod serde_json_lite {
     pub fn cmd(name: &str, kv: &[(&str, String)]) -> String {
         let body: Vec<String> = kv.iter().map(|(k, v)| format!("\"{k}\":{v}")).collect();
         format!("{{\"command\":\"{name}\",\"params\":{{{}}}}}", body.join(","))
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Parametric sets: where the members sit and how they turn, as formulas
+// ---------------------------------------------------------------------------------------------
+
+/// `vars` worked out again with some inputs changed (each derived value from its formula, in
+/// order).
+fn again(vars: &crate::equations::Vars, inputs: &[(&str, f64)]) -> crate::equations::Vars {
+    let mut out = crate::equations::Vars::default();
+    for v in &vars.list {
+        let mut v = v.clone();
+        if v.input {
+            if let Some((_, x)) = inputs.iter().find(|(k, _)| *k == v.key) {
+                v.value = *x;
+            }
+        } else {
+            v.value = out.eval(&v.expr, None).unwrap_or_else(|e| panic!("{}: {e}", v.key));
+        }
+        out.list.push(v);
+    }
+    out
+}
+
+/// The cells of a plan's toothed prism outlines, by member name.
+fn cells(s: &Spec) -> Vec<ToothCell> {
+    let p = plan(s).unwrap();
+    prism_outlines(s).iter().filter_map(|o| cell_for(&p.teeth, o)).collect()
+}
+
+fn same_angle(a: f64, b: f64, period: f64) -> bool {
+    let d = (a - b) / period;
+    (d - d.round()).abs() < 1e-7
+}
+
+#[test]
+fn the_centre_distance_formula_is_the_working_centre_distance() {
+    for (z1, z2, x1, x2, helix) in [(20, 30, 0.0, 0.0, 0.0), (13, 41, 0.4, 0.1, 0.0), (17, 23, -0.2, 0.5, 15.0), (9, 60, 0.6, -0.3, 30.0)] {
+        let s = spec(Kind::Pair, |s| {
+            s.teeth = z1;
+            s.teeth2 = z2;
+            s.shift = x1;
+            s.shift2 = x2;
+            s.helix = helix;
+        });
+        let p = plan(&s).unwrap();
+        let a = p.facts.iter().find(|f| f.label == "centre distance").unwrap().value;
+        let (index, x, y) = p.placing.centres.first().cloned().unwrap_or_else(|| panic!("{z1}/{z2}: no centre formula"));
+        let (cx, cy) = p.placing.value(&x, &y).unwrap();
+        assert!((cx - a).abs() < 1e-9 && cy.abs() < 1e-12, "{z1}/{z2} x {x1}/{x2} β {helix}: {cx} vs {a}");
+        assert_eq!(p.bodies[index].frame.origin[0], a);
+    }
+}
+
+/// A pair edited through its parameters: gear 2's centre and phase formulas, worked out again,
+/// are the new set's.
+#[test]
+fn a_pairs_place_and_phase_follow_its_parameters() {
+    let s = spec(Kind::Pair, |s| {
+        s.module = 2.0;
+        s.teeth = 20;
+        s.teeth2 = 30;
+    });
+    let p = plan(&s).unwrap();
+    let g2 = cells(&s).into_iter().find(|c| c.who == "gear 2").unwrap();
+    assert!(g2.vars.get("gear2_phase").is_some(), "gear 2 is turned by a formula");
+    for (z1, z2, x1) in [(24, 30, 0.0), (24, 33, 0.3), (13, 30, 0.0)] {
+        let inputs = [("teeth", f64::from(z1)), ("teeth2", f64::from(z2)), ("shift", x1)];
+        let placing = again(&p.placing.vars, &inputs);
+        let cell = again(&g2.vars, &inputs);
+        let t = spec(Kind::Pair, |t| {
+            t.module = 2.0;
+            t.teeth = z1;
+            t.teeth2 = z2;
+            t.shift = x1;
+        });
+        let q = plan(&t).unwrap();
+        let (_, x, _) = &p.placing.centres[0];
+        assert!((placing.eval(x, None).unwrap() - q.bodies[1].frame.origin[0]).abs() < 1e-9, "{z1}/{z2}");
+        let new = cells(&t).into_iter().find(|c| c.who == "gear 2").unwrap();
+        let (a, b) = (cell.value("gear2_phase").unwrap(), new.vars.value("gear2_phase").unwrap());
+        assert!(same_angle(a, b, TAU / f64::from(z2)), "{z1}/{z2}: phase {a} vs {b}");
+    }
+}
+
+/// A planetary set edited through its parameters: the planets' centres and phases and the
+/// ring's phase, worked out again, are the new set's (evenly and unevenly spaced planets).
+#[test]
+fn a_planetary_sets_places_and_phases_follow_its_parameters() {
+    let base = |zs: u32, zr: u32, m: f64| {
+        spec(Kind::Planetary, |s| {
+            s.module = m;
+            s.teeth = zs;
+            s.teeth2 = 24;
+            s.teeth3 = zr;
+            s.planets = 3;
+        })
+    };
+    let s = base(12, 60, 1.0);
+    let p = plan(&s).unwrap();
+    assert_eq!(p.placing.centres.len(), 3);
+    let made = cells(&s);
+    for (zs, zr, m) in [(12, 60, 1.25), (15, 63, 1.0), (13, 61, 1.0), (14, 62, 1.5)] {
+        let inputs = [("teeth", f64::from(zs)), ("teeth3", f64::from(zr)), ("module", m)];
+        let placing = again(&p.placing.vars, &inputs);
+        let t = base(zs, zr, m);
+        let q = plan(&t).unwrap();
+        let planets: Vec<&crate::plan::Body> = q.bodies.iter().filter(|b| b.name.starts_with("Planet")).collect();
+        for (k, (_, x, y)) in p.placing.centres.iter().enumerate() {
+            let (cx, cy) = (placing.eval(x, None).unwrap(), placing.eval(y, None).unwrap());
+            let o = planets[k].frame.origin;
+            assert!((cx - o[0]).abs() < 1e-9 && (cy - o[1]).abs() < 1e-9, "{zs}/{zr} m{m} planet {}: ({cx}, {cy}) vs {o:?}", k + 1);
+        }
+        let now = cells(&t);
+        for cell in &made {
+            let Some(key) = cell.vars.list.iter().find(|v| v.key.ends_with("_phase")).map(|v| v.key.clone()) else { continue };
+            let (period, who) = if key == "ring_phase" { (TAU / f64::from(zr), "ring") } else { (TAU / 24.0, "planet") };
+            let a = again(&cell.vars, &inputs).value(&key).unwrap();
+            let new = now.iter().find(|c| c.who == who && c.vars.get(&key).is_some()).unwrap_or_else(|| panic!("{zs}/{zr}: no {key}"));
+            let b = new.vars.value(&key).unwrap();
+            assert!(same_angle(a, b, period), "{zs}/{zr} m{m} {key}: {a} vs {b}");
+        }
+    }
+}
+
+/// A parametric spur gear's clearance profile, its followed vertices worked out for other
+/// parameters, has the new set's envelope (largest radius, ends along the axis).
+#[test]
+fn a_clearance_profile_follows_the_tip_and_the_face() {
+    let base = |z: u32, face: f64| {
+        spec(Kind::Spur, |s| {
+            s.module = 2.0;
+            s.teeth = z;
+            s.face_width = face;
+            s.clearance_body = Some(crate::clearance::Clearance::default());
+        })
+    };
+    let s = base(20, 8.0);
+    let p = plan(&s).unwrap();
+    let cell = cells(&s).into_iter().next().unwrap();
+    let envelope = |profile: &[V2]| {
+        let r = profile.iter().map(|q| q.x).fold(0.0, f64::max);
+        let (z0, z1) = profile.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q.y), a.1.max(q.y)));
+        (r, z0, z1)
+    };
+    let profile_of = |p: &crate::plan::Plan| match &p.clearance.as_ref().unwrap().steps[0] {
+        Step::Placed { step, .. } => match step.as_ref() {
+            Step::Revolve { profile, .. } => profile.clone(),
+            _ => panic!("not a revolve"),
+        },
+        _ => panic!("not placed"),
+    };
+    let follow = &p.clearance_follow[0];
+    let profile = profile_of(&p);
+    assert_eq!(follow.len(), profile.len());
+    assert!(follow.iter().any(|f| f.r.is_some()) && follow.iter().any(|f| f.z.is_some()), "{follow:?}");
+    for (z, face) in [(30, 8.0), (13, 12.0), (40, 5.0)] {
+        let vars = again(&cell.vars, &[("teeth", f64::from(z)), ("face_width", face)]);
+        let moved: Vec<V2> = profile
+            .iter()
+            .zip(follow)
+            .map(|(q, f)| {
+                let x = f.r.as_ref().map_or(q.x, |(tpl, at)| q.x + vars.eval(tpl, None).unwrap() - at);
+                let y = f.z.as_ref().map_or(q.y, |(k, key, at)| q.y + k * (vars.value(key).unwrap() - at));
+                V2::new(x, y)
+            })
+            .collect();
+        let want = envelope(&profile_of(&plan(&base(z, face)).unwrap()));
+        let got = envelope(&moved);
+        assert!((got.0 - want.0).abs() < 1e-3 && (got.1 - want.1).abs() < 0.05 && (got.2 - want.2).abs() < 0.05, "z{z} face {face}: {got:?} vs {want:?}");
     }
 }

@@ -364,6 +364,8 @@ pub(crate) fn tooth_body(s: &Spec, g: &Involute, f: &ToothFlank, phase: f64, fac
         backlash: s.backlash,
         face,
         face_key: if (face - s.face_width).abs() <= 1e-12 { "face_width".into() } else { "face_width2".into() },
+        phases: Vec::new(),
+        extra: Default::default(),
     });
     let outline = teeth_outline(f, g.teeth, phase);
     let twist_total = face * g.helix.tan() / g.r();

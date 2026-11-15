@@ -6,7 +6,7 @@ use std::f64::consts::TAU;
 use crate::clearance::{Clearance, Motion, Seat, motions, spacing};
 use crate::hub::{BEARINGS, Bore, BoreKind, bearing, bearing_series};
 use crate::mesh3d::Solid;
-use crate::plan::{Frame, Kind, Op, Plan, Spec, Step, plan};
+use crate::plan::{Body, Frame, Kind, Op, Plan, Spec, Step, plan};
 
 type P3 = [f64; 3];
 
@@ -469,4 +469,80 @@ fn bevel_planet_clearance_is_quick_enough() {
         assert_eq!(bare.bodies, p.bodies);
         contains_every_member(&s, &p, 0.01);
     }
+}
+
+/// A step's operation (a placed step's own).
+fn op_of(st: &Step) -> Op {
+    match st {
+        Step::Prism { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => *op,
+        Step::Placed { step, .. } => op_of(step),
+    }
+}
+
+/// Members with hubs, bores and integral shafts on both sides, joined after the cone trims of
+/// bevels and hypoids: the keep-out holds every part of their material (each part joined after
+/// the body's last trim, sampled on its own, turned round its axis), and a whole body's
+/// material points reach as far along its axis as those parts do.
+#[test]
+fn keep_out_holds_hubs_and_shafts_joined_after_trims() {
+    let bore = Bore { kind: BoreKind::Round, diameter: 6.0, ..Bore::default() };
+    let shaft = crate::hub::Shaft { diameter: 8.0, length: 10.0, ..crate::hub::Shaft::default() };
+    let dressed = |kind: Kind| Spec {
+        bore,
+        bore2: bore,
+        hub_diameter: 0.0,
+        hub_length: 0.0,
+        shaft_front: shaft,
+        shaft_back: shaft,
+        shaft2_front: shaft,
+        shaft2_back: shaft,
+        clearance_body: Some(Clearance::default()),
+        ..Spec::defaults_for(kind)
+    };
+    let hubbed = |kind: Kind| Spec { bore, bore2: bore, hub_diameter: 30.0, hub_length: 8.0, clearance_body: Some(Clearance::default()), ..Spec::defaults_for(kind) };
+    let mut checked = 0;
+    for kind in [Kind::Bevel, Kind::SpiralBevel, Kind::BevelPlanetary, Kind::Hypoid, Kind::Pair, Kind::Spur, Kind::Helical] {
+        for (what, s) in [("shafts", dressed(kind)), ("hub", hubbed(kind))] {
+            let p = match plan(&s) {
+                Ok(p) => p,
+                Err(e) => panic!("{kind:?} with {what}: {e}"),
+            };
+            let keep = Solid::new(p.clearance.as_ref().unwrap(), 0.002);
+            let c = s.clearance_body.clone().unwrap();
+            let ms = motions(s.kind, &p.bodies);
+            for (b, m) in p.bodies.iter().zip(&ms) {
+                if *m == Motion::Ring {
+                    continue;
+                }
+                let last_trim = b.steps.iter().rposition(|st| op_of(st) == Op::Intersect);
+                let whole = Solid::new(b, 0.2).material_points(0.3);
+                let (wlo, whi) = whole.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q[2]), a.1.max(q[2])));
+                for (i, st) in b.steps.iter().enumerate() {
+                    if last_trim.is_none_or(|t| i < t) || !matches!(op_of(st), Op::Join | Op::New) {
+                        continue;
+                    }
+                    let alone = Body { name: String::new(), frame: b.frame, steps: vec![st.clone()] };
+                    let pts = Solid::new(&alone, 0.2).material_points(0.3);
+                    let (lo, hi) = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q[2]), a.1.max(q[2])));
+                    assert!(wlo <= lo + 0.31 && whi >= hi - 0.31, "{kind:?} {what}: {} step {i} reaches {lo}..{hi}, its material points only {wlo}..{whi}", b.name);
+                    let every = (pts.len() / 400).max(1);
+                    for (j, q) in pts.iter().enumerate().step_by(every) {
+                        let a = 0.7 * j as f64;
+                        let (x, y) = (q[0] * a.cos() - q[1] * a.sin(), q[0] * a.sin() + q[1] * a.cos());
+                        let w = b.frame.world([x, y, q[2]]);
+                        let w = match m {
+                            Motion::Orbits { about, .. } => turn_about(w, about.origin, about.z, 0.5 + 0.3 * j as f64),
+                            _ => w,
+                        };
+                        assert!(keep.contains(w), "{kind:?} {what}: {} step {i} (joined after the trim) point {q:?} is outside the keep-out", b.name);
+                        checked += 1;
+                    }
+                }
+            }
+            let tried = contains_every_member(&s, &p, 0.01);
+            assert!(tried > 0, "{kind:?} {what}");
+            let _ = c;
+        }
+    }
+    assert!(checked > 500, "only {checked} points of parts joined after a trim");
 }

@@ -666,11 +666,16 @@ impl Solid {
     ///
     /// A body trimmed by a part it is intersected with (a flat bevel's back and front cones)
     /// keeps only the points inside every such part, and adds the trimming part's own points
-    /// that lie in the material: the trimmed body's surface, not the untrimmed one's.
+    /// that lie in the material: the trimmed body's surface, not the untrimmed one's. A trim
+    /// takes away only from what was made before it, as the body is built: a hub or a shaft
+    /// joined after the trim keeps all its points.
     pub fn material_points(&self, hz: f64) -> Vec<P3> {
         let mut out = Vec::new();
         let trims: Vec<usize> = self.parts.iter().enumerate().filter(|(_, (_, op))| *op == Op::Intersect).map(|(i, _)| i).collect();
-        let kept = |p: &P3, own: usize| trims.iter().all(|&t| t == own || self.parts[t].0.contains(*p));
+        // A point of part `own` stays if every trim after it holds it.
+        let kept = |p: &P3, own: usize| trims.iter().all(|&t| t <= own || self.parts[t].0.contains(*p));
+        // A trim's own surface is material where something made before it was.
+        let made_before = |p: &P3, trim: usize| self.parts[..trim].iter().any(|(q, o)| matches!(o, Op::New | Op::Join) && q.contains(*p));
         for (i, (part, op)) in self.parts.iter().enumerate() {
             let adds = matches!(op, Op::New | Op::Join);
             if !adds && *op != Op::Intersect {
@@ -685,7 +690,7 @@ impl Solid {
                         out.extend(row);
                         continue;
                     }
-                    out.extend(row.into_iter().filter(|p| kept(p, i) && (adds || self.parts.iter().any(|(q, o)| matches!(o, Op::New | Op::Join) && q.contains(*p)))));
+                    out.extend(row.into_iter().filter(|p| kept(p, i) && (adds || made_before(p, i))));
                 }
             }
         }

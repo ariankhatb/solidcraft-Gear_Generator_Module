@@ -943,6 +943,11 @@ fn one_way(queries: &[Sample], target: &Solid, ts: &[Sample], cell: f64) -> (f64
             Some((dist, along, true)) => {
                 if along >= 0.0 {
                     dist
+                // Behind a patch near the body's edge but not in the body (just past a convex
+                // edge, where a face's plane runs on beyond the body): outside, by the body's
+                // own word. Asked only for depths the checks could count.
+                } else if dist > 1e-3 && !target.contains(q.p) {
+                    dist
                 } else {
                     -dist
                 }
@@ -1165,6 +1170,7 @@ pub fn expected_gap(s: &Spec) -> (f64, f64) {
             let g = 0.25 * (j + j2) * an.cos() * gamma.cos();
             (g, g)
         }
+        Kind::BevelPlanetary => crate::plan::bevel_planet::expected_gap(s),
         _ => (0.0, j * an.cos()),
     }
 }
@@ -1185,6 +1191,9 @@ pub struct MeshPair3 {
     pub gap: (f64, f64),
     /// The length tolerances scale with (the module; mm).
     pub scale: f64,
+    /// The two members' names when they aren't the preview's `a` and `b` (a bevel planetary
+    /// set's preview shows one planet; its meshes name every planet).
+    pub labels: Option<[String; 2]>,
 }
 
 /// The 3D meshes of a planned set whose axes are not parallel: `whole`, the whole set's two
@@ -1200,7 +1209,7 @@ pub fn topology(s: &Spec, planned: &[Body], whole: Option<Vec<Body>>) -> Vec<Mes
         None => return Vec::new(),
     };
     let (ratio, _, period) = motion(s);
-    vec![MeshPair3 { a: 0, b: 1, bodies, ratio, period, gap: expected_gap(s), scale: s.module }]
+    vec![MeshPair3 { a: 0, b: 1, bodies, ratio, period, gap: expected_gap(s), scale: s.module, labels: None }]
 }
 
 /// Driver angles [`check`] probes over one tooth pitch.
@@ -1220,7 +1229,10 @@ pub fn check(plan: &Plan, m: &MeshPair3) -> MeshResult {
     let mut pair = Pair::for_run(ba, bb, m.scale / 10.0, m.scale / 3.0, m.ratio, -0.5 * m.period, 0.5 * m.period);
     let r = pair.run(m.ratio, 0.0, -0.5 * m.period, 0.5 * m.period, CHECK_STEPS);
     let name = |i: usize| plan.preview.get(i).map_or_else(|| format!("member {}", i + 1), |g| g.name.clone());
-    let (na, nb) = (name(m.a), name(m.b));
+    let (na, nb) = match &m.labels {
+        Some([a, b]) => (a.clone(), b.clone()),
+        None => (name(m.a), name(m.b)),
+    };
     let (depth, gap_min, gap_max) = (r.penetration, if r.gap_min.is_finite() { r.gap_min } else { 0.0 }, r.gap_max);
     let (verdict, message) = if depth > CHECK_DEPTH * m.scale {
         (Verdict::Interferes, format!("{na} and {nb} interfere: they overlap by {depth:.3} mm"))

@@ -1494,7 +1494,7 @@ fn in_place(s: &mut Session, rec: &Record, plan: &Plan, names: &[String], mode: 
                 if changed {
                     s.refresh();
                 }
-                let params = def.with_exprs(step_params(s, body, step, &ids, name, name)?);
+                let params = def_params(s, &def, body, step, &ids, name, name)?;
                 // The same feature over sketches that moved or were redrawn follows them by
                 // itself; anything else is redefined.
                 let outcome = if params == was.params {
@@ -1844,11 +1844,13 @@ struct StepDef {
     /// design parameters, in place of the numbers.
     distance: Option<String>,
     twist: Option<String>,
+    /// A mirrored half ([`mirrored_half`]): the mirror plane's point and normal (world).
+    mirror: Option<([f64; 3], [f64; 3])>,
 }
 
 impl StepDef {
     fn new(sketches: Vec<SketchDef>, command: &'static str, shape: String, picks: bool) -> StepDef {
-        StepDef { sketches, command, shape, picks, distance: None, twist: None }
+        StepDef { sketches, command, shape, picks, distance: None, twist: None, mirror: None }
     }
     /// A step's feature parameters with the expressions put in.
     fn with_exprs(&self, mut params: Value) -> Value {
@@ -1864,6 +1866,41 @@ impl StepDef {
         }
         params
     }
+}
+
+/// A herringbone's second half, when step `i` of `body` is it: the first step's twisted prism
+/// turned back the other way above it, which is that prism mirrored in the plane between them
+/// (each point of the upper half at height `d` above it lies where the lower half's point `d`
+/// below it does, turned the same). Mirrored and joined, it is the same solid for one sweep and
+/// a mirror in place of two sweeps (a 20-tooth gear's halves 2.7 s and 5.4 s swept and joined,
+/// 3.1 s and 2.8 s swept and mirrored, the volume the same to 1e-13). The plane's height, in the
+/// body's frame. Teeth drawn from their formulas keep their two sweeps: their heights follow
+/// the design's parameters, which the mirror's plane does not.
+fn mirrored_half(body: &Body, i: usize, step: &Step, mode: &equations::Mode) -> Option<f64> {
+    let (Some(Step::Prism { region: r0, z0: a, height: h, twist: t, op: Op::New }), Some(Step::Prism { region: r1, z0: b, height: h1, twist: t1, op: Op::Join })) =
+        (body.steps.first(), body.steps.get(1))
+    else {
+        return None;
+    };
+    let turned = Region { outer: r0.outer.iter().map(|o| o.rotated(*t)).collect(), holes: r0.holes.iter().map(|o| o.rotated(*t)).collect() };
+    let same = i == 1
+        && matches!(step, Step::Prism { .. })
+        && t.abs() > 1e-12
+        && *t1 == -*t
+        && h1 == h
+        && (b - (a + h)).abs() <= 1e-9 * (1.0 + h.abs())
+        && *r1 == turned
+        && mode.sketch_for(r0).is_none()
+        && mode.sketch_for(r1).is_none();
+    same.then_some(*b)
+}
+
+/// The parameters of a step's feature: [`step_params`], or a mirrored half's own.
+fn def_params(s: &Session, def: &StepDef, body: &Body, step: &Step, sketches: &[u64], target: &str, body_name: &str) -> Result<Value> {
+    if let Some((origin, normal)) = def.mirror {
+        return Ok(json!({"bodies": [target], "plane": {"origin": origin, "normal": normal}, "combine": true}));
+    }
+    Ok(def.with_exprs(step_params(s, body, step, sketches, target, body_name)?))
 }
 
 /// How far along its axis a trimming blank (a bevel's back and front cones) is tried: the
@@ -1885,6 +1922,11 @@ fn step_def(body: &Body, i: usize, step: &Step, nudge: f64, mode: &equations::Mo
         geometry(o, &mut g);
         vec![g]
     };
+    if let Some(z_mid) = mirrored_half(body, i, step, mode) {
+        let mut def = StepDef::new(Vec::new(), "solid.mirror", "mirrored half (join)".into(), false);
+        def.mirror = Some((f.world([0.0, 0.0, z_mid]), z));
+        return def;
+    }
     match step {
         // A placed step (a radial hole, say): its own frame, given in the body's.
         Step::Placed { frame, step } => {
@@ -1994,14 +2036,12 @@ fn step_params(s: &Session, body: &Body, step: &Step, sketches: &[u64], target: 
 /// Builds every body of the plan, each under its name in `names` where there is one (an
 /// update keeps the names the bodies had).
 fn build_set(s: &mut Session, plan: &Plan, names: &[String], warnings: &mut Vec<String>, mode: &equations::Mode) -> Result<Vec<BodyRecord>> {
-    // Lofts through many tooth sections (a hypoid set) are many hundreds of faces: the kernel's
-    // full check of them takes several times as long as making them (minutes for a ring gear),
-    // so they are built without it. The check still runs whenever the features are computed again.
-    let heavy = plan.bodies.iter().flat_map(|b| &b.steps).any(|st| matches!(st, Step::Loft { sections, .. } if sections.len() > 6));
+    // A gear's teeth are hundreds of faces: the kernel's full check of them takes about as long
+    // as making them (a spiral bevel's twisted lofts 7 s of 13, a planetary set 3 s of 5, a
+    // hypoid's minutes for the ring gear), so the set is built without it. The check still runs whenever the features are computed
+    // again (an edit before them, or the design opened).
     let checked = s.validation();
-    if heavy {
-        s.set_validation(solidcraft_kernel::Validation::Off);
-    }
+    s.set_validation(solidcraft_kernel::Validation::Off);
     let mut made = Vec::new();
     let mut built = Ok(());
     let gears = plan.bodies.len();
@@ -2064,7 +2104,7 @@ fn build_body(s: &mut Session, body: &Body, warnings: &mut Vec<String>, mode: &e
                 // another has not worked out yet.
                 s.refresh();
             }
-            let params = def.with_exprs(step_params(s, body, step, &ids, &name, &body.name)?);
+            let params = def_params(s, &def, body, step, &ids, &name, &body.name)?;
             match s.execute(def.command, &params) {
                 Ok(reply) => {
                     if k > 0 && let (Step::Loft { sections: all, .. }, Step::Loft { sections: used, .. }) = (&body.steps[i], step) {

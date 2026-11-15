@@ -297,6 +297,27 @@ fn a_set_is_kept_and_inspected() {
     assert!(run(&mut s, "gear.inspect", json!({}))["sets"].as_array().unwrap().is_empty());
 }
 
+/// A herringbone's upper half is its lower half mirrored and joined (one sweep, not two): the
+/// solid the two sweeps made (14043.12 mm³, kernel scripts of both), and it updates in place.
+#[test]
+fn a_herringbone_is_one_sweep_mirrored_and_updates_in_place() {
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "herringbone"}));
+    let group = r["group"].as_u64().unwrap();
+    let body = r["bodies"][0].as_str().unwrap().to_string();
+    let v = volume(&mut s, &body);
+    assert!((v / 14043.1213 - 1.0).abs() < 1e-3, "{v}");
+    let set = run(&mut s, "gear.inspect", json!({"group": group}))["sets"][0].clone();
+    let features = set["features"].clone();
+    // The lower half's profile, path and sweep, and the mirror.
+    assert_eq!(features.as_array().map(Vec::len), Some(4), "{set}");
+    let u = run(&mut s, "gear.update", json!({"group": group, "face_width": 20}));
+    assert_eq!(u["updated"], "in_place", "{u}");
+    let after = volume(&mut s, &body);
+    assert!((after / (2.0 * v) - 1.0).abs() < 1e-3, "{v} -> {after}");
+    assert_eq!(run(&mut s, "gear.inspect", json!({"group": group}))["sets"][0]["features"], features);
+}
+
 /// Changing a number regenerates the set in place: the same body, folder and features, another
 /// size, one undo step.
 #[test]
@@ -596,6 +617,8 @@ fn a_sketch_point_is_a_shaft_normal_to_its_sketch() {
     let r = run(&mut s, "gear.from_axes", json!({"axis1": {"sketch": sk, "point": "c"}, "axis2": "Z"}));
     assert_eq!(r["relation"]["kind"], "parallel", "{r}");
     assert!((r["relation"]["distance"].as_f64().unwrap() - 30.0).abs() < 1e-9);
+}
+
 // ---------------------------------------------------------------------------------------------
 // The clearance body (keep-out volume for a housing)
 // ---------------------------------------------------------------------------------------------

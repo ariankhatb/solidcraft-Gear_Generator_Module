@@ -26,6 +26,12 @@ impl<'de> Deserialize<'de> for GearAxis {
                 _ => Err(D::Error::custom("a sketch line axis is {\"sketch\": id or name, \"curve\": the line's id}")),
             };
         }
+        if v.is_object() && v.get("point").is_some() && v.get("sketch").is_some() {
+            return match (v.get("point").and_then(Value::as_str), v.get("sketch")) {
+                (Some(_), Some(Value::String(_) | Value::Number(_))) => Ok(GearAxis(v)),
+                _ => Err(D::Error::custom("a sketch point axis is {\"sketch\": id or name, \"point\": the point's id}")),
+            };
+        }
         AxisLine::deserialize(v).map(|a| GearAxis(a.0)).map_err(D::Error::custom)
     }
 }
@@ -39,10 +45,11 @@ impl JsonSchema for GearAxis {
         if let Some(o) = schema.as_object_mut() {
             o.insert(
                 "description".into(),
-                json!("A shaft axis: X, Y or Z, a construction axis's name, {\"origin\"?: [x, y, z] in mm, \"dir\": [x, y, z]}, a straight or circular edge or a cylinder, cone or torus face of a body ({\"edge\": [x, y, z]} or {\"face\": [x, y, z]}, a point on it), or a straight sketch line ({\"sketch\": id or name, \"curve\": id}). Read once: the gears do not follow the axis afterwards."),
+                json!("A shaft axis: X, Y or Z, a construction axis's name, {\"origin\"?: [x, y, z] in mm, \"dir\": [x, y, z]}, a straight or circular edge or a cylinder, cone or torus face of a body ({\"edge\": [x, y, z]} or {\"face\": [x, y, z]}, a point on it), a straight sketch line ({\"sketch\": id or name, \"curve\": id}), or a sketch point, the shaft through it normal to its sketch ({\"sketch\": id or name, \"point\": id}). Read once: the gears do not follow the axis afterwards."),
             );
             if let Some(Value::Array(forms)) = o.get_mut("anyOf") {
                 forms.push(json!({"type": "object", "properties": {"sketch": {"type": ["string", "integer"]}, "curve": {"type": "string"}}, "required": ["sketch", "curve"]}));
+                forms.push(json!({"type": "object", "properties": {"sketch": {"type": ["string", "integer"]}, "point": {"type": "string"}}, "required": ["sketch", "point"]}));
             }
         }
         schema

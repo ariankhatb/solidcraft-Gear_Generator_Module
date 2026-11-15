@@ -9,7 +9,10 @@
 //!   spur and helical teeth, cone frusta for bevels, the lofted hypoid members' own radius along
 //!   the axis, a worm's thread and a throated wheel's throat;
 //! - planets orbiting the sun (the carrier may turn) and a cycloidal drive's disc orbiting the
-//!   input (disc radius + eccentricity): revolves about the set's axis;
+//!   input (disc radius + eccentricity): revolves about the set's axis; a bevel planetary set's
+//!   planets, tilted to the sun's axis, are turned about their own axes first (their material
+//!   swept round) and then revolved about the sun's, a second sun turning on the sun's axis and
+//!   a bevel ring taken as a ring;
 //! - a rack's slot: its bounding box made longer by the travel it slides over;
 //! - an internal ring (and a cycloidal drive's pin ring): its outer rim, or nothing when the ring
 //!   is part of the housing ([`Clearance::ring_as_housing`]);
@@ -156,6 +159,16 @@ pub(crate) fn motions(kind: Kind, bodies: &[Body]) -> Vec<Motion> {
             Kind::Planetary if i > 0 => orbit(&bodies[0].frame, &bodies[i].frame),
             Kind::CycloidalDrive if n >= 2 && i == 1 => Motion::Ring,
             Kind::CycloidalDrive if n >= 2 && i == 0 => orbit(&bodies[1].frame, &bodies[0].frame),
+            // Sun first; members off its axis are planets; on it, the ring has the sun's
+            // apex-pointing z (a second sun's points the other way).
+            Kind::BevelPlanetary if i > 0 => {
+                let (sun, f) = (&bodies[0].frame, &bodies[i].frame);
+                if coaxial(sun, f) {
+                    if dot(sun.z, f.z) > 0.0 { Motion::Ring } else { Motion::Turns }
+                } else {
+                    orbit(sun, f)
+                }
+            }
             _ => Motion::Turns,
         })
         .collect()
@@ -312,10 +325,12 @@ fn build(s: &Spec, c: &Clearance, bodies: &[Body], preview: &[PreviewGear], fact
         let z = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q[2]), a.1.max(q[2])));
         let first = Solid::new(&Body { name: String::new(), frame: b.frame, steps: b.steps.iter().take(1).cloned().collect() }, 1.0);
         let mid = 0.5 * (first.z.0 + first.z.1);
-        let planet = matches!(motion, Motion::Orbits { .. }) && s.kind == Kind::Planetary;
+        let planet = matches!(motion, Motion::Orbits { .. }) && matches!(s.kind, Kind::Planetary | Kind::BevelPlanetary);
         let role = match motion {
             Motion::Ring => 0,
             _ if i == 0 => 1,
+            // A second sun has the sun's bore.
+            Motion::Turns if s.kind == Kind::BevelPlanetary => 1,
             _ => 2,
         };
         members.push(Member { who: who_of(s, b), body: b.clone(), motion: *motion, pts, z, teeth: first.z, mid, planet, hz, h, role, group: None, shaft: None, shaft_d: None });
@@ -364,12 +379,66 @@ fn build(s: &Spec, c: &Clearance, bodies: &[Body], preview: &[PreviewGear], fact
         g.hz = g.hz.max(m.hz);
         let mut zr = (f64::MAX, f64::MIN);
         let mut rmax = 0.0f64;
-        for q in &m.pts {
-            let zg = dot(sub(f.world(*q), g.frame.origin), g.frame.z);
-            let r = orbit + q[0].hypot(q[1]);
+        // An orbiting member whose axis is tilted to the one it goes round (bevel planets):
+        // each point swept round its own axis, every place measured about the group's. Its own
+        // clearances run partly across the group's axis and partly along it, so they are
+        // applied in its own frame: the radius grown by the radial one, the points also taken
+        // the axial one along its own axis either way (and the group's margins on top).
+        let tilted = orbit > 0.0 && norm(cross(f.z, g.frame.z)) > 1e-9;
+        let mut push = |zg: f64, r: f64, margin: f64| {
             zr = (zr.0.min(zg), zr.1.max(zg));
             rmax = rmax.max(r);
             g.pts.push((zg, r, margin));
+        };
+        if tilted {
+            // Swept round its own axis each row of points is a disc of its largest radius, and
+            // the distance from the group's axis along any chord of it is greatest at the rim:
+            // so only that rim, per row.
+            // Rows half a row spacing wide, at their middle with their largest radius, then
+            // each row's radius the largest within the axial clearance (and half a row) of it
+            // along its own axis: the points taken that far either way.
+            let wide = 0.5 * m.hz;
+            let mut rows: std::collections::BTreeMap<i64, f64> = std::collections::BTreeMap::new();
+            for q in &m.pts {
+                let row = rows.entry((q[2] / wide).floor() as i64).or_insert(0.0);
+                *row = row.max(q[0].hypot(q[1]));
+            }
+            let (Some(&k0), Some(&k1)) = (rows.keys().next(), rows.keys().next_back()) else { continue };
+            let w = ((ax + 0.5 * wide) / wide).ceil() as i64;
+            let rims: Vec<(f64, f64)> = (k0 - w..=k1 + w)
+                .filter_map(|k| {
+                    let r = rows.range(k - w..=k + w).map(|(_, r)| *r).fold(0.0, f64::max);
+                    (r > 0.0).then_some(((k as f64 + 0.5) * wide, r))
+                })
+                .collect();
+            let fine = m.h + 0.5 * m.hz + 0.002;
+            // The samples' need in bands along the group's axis: each band's largest radius at
+            // both its edges (every sample in it is within them, at that radius or less).
+            const BAND: f64 = 0.05;
+            let mut bands: std::collections::BTreeMap<i64, f64> = std::collections::BTreeMap::new();
+            for (z, rho) in rims {
+                let rho = rho + rad;
+                // Round the rim at the point spacing: a tilted rim's steps go along the group's
+                // axis too.
+                let n = (std::f64::consts::TAU * rho / m.h.min(m.hz)).ceil().clamp(8.0, 4096.0) as usize;
+                for k in 0..n {
+                    let t = std::f64::consts::TAU * k as f64 / n as f64;
+                    let d = sub(f.world([rho * t.cos(), rho * t.sin(), z]), g.frame.origin);
+                    let zg = dot(d, g.frame.z);
+                    let r = norm(sub(d, scale(g.frame.z, zg)));
+                    let b = bands.entry((zg / BAND).floor() as i64).or_insert(0.0);
+                    *b = b.max(r);
+                }
+            }
+            for (k, r) in bands {
+                push(k as f64 * BAND, r, fine);
+                push((k + 1) as f64 * BAND, r, fine);
+            }
+        } else {
+            for q in &m.pts {
+                let zg = dot(sub(f.world(*q), g.frame.origin), g.frame.z);
+                push(zg, orbit + q[0].hypot(q[1]), margin);
+            }
         }
         let what = if orbit > 0.0 { "orbit" } else { "envelope" };
         facts.push((format!("clearance: {} {what} diameter", m.who), 2.0 * (rmax + margin), Unit::Mm));

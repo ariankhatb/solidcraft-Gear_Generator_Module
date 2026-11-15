@@ -315,6 +315,7 @@ pub(crate) fn member_color(m: usize) -> Color32 {
 fn members(k: Kind) -> &'static [&'static str] {
     match k {
         Kind::Planetary => &["Sun", "Planets", "Ring"],
+        Kind::BevelPlanetary => &["Sun", "Planets", "Sun 2 or ring"],
         Kind::Worm => &["Wheel", "Worm"],
         Kind::Hypoid => &["Pinion", "Ring gear"],
         Kind::Cycloidal => &["Wheel", "Pinion"],
@@ -340,6 +341,9 @@ pub(crate) fn member_of_outline(k: Kind, i: usize, name: &str) -> Option<usize> 
         Kind::Planetary if name.starts_with("planet") => 1,
         Kind::Planetary if name == "ring" => 2,
         Kind::Planetary => 0,
+        Kind::BevelPlanetary if name.starts_with("planet") => 1,
+        Kind::BevelPlanetary if name == "sun 2" || name == "ring" => 2,
+        Kind::BevelPlanetary => 0,
         Kind::Sprocket | Kind::Pulley if name == "chain" || name == "belt" => return None,
         Kind::Sprocket | Kind::Pulley => usize::from(name.ends_with('2')),
         Kind::Spline => usize::from(name == "hub"),
@@ -356,6 +360,9 @@ pub(crate) fn member_of_body(k: Kind, only: u8, i: usize, name: &str) -> usize {
         Kind::Planetary if name.contains("Planet ") => 1,
         Kind::Planetary if name.contains("Ring z") => 2,
         Kind::Planetary => 0,
+        Kind::BevelPlanetary if name.contains("Planet ") => 1,
+        Kind::BevelPlanetary if name.contains("Ring z") || name.contains("Sun 2 z") => 2,
+        Kind::BevelPlanetary => 0,
         Kind::FaceGear => usize::from(name.contains("pinion")),
         Kind::Spline => usize::from(name.contains("hub")),
         _ if only > 0 => usize::from(only - 1).min(last),
@@ -1628,8 +1635,18 @@ fn section_set(ui: &mut Ui, cx: &mut Cx<'_>) {
             num(ui, "Shaft angle", "Angle between the axes", &mut s.shaft_angle, 5.0..=175.0, 0.5, "°");
         }
     }
+    if k == Kind::BevelPlanetary {
+        if d.shaft_angle {
+            locked(ui, "Cone angle", format!("{:.3}°", b.shaft_angle));
+        } else {
+            num(ui, "Cone angle", "Sun shaft to planet shaft (90°: a car differential). With a second sun or ring their whole teeth set it: sun 2 or ring teeth = sun + 2 × planet × cos Σ", &mut s.shaft_angle, 5.0..=175.0, 0.5, "°");
+        }
+    }
     if k == Kind::SpiralBevel {
         num(ui, "Spiral angle", "Mean spiral angle; 35° is usual", &mut s.spiral_angle, 0.0..=60.0, 0.5, "°");
+    }
+    if k == Kind::BevelPlanetary {
+        num(ui, "Spiral angle", "Mean spiral angle of the sun (planets the other hand); 0: straight teeth", &mut s.spiral_angle, -60.0..=60.0, 0.5, "°");
     }
     if k == Kind::Pair && d.center_distance {
         let a = if b.center_distance > 0.0 { b.center_distance } else { b.module * f64::from(b.teeth + b.teeth2) / 2.0 / b.helix.to_radians().cos() };
@@ -2026,6 +2043,38 @@ fn section_member(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
             locked_note(ui, "Teeth", b.teeth.to_string(), "as gear 1");
             bore(ui, "Bore", "bore2", &mut s.bore2);
         }
+        (Kind::BevelPlanetary, 1) => {
+            count(ui, "Teeth", "", &mut s.teeth2, 6..=2000);
+            count(ui, "Planets", "Patterned round the sun's shaft; with a second sun or ring, (sun + its teeth) ÷ planets whole spaces them evenly", &mut s.planets, 1..=24);
+            num(ui, "First planet at", "The first planet's azimuth about the sun's shaft", &mut s.first_azimuth, -360.0..=360.0, 0.5, "°");
+            row(ui, "Mode", "What meshes the planets besides the sun", |ui| {
+                use solidcraft_gear::plan::BevelPlanetMode;
+                egui::ComboBox::from_id_salt("gear_bevel_planet_mode").selected_text(s.bevel_planet_mode.label()).show_ui(ui, |ui| {
+                    for m in BevelPlanetMode::ALL {
+                        ui.selectable_value(&mut s.bevel_planet_mode, m, m.label());
+                    }
+                });
+            });
+            bore(ui, "Bore", "bore2", &mut s.bore2);
+        }
+        (Kind::BevelPlanetary, 2) => {
+            if s.bevel_planet_mode == solidcraft_gear::plan::BevelPlanetMode::Single {
+                ui.label(egui::RichText::new("None: the mode is sun and planets").small().weak());
+            } else {
+                let mut far = s.teeth3;
+                row(ui, "Teeth", "0 (auto): the nearest whole count at the cone angle; a count sets the cone angle", |ui| {
+                    if ui.add(egui::DragValue::new(&mut far).range(0..=4000).speed(0.2)).changed() {
+                        s.teeth3 = far;
+                    }
+                    if ui.small_button("auto").clicked() {
+                        s.teeth3 = 0;
+                    }
+                });
+                if s.bevel_planet_mode == solidcraft_gear::plan::BevelPlanetMode::Ring {
+                    num(ui, "Rim", "Beyond the roots; 0: 3 modules", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
+                }
+            }
+        }
         (Kind::Planetary, 2) => {
             let mut ring = if s.teeth3 > 0 { s.teeth3 } else { s.teeth + 2 * s.teeth2 };
             row(ui, "Teeth", "Sun + 2 × planet for standard gears", |ui| {
@@ -2047,7 +2096,7 @@ fn section_member(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
             } else {
                 count(ui, "Teeth", "", &mut s.teeth, 3..=2000);
             }
-            if k.involute() && !matches!(k, Kind::Worm | Kind::Elliptical | Kind::Hypoid) {
+            if k.involute() && !matches!(k, Kind::Worm | Kind::Elliptical | Kind::Hypoid | Kind::BevelPlanetary) {
                 num(ui, if k.is_set() { "Shift x₁" } else { "Profile shift x" }, "Profile shift coefficient: positive thickens the root and avoids undercut", &mut s.shift, -1.5..=1.5, 0.01, "");
                 if k == Kind::Pair && d.center_distance && d.shift {
                     locked(ui, "  x₁ (auto while 0)", format!("{:.4}", b.shift));
@@ -2427,6 +2476,7 @@ fn section_output(ui: &mut Ui, cx: &mut Cx<'_>) {
         row(ui, "Members", "Make every member, or just one", |ui| {
             let names: &[&str] = match k {
                 Kind::Planetary => &["all", "sun", "planets", "ring"],
+                Kind::BevelPlanetary => &["all", "sun", "planets", "sun 2 or ring"],
                 Kind::Worm => &["both", "wheel", "worm"],
                 Kind::CycloidalDrive => &["both", "disc", "pins"],
                 Kind::Hypoid => &["both", "pinion", "ring gear"],

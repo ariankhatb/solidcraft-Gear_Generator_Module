@@ -1,14 +1,18 @@
 //! The boolean family on bodies whose answers are known.
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)] // test
 
+mod common;
+
 use std::f64::consts::{PI, TAU};
 use std::io::Read as _;
 
 use serde_json::Value;
+use solidcore::topology::vertex::corner;
 use solidcore_ops::boolean::{boolean, imprint, union_all};
 use solidcore_ops::sweep::{extrude, revolve, Curve, DraftCorner};
 use solidcore_ops::{
-    make_box, make_cone, make_sphere, session, Body, BooleanOp, CheckLevel, Error,
+    blend, make_box, make_cone, make_sphere, session, Blend, Body, BooleanOp, CheckLevel, Corners,
+    Error,
 };
 use solidcore_record::brep::Brep as Record;
 
@@ -1511,4 +1515,131 @@ fn a_traced_cut_meeting_an_earlier_cut_removes_its_tool() {
         .unwrap()
         .unwrap();
     one_valid_solid_of_volume(&r, [46, 132, 88], want, 1e-9);
+}
+
+/// #16935's intersect as SolidCraft passed it. Both bodies are a decagon of side 10, 10 tall, with
+/// a 6 tall top tapered at 45°. The target has a 6 mm groove down the middle of each slope, its
+/// edges rounded at 1 mm; the tool has the ten edges between the slopes rounded at 5 mm. Near the
+/// top each 5 mm round's cylinder runs within the tolerance of a 1 mm round and the corner patch
+/// beside it, so each of the twenty gaps it leaves in the intersection loop is closed along the
+/// target's edge between them. Ten passes of one closure each left ten of them open, and the
+/// first closure taken at a corner ran up the round's tangent line: the faces were classified
+/// across the gaps, the intersect lost eight of the ten 5 mm rounds and said nothing.
+///
+/// The intersection is the target less the ten wedges between the tool's sharp edges and its
+/// rounds, `V(sharp tool) - V(tool)`, plus what the target's 1 mm rounds and their corner
+/// patches already took out of those wedges near the top: under 1e-3 (the wedges classified
+/// against the target, column by column along the slopes' normals). Before, the intersect gave
+/// 6.38 more: eight wedges kept.
+#[test]
+#[allow(clippy::disallowed_methods)] // the test's closed form, not ops computing geometry
+fn a_traced_intersect_keeps_every_5_mm_round_beside_the_grooves_1_mm_rounds() {
+    all_fixes();
+    let body = traced_operands("issue_16935_hip_rounds_over_groove_rounds");
+    // the decagon's apothem and area, the top's apothem 6 less (45°), the frustum on the prism
+    let apothem = 10.0 / (2.0 * 18_f64.to_radians().tan());
+    let base = 10.0 * apothem * apothem * 18_f64.to_radians().tan();
+    let top = base * ((apothem - 6.0) / apothem).powi(2);
+    let sharp_tool = 10.0 * base + 6.0 / 3.0 * (base + top + (base * top).sqrt());
+    let wedges = sharp_tool - body("tool").volume(1e-11).unwrap();
+    let want = body("target").volume(1e-11).unwrap() - wedges;
+    let r = boolean(body("target"), body("tool"), BooleanOp::Intersect)
+        .unwrap()
+        .unwrap();
+    let report = r.check(CheckLevel::All).unwrap();
+    assert!(report.is_valid(), "{}", report.text);
+    assert_eq!(r.solid_count().unwrap(), 1);
+    // the target's 92 faces and the ten rounds
+    assert_eq!(r.counts().unwrap(), [102, 320, 220]);
+    let v = r.volume(1e-11).unwrap();
+    assert!(
+        v >= want && v <= want + 1e-3,
+        "volume {v}, target less the wedges {want}"
+    );
+}
+
+/// A 10 mm cube with the vertical edge at x = 0, y = 0 rounded to radius 2.
+fn filleted_cube() -> Body {
+    let block = make_box([0.0; 3], [10.0, 10.0, 10.0]).unwrap();
+    let edge = common::edge_at(&block, [0.0, 0.0, 5.0]);
+    blend(&block, Blend::Round, &[edge], &[2.0], &[], Corners::Filled).unwrap();
+    block
+}
+
+/// A 6 x 10 x 5 slab through the cube's front, its near face `dx` past the fillet spring at x = 2.
+fn slab_past_spring(dx: f64) -> Body {
+    make_box([2.0 + dx, -5.0, 0.0], [6.0, 10.0, 5.0]).unwrap()
+}
+
+/// Every vertex under the intersection tolerance of each of its faces, none wider than `max_tol`.
+fn vertex_gaps_within_xsect(body: &Body, max_tol: f64) {
+    let (k, mut brep) = common::kernel_copy(body);
+    let xsect = corner::xsect_tol_3d_of_brep(&k, &brep);
+    for v in brep.vertices().ids().collect::<Vec<_>>() {
+        let (_, gap, _) = corner::is_within_xsect_tol_3d_of_faces(&k, &mut brep, v, true).unwrap();
+        assert!(gap < xsect, "vertex gap {gap} vs {xsect}");
+        let tol = brep.vertex(v).unwrap().tolerance;
+        assert!(tol <= max_tol, "vertex tolerance {tol}");
+    }
+}
+
+/// #16532: a slab whose near face is `dx` past a fillet spring. The cube less one rounded edge is
+/// `960 + 10 PI`; the overlap is the slab's 6 by 5 section over the 5 mm both bodies share, 150
+/// (the offset keeps both of the slab's x faces inside the cube). The result must check valid and
+/// no vertex may grow past 5e-5.
+///
+/// The volume bound is derived from the move. The join places the vertex between the round and
+/// the slab face within `dx` of the slab face (the round meets the flat face at x = 2, the slab
+/// face stands at x = 2 + dx), so the notch's near face is displaced by at most `dx`, and
+/// displacing a face by `d` changes the volume by at most `d` times its area. That face is the
+/// slab's x face inside the cube: `width` (the slab's y extent -5..5 cut to the cube's 0..10,
+/// so 5) by `height` (z 0..5, so 5). The bound is that, plus the file's `near` tolerance for the
+/// volume integral itself.
+fn slab_past_spring_case(dx: f64, op: BooleanOp) {
+    all_fixes();
+    let block = filleted_cube();
+    let report = block.check(CheckLevel::All).unwrap();
+    assert!(report.is_valid(), "{}", report.text);
+    let fillet = 960.0 + 10.0 * PI;
+    let expected = match op {
+        BooleanOp::Union => fillet + 300.0 - 150.0,
+        BooleanOp::Subtract => fillet - 150.0,
+        BooleanOp::Intersect => 150.0,
+    };
+    let built = boolean(filleted_cube(), slab_past_spring(dx), op);
+    assert!(built.is_ok(), "{op:?} dx {dx}: {:?}", built.as_ref().err());
+    let result = built.ok().flatten();
+    assert!(result.is_some(), "{op:?} dx {dx}: the boolean left no body");
+    let result = result.unwrap();
+    let report = result.check(CheckLevel::All).unwrap();
+    assert!(report.is_valid(), "{op:?} dx {dx}: {}", report.text);
+    let got = volume(&result);
+    let (width, height) = (5.0, 5.0);
+    let moved_volume = dx * width * height;
+    assert!(
+        near(got, expected) || (got - expected).abs() <= moved_volume + 1e-7 * expected.abs(),
+        "{op:?} dx {dx}: {got} vs {expected}, bound {moved_volume}"
+    );
+    vertex_gaps_within_xsect(&result, 5e-5 + 1e-12);
+}
+
+macro_rules! slab_past_spring_cases {
+    ($($name:ident: $dx:expr, $op:ident;)*) => {$(
+        #[test]
+        fn $name() {
+            slab_past_spring_case($dx, BooleanOp::$op);
+        }
+    )*};
+}
+
+slab_past_spring_cases! {
+    issue_16532_union_slab_on_the_spring: 0.0, Union;
+    issue_16532_union_slab_2e5_past_the_spring: 2e-5, Union;
+    issue_16532_union_slab_2_5e5_past_the_spring: 2.5e-5, Union;
+    issue_16532_subtract_slab_on_the_spring: 0.0, Subtract;
+    issue_16532_subtract_slab_2e5_past_the_spring: 2e-5, Subtract;
+    issue_16532_subtract_slab_2_5e5_past_the_spring: 2.5e-5, Subtract;
+    issue_16532_intersect_slab_on_the_spring: 0.0, Intersect;
+    issue_16532_intersect_slab_2e5_past_the_spring: 2e-5, Intersect;
+    issue_16532_intersect_slab_2_5e5_past_the_spring: 2.5e-5, Intersect;
 }

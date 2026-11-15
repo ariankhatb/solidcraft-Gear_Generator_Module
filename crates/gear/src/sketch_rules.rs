@@ -13,6 +13,7 @@
 //! | planetary | sun, planet, ring: sun and ring concentric, the planet touching both | three Ø |
 //! | rack, worm and wheel | circle + tangent line (worm: optional second parallel line) | line = pitch line |
 //! | bevel, face gear | circle + line through its centre (shaft 2 seen from above) | Ø; shaft angle (a setting, default 90°) |
+//! | bevel planetary | side view: origin dot (apex) + sun shaft line + first planet's shaft line from it | cone angle; sizes are settings |
 //! | hypoid | circle (ring gear) + line crossing it off-centre (pinion shaft) | ring Ø; offset |
 //! | crossed helical | circle + line missing it | Ø; offset |
 //!
@@ -113,6 +114,8 @@ pub fn slots(k: Kind) -> Vec<Slot> {
     use Role::*;
     let origin = if matches!(k, Kind::Bevel | Kind::SpiralBevel) {
         slot("Origin (apex)", Point, true, "the dot where the two shafts meet: the pitch cones' apex")
+    } else if k == Kind::BevelPlanetary {
+        slot("Origin (apex)", Point, true, "the dot where the sun's and the planets' shafts meet: the pitch cones' apex")
     } else {
         slot("Origin", Point, true, "the set's anchor: turns go about it (empty: gear 1's centre)")
     };
@@ -155,6 +158,12 @@ fn own_slots(k: Kind) -> Vec<Slot> {
         Kind::Bevel | Kind::SpiralBevel => vec![
             slot("Gear 1 shaft", Line, false, "a line through the origin dot (the apex), seen from the side"),
             slot("Gear 2 shaft", Line, false, "a line from the dot: the angle between the two lines is the shaft angle"),
+        ],
+        // The same side view: the sun's shaft and one planet's; the other planets are patterned
+        // round the sun's shaft.
+        Kind::BevelPlanetary => vec![
+            slot("Sun shaft", Line, false, "a line through the origin dot (the apex), seen from the side"),
+            slot("First planet's shaft", Line, false, "a line from the dot: the angle between the two lines is the cone angle"),
         ],
         Kind::FaceGear => vec![
             slot("Face gear pitch circle", Circle, false, "its Ø is the face gear's pitch Ø"),
@@ -454,12 +463,14 @@ fn measure_own(k: Kind, d: &Drawn, picks: &[Option<usize>], dot: Option<V2>) -> 
             }
             Ok(m)
         }
-        Kind::Bevel | Kind::SpiralBevel => {
+        Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary => {
             let (l1, l2) = (line(0)?.ok_or("a line is missing")?, line(1)?.ok_or("a line is missing")?);
+            let planetary = k == Kind::BevelPlanetary;
             let reach = l1.len().max(l2.len());
             let apex = match dot {
                 Some(p) => {
-                    for (l, which) in [(&l1, "gear 1's"), (&l2, "gear 2's")] {
+                    let names = if planetary { ["the sun's", "the planet's"] } else { ["gear 1's", "gear 2's"] };
+                    for (l, which) in [(&l1, names[0]), (&l2, names[1])] {
                         if !near(l.distance(p), 0.0, reach) {
                             return Err(format!("{which} shaft line must pass through the origin dot (the apex where the shafts meet); it is {} mm off", num(l.distance(p))));
                         }
@@ -471,7 +482,7 @@ fn measure_own(k: Kind, d: &Drawn, picks: &[Option<usize>], dot: Option<V2>) -> 
             let (r1, r2) = (ray(&l1, apex), ray(&l2, apex));
             let sigma = r1.cross(r2).abs().atan2(r1.dot(r2)).to_degrees();
             if !(5.0..=175.0).contains(&sigma) {
-                return Err(format!("the shafts meet at {}°: bevels need 5° to 175°", num(sigma)));
+                return Err(format!("the shafts meet at {}°: {} 5° to 175°", num(sigma), if planetary { "a bevel planetary set needs" } else { "bevels need" }));
             }
             let mut m = Measured::new(k, Shape::SideView);
             (m.line, m.line2, m.apex, m.shaft_angle) = (Some(l2), Some(l1), Some(apex), Some(sigma));
@@ -546,7 +557,7 @@ pub fn recognize(d: &Drawn) -> Option<Kind> {
 pub fn same_family(a: Kind, b: Kind) -> bool {
     let fam = |k: Kind| match k {
         Kind::Spur | Kind::Helical | Kind::Herringbone => 0,
-        Kind::Bevel | Kind::SpiralBevel | Kind::FaceGear => 1,
+        Kind::Bevel | Kind::SpiralBevel | Kind::FaceGear | Kind::BevelPlanetary => 1,
         Kind::Rack | Kind::Worm => 2,
         Kind::Pair | Kind::Cycloidal => 3,
         k => 10 + k as i32,
@@ -662,7 +673,7 @@ pub fn spec_for(m: &Measured, base: &Spec) -> Result<(Spec, Vec<String>), String
                 notes.push(format!("{} planets don't space evenly with {} + {} teeth: (sun + ring) ÷ planets must be whole", s.planets, s.teeth, s.teeth3));
             }
         }
-        Kind::Bevel | Kind::SpiralBevel => {
+        Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary => {
             // Drawn edge on: the angle is the drawing's; the sizes (module, teeth: gear 1's
             // pitch Ø and the ratio) are the settings'. The lines' lengths are not used.
             if let Some(a) = m.shaft_angle {
@@ -755,7 +766,7 @@ pub fn simple_of(m: &Measured, settings: &crate::simple::Simple) -> crate::simpl
             }
             s.shaft_angle = Some(90.0);
         }
-        Kind::Bevel | Kind::SpiralBevel => {
+        Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary => {
             s.shaft_angle = m.shaft_angle.or(s.shaft_angle);
         }
         Kind::FaceGear => {
@@ -973,6 +984,34 @@ mod tests {
         let f = s.frames[0];
         assert!(f.origin[1] < 0.0 && f.origin[0].abs() < 1e-6, "{:?}", f.origin);
         assert!((f.z[1].abs() - 1.0).abs() < 1e-9, "{:?}", f.z);
+    }
+
+    #[test]
+    fn bevel_planetary_side_view_places_sun_and_first_planet() {
+        use crate::plan::BevelPlanetMode;
+        for (deg, mode, planets) in [(90.0, BevelPlanetMode::Differential, 4), (60.0, BevelPlanetMode::Single, 3), (45.0, BevelPlanetMode::Ring, 3)] {
+            let d = side_view(deg);
+            let base = Spec { bevel_planet_mode: mode, planets, teeth: 20, teeth2: 10, ..Spec::defaults_for(Kind::BevelPlanetary) };
+            let (m, s) = solved(Kind::BevelPlanetary, &d, base);
+            assert_eq!(m.shape, Shape::SideView);
+            let p = crate::plan(&s.spec).unwrap();
+            // The sun on its drawn shaft below the apex (sketch -y), its z pointing back up at it.
+            let (sun, planet) = (p.bodies[0].frame, p.bodies[1].frame);
+            assert!(sun.origin[1] < 0.0 && sun.origin[0].abs() < 1e-6 && (sun.z[1] - 1.0).abs() < 1e-9, "{deg}: {sun:?}");
+            assert!(close(sun.origin, s.frames[0].origin) && close(planet.origin, s.frames[1].origin), "{deg}: {:?} against {:?}", (sun, planet), s.frames);
+            // Planet 1 on the drawn line (in the sketch's plane), at the built cone angle.
+            let built = crate::plan::bevel_planet::geometry(&s.spec).unwrap().sigma;
+            let u = [-planet.z[0], -planet.z[1], -planet.z[2]];
+            assert!(u[2].abs() < 1e-9 && u[0] > 0.0, "{deg}: {u:?}");
+            assert!((u[1] + built.cos()).abs() < 1e-9, "{deg}: {u:?} at {}", s.spec.shaft_angle);
+        }
+        let mut off = side_view(90.0);
+        off.points[0] = V2::new(5.0, 0.0);
+        assert!(measured(Kind::BevelPlanetary, &off).unwrap_err().contains("the sun's"));
+    }
+
+    fn close(a: [f64; 3], b: [f64; 3]) -> bool {
+        (0..3).all(|i| (a[i] - b[i]).abs() < 1e-6)
     }
 
     #[test]

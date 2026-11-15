@@ -25,7 +25,9 @@
 //!   load).
 //! * **Torsen Type A** ([`Style::TorsenA`], the T‑1, worm/invex): side gears are worms (high
 //!   helix), element gears are worm wheels across the axle with spur gears on both ends meshing
-//!   the next element. Worked out and reported ([`torsen_a_layout`]); the bodies aren't built yet.
+//!   the paired element's. Built as crossed helical pairs at 90° (the crossed helical planner) with
+//!   spur gears on each element's ends and integral journals turning in holes in the case; the lead
+//!   angle and bias estimate are in [`torsen_a_layout`].
 //!
 //! # The case
 //!
@@ -299,8 +301,10 @@ impl Diff {
                 d.module = 2.0;
                 d.side_teeth = 6;
                 d.pinion_teeth = 15;
-                d.pinions = 3;
+                // (Three pairs crowd elements this long: two fit.)
+                d.pinions = 2;
                 d.helix = 60.0;
+                d.drive_module = 8.0;
             }
         }
         d
@@ -1218,7 +1222,12 @@ fn torsen_a_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     let mut links = Vec::new();
     let mut cuts = Vec::new();
     let r_j = (0.35 * ge.rf()).max(1.0);
-    let y_end = ((rc + 0.6 * (2.0 * m).max(3.0)).powi(2) - e * e).max(0.0).sqrt();
+    // The journals end inside the case wall (their far corners too), so the wall takes them.
+    let wall = if d.wall > 0.0 { d.wall } else { (2.0 * m).max(3.0).max(3.0 * r_j) };
+    let y_end = ((rc + 0.8 * wall).powi(2) - (e + r_j).powi(2)).max(0.0).sqrt();
+    if (e * e + y_end * y_end).sqrt() < rc + 0.1 * wall || y_end < l0 + w_sp + r_j {
+        return Err("Torsen Type A: the case wall is too thin to hold the element journals: give a thicker wall".into());
+    }
     let an = d.pa().to_radians();
     let gap_sw = 0.5 * an.cos() * d.backlash * (beta_s.to_radians().cos() + (90.0 - beta_s).to_radians().cos());
     let gap_sp = d.backlash * 20f64.to_radians().cos();
@@ -1264,7 +1273,7 @@ fn torsen_a_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     if n > 1 {
         let half = (y_end.max(l0 + w_sp)).atan2(e - ra_sp.max(ra_e));
         if 2.0 * half > TAU / f64::from(n) {
-            p.warn(format!("{n} element pairs may crowd each other round the side gears (each spans {}°): use fewer pairs or smaller elements", mm((2.0 * half).to_degrees())));
+            return Err(format!("{n} element pairs don't fit round the side gears (each spans {}° with its spurs and journals): use fewer pairs or smaller elements", mm((2.0 * half).to_degrees())));
         }
     }
     let hub_bore = r_hub + clr;
@@ -1278,7 +1287,6 @@ fn torsen_a_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
         V2::new(r1, za),
         V2::new(hub_bore, za),
     ];
-    let wall = if d.wall > 0.0 { d.wall } else { (2.0 * m).max(3.0) };
     p.fact("element centre distance from the axle", e, Unit::Mm);
     p.fact("element spur gears: teeth", f64::from(z_sp), Unit::None);
     p.fact("element spur gears: module", m_sp, Unit::None);

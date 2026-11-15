@@ -237,7 +237,7 @@ pub enum DiffStyle {
     Biased,
     /// Torsen Type B (T-2): helical side gears and paired helical element gears in case pockets.
     TorsenB,
-    /// Torsen Type A (T-1, worm): worked out and reported, not built yet.
+    /// Torsen Type A (T-1, worm): worm side gears, crossed helical element wheels with spur ends.
     TorsenA,
 }
 

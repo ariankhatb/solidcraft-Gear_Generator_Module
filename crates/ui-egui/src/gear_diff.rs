@@ -203,7 +203,7 @@ pub(crate) fn advanced(ui: &mut Ui, s: &mut Spec) {
     style_picker(ui, d);
     let st = d.style;
     if st == Style::TorsenA {
-        ui.label(RichText::new("Torsen Type A is worked out (layout, lead angle, bias estimate in the numbers) but not built yet").small().color(ui.visuals().warn_fg_color));
+        ui.label(RichText::new("Torsen Type A: side gears are worms (helix = 90° − lead angle), elements are crossed helical wheels with spur ends; two pairs fit elements this size").small().weak());
     }
     heading(ui, if st.bevel() { "Side gears and pinions" } else { "Side gears and element gears" }, member_color(3));
     num(ui, "Module", if st.bevel() { "At the large end" } else { "Normal module" }, &mut d.module, 0.3..=20.0, 0.05, "");

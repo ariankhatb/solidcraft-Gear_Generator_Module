@@ -216,6 +216,9 @@ fn bad_designs_are_refused() {
     // Too many Torsen pairs.
     let e = plan(&spec(Diff { pinions: 8, drive: DriveKind::None, ..Diff::defaults_for(Style::TorsenB) })).unwrap_err();
     assert!(e.contains("don't fit"), "{e}");
+    // Three Torsen A pairs of these elements crowd each other.
+    let e = plan(&spec(Diff { pinions: 3, drive: DriveKind::None, ..Diff::defaults_for(Style::TorsenA) })).unwrap_err();
+    assert!(e.contains("don't fit"), "{e}");
     // A Torsen A whose side gears aren't worms.
     let e = plan(&spec(Diff { helix: 20.0, ..Diff::defaults_for(Style::TorsenA) })).unwrap_err();
     assert!(e.contains("Torsen Type A"), "{e}");

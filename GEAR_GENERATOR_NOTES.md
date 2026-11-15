@@ -370,7 +370,7 @@ A complete differential as one gear set: `Kind::Differential`, settings in `Spec
 (`crates/gear/src/diff.rs`, tests `diff_tests.rs`). Styles: open bevel, torque-biasing bevel
 (uneven side gears on tilted pinions, the bevel planetary planner's differential mode with
 `teeth3`), Torsen Type B (helical side gears, element pairs in case pockets), Torsen Type A
-(worked out and reported, bodies not built). Every style plans the case (one revolve: journals,
+(worm side gears and crossed helical element wheels with spur ends, two pairs, journals in the case). Every style plans the case (one revolve: journals,
 bearing shoulders, cones, flange, axle bores, hub journals, thrust faces, a sphere round the bevel
 apex, pin holes, assembly windows or element pockets) and the drive (spiral/straight bevel,
 hypoid, helical; bolted or integral), the assembly (`Plan::assembly`, a tree: drive pinion → ring

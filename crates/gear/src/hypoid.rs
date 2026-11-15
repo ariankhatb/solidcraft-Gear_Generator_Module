@@ -523,10 +523,12 @@ pub(crate) struct Form {
     z_lo: f64,
     z_hi: f64,
     soft: f64,
+    /// Fit points up each side of a tooth section.
+    side: usize,
 }
 
 /// Fit points up each side of a ring gear tooth section, and of a pinion tooth section.
-const GEAR_SIDE: usize = 10;
+const GEAR_SIDE: usize = 7;
 const PINION_SIDE: usize = 8;
 /// Sections along each member's axis: the ring gear's; the pinion's worked out exactly (its
 /// lofted sections are more, see [`LOFT_COUNTS`]).
@@ -733,6 +735,7 @@ impl Form {
             z_lo: 0.0,
             z_hi: 0.0,
             soft: 0.2 * (ha + hf),
+            side: GEAR_SIDE,
         };
         f.z_hi = f.height(ha, mu_i);
         // The back: where the outside cylinder leaves a little of the teeth's depth.
@@ -787,8 +790,8 @@ impl Form {
     fn sides(&self, z: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
         let top = self.tip(z);
         let mut out = (Vec::new(), Vec::new(), Vec::new());
-        for i in 0..GEAR_SIDE {
-            let t = -self.hf + (top + self.hf) * spread(i as f64 / (GEAR_SIDE - 1) as f64);
+        for i in 0..self.side {
+            let t = -self.hf + (top + self.hf) * spread(i as f64 / (self.side - 1) as f64);
             let mu = (self.hap - z) / (self.hap - t * self.sd);
             let c = self.centre(mu);
             let (wl, wh) = self.widths(t);
@@ -1197,10 +1200,31 @@ pub(crate) struct Set {
     gear_n: usize,
 }
 
-/// Works the set out in the design frame.
+/// Works the set out in the design frame; when its teeth twist too fast for the kernel to loft
+/// at the face width asked, at the widest face (in steps of a fifth) that lofts, with a warning.
 pub(crate) fn work_out(s: &Spec) -> Result<Set, String> {
+    let first = work_out_at(s);
+    let Err(e) = &first else { return first };
+    if !e.contains("twist too fast to loft") {
+        return first;
+    }
+    let mut t = s.clone();
+    for _ in 0..8 {
+        t.face_width *= 0.8;
+        if let Ok(mut set) = work_out_at(&t) {
+            set.d.warnings.push(format!("face width cut to {} mm: wider teeth twist too fast to loft", mm(set.d.b2)));
+            return Ok(set);
+        }
+    }
+    first
+}
+
+fn work_out_at(s: &Spec) -> Result<Set, String> {
     let d = design(s)?;
     let form = Form::new(s, &d)?;
+    // The pinion is cut by the ring gear without its backlash, so the backlash stays between
+    // the two (cut by the thinned gear, the pinion would grow into it).
+    let cutter = if s.backlash > 0.0 { Form::new(&Spec { backlash: 0.0, ..s.clone() }, &d)? } else { form.clone() };
     let g2 = d.g2();
     // The pinion's toothed length: across the ring gear's face and a little past both ends.
     let along = |x: V3| dot(sub(x, d.o1), d.a1);
@@ -1230,7 +1254,7 @@ pub(crate) fn work_out(s: &Spec) -> Result<Set, String> {
     let yp = cross(zp, xp);
     let rel = sub(d.p, op);
     let carve = Carve {
-        f: &form,
+        f: &cutter,
         op,
         xp,
         yp,
@@ -1265,31 +1289,41 @@ pub(crate) fn work_out(s: &Spec) -> Result<Set, String> {
         teeth.push(t);
     }
     // The ring gear: GEAR_SECTIONS sections where the kernel takes that many curves, more if it
-    // needs them to line the sections up tooth to tooth.
-    let per_section = s.teeth2 as usize * 2 * GEAR_SIDE;
-    let most = (KERNEL_CURVES / per_section).min(50);
-    let first = GEAR_SECTIONS.min(most);
-    if first < 4 {
-        return Err(format!("too many ring gear teeth to loft: use at most {}", KERNEL_CURVES / (4 * 2 * GEAR_SIDE)));
-    }
+    // needs them to line the sections up tooth to tooth, and fewer fit points a flank (more
+    // twist between sections taken) when that isn't enough.
+    let mut form = form;
     let mut gear_n = None;
-    for n in std::iter::once(first).chain(LOFT_COUNTS.into_iter().filter(|n| *n > first && *n <= most)) {
-        let mut gear = Vec::new();
-        for j in 0..n {
-            let z = form.z_lo + (form.z_hi - form.z_lo) * j as f64 / (n - 1) as f64;
-            let (r, lo, hi) = form.sides(z);
-            if !sound(&r, &lo, &hi, form.pitch) {
-                return Err("ring gear tooth can't be drawn: use a smaller face width or fewer, larger teeth".into());
-            }
-            gear.push(teeth_outline(&r, &lo, &hi, s.teeth2));
+    'sides: for side in [GEAR_SIDE, 5, 4] {
+        form.side = side;
+        let most = (KERNEL_CURVES / (s.teeth2 as usize * 2 * side)).min(50);
+        let first = GEAR_SECTIONS.min(most);
+        if first < 4 {
+            continue;
         }
-        if !slips(&gear, s.teeth2 as usize) {
-            gear_n = Some(n);
-            break;
+        for n in std::iter::once(first).chain(LOFT_COUNTS.into_iter().filter(|n| *n > first && *n <= most)).chain((most > 49).then_some(most).filter(|m| *m <= 50)) {
+            let mut gear = Vec::new();
+            for j in 0..n {
+                let z = form.z_lo + (form.z_hi - form.z_lo) * j as f64 / (n - 1) as f64;
+                let (r, lo, hi) = form.sides(z);
+                if !sound(&r, &lo, &hi, form.pitch) {
+                    return Err("ring gear tooth can't be drawn: use a smaller face width or fewer, larger teeth".into());
+                }
+                gear.push(teeth_outline(&r, &lo, &hi, s.teeth2));
+            }
+            if cfg!(test) && std::env::var("HYPOID_TRACE").is_ok() {
+                eprintln!("gear loft of {n} ({side} a side): restarts {:?}", restarts(&gear, s.teeth2 as usize));
+            }
+            if !slips(&gear, s.teeth2 as usize) {
+                gear_n = Some(n);
+                break 'sides;
+            }
         }
     }
     let Some(gear_n) = gear_n else {
-        return Err("ring gear teeth twist too fast to loft: use a smaller spiral angle or face width".into());
+        if KERNEL_CURVES / (s.teeth2 as usize * 2 * 4) < 4 {
+            return Err(format!("too many ring gear teeth to loft: use at most {}", KERNEL_CURVES / (4 * 2 * 4)));
+        }
+        return Err("ring gear teeth twist too fast to loft: use a smaller face width or spiral angle".into());
     };
     // The pinion's teeth turn fast along its axis: the kernel would line its sections up
     // tooth to tooth only when they are close enough, so it gets as many as that takes.
@@ -1515,7 +1549,11 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
         period: 0.0,
         orbit: 0.0,
     });
-    p.preview_note = format!("middle sections of the pinion and the ring gear, side by side at their speeds (the axes are {} mm apart and don't meet: {hand}-hand pinion)", mm(d.offset));
+    p.preview_note = format!(
+        "middle sections of the pinion and the ring gear, side by side at their speeds (the axes are {} mm apart at {}° and don't meet: {hand}-hand pinion)",
+        mm(d.offset),
+        mm(d.sigma.to_degrees())
+    );
     Ok(())
 }
 
@@ -2673,6 +2711,46 @@ mod tests {
                 w.2
             );
         }
+    }
+
+    /// Off 90°, the set still builds, its pinion's axis at the shaft angle to the ring gear's,
+    /// lofted tooth to tooth; too far off, it is refused with the angle that works.
+    #[test]
+    fn shaft_angles_build_at_their_angle_or_are_refused() {
+        for sigma in [60.0, 75.0, 90.0] {
+            let mut s = spec();
+            s.shaft_angle = sigma;
+            let p = crate::plan(&s).unwrap_or_else(|e| panic!("Σ {sigma}: {e}"));
+            let (pz, gz) = (p.bodies[0].frame.z, p.bodies[1].frame.z);
+            let angle = dot(pz, gz).clamp(-1.0, 1.0).acos().to_degrees();
+            assert!((angle - sigma).abs() < 1e-9 || (180.0 - angle - sigma).abs() < 1e-9, "Σ {sigma}: axes {angle}°");
+            for (b, teeth) in p.bodies.iter().zip([s.teeth, s.teeth2]) {
+                let Step::Loft { sections, .. } = &b.steps[0] else { panic!() };
+                let k = loft_shifts(&b.frame, sections);
+                let per = corners(&sections[0].0).len() / teeth as usize;
+                assert!(k.windows(2).all(|w| (w[1] + per * teeth as usize - w[0]) % per == 0), "Σ {sigma}: {} would slip", b.name);
+            }
+        }
+        for sigma in [105.0, 120.0] {
+            let mut s = spec();
+            s.shaft_angle = sigma;
+            let e = crate::plan(&s).unwrap_err();
+            assert!(e.starts_with("shaft angle too large: use at most") && e.len() < 120, "{e}");
+        }
+    }
+
+    /// The backlash stays between the members: the pinion is cut by the gear without it.
+    #[test]
+    fn backlash_leaves_a_gap() {
+        let mut s = spec();
+        s.backlash = 0.1;
+        let set = pair(&s);
+        let (pen, gap) = set.run(Between::Spline, 1.0, 8, 0.0);
+        // The ring gear thinned by j: each flank about j/2 · cos α apart.
+        let want = 0.5 * s.backlash * s.pressure_angle.to_radians().cos();
+        eprintln!("backlash 0.1: penetration {pen:.5} mm, largest least gap {gap:.5} mm (about {want:.3} expected)");
+        assert!(pen < 1e-3, "{pen}");
+        assert!(gap > 0.3 * want && gap < 2.5 * want, "{gap}");
     }
 
     #[test]

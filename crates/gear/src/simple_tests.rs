@@ -515,3 +515,13 @@ fn fast_enough() {
     println!("hypoid first solve {:.3} ms, then its schematic {:.3} ms", 1e3 * first, 1e3 * t.elapsed().as_secs_f64());
     assert!(pair < 5e-3 && planet < 5e-3);
 }
+
+#[test]
+#[ignore]
+fn hypoid_30_degree_trace() {
+    let x = Simple { shaft_angle: Some(30.0), offset: Some(5.0), ratio: Some(2.0), pitch_diameter2: Some(100.0), ..Simple::default() };
+    let s = solve(&x, &Spec::default());
+    let p = &s.spec;
+    eprintln!("kind {:?} z {} {} m {} E {} Σ {} β {} b {} pa {}", s.kind, p.teeth, p.teeth2, p.module, p.offset, p.shaft_angle, p.spiral_angle, p.face_width, p.pressure_angle);
+    eprintln!("{:?}", plan(p).err());
+}

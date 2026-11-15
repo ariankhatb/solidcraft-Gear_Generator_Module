@@ -848,6 +848,7 @@ fn equal_gears_and_a_second_set_get_distinct_names() {
     let r = run(&mut s, "gear.create", json!({"origin": [60, 0, 0]}));
     assert_eq!(r["bodies"][0].as_str(), Some("Gear z20 (3)"));
     assert!(!s.model.state().bodies.iter().any(|b| b.name.starts_with("Body")));
+}
 
 // ---------------------------------------------------------------------------------------------
 // Parametric sets: what follows a parameter edit besides the teeth
@@ -856,7 +857,7 @@ fn equal_gears_and_a_second_set_get_distinct_names() {
 /// The overlap volume the kernel finds among `bodies`.
 fn overlap(s: &mut Session, bodies: &[&str]) -> f64 {
     let i = run(s, "inspect.interference", json!({"bodies": bodies}));
-    i["interferences"].as_array().unwrap().iter().map(|h| h["volume"].as_f64().unwrap_or(0.0)).sum()
+    i["interferences"].as_array().unwrap().iter().map(|h| h["volume_mm3"].as_f64().unwrap_or(0.0)).sum()
 }
 
 /// A parametric pair's gear 2 sits at the centre distance its parameters give: a tooth-count or

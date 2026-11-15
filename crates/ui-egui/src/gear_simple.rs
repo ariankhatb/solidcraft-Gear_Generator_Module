@@ -509,7 +509,9 @@ pub(crate) fn drawing(ui: &mut Ui, w: &mut GearWindow, size: egui::Vec2) {
     let lit = w.lit();
     let (bodies, _, _) = w.clearance_inputs();
     let s = &mut w.simple;
-    let main = if side { egui::vec2(size.x, size.y * 0.66) } else { size };
+    // The side view keeps a readable height when the window gives the views little.
+    let side_h = if side { (size.y * 0.34).max(100.0) } else { 0.0 };
+    let main = if side { egui::vec2(size.x, (size.y - side_h).max(120.0)) } else { size };
     let changed = crate::gear_drawing::sketch(
         ui,
         &mut s.canvas,
@@ -534,7 +536,7 @@ pub(crate) fn drawing(ui: &mut Ui, w: &mut GearWindow, size: egui::Vec2) {
         // The shaft angle is a setting here: the side view edits it (and a hypoid's faces).
         let mut spec = Spec { shaft_angle: s.settings.shaft_angle.unwrap_or(w.spec.shaft_angle), helix: s.settings.helix_split.unwrap_or(w.spec.helix), ..w.spec.clone() };
         let before = spec.clone();
-        if crate::gear_drawing::side_view(ui, &mut s.canvas, &mut spec, egui::vec2(size.x, size.y * 0.34)) {
+        if crate::gear_drawing::side_view(ui, &mut s.canvas, &mut spec, egui::vec2(size.x, side_h)) {
             if spec.shaft_angle != before.shaft_angle {
                 s.settings.shaft_angle = Some(spec.shaft_angle);
             }

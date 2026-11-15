@@ -19,7 +19,7 @@ pub(crate) fn bearing_od_width(c: &Clearance) -> Option<(f64, f64)> {
 }
 
 fn num(ui: &mut Ui, label: &str, tip: &str, v: &mut f64, range: std::ops::RangeInclusive<f64>, unit: &str) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(label).on_hover_text(tip);
         ui.add(egui::DragValue::new(v).range(range).speed(0.05).max_decimals(3).suffix(unit)).on_hover_text(tip);
     });
@@ -30,7 +30,7 @@ fn num(ui: &mut Ui, label: &str, tip: &str, v: &mut f64, range: std::ops::RangeI
 pub(crate) fn section(ui: &mut Ui, s: &mut Spec, advanced: bool, names: &[String], warnings: &[String], facts: &[solidcraft_gear::Fact]) {
     ui.add_space(6.0);
     let mut on = s.clearance_body.is_some();
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         crate::gear_icons::mark(ui, crate::gear_icons::HOUSING_CUTOUT);
         ui.label(RichText::new("Housing clearance").strong());
         if ui.checkbox(&mut on, "Make a clearance body").on_hover_text(SWITCH_TIP).changed() {
@@ -90,7 +90,7 @@ fn bearing_picker(ui: &mut Ui, c: &mut Clearance, advanced: bool) {
         (None, Some(_)) => "custom…".to_string(),
         (None, None) => "none".to_string(),
     };
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let tip = "One bearing size for every seat (bore × OD × width, mm).";
         ui.label("Bearing").on_hover_text(tip);
         egui::ComboBox::from_id_salt("gear_clearance_bearing").width(170.0).selected_text(current).show_ui(ui, |ui| {
@@ -134,7 +134,7 @@ fn seats_ui(ui: &mut Ui, c: &mut Clearance, names: &[String], face: f64) {
     let name = |m: u32| names.get(m as usize - 1).cloned().unwrap_or_else(|| format!("member {m}"));
     let mut remove = None;
     for (i, seat) in c.seats.iter_mut().enumerate() {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             crate::gear_icons::mark(ui, crate::gear_icons::BEARING_SEAT);
             match seat {
                 Seat::Along { member, along } => {
@@ -162,7 +162,7 @@ fn seats_ui(ui: &mut Ui, c: &mut Clearance, names: &[String], face: f64) {
     if let Some(i) = remove {
         c.seats.remove(i);
     }
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if c.seats.len() < 64 && ui.small_button("Add seat").on_hover_text("A bearing seat on gear 1's shaft just behind it; each seat is a cylinder of the bearing's OD + fit and its width").clicked() {
             c.seats.push(Seat::Along { member: 1, along: -(face / 2.0 + width) });
         }

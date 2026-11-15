@@ -108,3 +108,43 @@ fn a_set_made_with_a_new_sketch_is_linked_to_it() {
     run(&mut s, "edit.undo", json!({}));
     assert!(run(&mut s, "gear.inspect", json!({}))["sets"].as_array().unwrap().is_empty());
 }
+
+/// The user's own sketch: two tangent circles, a third equal one touching nothing, and
+/// construction lines joining the centres. Construction lines are helpers, never shafts; the
+/// lone circle is named in the refusal; tangent, the three make a train.
+#[test]
+fn construction_lines_are_helpers_and_a_lone_circle_is_named() {
+    let mut s = Session::default();
+    let sk = run(&mut s, "sketch.create", json!({"plane": "XZ"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 15, "id": "c1"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [22.5, 0], "radius": 7.5, "id": "c2"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [5, 40], "radius": 7.5, "id": "c3"}));
+    for (id, a, b) in [("l1", [0.0, 0.0], [22.5, 0.0]), ("l2", [22.5, 0.0], [5.0, 40.0]), ("l3", [5.0, 40.0], [0.0, 0.0])] {
+        run(&mut s, "sketch.line", json!({"points": [a, b], "ids": [id], "construction": true}));
+    }
+    run(&mut s, "sketch.finish", json!({}));
+    let e = s.execute("gear.calculate", &json!({"sketch": sk, "type": "spur"})).unwrap_err().to_string();
+    assert!(e.contains("circle c3 touches no other gear"), "{e}");
+    assert!(!e.contains("shaft line"), "construction lines read as shafts: {e}");
+    // A centre line (not construction) between circles that don't touch says what to do.
+    run(&mut s, "sketch.edit", json!({"sketch": sk}));
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [5, 40]], "ids": ["m"]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let e = s.execute("gear.calculate", &json!({"sketch": sk, "type": "spur"})).unwrap_err().to_string();
+    assert!(e.contains("joined by the centre line m but don't touch"), "{e}");
+}
+
+/// Three circles in a row, each tangent to the next: a train, whatever construction lines are
+/// drawn with them.
+#[test]
+fn tangent_circles_with_construction_helpers_make_a_train() {
+    let mut s = Session::default();
+    let sk = run(&mut s, "sketch.create", json!({"plane": "XY"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 15, "id": "c1"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [22.5, 0], "radius": 7.5, "id": "c2"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [42.5, 0], "radius": 12.5, "id": "c3"}));
+    run(&mut s, "sketch.line", json!({"points": [[0, 0], [42.5, 0]], "ids": ["axis"], "construction": true}));
+    run(&mut s, "sketch.finish", json!({}));
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "spur", "module": 1}));
+    assert!(r["params"].is_object(), "{r}");
+}

@@ -1192,9 +1192,11 @@ fn read(cmd: &str, p: &Value) -> Result<GearParams> {
 }
 
 /// A sketch's standalone points (not a curve's ends or centre), circles and lines, in its plane:
-/// what a gear set drawn in one sketch is read from (`gear.create {sketch}` and the Gear
-/// Generator window's picks). `frame` is the sketch's plane in the world (its z the normal), in
-/// which the 2D coordinates are given.
+/// what a gear set drawn in one sketch is read from (`gear.create {sketch}` and the Gears
+/// dialog). Construction curves are helpers, never gears or shafts: they are left out. A line
+/// from one circle's centre to another's is a centre line saying the two mesh, not a shaft
+/// (`centre_lines`). `frame` is the sketch's plane in the world (its z the normal), in which the
+/// 2D coordinates are given.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GearSketch {
     pub sketch: u64,
@@ -1202,6 +1204,8 @@ pub struct GearSketch {
     pub points: Vec<(String, solidcraft_gear::V2)>,
     pub circles: Vec<(String, sketch_rules::Circle)>,
     pub lines: Vec<(String, sketch_rules::Line)>,
+    /// Lines joining two circles' centres (their id, and the two circles' indices).
+    pub centre_lines: Vec<(String, usize, usize)>,
     /// The last point is the sketch's own origin (not one the user drew).
     pub has_origin: bool,
 }
@@ -1223,6 +1227,32 @@ impl GearSketch {
             d.points.pop();
         }
         d
+    }
+    /// Circles drawn as gears of a train that mesh with nothing (no circle touching them), and
+    /// centre lines between circles that don't touch: what the reading refuses, in plain words
+    /// naming the circles, and which circles (indices into `circles`) to point at.
+    pub fn mesh_problem(&self) -> Option<(String, Vec<usize>)> {
+        use sketch_rules::Touch;
+        let n = self.circles.len();
+        if n < 2 || !self.lines.is_empty() {
+            return None;
+        }
+        for (id, a, b) in &self.centre_lines {
+            let t = sketch_rules::touch(&self.circles[*a].1, &self.circles[*b].1);
+            if !matches!(t, Touch::External | Touch::Internal) {
+                let why = format!(
+                    "circles {} and {} are joined by the centre line {id} but don't touch: make them tangent (Tangent constraint), or make the line construction",
+                    self.circles[*a].0, self.circles[*b].0
+                );
+                return Some((why, vec![*a, *b]));
+            }
+        }
+        let lone: Vec<usize> = (0..n)
+            .filter(|i| !(0..n).any(|j| j != *i && !matches!(sketch_rules::touch(&self.circles[*i].1, &self.circles[j].1), Touch::Apart | Touch::Inside | Touch::Crossing)))
+            .collect();
+        let first = *lone.first()?;
+        let why = format!("circle {} touches no other gear: make it tangent to the gear it meshes with (Tangent constraint)", self.circles[first].0);
+        Some((why, lone))
     }
     /// Where the entity `id` is among the slots' role (points, circles or lines).
     pub fn index(&self, role: sketch_rules::Role, id: &str) -> Option<usize> {
@@ -1254,10 +1284,43 @@ pub fn sketch_entities(s: &Session, sketch: u64) -> std::result::Result<GearSket
     let at = |i: usize| sk.point(i).map(|p| solidcraft_gear::V2::new(p.x, p.y));
     let mut used = vec![false; sk.points.len()];
     let (mut circles, mut lines) = (Vec::new(), Vec::new());
+    // (Circles first: a line is a centre line when its ends are two of their centres.)
+    let mut centres: Vec<(usize, solidcraft_gear::V2)> = Vec::new();
+    for c in sk.curves.iter().filter(|c| !c.construction) {
+        if let crate::sketch::CurveKind::Circle { c: ci, .. } = c.kind
+            && let Some(pc) = at(ci)
+        {
+            centres.push((ci, pc));
+        }
+    }
+    let centre_of = |i: usize, p: Option<solidcraft_gear::V2>| {
+        centres.iter().position(|(ci, pc)| *ci == i || p.is_some_and(|p| p.dist(*pc) < 1e-6))
+    };
+    let mut centre_lines = Vec::new();
     for c in &sk.curves {
+        // Construction geometry is a helper: never a gear or a shaft (its points stay out of
+        // the dots too).
+        if c.construction {
+            match c.kind {
+                crate::sketch::CurveKind::Line { a, b } => used.iter_mut().enumerate().filter(|(i, _)| *i == a || *i == b).for_each(|(_, u)| *u = true),
+                crate::sketch::CurveKind::Circle { c: ci, .. } => {
+                    if let Some(u) = used.get_mut(ci) {
+                        *u = true;
+                    }
+                }
+                crate::sketch::CurveKind::Arc { c: ci, a, b } => used.iter_mut().enumerate().filter(|(i, _)| [ci, a, b].contains(i)).for_each(|(_, u)| *u = true),
+                _ => {}
+            }
+            continue;
+        }
         match c.kind {
             crate::sketch::CurveKind::Line { a, b } => {
-                if let (Some(pa), Some(pb)) = (at(a), at(b)) {
+                let (ca, cb) = (centre_of(a, at(a)), centre_of(b, at(b)));
+                if let (Some(ca), Some(cb)) = (ca, cb)
+                    && ca != cb
+                {
+                    centre_lines.push((c.id.clone(), ca, cb));
+                } else if let (Some(pa), Some(pb)) = (at(a), at(b)) {
                     lines.push((c.id.clone(), sketch_rules::Line { a: pa, b: pb }));
                 }
                 for i in [a, b] {
@@ -1294,7 +1357,7 @@ pub fn sketch_entities(s: &Session, sketch: u64) -> std::result::Result<GearSket
     }
     let has_origin = origin.is_some();
     points.extend(origin);
-    Ok(GearSketch { sketch, frame, points, circles, lines, has_origin })
+    Ok(GearSketch { sketch, frame, points, circles, lines, centre_lines, has_origin })
 }
 
 /// The bevel planetary mode asked for, as the gear crate names it.
@@ -1339,7 +1402,12 @@ fn from_sketch(s: &Session, cmd: &str, p: &GearParams) -> Result<Solved> {
     }
     // A tooth style: the whole drawing (or what is picked) read as one set.
     let view = match &p.picks {
-        None => sk.user_drawn(),
+        None => {
+            if let Some((why, _)) = sk.mesh_problem() {
+                return Err(bad(cmd, why));
+            }
+            sk.user_drawn()
+        }
         Some(ids) => picked(cmd, &sk, ids)?,
     };
     match sketch_rules::read(style, &view).map_err(|e| bad(cmd, e))? {

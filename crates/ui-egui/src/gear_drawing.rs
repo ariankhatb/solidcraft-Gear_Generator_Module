@@ -370,7 +370,7 @@ pub(crate) fn sketch(ui: &mut Ui, cv: &mut Canvas, d: &mut Drawn, cx: Ctx<'_>, s
         let (c, lit) = color_of(Item::Line(i));
         let u = l.dir();
         let far = 4.0 * (rect.width().max(rect.height()) as f64) / view.scale;
-        painter.extend(egui::Shape::dashed_line(&[to_screen(l.a - u * far), to_screen(l.b + u * far)], Stroke::new(0.8, c.gamma_multiply(0.5)), 10.0, 4.0));
+        crate::gear_drawing::dashed(&painter, &[to_screen(l.a - u * far), to_screen(l.b + u * far)], Stroke::new(0.8, c.gamma_multiply(0.5)), 10.0, 4.0);
         let w = if cv.selected == Some(Item::Line(i)) || lit { 2.6 } else { 1.6 };
         painter.line_segment([to_screen(l.a), to_screen(l.b)], Stroke::new(w, c));
         for p in [l.a, l.b] {
@@ -788,7 +788,12 @@ fn bevel_dims(p: &egui::Painter, to_screen: &dyn Fn(V2) -> Pos2, l1: Line, l2: L
     let (z1, z2) = (f64::from(spec.teeth.max(1)), f64::from(spec.teeth2.max(1)));
     let d1 = sigma.sin().atan2(z2 / z1 + sigma.cos());
     let d2 = sigma - d1;
-    let re = spec.module * z1 / 2.0 / d1.sin().max(1e-9);
+    // Shafts lying (nearly) along one line make no cones to draw: a cone distance blown up by a
+    // near-zero angle would reach far past the view.
+    if !(d1 > 1e-3 && d2 > 1e-3) {
+        return None;
+    }
+    let re = spec.module * z1 / 2.0 / d1.sin();
     let b = spec.face_width.min(0.45 * re);
     let side = if r1.cross(r2) >= 0.0 { 1.0 } else { -1.0 };
     for (r, delta, member, toward) in [(r1, d1, 0usize, side), (r2, d2, 1usize, -side)] {
@@ -799,8 +804,8 @@ fn bevel_dims(p: &egui::Painter, to_screen: &dyn Fn(V2) -> Pos2, l1: Line, l2: L
         let inner = [apex + rim * (re - b), apex + other * (re - b)];
         let fill = c.gamma_multiply(0.22);
         p.add(egui::Shape::convex_polygon(vec![to_screen(inner[0]), to_screen(outer[0]), to_screen(outer[1]), to_screen(inner[1])], fill, Stroke::new(1.0, c)));
-        p.extend(egui::Shape::dashed_line(&[to_screen(apex), to_screen(outer[0])], Stroke::new(0.7, c.gamma_multiply(0.7)), 4.0, 3.0));
-        p.extend(egui::Shape::dashed_line(&[to_screen(apex), to_screen(outer[1])], Stroke::new(0.7, c.gamma_multiply(0.7)), 4.0, 3.0));
+        crate::gear_drawing::dashed(&p, &[to_screen(apex), to_screen(outer[0])], Stroke::new(0.7, c.gamma_multiply(0.7)), 4.0, 3.0);
+        crate::gear_drawing::dashed(&p, &[to_screen(apex), to_screen(outer[1])], Stroke::new(0.7, c.gamma_multiply(0.7)), 4.0, 3.0);
         let label = apex + r.rot(-toward * delta * 0.5) * (re * 0.55);
         let name = if member == 0 { "δ₁" } else { "δ₂" };
         p.text(to_screen(label), egui::Align2::CENTER_CENTER, format!("{name} {}°", fmt(delta.to_degrees())), egui::FontId::proportional(10.5), c.lerp_to_gamma(ink, 0.4));
@@ -901,8 +906,8 @@ pub(crate) fn side_view(ui: &mut Ui, cv: &mut Canvas, spec: &mut Spec, size: egu
     let up = vec2(0.0, -1.0);
     let dir2 = vec2(sigma.sin(), -sigma.cos());
     let (c1, c2) = (crate::gear_window::member_color(0), crate::gear_window::member_color(1));
-    painter.extend(egui::Shape::dashed_line(&[c - up * r * 0.5, c + up * r], Stroke::new(1.5, c1), 9.0, 3.0));
-    painter.extend(egui::Shape::dashed_line(&[c - dir2 * r * 0.5, c + dir2 * r], Stroke::new(1.5, c2), 9.0, 3.0));
+    crate::gear_drawing::dashed(&painter, &[c - up * r * 0.5, c + up * r], Stroke::new(1.5, c1), 9.0, 3.0);
+    crate::gear_drawing::dashed(&painter, &[c - dir2 * r * 0.5, c + dir2 * r], Stroke::new(1.5, c2), 9.0, 3.0);
     arrowhead(&painter, c + up * r, c, c1);
     arrowhead(&painter, c + dir2 * r, c, c2);
     let handle = c + dir2 * r;
@@ -962,4 +967,40 @@ pub(crate) fn side_view(ui: &mut Ui, cv: &mut Canvas, spec: &mut Spec, size: egu
         }
     }
     changed
+}
+
+/// A dashed polyline, clipped to what can be seen: a line far longer than the view (a cone
+/// distance blown up by a near-zero angle, an axis drawn "to infinity") would otherwise be cut
+/// into billions of dashes and run the window out of memory. Points that aren't finite draw
+/// nothing.
+pub(crate) fn dashed(p: &egui::Painter, pts: &[Pos2], stroke: Stroke, dash: f32, gap: f32) {
+    let clip = p.clip_rect().expand(64.0);
+    let inside = |q: Pos2| q.x.is_finite() && q.y.is_finite();
+    for w in pts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if !inside(a) || !inside(b) {
+            continue;
+        }
+        // Liang–Barsky: the part of a→b within the clip rectangle.
+        let d = b - a;
+        let (mut t0, mut t1) = (0.0f32, 1.0f32);
+        let mut keep = true;
+        for (pp, q) in [(-d.x, a.x - clip.min.x), (d.x, clip.max.x - a.x), (-d.y, a.y - clip.min.y), (d.y, clip.max.y - a.y)] {
+            if pp == 0.0 {
+                if q < 0.0 {
+                    keep = false;
+                }
+            } else {
+                let r = q / pp;
+                if pp < 0.0 {
+                    t0 = t0.max(r);
+                } else {
+                    t1 = t1.min(r);
+                }
+            }
+        }
+        if keep && t0 < t1 {
+            p.extend(egui::Shape::dashed_line(&[a + d * t0, a + d * t1], stroke, dash, gap));
+        }
+    }
 }

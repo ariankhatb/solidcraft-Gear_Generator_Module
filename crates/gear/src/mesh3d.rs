@@ -1165,6 +1165,10 @@ pub fn motion(s: &Spec) -> (f64, f64, f64) {
             let starts = f64::from(s.starts.max(1));
             (-hand * f64::from(s.teeth) / starts, PI / starts, TAU / f64::from(s.teeth.max(1)))
         }
+        // A face gear's set is the face gear (teeth2) first, then its pinion (teeth): the pinion
+        // turns teeth2/teeth times as fast. Turned the other way round, the check read the pair
+        // as interfering everywhere but the built pose.
+        Kind::FaceGear => (-f64::from(s.teeth2) / f64::from(s.teeth.max(1)), PI / f64::from(s.teeth.max(1)), TAU / f64::from(s.teeth2.max(1))),
         _ => (-f64::from(s.teeth) / f64::from(s.teeth2.max(1)), PI / f64::from(s.teeth2.max(1)), TAU / f64::from(s.teeth.max(1))),
     }
 }

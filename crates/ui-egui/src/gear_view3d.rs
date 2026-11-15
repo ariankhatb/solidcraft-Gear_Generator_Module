@@ -1037,7 +1037,7 @@ impl Overlay<'_> {
 
     fn arrow_line(&self, a: P3, b: P3, color: Color32) {
         let (pa, pb) = ((self.to_screen)(a), (self.to_screen)(b));
-        self.painter.extend(egui::Shape::dashed_line(&[pa, pb], Stroke::new(1.3, color), 9.0, 3.0));
+        crate::gear_drawing::dashed(&self.painter, &[pa, pb], Stroke::new(1.3, color), 9.0, 3.0);
         let d = pb - pa;
         if d.length() > 4.0 {
             let u = d / d.length();
@@ -1101,7 +1101,7 @@ impl Overlay<'_> {
                 self.label(p.lerp(q, 0.5), &format!("e = {}", fmt(offset)), self.ink);
                 // Axis 2's direction carried to axis 1's foot, and the angle between them.
                 let ghost = (self.to_screen)(add(foot1, mul(a2.dir, k * 1.4)));
-                self.painter.extend(egui::Shape::dashed_line(&[(self.to_screen)(foot1), ghost], Stroke::new(1.0, self.ink.gamma_multiply(0.5)), 4.0, 4.0));
+                crate::gear_drawing::dashed(&self.painter, &[(self.to_screen)(foot1), ghost], Stroke::new(1.0, self.ink.gamma_multiply(0.5)), 4.0, 4.0);
                 self.arc(foot1, a1.dir, a2.dir, k, &format!("Σ {}°", fmt(angle(a1.dir, a2.dir).to_degrees())));
             }
             _ => {}

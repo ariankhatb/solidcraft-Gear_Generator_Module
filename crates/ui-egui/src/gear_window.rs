@@ -2767,5 +2767,49 @@ fn preview(ui: &mut Ui, w: &GearWindow) -> Option<usize> {
 fn dashed_circle(p: &egui::Painter, c: Pos2, r: f32, stroke: Stroke) {
     let n = ((r * 0.6) as usize).clamp(24, 240);
     let pts: Vec<Pos2> = (0..=n).map(|i| c + Vec2::angled(i as f32 / n as f32 * std::f32::consts::TAU) * r).collect();
-    p.extend(egui::Shape::dashed_line(&pts, stroke, 4.0, 4.0));
+    crate::gear_drawing::dashed(&p, &pts, stroke, 4.0, 4.0);
+}
+
+#[cfg(test)]
+mod freeze_tests {
+    use super::*;
+
+    /// Simple mode, face gear, then bevel planetary: the window once ran away with memory
+    /// (13 GB in seconds) on that switch. Each step is timed so a runaway shows where it is.
+    #[test]
+    fn face_gear_then_bevel_planetary_stays_responsive() {
+        let mut h = crate::scenario::Harness::new();
+        open(&mut h.app);
+        h.frames(5);
+        let t = std::time::Instant::now();
+        crate::gear_simple::set_mode(h.app.gear_window.as_mut().unwrap(), Kind::FaceGear);
+        h.frames(10);
+        eprintln!("face gear: {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        {
+            let w = h.app.gear_window.as_mut().unwrap();
+            crate::gear_simple::set_mode(w, Kind::BevelPlanetary);
+            eprintln!("set_mode: {:?}", t.elapsed());
+            crate::gear_simple::apply(w);
+            eprintln!("apply: {:?} error {:?} kind {:?} shaft {}", t.elapsed(), w.simple.error, w.spec.kind, w.spec.shaft_angle);
+            w.replan();
+            eprintln!("replan: {:?} plan ok {}", t.elapsed(), w.plan.is_ok());
+        }
+        for i in 0..20 {
+            let f = std::time::Instant::now();
+            let before = h.app.gear_window.as_ref().unwrap().plan_gen;
+            h.frame();
+            let w = h.app.gear_window.as_ref().unwrap();
+            eprintln!("frame {i}: {:?}, plans {}", f.elapsed(), w.plan_gen - before);
+        }
+        let w = h.app.gear_window.as_ref().unwrap();
+        eprintln!("spec equal to itself: {}, axes equal to themselves: {}", w.spec == w.spec.clone(), w.axes == w.axes.clone());
+        eprintln!("spec: {:?}", w.spec);
+        // Settled: no frame plans again.
+        let before = w.plan_gen;
+        h.frames(5);
+        let again = h.app.gear_window.as_ref().unwrap().plan_gen - before;
+        assert_eq!(again, 0, "the window plans again on every frame");
+        assert!(t.elapsed().as_secs_f64() < 30.0, "{:?}", t.elapsed());
+    }
 }

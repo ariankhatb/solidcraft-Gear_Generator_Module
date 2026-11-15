@@ -202,8 +202,9 @@ fn concentric_circles_are_compound_gears_on_one_shaft() {
     let (z1, z2, z3, z4) = (t.gears[0].teeth, t.gears[1].teeth, t.gears[2].teeth, t.gears[3].teeth);
     let want = (f64::from(z2) / f64::from(z1)) * (f64::from(z4) / f64::from(z3));
     assert!((fact(&p, "train ratio gear 1 → gear 4") - want).abs() < 1e-12);
-    assert!(p.assembly.links.iter().any(|l| matches!(l, AssemblyLink::Rigid { a: 1, b: 2 })));
-    assembly_matches_preview(&p);
+    // Gears 2 and 3 are one body (one part on their shaft).
+    assert_eq!(p.bodies.len(), 3);
+    assert_eq!((p.members[1].body, p.members[2].body), (Some(1), Some(1)));
 }
 
 #[test]

@@ -1021,12 +1021,23 @@ pub struct TrainCircle {
     pub face_width: Option<f64>,
     /// It must be (true) or must not be (false) a ring gear (`None`: as the drawing says).
     pub ring: Option<bool>,
+    /// Build a shaft on its axis, through it and the gears sharing its axis (its bore made to
+    /// fit): `shaft_span` where the shaft runs along the axis (as `z`: a drawn shaft line's ends),
+    /// else past the outer gears' faces; `shaft_diameter` its diameter, else half the smallest
+    /// root diameter of the gears on it.
+    pub shaft: bool,
+    pub shaft_span: Option<(f64, f64)>,
+    pub shaft_diameter: Option<f64>,
+    /// Its helix angle (degrees, its own hand's sign ignored: hands alternate across meshes),
+    /// and V (herringbone) teeth; `None`: the set's. Its meshing group shares them.
+    pub helix: Option<f64>,
+    pub herringbone: Option<bool>,
 }
 
 impl TrainCircle {
     /// A circle with nothing asked of it.
     pub fn of(circle: Circle) -> TrainCircle {
-        TrainCircle { circle, z: None, module: None, teeth: None, face_width: None, ring: None }
+        TrainCircle { circle, z: None, module: None, teeth: None, face_width: None, ring: None, shaft: false, shaft_span: None, shaft_diameter: None, helix: None, herringbone: None }
     }
 }
 
@@ -1279,8 +1290,53 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             }
         }
     }
+    // Each meshing group's helix and V teeth: what its members ask (they must agree), else the
+    // set's (a helix asked on spur teeth makes them helical). A cluster's gears may differ.
+    let mut gh = vec![helix; n];
+    let mut gv = vec![style == Kind::Herringbone; n];
+    for g in (0..n).filter(|i| group[*i] == *i).collect::<Vec<_>>() {
+        let members: Vec<usize> = (0..n).filter(|i| group[*i] == g).collect();
+        let mut asked: Option<(usize, f64)> = None;
+        let mut vee: Option<(usize, bool)> = None;
+        for &i in &members {
+            if let Some(h) = circles[i].helix {
+                let h = h.abs();
+                if !(h.is_finite() && h < 80.0) {
+                    fail(&mut err, i, format!("gear {}: helix angle must be under 80°", i + 1));
+                    continue;
+                }
+                match asked {
+                    None => asked = Some((i, h)),
+                    Some((j, hj)) if (h - hj).abs() > 1e-9 => fail(
+                        &mut err,
+                        i,
+                        format!("gear {} asks a {}° helix, but gear {} it meshes with asks {}°: meshing gears share one helix angle (of opposite hands)", i + 1, num(h), j + 1, num(hj)),
+                    ),
+                    Some(_) => {}
+                }
+            }
+            if let Some(v) = circles[i].herringbone {
+                match vee {
+                    None => vee = Some((i, v)),
+                    Some((j, vj)) if v != vj => fail(&mut err, i, format!("gear {} and gear {} mesh: both have V (herringbone) teeth, or neither", i + 1, j + 1)),
+                    Some(_) => {}
+                }
+            }
+        }
+        for &i in &members {
+            if let Some((_, h)) = asked {
+                gh[i] = h;
+            }
+            if let Some((_, v)) = vee {
+                gv[i] = v;
+            }
+            if gv[i] && gh[i] == 0.0 {
+                fail(&mut err, i, format!("gear {}: V (herringbone) teeth need a helix angle", i + 1));
+            }
+        }
+    }
     // One module per meshing group, and the teeth.
-    let f = 1.0 / helix.to_radians().cos();
+    let fs: Vec<f64> = gh.iter().map(|h| 1.0 / h.to_radians().cos()).collect();
     let mut module = vec![0.0f64; n];
     let mut teeth = vec![0u32; n];
     let roots: Vec<usize> = (0..n).filter(|i| group[*i] == *i).collect();
@@ -1290,6 +1346,7 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             continue;
         }
         let d = |i: usize| 2.0 * c[i].r;
+        let f = fs[g];
         // The module the members ask, or the one their asked teeth give: they must agree.
         let mut asked: Option<(usize, f64, &str)> = None;
         for &i in &members {
@@ -1383,7 +1440,7 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
     // Shifts that keep every drawn centre distance, from each group's first gear along its tree.
     let face = settings.face_width.filter(|f| *f > 0.0).unwrap_or(10.0 * module.iter().copied().fold(0.0, f64::max));
     let probe = Spec { kind: style, helix, face_width: face, train: None, ..base.clone() };
-    let inv = |i: usize, x: f64| Spec { module: module[i].max(1e-6), ..probe.clone() }.involute(teeth[i].max(3), x, hand[i] * helix);
+    let inv = |i: usize, x: f64| Spec { module: module[i].max(1e-6), helix: gh[i], ..probe.clone() }.involute(teeth[i].max(3), x, hand[i] * gh[i]);
     let mut shift: Vec<Option<f64>> = vec![None; n];
     for &g in &roots {
         shift[g] = Some(0.0);
@@ -1421,8 +1478,29 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             }
         }
     }
-    // Where each gear sits along the shafts.
-    let faces: Vec<f64> = circles.iter().map(|t| t.face_width.filter(|f| *f > 0.0).unwrap_or(face)).collect();
+    // Where each gear sits along the shafts. Worked out, a face width fits between the gears
+    // drawn on one shaft (nine tenths of the nearest's spacing).
+    let spacing = |i: usize| -> Option<f64> {
+        let zi = circles[i].z?;
+        links
+            .iter()
+            .filter(|l| l.kind == LinkKind::Compound && (l.a == i || l.b == i))
+            .filter_map(|l| circles[if l.a == i { l.b } else { l.a }].z.map(|zj| (zj - zi).abs()))
+            .filter(|d| *d > 1e-9)
+            .reduce(f64::min)
+    };
+    let auto = |i: usize| -> f64 {
+        if settings.face_width.is_some_and(|f| f > 0.0) {
+            return face;
+        }
+        // A whole meshing group alike: the tightest of its gears' spacings.
+        let tight = (0..n).filter(|j| group[*j] == group[i]).filter_map(spacing).reduce(f64::min);
+        match tight {
+            Some(d) if 0.9 * d < face => 0.9 * d,
+            _ => face,
+        }
+    };
+    let faces: Vec<f64> = (0..n).map(|i| circles[i].face_width.filter(|f| *f > 0.0).unwrap_or_else(|| auto(i))).collect();
     let step = faces.iter().copied().fold(face, f64::max) * 1.1 + 1.0;
     let z_of = |i: usize| match circles[group[i]].z {
         Some(z) => z,
@@ -1463,7 +1541,7 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             source: i,
             module: module[i],
             teeth: teeth[i],
-            pitch_diameter: module[i] * f * f64::from(teeth[i]),
+            pitch_diameter: module[i] * fs[i] * f64::from(teeth[i]),
             face_width: faces[i],
             ring: ring[i],
             meshes_with: links.iter().filter(|l| l.kind != LinkKind::Compound).filter_map(|l| if l.a == i { Some(l.b) } else if l.b == i { Some(l.a) } else { None }).collect(),
@@ -1484,13 +1562,41 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
         return out;
     }
     out.errors = err;
+    // Shafts: one per axis that carries a gear asking for one (a cluster's gears share it).
+    let mut shafts = Vec::new();
+    let mut done = vec![false; n];
+    for i in 0..n {
+        if done[i] || ring[i] || !circles[i].shaft {
+            continue;
+        }
+        let on: Vec<usize> = match cluster[i] {
+            Some(k) => out.clusters[k].iter().copied().filter(|j| !ring[*j]).collect(),
+            None => vec![i],
+        };
+        for &j in &on {
+            done[j] = true;
+        }
+        let root = on.iter().map(|&j| module[j] * fs[j] * f64::from(teeth[j]) - 2.5 * module[j]).fold(f64::INFINITY, f64::min);
+        let d = on
+            .iter()
+            .find_map(|j| circles[*j].shaft_diameter.filter(|d| *d > 0.0))
+            .or((base.bore.diameter > 0.0).then_some(base.bore.diameter))
+            .unwrap_or_else(|| (root.floor() / 2.0).max(1.0));
+        let (lo, hi) = on.iter().map(|&j| (z_of(j), z_of(j) + faces[j])).fold((f64::INFINITY, f64::NEG_INFINITY), |a, b| (a.0.min(b.0), a.1.max(b.1)));
+        let ext = (0.25 * d).max(2.0);
+        let (from, to) = on.iter().filter_map(|j| circles[*j].shaft_span).reduce(|a, b| (a.0.min(b.0), a.1.max(b.1))).map(|(a, b)| (a.min(b), a.max(b))).unwrap_or((lo - ext, hi + ext));
+        if to - from > 1e-6 {
+            shafts.push(crate::plan::TrainShaft { center: c[i].c, from, to, diameter: d, gears: on });
+        }
+    }
     let gears: Vec<TrainGear> = (0..n)
         .map(|i| TrainGear {
             center: c[i].c,
             teeth: teeth[i],
             module: module[i],
             shift: shift[i].unwrap_or(0.0),
-            helix: hand[i] * helix,
+            helix: hand[i] * gh[i],
+            herringbone: gv[i],
             ring: ring[i],
             z: z_of(i),
             face: faces[i],
@@ -1509,7 +1615,7 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
         face_width: face,
         herringbone: style == Kind::Herringbone,
         coupon: false,
-        train: Some(Train { gears, links }),
+        train: Some(Train { gears, links, shafts }),
         ..base.clone()
     });
     out

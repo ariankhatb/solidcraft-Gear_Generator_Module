@@ -3,7 +3,7 @@
 
 use crate::drivetrain::{Ask, Circle3, Item, Line3, Outcome, Role, Thing, read};
 use crate::mesh2d::{Verdict, check_mesh};
-use crate::plan::{AssemblyLink, Kind, Spec};
+use crate::plan::{Kind, Spec};
 use crate::simple::Simple;
 use crate::sketch_rules::{Circle, Drawn, Reading};
 use crate::V2;
@@ -38,7 +38,7 @@ fn compound() -> Vec<Item> {
     vec![
         line([0.0, 0.0, -10.0], [0.0, 0.0, 40.0]),
         line([50.0, 0.0, -10.0], [50.0, 0.0, 40.0]),
-        line([85.0, 0.0, -10.0], [85.0, 0.0, 40.0]),
+        line([85.0, 0.0, 15.0], [85.0, 0.0, 35.0]),
         circle([0.0, 0.0, 0.0], Z, 20.0),
         circle([50.0, 0.0, 0.0], Z, 30.0),
         circle([50.0, 0.0, 20.0], Z, 15.0),
@@ -52,7 +52,9 @@ fn compound() -> Vec<Item> {
 fn a_3d_compound_two_circles_on_one_shaft_meshing_two_others() {
     let o = read(&compound(), None, &Simple { face_width: Some(8.0), ..Simple::default() }, &Spec::default());
     let p = planned(&o);
-    assert_eq!(p.bodies.len(), 4);
+    // One body per member that turns as one: each shaft with its gears.
+    assert_eq!(p.bodies.len(), 3, "{:?}", p.bodies.iter().map(|b| &b.name).collect::<Vec<_>>());
+    assert_eq!(p.shafts.len(), 3);
     clean(&p, 2);
     // Members: the circles on their shafts; 5 and 6 one cluster; meshes 4–5 and 6–7.
     let m = &o.members;
@@ -62,10 +64,12 @@ fn a_3d_compound_two_circles_on_one_shaft_meshing_two_others() {
     assert_eq!((m[7].role, m[7].shaft, m[8].role), ("bearing", Some(0), "point"));
     assert_eq!(o.seats, vec![[0.0, 0.0, -5.0]]);
     assert!(m.iter().all(|m| m.error.is_none()));
-    // The plan: one cluster of gears 2 and 3, held together rigidly; gear 4 20 mm up its shaft.
+    // The plan: one cluster of gears 2 and 3, one body with their shaft; gear 4's shaft from
+    // its drawn line's end.
     assert_eq!(p.clusters, vec![vec![1, 2]]);
-    assert!(p.assembly.links.iter().any(|l| matches!(l, AssemblyLink::Rigid { a: 1, b: 2 })));
-    assert!((p.bodies[3].frame.origin[2] - 20.0).abs() < 1e-9 && (p.bodies[3].frame.origin[0] - 85.0).abs() < 1e-9, "{:?}", p.bodies[3].frame);
+    assert_eq!((p.members[1].body, p.members[2].body), (Some(1), Some(1)));
+    assert!((p.bodies[2].frame.origin[2] - 15.0).abs() < 1e-9 && (p.bodies[2].frame.origin[0] - 85.0).abs() < 1e-9, "{:?}", p.bodies[2].frame);
+    assert!((p.shafts[2].length - 20.0).abs() < 1e-9);
     let (z1, z2, z3, z4) = (m[3].teeth.unwrap(), m[4].teeth.unwrap(), m[5].teeth.unwrap(), m[6].teeth.unwrap());
     let ratio = p.facts.iter().find(|f| f.label == "train ratio gear 1 → gear 4").unwrap().value;
     assert!((ratio - f64::from(z2) / f64::from(z1) * f64::from(z4) / f64::from(z3)).abs() < 1e-12);
@@ -182,7 +186,9 @@ fn a_gear_on_a_selected_shaft_line_with_its_size() {
     let p = planned(&o);
     clean(&p, 1);
     assert_eq!((o.members[0].role, o.members[0].shaft, o.members[1].shaft), ("spur", Some(0), Some(2)));
-    assert!((p.bodies[0].frame.origin[2] - 5.0).abs() < 1e-9);
+    // The gear and its shaft are one body, from the shaft line's first end.
+    assert_eq!(p.bodies.len(), 2);
+    assert!(p.bodies[0].frame.origin[2].abs() < 1e-9 && (p.shafts[0].length - 30.0).abs() < 1e-9);
 }
 
 /// The user's build 6 sketch: three circles on XZ, the first two touching, the third touching
@@ -238,9 +244,64 @@ fn a_compound_from_two_sketches_on_parallel_planes_and_a_shaft_line_in_a_third()
     assert_eq!((m[1].shaft, m[2].shaft, m[0].shaft), (Some(4), Some(4), None));
     assert_eq!((m[5].role, m[5].shaft), ("bearing", Some(4)));
     assert_eq!(p.clusters, vec![vec![1, 2]]);
-    assert!(p.assembly.links.iter().any(|l| matches!(l, AssemblyLink::Rigid { a: 1, b: 2 })));
+    assert_eq!(p.members[1].body, p.members[2].body);
     // Without the shaft line, the shared axis alone makes the cluster.
     let o = read(&items[..4], None, &Simple { face_width: Some(8.0), ..Simple::default() }, &Spec::default());
     planned(&o);
     assert!(o.members[1].cluster.is_some() && o.members[1].cluster == o.members[2].cluster);
+}
+
+/// A synthetic copy of the user's RC gearbox (five sketches on offset planes, read in model
+/// space): a Ø30 input driving two Ø15 countershaft gears (centres 35 apart, 22.5 from the
+/// input), a 15 mm shaft line on each countershaft's axis to a second plane where each carries a
+/// Ø25 (compound clusters), both Ø25s driving one Ø15 output (a power-split loop). The Ø36 round
+/// the output and the Ø10 on the input's axis are the user's own checks, not picked.
+fn gearbox() -> Vec<Item> {
+    let h = 200f64.sqrt();
+    let out_z = h + (400.0f64 - 17.5 * 17.5).sqrt();
+    let (down, up) = ([0.0, -1.0, 0.0], [0.0, 1.0, 0.0]);
+    vec![
+        circle([0.0, 0.0, 0.0], down, 15.0),
+        circle([17.5, 0.0, h], down, 7.5),
+        circle([-17.5, 0.0, h], down, 7.5),
+        circle([17.5, 15.0, h], up, 12.5),
+        circle([-17.5, 15.0, h], up, 12.5),
+        circle([0.0, 15.0, out_z], up, 7.5),
+        line([17.5, 0.0, h], [17.5, 15.0, h]),
+        line([-17.5, 0.0, h], [-17.5, 15.0, h]),
+    ]
+}
+
+#[test]
+fn the_rc_gearbox_power_split_with_clusters() {
+    let items = gearbox();
+    let o = read(&items, None, &Simple::default(), &Spec::default());
+    let p = planned(&o);
+    // The loop closes (one countershaft turned on its shaft), every mesh clean.
+    clean(&p, 4);
+    let m = &o.members;
+    assert!(m.iter().all(|m| m.error.is_none()), "{:?}", m);
+    // Stage 1 module 1.5 (20 and 10 teeth, 22.5 apart), stage 2 module 1.25 (20 and 12, 20 apart).
+    assert_eq!((m[0].teeth, m[1].teeth, m[2].teeth), (Some(20), Some(10), Some(10)));
+    assert_eq!((m[3].teeth, m[4].teeth, m[5].teeth), (Some(20), Some(20), Some(12)));
+    assert_eq!((m[0].module, m[3].module), (Some(1.5), Some(1.25)));
+    assert!(m[1].cluster.is_some() && m[1].cluster == m[3].cluster && m[2].cluster == m[4].cluster && m[1].cluster != m[2].cluster);
+    assert_eq!((m[1].shaft, m[3].shaft, m[2].shaft, m[4].shaft), (Some(6), Some(6), Some(7), Some(7)));
+    assert_eq!(m[5].meshes_with, vec![3, 4]);
+    // Faces fit the 15 mm between the gears on each countershaft.
+    assert!(m.iter().filter_map(|m| m.face_width).all(|f| f <= 13.5 + 1e-9), "{:?}", m.iter().map(|m| m.face_width).collect::<Vec<_>>());
+    let ratio = p.facts.iter().find(|f| f.label == "train ratio gear 1 → gear 6").unwrap().value;
+    assert!((ratio - 0.3).abs() < 1e-12, "{ratio}");
+    assert_eq!(p.clusters.len(), 2);
+    // Picked as gears, a Ø36 round the output (one axis, one plane) and the output are named.
+    let mut both = gearbox();
+    let h = 200f64.sqrt();
+    both.push(circle([0.0, 15.0, h + (400.0f64 - 17.5 * 17.5).sqrt()], up_dir(), 18.0));
+    let o = read(&both, None, &Simple::default(), &Spec::default());
+    assert!(o.members[8].error.as_deref().unwrap_or_default().contains("concentric in one plane"), "{:?}", o.members[8]);
+    assert!(o.members[5].error.as_deref().unwrap_or_default().contains("concentric in one plane"));
+}
+
+fn up_dir() -> [f64; 3] {
+    [0.0, 1.0, 0.0]
 }

@@ -140,6 +140,8 @@ impl Role {
             "internal" => Role::Internal,
             "shaft" => Role::Shaft,
             "bearing" => Role::Bearing,
+            // Worked out from the geometry (as no role at all).
+            "auto" => return None,
             _ => return None,
         })
     }
@@ -159,6 +161,14 @@ pub struct Ask {
     pub pitch_diameter: Option<f64>,
     /// On a shaft line: where its gear or bearing sits, mm from its first end.
     pub along: Option<f64>,
+    /// A gear: its helix angle (degrees; 0 straight) and V (herringbone) teeth. Its meshing
+    /// partners get the opposite hand; a helix on a gear of no asked type makes it helical.
+    pub helix: Option<f64>,
+    pub herringbone: Option<bool>,
+    /// A shaft (a line, or a gear's axis): build its shaft body (default yes) and its diameter
+    /// (default from the smallest gear's root).
+    pub shaft_body: Option<bool>,
+    pub shaft_diameter: Option<f64>,
 }
 
 /// One member read: its geometry and what is asked of it.
@@ -181,6 +191,8 @@ pub struct Member {
     pub shaft: Option<usize>,
     pub cluster: Option<usize>,
     pub error: Option<String>,
+    /// Its role was worked out from the geometry (none, or `auto`, was asked).
+    pub inferred: bool,
 }
 
 /// What [`read`] made of the items.
@@ -195,6 +207,8 @@ pub struct Outcome {
     pub notes: Vec<String>,
     /// Why there is no set: every member's error in one line, or one about the whole.
     pub error: Option<String>,
+    /// The gears in the set's order (its train's gears, `Plan::members`): each one's item.
+    pub gears: Vec<usize>,
 }
 
 /// Lines this close to parallel (radians) are parallel.
@@ -213,6 +227,12 @@ fn who(_items: &[Item], i: usize) -> String {
 /// asked nothing else (default spur); `settings` the set's own (module, face width, helix,
 /// hand, `exact`); `base` the rest of the spec (bores, tooth form...).
 pub fn read(items: &[Item], style: Option<Kind>, settings: &Simple, base: &Spec) -> Outcome {
+    read_with(items, style, settings, base, true)
+}
+
+/// [`read`], with shafts built on the gears' axes (`shafts`; each shaft or gear may still turn
+/// its own off) or not.
+pub fn read_with(items: &[Item], style: Option<Kind>, settings: &Simple, base: &Spec, shafts: bool) -> Outcome {
     let n = items.len();
     let style = style.unwrap_or(Kind::Spur);
     let mut out = Outcome { members: (0..n).map(|i| Member { index: i, ..Member::default() }).collect(), ..Outcome::default() };
@@ -259,6 +279,7 @@ pub fn read(items: &[Item], style: Option<Kind>, settings: &Simple, base: &Spec)
             (Thing::Point(_), None) => Role::Bearing,
         });
         out.members[i].role = role[i].map_or("", Role::name);
+        out.members[i].inferred = it.ask.role.is_none();
     }
     // The gears: circles, and lines carrying a gear `along` them.
     let mut gears: Vec<(usize, Circle3)> = Vec::new();
@@ -341,8 +362,9 @@ pub fn read(items: &[Item], style: Option<Kind>, settings: &Simple, base: &Spec)
     // Every gear's shaft parallel to gear 1's: a train in the plane square to them.
     let n0 = gears[0].1.n;
     let all_parallel = gears.iter().all(|(_, c)| parallel(c.n, n0));
+    out.gears = gears.iter().map(|g| g.0).collect();
     if all_parallel {
-        train(items, &gears, &role, style, settings, base, &mut out, &mut err);
+        train(items, &gears, &role, style, settings, base, shafts, &mut out, &mut err);
     } else if gears.len() == 2 {
         crossed(items, &gears, &role, style, settings, base, &mut out, &mut err);
     } else {
@@ -359,7 +381,7 @@ pub fn read(items: &[Item], style: Option<Kind>, settings: &Simple, base: &Spec)
 
 /// Gears on parallel shafts: a train (see [`read`]).
 #[allow(clippy::too_many_arguments)]
-fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], style: Kind, settings: &Simple, base: &Spec, out: &mut Outcome, err: &mut [Option<String>]) {
+fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], style: Kind, settings: &Simple, base: &Spec, shafts: bool, out: &mut Outcome, err: &mut [Option<String>]) {
     // One tooth style: the gears' own, all alike.
     let mut chosen: Option<(usize, Kind)> = None;
     for &(i, _) in gears {
@@ -398,6 +420,14 @@ fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], styl
             let _ = flip(c);
             let q = sub(c.c, origin);
             let a = &items[*i].ask;
+            // Its shaft line, if drawn: the shaft runs between its ends; the line asks too.
+            let line = out.members[*i].shaft.map(|k| (k, items[k]));
+            let span = line.and_then(|(_, it)| match it.thing {
+                Thing::Line(l) => Some((dot(sub(l.a, origin), z), dot(sub(l.b, origin), z))),
+                _ => None,
+            });
+            let line_ask = line.map(|(_, it)| it.ask).unwrap_or_default();
+            let on = shafts && a.shaft_body != Some(false) && line_ask.shaft_body != Some(false);
             TrainCircle {
                 circle: Circle { c: V2::new(dot(q, x), dot(q, y)), r: c.r },
                 z: Some(dot(q, z)),
@@ -405,6 +435,17 @@ fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], styl
                 teeth: a.teeth,
                 face_width: a.face_width,
                 ring: (role[*i] == Some(Role::Internal)).then_some(true),
+                shaft: on,
+                shaft_span: span,
+                shaft_diameter: a.shaft_diameter.or(line_ask.shaft_diameter),
+                helix: a.helix.or(match role[*i] {
+                    Some(Role::Gear(Kind::Spur)) if a.role.is_some() => Some(0.0),
+                    _ => None,
+                }),
+                herringbone: a.herringbone.or(match role[*i] {
+                    Some(Role::Gear(Kind::Herringbone)) if a.role.is_some() => Some(true),
+                    _ => None,
+                }),
             }
         })
         .collect();
@@ -426,6 +467,14 @@ fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], styl
         out.error = Some(renamed(e, items, gears));
     }
     if let Some(mut spec) = sized.spec {
+        // Each gear's resolved type: helical where its helix isn't 0, V teeth herringbone.
+        if let Some(t) = &spec.train {
+            for (k, (i, _)) in gears.iter().enumerate() {
+                if let Some(g) = t.gears.get(k).filter(|g| g.helix != 0.0 && !g.ring) {
+                    out.members[*i].role = if g.herringbone { "herringbone" } else { "helical" };
+                }
+            }
+        }
         spec.origin = [0.0; 3];
         spec.placement = Some(frame);
         out.solved = Some(Solved { spec, relation: None, frames: [frame; 2], facts: Vec::new(), notes: Vec::new(), derived: Default::default() });

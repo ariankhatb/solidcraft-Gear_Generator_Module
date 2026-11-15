@@ -539,8 +539,8 @@ fn build(
                 push(zg, orbit + q[0].hypot(q[1]), margin);
             }
         }
-        if rules.len() < groups.len() {
-            rules.resize_with(groups.len(), GroupFollow::default);
+        if rules.len() <= gi {
+            rules.resize_with(gi + 1, GroupFollow::default);
         }
         let to_group = |z: f64| dot(sub(f.world([0.0, 0.0, z]), g.frame.origin), g.frame.z);
         let teeth_g = {

@@ -61,6 +61,7 @@ pub mod pulley;
 pub mod spline;
 pub mod sprocket;
 pub mod sheet;
+pub mod simple;
 pub mod strength;
 pub mod worm;
 pub mod wrap;

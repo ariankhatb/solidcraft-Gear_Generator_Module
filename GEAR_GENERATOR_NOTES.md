@@ -221,3 +221,73 @@ assembly."
   radial and axial clearance, the shafts, and bearing seats (one bearing size from the library,
   placed at dots on the shafts). Other housing features stay manual for now.
 Agent worktree: `solidcraft-keepout` / `gear-keepout`.
+
+### Sketch rules (confirmed by the user) — circles are pitch diameters, lines are shafts
+
+One sketch = gear 1's plane. A circle is a gear's pitch circle (Ø = pitch Ø), its shaft through
+the centre normal to the sketch unless a line says otherwise.
+
+| Drawn | Set | Sizes |
+|---|---|---|
+| one circle | single gear (spur/helical by helix field) | pitch Ø |
+| two circles touching outside | parallel pair (helix field: helical/herringbone) | both pitch Ø; centre distance |
+| circle touching inside a bigger one | internal pair | both pitch Ø |
+| centre circle + circles around it inside a big circle | planetary | sun, planets, ring |
+| circle + tangent line | rack and pinion OR worm and wheel (one choice; worm Ø a field or a second parallel line) | line = pitch line |
+| circle + line through its centre | bevel, 90° | line = shaft 2 seen from above; meets shaft 1 at the apex |
+| circle + line crossing the circle off-centre | hypoid | offset = line's distance from centre |
+| circle + line missing the circle | crossed helical | offset = line's distance from centre |
+| second circle in another sketch touching the first | bevel at any angle | both pitch Ø; shaft angle = angle between sketch planes |
+
+Face width: a field per gear (default ≈ 10×module; 30% of cone distance for bevel/hypoid),
+shown as a dimension. Mate size for bevel/hypoid with one circle: ratio field (or the side-sketch
+circle). Non-90° bevel/hypoid: angle field or the two-sketch form.
+- Bevels at any shaft angle (user's example: 80°) must be easy in Simple mode: a shaft-angle
+  dimension on the bevel's side-view drawing (default 90°), side-view sketch input (two lines
+  meeting at the apex), cone angles and apex drawn. The generator already supports 5–175°.
+
+### Mode first, then pick from the sketch; new mode: bevel planetary (user, same evening)
+
+User: keep the mode selection for now; after choosing the mode, select the components from the
+sketch that the mode needs. New set: "something similar to a sun gear and planet gears around
+it, but the planets are made at a cone shape, so each one goes in a different direction, not
+perpendicular or parallel to each other."
+- **Bevel planetary**: a bevel sun; N bevel planets whose axes meet the sun axis at one apex at a
+  cone angle (90° = differential spider gears); optional second sun opposite (full
+  differential) or an outer bevel ring. Sketch: sun circle + one line per planet from the centre
+  (azimuths) + cone angle dimension (or a side-view sketch: two lines meeting at the apex);
+  planet size from a second circle on a spoke or a ratio.
+- Window: mode picker stays; each mode lists its pick slots (circle / line / point / second
+  sketch) and validates picks; auto-detection only as a hint. Per-mode slots:
+  single gear: 1 circle; pair: 2 touching circles; internal: circle inside circle; planetary:
+  sun/planet/ring circles; rack/worm: circle + tangent line; bevel: circle + line through centre
+  (or 2 side-view lines); hypoid: circle + off-centre crossing line; crossed helical: circle +
+  missing line; bevel planetary: sun circle + planet lines + cone angle.
+Agent worktree for the new kind: `solidcraft-bevelplanet` / `gear-bevelplanet`.
+- **Correction: ONE sketch only**, basic geometry (circles, lines). No second sketch, no side-view
+  sketch. Out-of-plane angles (bevel/hypoid/crossed shaft angle, bevel planetary cone angle) are
+  settings (default 90°). Counts are settings: draw one planet (one line from the sun's centre
+  for bevel planetary, one planet circle for classic planetary) and set the planet count.
+- **Origin dot, always**: every mode's first pick is a sketch point = origin of the set; default
+  orientation follows the sketch (circle modes: shafts normal to the sketch; line modes: shafts in
+  the plane); rotate about the origin in 90° steps (+ free angle) to align to the wanted plane.
+- **Bevel and bevel planetary drawn as a side view** in the one sketch: a line (sun/gear 1 shaft),
+  the dot on it (apex = origin), a second line from the dot at an angle (planet/gear 2 shaft);
+  the angle between the lines is the meeting angle (drawn). Sizes, planet count, face width are
+  settings. Hypoid stays circle + off-centre line with the out-of-plane offset as a setting.
+- Optimization agent (user request: "faster and smoother"): worktree `solidcraft-perf` /
+  `gear-perf` — kernel build path per kind, plan/check_mesh/solver costs; measure before/after.
+
+## Integrator plan while the user is away (from ~19:15, back in a couple of hours)
+
+User: "whenever that is done, rebuild everything yourself … if the first rebuild goes wrong, redo
+it … if it finishes and I'm not around, double check everything and rebuild again if there are
+bugs." Steps: merge each agent branch as it lands (gear tests + cargo check after each) → full
+release build → kernel overlap check on every kind, engine gear tests, renders, window
+screenshots (Simple and Advanced) via the control channel → fix and rebuild until clean →
+summary for the user.
+- Merged `gear-simple` (design-by-outputs `simple.rs`: Simple/solve/outputs_of/auto_kind/schematic).
+  TODO at integration: pairs (and planetary) can't be herringbone — `pair()` checks
+  `s.kind == Kind::Herringbone`; add `Spec.herringbone: bool` (+ `GearParams.herringbone`, window
+  toggle) so a pair builds herringbone teeth. `sweep_tests::big_gears_plan_quickly` (50 ms) is
+  flaky under load; passes alone.

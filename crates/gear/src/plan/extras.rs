@@ -18,14 +18,14 @@ fn with_module(s: &Spec, module: f64) -> Spec {
 }
 
 /// The chain the spec names: (label, pitch, roller Ø, inner width, transverse pitch).
-pub(super) fn chain_of(s: &Spec) -> (String, f64, f64, f64, f64) {
+pub(crate) fn chain_of(s: &Spec) -> (String, f64, f64, f64, f64) {
     match chain_by_id(s.chain) {
         Some(c) => (c.label.to_string(), c.pitch, c.roller, c.inner_width, c.strand_pitch),
         None => (format!("custom {} mm pitch", mm(s.chain_pitch)), s.chain_pitch, s.roller_diameter, s.roller_width, s.strand_pitch),
     }
 }
 
-pub(super) fn belt_of(s: &Spec) -> Belt {
+pub(crate) fn belt_of(s: &Spec) -> Belt {
     belt_by_id(s.belt).or(BELTS.first()).copied().unwrap_or(Belt {
         id: "gt2_2",
         label: "GT2 2 mm",
@@ -397,7 +397,7 @@ pub(super) fn sprocket(s: &Spec, p: &mut Plan) {
 // Timing belt pulleys
 
 /// The centre distance at which an open belt of `length` (pitch line) is taut, if any.
-fn belt_center(r1: f64, r2: f64, length: f64) -> Option<f64> {
+pub(crate) fn belt_center(r1: f64, r2: f64, length: f64) -> Option<f64> {
     let lo = (r1 - r2).abs() + 1e-6;
     if belt_length(r1, r2, lo) > length {
         return None;
@@ -546,7 +546,7 @@ pub(super) fn pulley(s: &Spec, p: &mut Plan) {
 // ------------------------------------------------------------------------------------------
 // Involute splines
 
-pub(super) fn spline_of(s: &Spec) -> Spline {
+pub(crate) fn spline_of(s: &Spec) -> Spline {
     Spline {
         standard: s.spline_standard,
         module: s.module,

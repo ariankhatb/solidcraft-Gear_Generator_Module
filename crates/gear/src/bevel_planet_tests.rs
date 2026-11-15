@@ -8,7 +8,7 @@ use std::f64::consts::PI;
 use crate::mesh2d::{Verdict, check_mesh};
 use crate::mesh3d::{MeshPair3, Pair};
 use crate::plan::bevel_planet::{geometry, placement_from_shafts};
-use crate::plan::{BevelPlanetMode, Kind, Plan, Spec, plan};
+use crate::plan::{BevelPlanetMode, Kind, Plan, Spec, Step, plan};
 
 const STEPS: usize = 16;
 /// As in `mesh3d_tests`: flanks in contact may read as crossing by this much, or as this much
@@ -275,4 +275,37 @@ fn placement_from_a_side_view_sketch() {
     let sun = &p.bodies[0];
     assert!((sun.frame.z[1] - 1.0).abs() < 1e-12);
     assert!(placement_from_shafts([0.0; 3], [0.0, 0.0, 1.0], [0.0, 0.0, 2.0]).is_err());
+}
+
+/// The ring is a blank with its spaces cut: the kernel left the cut out (keeping the blank) while
+/// the cutter ended level with the blank's faces, and the planets then sat 173 to 175 mm³ inside
+/// the ring of the 45° default. The cutter now runs past both faces; the planets mesh with the
+/// ring as planned, and without its cut each one would overlap the blank by that much.
+#[test]
+fn bevel_ring_cut_runs_through_the_blank() {
+    use crate::mesh3d::{Solid, overlap};
+    for (label, s) in [
+        ("ring 45 16:10 x4 (default, uneven)", Spec { bevel_planet_mode: BevelPlanetMode::Ring, shaft_angle: 45.0, ..d() }),
+        ("ring 45 20:10 x3", set(BevelPlanetMode::Ring, 45.0, 20, 10, 3)),
+        ("ring 60 24:12 x3 spiral 25", Spec { spiral_angle: 25.0, backlash: 0.1, ..set(BevelPlanetMode::Ring, 60.0, 24, 12, 3) }),
+        ("ring 30 20:10 x3 spiral -35", Spec { spiral_angle: -35.0, ..set(BevelPlanetMode::Ring, 30.0, 20, 10, 3) }),
+    ] {
+        let p = prove(label, &s);
+        let ring = p.bodies.last().unwrap();
+        let [Step::Revolve { profile, .. }, Step::Taper { z0, height, op: crate::plan::Op::Cut, .. }] = ring.steps.as_slice() else { panic!("{label}: {:?}", ring.steps) };
+        let (lo, hi) = profile.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q.y), a.1.max(q.y)));
+        let gap = 0.099 * s.module;
+        assert!(*z0 <= lo - gap && z0 + height >= hi + gap, "{label}: the cutter {z0}..{} ends within {gap} mm of the blank {lo}..{hi}", z0 + height);
+        let n = p.bodies.len();
+        let mut blank = ring.clone();
+        blank.steps.truncate(1);
+        let (cut, blank) = (Solid::new(ring, 0.05), Solid::new(&blank, 0.05));
+        for b in &p.bodies[1..n - 1] {
+            let pl = Solid::new(b, 0.05);
+            let (with, without) = (overlap(&pl, &cut, 0.1), overlap(&pl, &blank, 0.1));
+            eprintln!("{label}: {} in the ring {with:.3} mm3, in the uncut blank {without:.1} mm3", b.name);
+            assert!(with < 0.01 * s.module.powi(3), "{label}: {} overlaps the ring by {with} mm3", b.name);
+            assert!(without > 2.0 * s.module.powi(3), "{label}: {} hardly reaches the blank ({without} mm3)", b.name);
+        }
+    }
 }

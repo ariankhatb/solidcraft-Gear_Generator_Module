@@ -634,7 +634,8 @@ const WHEEL_SECTIONS_SLIP_MAX: usize = 41;
 /// segment that best matches, so a section turned too far from its neighbour slips by a few
 /// segments and the loft's walls cut across the teeth), within the kernel's loft curve limit.
 pub fn taper_sections(outline: &Outline, twist: f64, scale: f64) -> usize {
-    let per = outline.segs.len().max(1);
+    // The kernel's curves: one per segment, a spline's one per span.
+    let per = crate::hypoid::corners(outline).len().max(1);
     let most = (LOFT_CURVE_LIMIT / per).clamp(2, 61);
     let mut n = 7usize.min(most);
     loop {

@@ -1504,7 +1504,13 @@ fn bevel_planetary(c: &mut Ctx) -> Result<(), String> {
     if let Some(a) = s.spiral_angle {
         c.spec.spiral_angle = a;
     }
-    let sigma = s.shaft_angle.unwrap_or(c.spec.shaft_angle);
+    let mut sigma = s.shaft_angle.unwrap_or(c.spec.shaft_angle);
+    // A ring with no cone angle asked: where the base's angle can't take one (a differential's
+    // 90° would need a ring flatter than 85°), a bevel epicyclic's usual 45°.
+    if mode == BevelPlanetMode::Ring && s.shaft_angle.is_none() && bevel_planet::geometry(&Spec { shaft_angle: sigma, teeth3: 0, ..c.spec.clone() }).is_err() {
+        c.note(format!("a ring can't be made at the {}° cone angle: 45° taken (set the cone angle to choose another)", num(sigma)));
+        sigma = 45.0;
+    }
     if !(5.0..=175.0).contains(&sigma) {
         return Err(format!("the cone angle (sun shaft to planet shaft) must be 5° to 175°; {} asked", num(sigma)));
     }

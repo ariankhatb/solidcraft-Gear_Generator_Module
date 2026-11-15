@@ -558,6 +558,11 @@ fn bevel_planetary_sets_by_their_outputs() {
         let again = solved(&outputs_of(x), x).spec;
         assert_eq!((again.module, again.teeth, again.teeth2, again.teeth3, again.shaft_angle.round(), again.planets, again.bevel_planet_mode), (x.module, x.teeth, x.teeth2, x.teeth3, x.shaft_angle.round(), x.planets, x.bevel_planet_mode));
     }
+    // Switched to a ring from the 90° differential default, a workable cone angle is taken.
+    let sw = solved(&Simple { bevel_planet_mode: Some(Ring), ..of(Kind::BevelPlanetary) }, &base);
+    assert!(sw.spec.shaft_angle < 85.0 && sw.spec.teeth3 > 0, "{:?}", sw.chosen);
+    assert!(sw.notes.iter().any(|n| n.contains("45°")), "{:?}", sw.notes);
+    plan(&sw.spec).unwrap();
     // A ring is refused where the far side faces the sun's way, with why.
     let bad = solve(&Simple { bevel_planet_mode: Some(Ring), shaft_angle: Some(120.0), ratio: Some(0.6), ..of(Kind::BevelPlanetary) }, &base);
     assert!(bad.error.is_some());

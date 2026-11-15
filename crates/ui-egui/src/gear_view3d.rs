@@ -1142,3 +1142,28 @@ pub(crate) fn fmt(v: f64) -> String {
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s == "-0" { "0".into() } else { s.to_string() }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use solidcraft_gear::plan::{Kind, Spec, plan};
+
+    /// Every kind's default set makes its 3D preview quickly and in bounded size, with and
+    /// without teeth (a bevel planetary set once ran away with memory in the window).
+    #[test]
+    fn every_default_set_previews_in_bounds() {
+        for k in Kind::ALL {
+            let spec = Spec::defaults_for(k);
+            let Ok(p) = plan(&spec) else { continue };
+            for teeth in [false, true] {
+                let t = std::time::Instant::now();
+                let sch = schematic_of(&spec, &p);
+                let scene = build_scene(&sch, &p, teeth, None);
+                let ms = t.elapsed().as_secs_f64() * 1e3;
+                let segs = scene.segs.len();
+                eprintln!("{k:?} teeth={teeth}: {} triangles, {segs} lines, {ms:.0} ms", scene.triangles);
+                assert!(scene.triangles < 3_000_000 && segs < 1_000_000 && ms < 5000.0, "{k:?} teeth={teeth}: {} triangles, {segs} lines, {ms:.0} ms", scene.triangles);
+            }
+        }
+    }
+}

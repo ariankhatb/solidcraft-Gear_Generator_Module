@@ -653,7 +653,10 @@ impl GearWindow {
             s.backlash = keep.backlash;
         }
         s.bore = keep.bore;
-        s.bore2 = keep.bore2;
+        // Gear 2's bore only for a type with a gear 2: a single gear would warn it left it out.
+        if k.is_set() {
+            s.bore2 = keep.bore2;
+        }
         s.origin = keep.origin;
         s.name = keep.name;
         s.load = keep.load;

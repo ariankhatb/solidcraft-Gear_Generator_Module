@@ -217,3 +217,40 @@ fn big_worm_wheels_loft_in_few_sections() {
     }
 }
 
+
+/// Every kind at its defaults reads as meshing in the window's check (a red "Interferes" on a
+/// default set is a false alarm or a real fault, either way a bug).
+#[test]
+fn window_check_passes_every_default_set() {
+    use crate::mesh2d::{Verdict, check_mesh};
+    let mut bad = Vec::new();
+    for k in Kind::ALL {
+        let Ok(p) = plan(&d(k)) else { continue };
+        for r in check_mesh(&p) {
+            eprintln!("{k:?}: {:?} {}", r.verdict, r.message);
+            if r.verdict != Verdict::Ok {
+                bad.push(format!("{k:?}: {}", r.message));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+#[test]
+#[ignore]
+fn debug_face_gear_motion() {
+    let p = plan(&d(Kind::FaceGear)).unwrap();
+    for m in &p.meshes3d {
+        for sign in [1.0, -1.0] {
+            let mut m2 = m.clone();
+            m2.ratio *= sign;
+            let r = crate::mesh3d::check(&p, &m2);
+            eprintln!("ratio {} period {}: {}", m2.ratio, m2.period, r.message);
+            let mut pair = crate::mesh3d::Pair::for_run(&m2.bodies.as_ref().map_or(p.bodies[0].clone(), |b| b[0].clone()), &m2.bodies.as_ref().map_or(p.bodies[1].clone(), |b| b[1].clone()), m.scale / 10.0, m.scale / 3.0, m2.ratio, -0.5 * m2.period, 0.5 * m2.period);
+            for t in [-0.5, -0.25, 0.0, 0.25, 0.5] {
+                let r = pair.run(m2.ratio, 0.0, t * m2.period, t * m2.period, 1);
+                eprintln!("   at {t:+}: depth {:.3}", r.penetration);
+            }
+        }
+    }
+}

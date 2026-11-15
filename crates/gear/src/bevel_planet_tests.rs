@@ -378,3 +378,36 @@ fn simple_mode_bevel_planetary_spec_is_stable() {
         assert!(p.meshes3d.len() <= 16, "{} mesh pairs", p.meshes3d.len());
     }
 }
+
+/// The window switching from a face gear to a bevel planetary set: for a frame the new set is
+/// planned on the face gear's drawn shafts (its spec is the new type's, the axes the old
+/// drawing's). That must plan (or refuse) quickly, not run away.
+#[test]
+fn bevel_planetary_on_a_face_gears_shafts_plans_quickly() {
+    use crate::axes::{self, Drive};
+    use crate::geom::V2;
+    use crate::sketch_rules::{self, Circle, Drawn, Line};
+    let fg = Spec::defaults_for(Kind::FaceGear);
+    let rf = fg.module * f64::from(fg.teeth2) / 2.0;
+    let d = Drawn { points: vec![V2::ZERO], circles: vec![Circle { c: V2::ZERO, r: rf }], lines: vec![Line { a: V2::ZERO, b: V2::new(1.4 * rf, 0.0) }] };
+    let picks = sketch_rules::auto_picks(Kind::FaceGear, &d);
+    let m = sketch_rules::measure(Kind::FaceGear, &d, &picks).unwrap();
+    let sol = crate::simple::solve(&sketch_rules::simple_of(&m, &crate::simple::Simple::default()), &fg);
+    assert!(sol.error.is_none(), "{:?}", sol.error);
+    let (a1, a2) = sketch_rules::axes_for(&m, &sol.spec, &crate::plan::Frame::at([0.0; 3]), [0.0; 3]);
+    let bp = Spec { bore: fg.bore.clone(), bore2: fg.bore2.clone(), ..Spec::defaults_for(Kind::BevelPlanetary) };
+    let t = std::time::Instant::now();
+    let solved = axes::solve(&a1, a2.as_ref(), Some(Kind::BevelPlanetary), &bp, &Drive::default());
+    eprintln!("solve: {:?} in {:?}", solved.as_ref().map(|s| (s.spec.module, s.spec.teeth, s.spec.teeth2, s.spec.shaft_angle, s.spec.planets)).map_err(|e| e.clone()), t.elapsed());
+    if let Ok(s) = solved {
+        let t = std::time::Instant::now();
+        let p = plan(&s.spec);
+        eprintln!("plan: {} in {:?}", p.as_ref().map(|p| format!("{} bodies, {} mesh pairs", p.bodies.len(), p.meshes3d.len())).unwrap_or_else(|e| e.clone()), t.elapsed());
+        if let Ok(p) = p {
+            let t = std::time::Instant::now();
+            let r = check_mesh(&p);
+            eprintln!("check: {} results in {:?}", r.len(), t.elapsed());
+        }
+    }
+    assert!(t.elapsed().as_secs_f64() < 10.0);
+}

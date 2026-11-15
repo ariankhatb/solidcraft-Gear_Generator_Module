@@ -405,8 +405,10 @@ fn make_part(st: &Step, h: f64) -> (Part, Op, (f64, f64, f64)) {
             // quadratic), so the solid between two sections is that curve's, here followed by
             // short straight slabs.
             let zs: Vec<f64> = sections.iter().map(|s| s.1).collect();
-            // (Many close sections, as a hypoid pinion's, need fewer slabs between.)
-            let (polys, zs) = across(&polys, &zs, if zs.len() >= 16 { 2 } else { 4 });
+            // (Many close sections, as a hypoid pinion's 41, need fewer slabs between; a hypoid
+            // ring gear's 19 on its flat cone move far between sections and need four: with two
+            // the model's flanks strayed 0.06 mm and its heel face showed a false overlap.)
+            let (polys, zs) = across(&polys, &zs, if zs.len() >= 30 { 2 } else { 4 });
             let slabs: Vec<Slab> = (0..zs.len() - 1).map(|j| Slab::new(polys[j].clone(), polys[j + 1].clone(), zs[j], zs[j + 1])).collect();
             let r = slabs.iter().fold(0.0f64, |a, s| a.max(s.rmax));
             (Part::Loft { slabs }, *op, (r, sections[0].1, sections[sections.len() - 1].1))

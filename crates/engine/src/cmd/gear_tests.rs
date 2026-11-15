@@ -1144,4 +1144,24 @@ fn an_update_keeps_one_set_of_components_and_joints() {
     run(&mut s, "gear.update", json!({"group": group, "assembly": null}));
     assert_eq!(counts(&s), empty);
     no_errors(&s);
+
+/// Bevel teeth end on their back and front cones: the kernel takes the trim (a revolved blank
+/// intersected with the teeth's taper) on ordinary and nearly flat cones, straight and spiral,
+/// with gear 2's own face width and heel offset (slow: run with --ignored).
+#[test]
+#[ignore]
+fn bevel_teeth_are_trimmed_by_their_cones() {
+    for p in [
+        json!({"type": "bevel"}),
+        json!({"type": "spiral_bevel"}),
+        json!({"type": "spiral_bevel", "module": 2.5, "teeth": 17, "teeth2": 34, "shaft_angle": 110}),
+        json!({"type": "bevel", "module": 2.5, "teeth": 17, "teeth2": 34, "shaft_angle": 100}),
+        json!({"type": "bevel", "face_width2": 8, "face_offset2": 1.5}),
+    ] {
+        let mut s = Session::default();
+        let r = run(&mut s, "gear.create", p.clone());
+        assert_eq!(r["bodies"].as_array().map_or(0, Vec::len), 2, "{p}: {r}");
+        let trim_failed = r["warnings"].as_array().is_some_and(|w| w.iter().any(|x| x.as_str().is_some_and(|x| x.contains("could not be trimmed"))));
+        assert!(!trim_failed, "{p}: {r}");
+    }
 }

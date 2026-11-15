@@ -2224,6 +2224,11 @@ fn gear2_rows(ui: &mut Ui, s: &mut Spec, k: Kind) {
         num(ui, "Face width", "Gear 2's own face width; 0: the same as gear 1's", &mut s.face_width2, 0.0..=5000.0, 0.1, " mm");
         num(ui, "Face offset", "How far gear 2's mid plane sits from gear 1's along the axis; faces that don't overlap are refused", &mut s.face_offset2, -5000.0..=5000.0, 0.1, " mm");
     }
+    if matches!(k, Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary) {
+        let (whose, faces) = if k == Kind::BevelPlanetary { ("The planets'", "the sun's") } else { ("Gear 2's", "gear 1's") };
+        num(ui, "Face width", &format!("{whose} own face width along the cone (toe to heel); 0: the same as {faces}"), &mut s.face_width2, 0.0..=5000.0, 0.1, " mm");
+        num(ui, "Heel offset", &format!("How far {} heel (outer end of the teeth) sits in from the cone distance, towards the apex; faces that don't overlap {faces} are refused", whose.to_lowercase()), &mut s.face_offset2, -5000.0..=5000.0, 0.1, " mm");
+    }
 }
 
 /// A member's integral shafts: one from the front face (through the hub) and, with Dual shaft

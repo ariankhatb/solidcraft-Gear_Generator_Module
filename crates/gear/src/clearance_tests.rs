@@ -132,7 +132,10 @@ fn envelopes_follow_the_teeth_not_a_bounding_cylinder() {
     let pts = Solid::new(g1, 0.05).material_points(0.2);
     let (zlo, zhi) = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q[2]), a.1.max(q[2])));
     let rmax_at = |z: f64| pts.iter().filter(|q| (q[2] - z).abs() < 0.3).map(|q| q[0].hypot(q[1])).fold(0.0, f64::max);
-    let (big, small) = (rmax_at(zlo + 0.3), rmax_at(zhi - 0.3));
+    // (The most is at the heel, a little above the back face, which the back cone narrows.)
+    let big = pts.iter().map(|q| q[0].hypot(q[1])).fold(0.0, f64::max);
+    let small = rmax_at(zhi - 0.3);
+    let _ = zlo;
     assert!(big > small + 3.0, "{big} {small}");
     // Just past the small end's need, at the small end, it is outside; it would be inside for a
     // cylinder of the big end's radius.

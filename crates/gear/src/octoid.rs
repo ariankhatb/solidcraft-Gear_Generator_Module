@@ -202,6 +202,12 @@ impl Crown {
     /// within the profile tolerances for module `m`; and the unskewed tooth for the plan's
     /// checks.
     pub fn tooth(&self, teeth: u32, m: f64, skew: &dyn Fn(f64) -> f64) -> (ToothSides, ToothFlank) {
+        self.tooth_with(teeth, m, skew, 1.0)
+    }
+    /// [`Crown::tooth`] with its fit points `coarse` times as far from the curves (fewer of them:
+    /// a long spiral taper's loft needs fewer per section to stay lined up within the kernel's
+    /// limit).
+    pub fn tooth_with(&self, teeth: u32, m: f64, skew: &dyn Fn(f64) -> f64, coarse: f64) -> (ToothSides, ToothFlank) {
         let g = Generated::new(self);
         let pitch_half = PI / f64::from(teeth);
         let (rf, ra_full) = self.radii();
@@ -239,12 +245,12 @@ impl Crown {
         let span = handover - rf;
         let side = |sign: f64| -> Vec<Vec<(f64, f64)>> {
             let mut fillet = if span > 0.0 {
-                side_points(&|rr| sign * fillet_half(rr) + skew(rr), &|s| if s >= 1.0 { handover } else { rf + span * s * s }, FILLET_TOLERANCE * m, min_gap)
+                side_points(&|rr| sign * fillet_half(rr) + skew(rr), &|s| if s >= 1.0 { handover } else { rf + span * s * s }, coarse * FILLET_TOLERANCE * m, min_gap)
             } else {
                 Vec::new()
             };
             let flank = if has_flank {
-                side_points(&|rr| sign * flank_half(rr) + skew(rr), &|s| if s >= 1.0 { ra } else { handover + (ra - handover) * s }, PROFILE_TOLERANCE * m, min_gap)
+                side_points(&|rr| sign * flank_half(rr) + skew(rr), &|s| if s >= 1.0 { ra } else { handover + (ra - handover) * s }, coarse * PROFILE_TOLERANCE * m, min_gap)
             } else {
                 Vec::new()
             };

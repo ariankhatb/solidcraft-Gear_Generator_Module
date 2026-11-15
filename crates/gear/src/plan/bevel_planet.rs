@@ -62,7 +62,7 @@
 
 use std::f64::consts::{PI, TAU};
 
-use super::{Body, Frame, Op, Plan, PreviewGear, Spec, Step, Unit, bevel_hub, mm, name, tooth_warnings, wanted};
+use super::{Body, ConeEnds, ConeFace, Frame, Op, Plan, PreviewGear, Spec, Step, Unit, bevel_hub, cone_faces, lined_up_cone_teeth, mm, name, tooth_warnings, wanted};
 use crate::geom::{Outline, Region, V2};
 use crate::involute::{Internal, Involute, PROFILE_TOLERANCE, ToothSides, external_outline, mesh_phase, mesh_phase_internal, side_points, sided_outline, teeth_outline};
 use crate::mesh3d::MeshPair3;
@@ -253,7 +253,8 @@ pub fn geometry(s: &Spec) -> Result<Geometry, String> {
 pub fn expected_gap(s: &Spec) -> (f64, f64) {
     let Ok(g) = geometry(s) else { return (0.0, 0.0) };
     let w = s.backlash * s.pressure_angle.to_radians().cos() * g.spiral.cos();
-    (w * (g.re - g.face) / g.re, w)
+    let (lo, hi) = super::faces_overlap(s, g.re);
+    (w * lo / g.re, w * hi / g.re)
 }
 
 /// The placement and cone angle from a side-view sketch: the apex (a point), the direction from
@@ -282,16 +283,17 @@ pub fn placement_from_shafts(apex: [f64; 3], sun_dir: [f64; 3], planet_dir: [f64
 /// `bevel_member` makes them (or, for a ring, the tool cut out of its blank).
 struct Member {
     steps: Vec<Step>,
-    /// The tip radius on the large end's plane (a ring's: its root).
+    /// The outer tip radius as built (a ring's: its root on the large end's plane).
     ra: f64,
     zv: f64,
+    /// Where the body ends along its axis (a ring: unused).
+    ends: ConeEnds,
 }
 
 #[allow(clippy::too_many_arguments)]
-fn member(s: &Spec, g: &Geometry, z: u32, delta: f64, spiral: f64, phase: f64, p: &mut Plan, who: &str) -> Option<Member> {
+fn member(s: &Spec, g: &Geometry, z: u32, delta: f64, spiral: f64, phase: f64, face: ConeFace, p: &mut Plan, who: &str) -> Option<Member> {
     let m = s.module;
     let re = g.re;
-    let b = g.face;
     let h = re * delta.cos();
     let zv = f64::from(z) / delta.cos();
     let v = Involute {
@@ -316,17 +318,13 @@ fn member(s: &Spec, g: &Geometry, z: u32, delta: f64, spiral: f64, phase: f64, p
         ));
         return None;
     }
-    let rm = re - b / 2.0;
+    let rm = face.mid;
     let wind = if spiral.abs() > 1e-6 { spiral.tan() / ds } else { 0.0 };
     let skew = |rr: f64| if wind == 0.0 { 0.0 } else { wind * (rr.hypot(h) / rm).ln() };
-    let (sides, mut flank) = crown.tooth(z, mn, &skew);
+    let (teeth, mut flank) = lined_up_cone_teeth(&crown, z, mn, &skew, phase, delta, re, face, wind, m);
     flank.undercut = v.undercut();
     tooth_warnings(p, who, &v, &flank);
-    let scale = (re - b) / re;
-    let height = h * (1.0 - scale);
-    let steps = vec![Step::Taper { outline: sided_outline(&sides, z, phase), z0: 0.0, height, twist: wind * scale.ln(), scale, op: Op::New }];
-    let (_, ra) = crown.radii();
-    Some(Member { steps, ra, zv })
+    Some(Member { steps: teeth.steps, ra: teeth.tip_radius, zv, ends: teeth.ends })
 }
 
 /// The crown gear that cuts a member's spaces (as `bevel_member`'s, without profile shift).
@@ -463,15 +461,55 @@ fn ring_member(s: &Spec, g: &Geometry, spiral: f64, phase: f64, p: &mut Plan) ->
         p.refuse("ring: its tooth spaces couldn't be traced");
         return None;
     }
-    let scale = (re - b) / re;
-    let height = h * (1.0 - scale);
     // The ring in one: the region between its rim's outside and the spaces' outline (the
     // planets' cut, an external bevel), tapered as the planets' teeth are. Not a blank with
     // that bevel cut out of it: the kernel's cut came out an open shell and the build kept the
     // whole blank (173 to 175 mm³ in each planet of the 45° default).
+    //
+    // As an external member's (`cone_teeth`), the taper runs long enough to hold the whole face
+    // (the tips past the back cone at its start, the roots inside the front cone at its end) and
+    // is intersected with a revolved blank: the teeth end on the back and front cones; a little
+    // past the roots the rim has flat faces square to the axis, out to the rim's outside.
+    let (heel, toe) = (re, re - b);
+    let (sd, cd) = dr.sin_cos();
+    let (phi_t, phi_r) = (r_tip.atan2(h), r_root.atan2(h));
+    let on = |phi: f64, along: f64| -> (f64, f64) {
+        let rho = along / (phi - dr).cos();
+        (rho * phi.sin(), h - rho * phi.cos())
+    };
+    let cone_r = |along: f64, z: f64| (along + (z - h) * cd) / sd;
+    let (r_root_heel, z_root_heel) = on(phi_r, heel);
+    let (_, z_root_toe) = on(phi_r, toe);
+    let (_, z_tip_heel) = on(phi_t, heel);
+    // The back cone runs on a little past the roots before the rim's flat back face (behind
+    // the roots it would leave a sliver of tooth past the back cone, which the planets' tips
+    // reach at their heels), the front cone likewise before its front face.
+    let z_front = z_root_toe + 0.25 * m * sd;
+    let z_back = z_root_heel + (0.25 * m * sd).min(0.3 * (z_front - z_root_heel));
+    let z_lo = z_tip_heel - 0.5 * m;
+    let z_hi = z_front + (0.5 * m).min(0.5 * (h - z_front));
+    let (k0, k1) = ((h - z_lo) / h, (h - z_hi) / h);
+    let scale = k1 / k0;
     let rim = if s.rim > 0.0 { s.rim } else { 3.0 * m };
-    let steps = vec![Step::RingTaper { outline: sided_outline(&sides, zr, phase), rim: r_root + rim, z0: 0.0, height, twist: wind * scale.ln(), scale, op: Op::New }];
-    Some(Member { steps, ra: r_root, zv: f64::from(zr) / dr.cos() })
+    let outside = r_root_heel + rim;
+    // The taper's own rim clears its roots all the way (they are furthest out at its start) and
+    // the blank's.
+    let rim_taper = outside.max(r_root * k0) + m;
+    let e = m;
+    let blank = vec![
+        V2::new(cone_r(toe, z_lo - e).max(0.0), z_lo - e),
+        V2::new(cone_r(heel, z_lo - e).max(0.0), z_lo - e),
+        V2::new(cone_r(heel, z_back), z_back),
+        V2::new(outside, z_back),
+        V2::new(outside, z_front),
+        V2::new(cone_r(toe, z_front), z_front),
+    ];
+    let base = sided_outline(&sides, zr, phase).scaled(k0).rotated(wind * k0.ln());
+    let steps = vec![
+        Step::RingTaper { outline: base, rim: rim_taper, z0: z_lo, height: z_hi - z_lo, twist: wind * scale.ln(), scale, op: Op::New },
+        Step::Revolve { profile: blank, op: Op::Intersect },
+    ];
+    Some(Member { steps, ra: r_root, zv: f64::from(zr) / dr.cos(), ends: ConeEnds { back: z_back, front: z_front, small_root: on(phi_t, toe).0 } })
 }
 
 fn rot(v: [f64; 3], t: f64) -> [f64; 3] {
@@ -503,13 +541,16 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
     let beta = g.spiral;
 
     // ---- Teeth. ----
-    let Some(sun) = member(s, &g, zs, g.delta_sun, beta, 0.0, p, "sun") else { return };
-    let Some(planet) = member(s, &g, zp, g.delta_planet, -beta, 0.0, p, "planet") else { return };
+    // The sun, the second sun and the ring share the face width; the planets may have their own
+    // (face_width2) and their heels in from the cone distance (face_offset2).
+    let Some([f_sun, f_planet]) = cone_faces(s, re, p, ["sun", "planets"]) else { return };
+    let Some(sun) = member(s, &g, zs, g.delta_sun, beta, 0.0, f_sun, p, "sun") else { return };
+    let Some(planet) = member(s, &g, zp, g.delta_planet, -beta, 0.0, f_planet, p, "planet") else { return };
     let far = match mode {
         BevelPlanetMode::Single => None,
         BevelPlanetMode::Differential => {
             let phase = -th0 * (fs + ff) / ff - PI * fp / ff;
-            let Some(m) = member(s, &g, zf, PI - g.delta_far, beta, phase, p, "sun 2") else { return };
+            let Some(m) = member(s, &g, zf, PI - g.delta_far, beta, phase, f_sun, p, "sun 2") else { return };
             Some(m)
         }
         BevelPlanetMode::Ring => {
@@ -525,7 +566,7 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
     let h_planet = re * g.delta_planet.cos();
     let sun_frame = Frame { origin: [apex[0], apex[1], apex[2] - h_sun], x: [1.0, 0.0, 0.0], z: [0.0, 0.0, 1.0] };
     let mut sun_steps = sun.steps.clone();
-    bevel_hub(s, &s.bore, m_r(s, zs) * 0.6, 0.0, &mut sun_steps, p, "sun");
+    bevel_hub(s, &s.bore, m_r(s, zs) * 0.6, &sun.ends, &mut sun_steps, p, "sun");
     let sun_body = Body { name: name(s, &format!("Sun z{zs}")), frame: sun_frame, steps: sun_steps };
 
     let mut planets = Vec::new();
@@ -539,7 +580,7 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
                 other => other.clone(),
             })
             .collect();
-        bevel_hub(s, &s.bore2, m_r(s, zp) * 0.6, 0.0, &mut steps, p, "planet");
+        bevel_hub(s, &s.bore2, m_r(s, zp) * 0.6, &planet.ends, &mut steps, p, "planet");
         let ax = rot([-sigma.sin(), 0.0, sigma.cos()], *th);
         let frame = Frame { origin: [0, 1, 2].map(|i| apex[i] - ax[i] * h_planet), x: rot([sigma.cos(), 0.0, sigma.sin()], *th), z: ax };
         planets.push(Body { name: name(s, &format!("Planet {} z{zp}", k + 1)), frame, steps });
@@ -552,7 +593,7 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
         }
         _ => {
             let mut steps = f.steps.clone();
-            bevel_hub(s, &s.bore, m_r(s, zf) * 0.6, 0.0, &mut steps, p, "sun 2");
+            bevel_hub(s, &s.bore, m_r(s, zf) * 0.6, &f.ends, &mut steps, p, "sun 2");
             let frame = Frame { origin: [apex[0], apex[1], apex[2] + re * (PI - g.delta_far).cos()], x: [1.0, 0.0, 0.0], z: [0.0, 0.0, -1.0] };
             Body { name: name(s, &format!("Sun 2 z{zf}")), frame, steps }
         }

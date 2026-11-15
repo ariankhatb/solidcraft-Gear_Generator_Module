@@ -535,7 +535,10 @@ impl Part {
                 out.extend(wall.sheets(h, hz, band));
             }
             Part::Taper { poly, z0, height, twist, scale } => {
-                let n = layers(height.hypot(poly.rmax * twist.abs()));
+                // Rows about `hz` apart along the surface: up the axis, out along the taper's
+                // lines through the apex (long on a flat cone, whose teeth run nearly square to
+                // the axis) and round with its turn.
+                let n = layers(height.hypot(poly.rmax * (1.0 - scale).abs() * scale.max(1.0)).hypot(poly.rmax * twist.abs()));
                 out.push(
                     (0..=n)
                         .map(|j| {
@@ -658,18 +661,39 @@ impl Solid {
     /// joins), in the body's own coordinates (unturned): round each outline about `h` apart (the
     /// solid's own spacing) and along each sweep about `hz` apart. Whatever the body sweeps when it
     /// turns about its axis lies within these points' radii, row by row.
+    ///
+    /// A body trimmed by a part it is intersected with (a flat bevel's back and front cones)
+    /// keeps only the points inside every such part, and adds the trimming part's own points
+    /// that lie in the material: the trimmed body's surface, not the untrimmed one's.
     pub fn material_points(&self, hz: f64) -> Vec<P3> {
         let mut out = Vec::new();
-        for (part, op) in self.parts.iter() {
-            if matches!(op, Op::New | Op::Join) {
-                for sheet in part.sheets(self.h, hz, (f64::MIN, f64::MAX)) {
-                    for row in sheet {
+        let trims: Vec<usize> = self.parts.iter().enumerate().filter(|(_, (_, op))| *op == Op::Intersect).map(|(i, _)| i).collect();
+        let kept = |p: &P3, own: usize| trims.iter().all(|&t| t == own || self.parts[t].0.contains(*p));
+        for (i, (part, op)) in self.parts.iter().enumerate() {
+            let adds = matches!(op, Op::New | Op::Join);
+            if !adds && *op != Op::Intersect {
+                continue;
+            }
+            for sheet in part.sheets(self.h, hz, (f64::MIN, f64::MAX)) {
+                // A trim's rows go round the axis: a few dozen of them show how far out its
+                // faces carry material (testing every one against the teeth is slow).
+                let stride = if adds { 1 } else { (sheet.len() / 96).max(1) };
+                for row in sheet.into_iter().step_by(stride) {
+                    if trims.is_empty() {
                         out.extend(row);
+                        continue;
                     }
+                    out.extend(row.into_iter().filter(|p| kept(p, i) && (adds || self.parts.iter().any(|(q, o)| matches!(o, Op::New | Op::Join) && q.contains(*p)))));
                 }
             }
         }
         out
+    }
+    /// Which of the body's parts hold the world point (debugging).
+    #[cfg(test)]
+    pub(crate) fn parts_holding(&self, p: P3) -> Vec<(usize, Op, bool)> {
+        let l = self.local(p);
+        self.parts.iter().enumerate().map(|(i, (part, op))| (i, *op, part.contains(l))).collect()
     }
     /// Is the world point inside the body?
     pub fn contains(&self, p: P3) -> bool {
@@ -801,8 +825,21 @@ impl Surface {
             ir >= 0.0 && iz >= 0.0 && (ir as usize) < nr && (iz as usize) < nz && ring[iz as usize * nr + ir as usize] || ir >= nr as f64
         };
         let eps = 0.02 * h;
+        // A trimmed body's sheets run on past the trim, which ends them across their patches:
+        // a patch there is taken in pieces, each kept only if on the body, so the sampled
+        // surface reaches the trimmed edge (a gap there reads as depth where the mate's flank
+        // touches the edge).
+        let trimmed = solid.parts.iter().any(|(_, op)| *op == Op::Intersect);
         let mut samples = Vec::new();
-        for (part, _) in solid.parts.iter() {
+        for (part, op) in solid.parts.iter() {
+            // A trim's faces (a bevel's back and front cones) are the body's ends, where its
+            // teeth stop: like a taper's flat ends they aren't sampled. (Their patches would
+            // straddle the teeth's edges and read as touching the mate's flank where it passes
+            // a backlash away; what the trim leaves of the teeth is sampled on the teeth's own
+            // sheets.)
+            if *op == Op::Intersect {
+                continue;
+            }
             for rows in part.sheets(h, hz, (blo, bhi)) {
                 for w in rows.windows(2) {
                     let (r0, r1) = (&w[0], &w[1]);
@@ -828,6 +865,20 @@ impl Surface {
                             let outer = solid.contains_local([0, 1, 2].map(|k| p[k] + eps * nn[k]));
                             (inner != outer).then(|| if outer { nn.map(|v| -v) } else { nn })
                         };
+                        if trimmed && !(on(p).is_some() && [a, b, c, d].iter().all(|q| on(*q).is_some())) {
+                            const K: usize = 4;
+                            for iu in 0..K {
+                                for iv in 0..K {
+                                    let (fu, fv) = ((iu as f64 + 0.5) / K as f64 - 0.5, (iv as f64 + 0.5) / K as f64 - 0.5);
+                                    let q = [0, 1, 2].map(|k| p[k] + fu * du[k] + fv * dv[k]);
+                                    if let Some(n) = on(q) {
+                                        let f = 0.5 / K as f64;
+                                        samples.push(Sample { p: q, n, hu: du.map(|v| f * v), hv: dv.map(|v| f * v), area: area / (K * K) as f64 });
+                                    }
+                                }
+                            }
+                            continue;
+                        }
                         if let Some(n) = on(p) {
                             samples.push(Sample { p, n, hu: du.map(|v| 0.5 * v), hv: dv.map(|v| 0.5 * v), area });
                             continue;
@@ -984,11 +1035,15 @@ fn one_way(queries: &[Sample], target: &Solid, ts: &[Sample], cell: f64) -> (f64
             }
             // Nearest a patch's border (past an edge of the body, or of the sampled zone): the
             // body itself says which side, asked only when it could matter.
-            Some((dist, _, false)) => {
+            Some((dist, along, false)) => {
                 if dist >= near && dist < 0.5 * cell {
                     continue;
                 } else if target.contains(q.p) {
-                    -dist
+                    // Inside, past the border of the nearest patch: as deep as it is behind
+                    // that patch's plane. (Where a trimmed body's sampled surface stops a hair
+                    // short of its edge, a point touching the edge is that hair from the patch
+                    // along the surface, not into the body.)
+                    -along.abs().min(dist)
                 } else {
                     dist
                 }
@@ -1192,11 +1247,12 @@ pub fn expected_gap(s: &Spec) -> (f64, f64) {
             let (z1, z2) = (f64::from(s.teeth), f64::from(s.teeth2));
             let d1 = sigma.sin().atan2(z2 / z1 + sigma.cos());
             let re = s.module * z1 / 2.0 / d1.sin();
-            let b = s.face_width.min(0.45 * re);
             let beta = if s.kind == Kind::SpiralBevel { s.spiral_angle.to_radians() } else { 0.0 };
-            // The same turn of play is less gap nearer the apex.
+            // The same turn of play is less gap nearer the apex: over the stretch of the cone
+            // both members' teeth are on.
             let g = j * an.cos() * beta.cos();
-            (g * (re - b) / re, g)
+            let (lo, hi) = crate::plan::faces_overlap(s, re);
+            (g * lo / re, g * hi / re)
         }
         Kind::Worm => {
             let d1 = if s.worm_diameter > 0.0 { s.worm_diameter } else { 10.0 * s.module };

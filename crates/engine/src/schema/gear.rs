@@ -1101,6 +1101,46 @@ pub struct GearSet {
     /// The set they came to, as plain `gear.create` parameters: every value explicit, placed
     /// by `placement` when it is not at the world's origin frame.
     pub params: Value,
+    /// The sketch the set is made from and follows (`gear.create {sketch}`), if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sketch: Option<u64>,
+    /// The sketch reads differently than when the set was last made (an edit the set could not
+    /// follow): `gear.update {group}` brings it up to date.
+    #[serde(default)]
+    pub sketch_changed: bool,
+}
+
+/// `gear.sketch`: a mode's drawing as a native sketch.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct GearSketchParams {
+    /// The mode to draw.
+    #[serde(rename = "type")]
+    pub kind: GearType,
+    /// The sketch's plane, as `sketch.create`'s `plane` (default XY).
+    #[serde(default)]
+    pub plane: Option<Value>,
+    /// The sketch's name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `gear.create` parameters the drawing is sized by (module, teeth, shaft angle, offset...).
+    #[serde(default)]
+    pub gear: Option<Value>,
+}
+
+/// What `gear.sketch` made.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct GearSketchResult {
+    /// The sketch's feature id.
+    pub sketch: u64,
+    /// The mode's slots, as the sketch's point and curve ids (`gear.create`'s `picks`).
+    pub picks: Vec<Option<String>>,
+    /// The parameter each dimension's value is in: `diameter1`, `diameter2`, `shaft_angle`,
+    /// `offset`, `length`, as the mode has them.
+    pub dimensions: std::collections::BTreeMap<String, String>,
+    /// The constraints added besides the curves' own.
+    pub constraints: Vec<String>,
 }
 
 /// What `gear.inspect` found: the set asked for, or every set in the design.
@@ -1186,6 +1226,11 @@ pub struct GearResult {
     /// on a face or edge the new gear no longer has).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub broken: Vec<GearBroken>,
+    /// `gear.calculate`: the set worked out, as explicit `gear.create` parameters (placed by
+    /// `placement`), as `gear.inspect`'s `params` (a front end previews it from these: a set
+    /// read from a sketch is read by the engine, not again by the front end).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<Value>,
 }
 
 /// A line in space.

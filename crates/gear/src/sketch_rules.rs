@@ -102,6 +102,79 @@ const fn slot(label: &'static str, role: Role, optional: bool, hint: &'static st
     Slot { label, role, optional, hint }
 }
 
+/// The picture a mode starts from, sized by `s` (the Gear Generator window's Simple mode shows it
+/// before there is a sketch, and `gear.sketch` draws it as a native sketch): the origin dot at gear 1's centre
+/// (a bevel's apex), and the circles and lines its rule wants.
+pub fn template(k: Kind, s: &Spec) -> Drawn {
+    let r = |z: u32| s.module * f64::from(z) / 2.0;
+    let c = |x: f64, y: f64, r: f64| Circle { c: V2::new(x, y), r };
+    let l = |ax: f64, ay: f64, bx: f64, by: f64| Line { a: V2::new(ax, ay), b: V2::new(bx, by) };
+    let mut d = Drawn { points: vec![V2::ZERO], ..Drawn::default() };
+    match k {
+        Kind::Pair | Kind::Cycloidal => {
+            let (r1, r2) = (r(s.teeth), r(s.teeth2));
+            d.circles = vec![c(0.0, 0.0, r1), c(r1 + r2, 0.0, r2)];
+        }
+        Kind::Internal => {
+            let ring = r(s.teeth);
+            d.circles = vec![c(0.0, 0.0, ring), c(ring * 2.0 / 3.0, 0.0, ring / 3.0)];
+        }
+        Kind::Planetary => {
+            let (rs, rp) = (r(s.teeth), r(s.teeth2));
+            d.circles = vec![c(0.0, 0.0, rs), c(rs + rp, 0.0, rp), c(0.0, 0.0, rs + 2.0 * rp)];
+        }
+        Kind::Rack => {
+            let r1 = r(s.teeth);
+            d.circles = vec![c(0.0, 0.0, r1)];
+            d.lines = vec![l(-1.6 * r1, -r1, 1.6 * r1, -r1)];
+        }
+        Kind::Worm => {
+            let r1 = r(s.teeth);
+            d.circles = vec![c(0.0, 0.0, r1)];
+            d.lines = vec![l(-1.3 * r1, r1, 1.3 * r1, r1)];
+        }
+        Kind::Bevel | Kind::SpiralBevel => {
+            let len = 1.6 * r(s.teeth.max(10));
+            let a = s.shaft_angle.to_radians();
+            d.lines = vec![l(0.0, 0.0, 0.0, -len), l(0.0, 0.0, len * a.sin(), -len * a.cos())];
+        }
+        // The same side view: the apex dot, the sun's shaft down from it, the first planet's
+        // at the cone angle.
+        Kind::BevelPlanetary => {
+            let len = 1.6 * r(s.teeth.max(10));
+            let a = s.shaft_angle.to_radians();
+            d.lines = vec![l(0.0, 0.0, 0.0, -len), l(0.0, 0.0, len * a.sin(), -len * a.cos())];
+        }
+        Kind::FaceGear => {
+            let rf = r(s.teeth2);
+            d.circles = vec![c(0.0, 0.0, rf)];
+            d.lines = vec![l(0.0, 0.0, 1.4 * rf, 0.0)];
+        }
+        Kind::Hypoid => {
+            let ring = r(s.teeth2);
+            let e = if s.offset > 0.0 { s.offset } else { 0.125 * 2.0 * ring };
+            d.circles = vec![c(0.0, 0.0, ring)];
+            d.lines = vec![l(-1.2 * ring, -e, 1.2 * ring, -e)];
+        }
+        Kind::CrossedHelical => {
+            let b1 = (s.shaft_angle / 2.0).to_radians();
+            let (r1, r2) = (r(s.teeth) / b1.cos(), r(s.teeth2) / (s.shaft_angle.to_radians() - b1).cos());
+            d.circles = vec![c(0.0, 0.0, r1)];
+            d.lines = vec![l(-1.5 * (r1 + r2), r1 + r2, 1.5 * (r1 + r2), r1 + r2)];
+        }
+        Kind::Sprocket => {
+            let p = crate::sprocket::chain_by_id(s.chain).map(|c| c.pitch).unwrap_or(s.chain_pitch);
+            d.circles = vec![c(0.0, 0.0, p / (std::f64::consts::PI / f64::from(s.teeth.max(6))).sin() / 2.0)];
+        }
+        Kind::Pulley => {
+            let p = crate::pulley::belt_by_id(s.belt).map(|b| b.pitch).unwrap_or(2.0);
+            d.circles = vec![c(0.0, 0.0, p * f64::from(s.teeth.max(6)) / std::f64::consts::PI / 2.0)];
+        }
+        _ => d.circles = vec![c(0.0, 0.0, r(s.teeth))],
+    }
+    d
+}
+
 /// The modes the sketch input covers (the rest are set up in the window's Advanced mode).
 pub fn sketched(k: Kind) -> bool {
     !matches!(k, Kind::CycloidalDrive | Kind::Spline | Kind::Elliptical | Kind::Differential)

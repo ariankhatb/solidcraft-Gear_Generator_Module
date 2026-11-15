@@ -34,7 +34,7 @@ use super::sketch::{Left, edit_solved};
 use super::sketch_import::add_geometry;
 use crate::params::bad;
 use crate::schema::gear::{
-    BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, SeatAlongParams, SeatPointParams, GearAxesResult, GearAxis, GearAxisLine, GearBevelPlanetMode, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult,
+    BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, SeatAlongParams, SeatPointParams, GearAxesResult, GearAxis, GearAxisLine, GearBevelPlanetMode, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult, GearSketchParams, GearSketchResult,
     DiffDrive, DiffMount, DiffStyle, DifferentialGoalParams, DifferentialParams, GearMaterial, GearParams, GearRelation, GearResult, GearSet, GearType, HardwareParams, PlacementParams, RackStandard, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
 };
 use solidcraft_gear::spline::SplineStandard;
@@ -44,6 +44,11 @@ use crate::{EngineError, Result, Session};
 
 const GEAR_CONTRACT: TypedContract<GearParams> = TypedContract::new();
 const INSPECT_CONTRACT: TypedContract<GearInspectParams> = TypedContract::new();
+const SKETCH_CONTRACT: TypedContract<GearSketchParams> = TypedContract::new();
+
+#[path = "gear_sketch.rs"]
+mod sketch_link;
+pub use sketch_link::follow_sketches;
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("gear.create", "Gear Generator", crate::checked!("gear.create", create))
@@ -97,7 +102,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .read_only()
         .contract(&GEAR_CONTRACT)
         .output(output_schema_for::<GearResult>)
-        .params("the same as gear.create; builds nothing: returns the facts and warnings gear.create would"),
+        .params("the same as gear.create; builds nothing: returns the facts and warnings gear.create would, and params (the set as explicit gear.create parameters)"),
     CommandSpec::new("gear.from_axes", "Gears From Axes", crate::checked!("gear.from_axes", from_axes))
         .icon("gear_generator")
         .noundo()
@@ -121,6 +126,19 @@ pub static COMMANDS: &[CommandSpec] = &[
              on the gears keep working; otherwise its features are deleted and made again under the same body names, in the same folder and place in the history. \
              Returns as gear.create, plus updated: in_place|rebuilt, rebuilt_because?, broken: [{feature, error}] (features outside the set that worked and now fail)",
         ),
+    CommandSpec::new("gear.sketch", "Gear Sketch", crate::checked!("gear.sketch", sketch_link::make))
+        .icon("gear_generator")
+        .contract(&SKETCH_CONTRACT)
+        .output(output_schema_for::<GearSketchResult>)
+        .params(
+            "type: the mode (as gear.create's type; the sketched ones); plane?: as sketch.create's (default XY); name?; gear?: gear.create parameters for its sizes \
+             (module, teeth, teeth2, shaft_angle, offset, chain, belt...). Draws the mode's picture as a normal sketch: pitch circles, shaft lines and the origin \
+             (a bevel's apex) point, held by native constraints (a pair's circles tangent, a planet tangent to sun and ring, a worm's or rack's line tangent to \
+             the wheel, a bevel's first shaft vertical) and dimensions (pitch diameters, a bevel's shaft angle, a hypoid's or crossed set's offset, a rack's \
+             length), editable with the sketch tools and Parameters. Returns sketch (its id), picks (the slots' entity ids for gear.create's picks), \
+             dimensions ({diameter1, diameter2, shaft_angle, offset, length}: the parameter holding each) and constraints. A set made from it \
+             (gear.create {sketch, picks}) follows it: when the sketch reads differently after a command, the set is updated in that command's step",
+        ),
     CommandSpec::new("gear.inspect", "Inspect Gears", crate::checked!("gear.inspect", inspect))
         .noundo()
         .read_only()
@@ -128,7 +146,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .output(output_schema_for::<GearInspectResult>)
         .params(
             "group?: a set's timeline folder id | body?: one of its bodies (neither: every set in the design) → sets: [{group, name, bodies, features, \
-             request (the parameters as given, with ui), params (the set as explicit gear.create parameters)}]",
+             request (the parameters as given, with ui), params (the set as explicit gear.create parameters), sketch? (the sketch it follows), sketch_changed}]",
         ),
 ];
 
@@ -1035,6 +1053,11 @@ fn frame_of(f: &PlacementParams) -> std::result::Result<Frame, String> {
     Ok(Frame { origin: f.origin, x, z })
 }
 
+/// The mode a `type` is.
+fn kind_of(t: GearType) -> Kind {
+    KINDS.iter().find(|(x, _)| *x == t).map(|(_, k)| *k).unwrap_or(Kind::Spur)
+}
+
 fn gear_type(k: Kind) -> GearType {
     KINDS.iter().find(|(_, x)| *x == k).map(|(t, _)| *t).unwrap_or(GearType::Spur)
 }
@@ -1383,7 +1406,7 @@ fn reply<T: serde::Serialize>(cmd: &str, r: T) -> Result<Value> {
 fn calculate(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "gear.calculate";
     let (asked, plan) = ask(s, cmd, p)?;
-    reply(cmd, GearResult { facts: facts(&asked, &plan), warnings: plan.warnings.clone(), notes: notes(&asked), ..GearResult::default() })
+    reply(cmd, GearResult { facts: facts(&asked, &plan), warnings: plan.warnings.clone(), notes: notes(&asked), params: Some(params_of(&asked.spec)), ..GearResult::default() })
 }
 
 fn relation_of(rel: Option<&Relation>) -> GearRelation {
@@ -1467,7 +1490,11 @@ fn from_axes(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "gear.create";
+    // `sketch: "new"`: the drawing made first, in this step; the set is then made from it.
+    let drawn = sketch_link::new_sketch(s, cmd, p)?;
+    let p = drawn.as_ref().unwrap_or(p);
     let (asked, plan) = ask(s, cmd, p)?;
+    let sketch_print = sketch_link::sketch_print(s, p);
     let spec = &asked.spec;
     if s.active_sketch.is_some() {
         return Err(bad(cmd, "finish the sketch being edited first"));
@@ -1503,7 +1530,7 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (assembly_record, assembly_made) = built.map_or((None, None), |(r, m)| (Some(r), Some(m)));
     if let Some(group) = group {
-        keep(s, &Record { version: RECORD_VERSION, group, name: group_name, request, params: params_of(spec), bodies, assembly: assembly_record }, &mut warnings);
+        keep(s, &Record { version: RECORD_VERSION, group, name: group_name, request, params: params_of(spec), bodies, assembly: assembly_record, sketch_print }, &mut warnings);
     }
     reply(cmd, GearResult { bodies: made, group, clearance, assembly: assembly_made, facts: facts(&asked, &plan), warnings, notes: notes(&asked), ..GearResult::default() })
 }
@@ -1574,6 +1601,10 @@ struct Record {
     /// The components and joints made of the set (`assembly: true`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     assembly: Option<assembly::AssemblyRecord>,
+    /// Made from a sketch: what the sketch rules read from it then ([`sketch_link::sketch_print`]);
+    /// the set follows the sketch when it reads differently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sketch_print: Option<String>,
 }
 
 impl Record {
@@ -1640,7 +1671,16 @@ fn current_names(s: &Session, rec: &Record) -> Vec<String> {
 
 fn set_of(s: &Session, rec: &Record) -> GearSet {
     let name = s.doc.timeline_groups.iter().find(|g| g.id == rec.group).map(|g| g.name.clone()).unwrap_or_else(|| rec.name.clone());
-    GearSet { group: rec.group, name, bodies: current_names(s, rec), features: rec.features(), request: rec.request.clone(), params: rec.params.clone() }
+    GearSet {
+        group: rec.group,
+        name,
+        bodies: current_names(s, rec),
+        features: rec.features(),
+        request: rec.request.clone(),
+        params: rec.params.clone(),
+        sketch: rec.sketch_print.as_ref().and_then(|_| sketch_link::sketch_of(s, &rec.request)),
+        sketch_changed: sketch_link::sketch_changed(s, rec),
+    }
 }
 
 /// Every gear set kept in the session's design, for front ends.
@@ -1920,6 +1960,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     equations::read_back(s, &mut request, &rec.params, &given_keys);
     let request = Value::Object(request);
     let (asked, plan) = ask(s, cmd, &request)?;
+    let sketch_print = sketch_link::sketch_print(s, &request);
     let mut warnings = plan.warnings.clone();
     let (mode, notes_eq) = equations::Mode::of(s, cmd, &request, &asked.spec, &plan, &rec.name, false)?;
     warnings.extend(notes_eq);
@@ -1978,6 +2019,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     let old_key = record_key(rec.group);
     rec.request = request;
     rec.params = params_of(&asked.spec);
+    rec.sketch_print = sketch_print;
     match group {
         Some(group) => {
             if group != rec.group {
@@ -2794,3 +2836,7 @@ mod assembly;
 #[cfg(test)]
 #[path = "gear_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "gear_sketch_tests.rs"]
+mod sketch_tests;

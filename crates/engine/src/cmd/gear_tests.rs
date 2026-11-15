@@ -1148,6 +1148,7 @@ fn an_update_keeps_the_assemblys_components_joints_and_links_in_place() {
     run(&mut s, "gear.update", json!({"group": group, "assembly": null}));
     assert_eq!(counts(&s), empty);
     no_errors(&s);
+}
 
 /// Bevel teeth end on their back and front cones: the kernel takes the trim (a revolved blank
 /// intersected with the teeth's taper) on ordinary and nearly flat cones, straight and spiral,

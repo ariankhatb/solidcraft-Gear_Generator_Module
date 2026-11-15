@@ -488,3 +488,118 @@ fn a_parametric_ring_keeps_its_rim_profile_through_a_tooth_count_change() {
     let v50 = volume(&mut s, &body);
     assert!(v50 < v && v50 > 0.5 * v, "{v} then {v50}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// The clearance body (keep-out volume for a housing)
+// ---------------------------------------------------------------------------------------------
+
+fn names(r: &Value) -> Vec<String> {
+    r["bodies"].as_array().unwrap().iter().map(|b| b.as_str().unwrap().to_string()).collect()
+}
+
+/// `gear.create` with `clearance_body` makes exactly one more body, which cuts a housing block
+/// in one Boolean without touching the gears, and which an update regenerates in place.
+#[test]
+fn a_clearance_body_comes_with_the_set_and_cuts_a_housing() {
+    let set = json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 32, "face_width": 10, "name": "Drive",
+        "bore": {"type": "round", "diameter": 8}, "bore2": {"type": "round", "diameter": 8}});
+    let mut plain = Session::default();
+    let bare = names(&run(&mut plain, "gear.create", set.clone()));
+    assert_eq!(bare.len(), 2);
+    let mut s = Session::default();
+    let mut p = set.clone();
+    p["clearance_body"] = json!({"radial": 0.5, "axial": 0.5, "bearing": "608", "bearing_fit": 0.1,
+        "seats": [{"member": 1, "along": -14}, {"member": 2, "along": 14}, {"point": [0, 0, 20]}]});
+    let r = run(&mut s, "gear.create", p.clone());
+    let made = names(&r);
+    assert_eq!(made.len(), bare.len() + 1, "{r}");
+    assert_eq!(made[..2], bare[..]);
+    assert_eq!(r["clearance"], "Drive clearance", "{r}");
+    assert_eq!(made[2], "Drive clearance");
+    let facts = r["facts"].as_array().unwrap();
+    assert!(facts.iter().any(|f| f["label"] == "clearance bearing 608 outside diameter" && f["value"] == 22.0), "{r}");
+    assert!(!r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("seat")), "{r}");
+    let v = volume(&mut s, "Drive clearance");
+    assert!(v > 0.0);
+    // The set is kept with its clearance body.
+    let group = r["group"].as_u64().unwrap();
+    let kept = run(&mut s, "gear.inspect", json!({"group": group}));
+    assert_eq!(kept["sets"][0]["bodies"].as_array().unwrap().len(), 3, "{kept}");
+    assert!(kept["sets"][0]["params"]["clearance_body"]["seats"].as_array().is_some_and(|a| a.len() == 3), "{kept}");
+    // A housing block (the shafts go through its walls) cut by it in one Boolean.
+    run(&mut s, "solid.box", json!({"length": 150, "width": 90, "height": 30, "center": [26, 0, 5], "body_name": "Housing"}));
+    let block = volume(&mut s, "Housing");
+    run(&mut s, "solid.combine", json!({"target": "Housing", "tools": ["Drive clearance"], "operation": "cut", "keep_tools": true}));
+    let housing = volume(&mut s, "Housing");
+    assert!(housing > 0.0 && housing < block - 0.5 * v, "{block} -> {housing} (clearance {v})");
+    no_errors(&s);
+    // Nothing of the gears is in the housing.
+    let i = run(&mut s, "inspect.interference", json!({"bodies": ["Housing", made[0], made[1]]}));
+    let hits: Vec<&Value> = i["interferences"].as_array().unwrap().iter().filter(|h| h["a"] == "Housing" || h["b"] == "Housing").collect();
+    assert!(hits.is_empty(), "{i}");
+    assert!(i["unchecked"].as_array().unwrap().iter().all(|u| u["a"] != "Housing" && u["b"] != "Housing"), "{i}");
+    // More clearance: regenerated in place, and the housing's cut follows.
+    let u = run(&mut s, "gear.update", json!({"group": group, "clearance_body": {"radial": 1.0, "axial": 0.5, "bearing": "608", "bearing_fit": 0.1,
+        "seats": [{"member": 1, "along": -14}, {"member": 2, "along": 14}, {"point": [0, 0, 20]}]}}));
+    assert_eq!(u["updated"], "in_place", "{u}");
+    assert_eq!(u["clearance"], "Drive clearance");
+    assert!(u["broken"].as_array().is_none_or(|b| b.is_empty()), "{u}");
+    assert!(volume(&mut s, "Drive clearance") > v);
+    assert!(volume(&mut s, "Housing") < housing);
+    // Without it: the set is rebuilt with only its gears.
+    let u = run(&mut s, "gear.update", json!({"group": group, "clearance_body": null}));
+    assert_eq!(names(&u).len(), 2, "{u}");
+    assert!(u.get("clearance").is_none(), "{u}");
+}
+
+#[test]
+fn clearance_parameters_round_trip_and_bad_ones_are_refused() {
+    use solidcraft_gear::clearance::{BearingSize, Clearance, Seat};
+    let mut spec = solidcraft_gear::Spec::defaults_for(solidcraft_gear::Kind::Worm);
+    spec.clearance_body = Some(Clearance {
+        radial: 0.3,
+        axial: 0.8,
+        shaft_extension: 25.0,
+        ring_as_housing: false,
+        bearing: None,
+        bearing_size: Some(BearingSize { bore: 10.0, od: 26.0, width: 8.0 }),
+        bearing_fit: 0.15,
+        seats: vec![Seat::Along { member: 2, along: -30.0 }, Seat::Point([1.0, 2.0, 3.0])],
+        travel: 0.0,
+    });
+    let p = crate::gear_params_of(&spec);
+    let back: crate::schema::gear::GearParams = serde_json::from_value(p.clone()).unwrap_or_else(|e| panic!("{p}: {e}"));
+    assert_eq!(crate::gear_spec_of(&back).unwrap(), spec, "{p}");
+    let mut s = Session::default();
+    for c in [
+        json!({"bearing": "9999"}),
+        json!({"seats": [{"member": 1}]}),
+        json!({"seats": [{"member": 1, "along": 0}]}),
+        json!({"radial": -1}),
+        json!({"bearing": {"od": 0, "width": 5}}),
+        json!({"bearing": "608", "seats": [{"member": 7, "along": 0}]}),
+        json!({"nope": 1}),
+    ] {
+        assert!(s.execute("gear.calculate", &json!({"type": "pair", "clearance_body": c})).is_err(), "{c}");
+    }
+    // gear.calculate gives the clearance facts and builds nothing.
+    let r = run(&mut s, "gear.calculate", json!({"type": "worm", "clearance_body": {"bearing": "6000", "seats": [{"member": 2, "along": 25}]}}));
+    assert!(r["bodies"].as_array().unwrap().is_empty());
+    assert!(r["facts"].as_array().unwrap().iter().any(|f| f["label"].as_str().unwrap().starts_with("clearance: ")), "{r}");
+}
+
+/// Every type builds its clearance body in the kernel (slow: run with --ignored).
+#[test]
+#[ignore]
+fn every_type_builds_its_clearance_body() {
+    for k in solidcraft_gear::Kind::ALL {
+        let mut s = Session::default();
+        let mut p = crate::gear_params_of(&solidcraft_gear::Spec::defaults_for(k));
+        p["clearance_body"] = json!({});
+        let r = s.execute("gear.create", &p).unwrap_or_else(|e| panic!("{k:?}: {e}"));
+        let name = r["clearance"].as_str().unwrap_or_else(|| panic!("{k:?}: {r}")).to_string();
+        let v = volume(&mut s, &name);
+        assert!(v > 0.0, "{k:?}");
+        eprintln!("{k:?} {name}: {v:.1} mm³");
+    }
+}

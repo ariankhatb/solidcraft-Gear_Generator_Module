@@ -1,0 +1,720 @@
+//! The clearance body (keep-out volume) of a gear set: one solid holding exactly the space the
+//! assembled set needs to turn, so a housing is any block with this body cut out of it.
+//!
+//! What it holds, all grown by a radial and an axial clearance:
+//! - every member's turning envelope: a revolve about its axis of the most radius its material
+//!   reaches at each position along the axis, taken from the planned steps themselves (points on
+//!   every outline of every step, through the steps' and bodies' frames; see
+//!   [`crate::mesh3d::Solid::material_points`]), so it clears the teeth as built: cylinders for
+//!   spur and helical teeth, cone frusta for bevels, the lofted hypoid members' own radius along
+//!   the axis, a worm's thread and a throated wheel's throat;
+//! - planets orbiting the sun (the carrier may turn) and a cycloidal drive's disc orbiting the
+//!   input (disc radius + eccentricity): revolves about the set's axis;
+//! - a rack's slot: its bounding box made longer by the travel it slides over;
+//! - an internal ring (and a cycloidal drive's pin ring): its outer rim, or nothing when the ring
+//!   is part of the housing ([`Clearance::ring_as_housing`]);
+//! - a chain or belt between two sprockets or pulleys: the region round both wheels and the two
+//!   runs, as a prism over the chain's or belt's width;
+//! - each member's shaft (its bore's size, else the bearing's bore), on through the housing walls
+//!   by [`Clearance::shaft_extension`] beyond the gear on each side; integral shafts as built;
+//! - bearing seats: one bearing size (from [`crate::hub::BEARINGS`] or given), at points on the
+//!   shafts, each a cylinder of the bearing's outside diameter plus a fit allowance and its width.
+//!
+//! The members on one axis share one revolved profile (gear, shaft and seats together), so the
+//! body is a handful of revolves joined, plus the prisms of a rack's slot or a chain's run.
+
+use crate::geom::{Outline, Region, Seg, V2};
+use crate::hub::{Bore, BoreKind};
+use crate::mesh3d::Solid;
+use crate::plan::{Body, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit};
+
+/// A bearing's size in mm.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BearingSize {
+    /// The bore (0: not known; the shaft check is skipped).
+    pub bore: f64,
+    pub od: f64,
+    pub width: f64,
+}
+
+/// Where a bearing seat goes: a dot on a member's shaft.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Seat {
+    /// On member `member` (1-based: the set's bodies in their order, gear 1 first), `along` mm
+    /// along its axis (signed, the axis's own direction) from the middle of its teeth.
+    Along { member: u32, along: f64 },
+    /// A point (world coordinates, mm), moved onto the nearest member's axis.
+    Point([f64; 3]),
+}
+
+/// What the clearance body is made with. Off unless `Spec::clearance_body` is set; these
+/// defaults are what a front end starts from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Clearance {
+    /// Radial clearance round every tip envelope, shaft and chain run, mm.
+    pub radial: f64,
+    /// Axial clearance at each end of every member's material, mm.
+    pub axial: f64,
+    /// How far each member's shaft runs on past its gear on each side, mm (0: twice the face
+    /// width, enough to pass through a housing wall). Integral shafts are taken as built.
+    pub shaft_extension: f64,
+    /// An internal ring gear (and a cycloidal drive's pin ring) is part of the housing: it is
+    /// left out (true), or its outer rim is cleared like any other member (false).
+    pub ring_as_housing: bool,
+    /// The bearing, by its name in [`crate::hub::BEARINGS`] ("608", "6001", "MR105"...).
+    pub bearing: Option<String>,
+    /// A bearing of any size instead (used when `bearing` is not set).
+    pub bearing_size: Option<BearingSize>,
+    /// How much larger than the bearing's outside diameter a seat is made, on the diameter, mm.
+    pub bearing_fit: f64,
+    /// Where the bearing seats go.
+    pub seats: Vec<Seat>,
+    /// A rack's travel: how far it slides in all (mm; 0: its own length), its slot that much
+    /// longer than the rack.
+    pub travel: f64,
+}
+
+impl Default for Clearance {
+    fn default() -> Self {
+        Self { radial: 0.5, axial: 0.5, shaft_extension: 0.0, ring_as_housing: true, bearing: None, bearing_size: None, bearing_fit: 0.0, seats: Vec::new(), travel: 0.0 }
+    }
+}
+
+impl Clearance {
+    /// The bearing chosen: its name ("custom" for a size given) and size.
+    pub fn chosen_bearing(&self) -> Result<Option<(String, BearingSize)>, String> {
+        if let Some(name) = &self.bearing {
+            return match crate::hub::bearing(name) {
+                Some((bore, od, width)) => Ok(Some((name.trim().to_string(), BearingSize { bore, od, width }))),
+                None => Err(format!("clearance: no standard bearing is called '{}'", name.trim())),
+            };
+        }
+        Ok(self.bearing_size.map(|b| ("custom".to_string(), b)))
+    }
+}
+
+/// Validates the clearance settings (the members a seat names are checked when the body is
+/// made).
+pub fn check(c: &Clearance) -> Result<(), String> {
+    let within = |v: f64, lo: f64, hi: f64, what: &str| {
+        if v.is_finite() && (lo..=hi).contains(&v) { Ok(()) } else { Err(format!("clearance: {what} must be between {lo} and {hi} mm")) }
+    };
+    within(c.radial, 0.0, 50.0, "the radial clearance")?;
+    within(c.axial, 0.0, 50.0, "the axial clearance")?;
+    within(c.shaft_extension, 0.0, 10_000.0, "the shaft extension")?;
+    within(c.travel, 0.0, 100_000.0, "the rack's travel")?;
+    within(c.bearing_fit, -1.0, 5.0, "the bearing fit")?;
+    if let Some(b) = c.bearing_size
+        && c.bearing.is_none()
+    {
+        let ok = [b.bore, b.od, b.width].iter().all(|v| v.is_finite()) && b.od > 0.0 && b.width > 0.0 && b.bore >= 0.0 && b.bore < b.od && b.od <= 2000.0 && b.width <= 1000.0;
+        if !ok {
+            return Err("clearance: a bearing needs an outside diameter and a width over 0 (and a bore under the outside diameter)".into());
+        }
+    }
+    c.chosen_bearing()?;
+    if c.seats.len() > 64 {
+        return Err("clearance: 64 bearing seats at most".into());
+    }
+    if !c.seats.is_empty() && c.chosen_bearing()?.is_none() {
+        return Err("clearance: bearing seats need a bearing (`bearing` or its size)".into());
+    }
+    for (i, seat) in c.seats.iter().enumerate() {
+        let ok = match seat {
+            Seat::Along { member, along } => *member >= 1 && along.is_finite() && along.abs() <= 1e5,
+            Seat::Point(p) => p.iter().all(|v| v.is_finite() && v.abs() <= 1e7),
+        };
+        if !ok {
+            return Err(format!("clearance: bearing seat {} needs a member (1, 2, ...) and a finite distance along it, or a finite point", i + 1));
+        }
+    }
+    Ok(())
+}
+
+/// How a member moves, for its clearance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Motion {
+    /// Turns about its own frame's z axis.
+    Turns,
+    /// Turns about its own axis and goes round `about`'s z axis (planets on a turning carrier,
+    /// a cycloidal drive's disc on its eccentric), `distance` from it.
+    Orbits { about: Frame, distance: f64 },
+    /// Slides along its own frame's x (a rack).
+    Slides,
+    /// A ring gear (or pin ring), which may be part of the housing.
+    Ring,
+}
+
+/// How each of a whole set's bodies (in plan order) moves.
+pub(crate) fn motions(kind: Kind, bodies: &[Body]) -> Vec<Motion> {
+    let n = bodies.len();
+    (0..n)
+        .map(|i| match kind {
+            Kind::Rack => Motion::Slides,
+            Kind::Internal => Motion::Ring,
+            Kind::Planetary if n >= 3 && i == n - 1 => Motion::Ring,
+            Kind::Planetary if i > 0 => orbit(&bodies[0].frame, &bodies[i].frame),
+            Kind::CycloidalDrive if n >= 2 && i == 1 => Motion::Ring,
+            Kind::CycloidalDrive if n >= 2 && i == 0 => orbit(&bodies[1].frame, &bodies[0].frame),
+            _ => Motion::Turns,
+        })
+        .collect()
+}
+
+fn orbit(about: &Frame, f: &Frame) -> Motion {
+    let d = sub(f.origin, about.origin);
+    let along = dot(d, about.z);
+    let off = sub(d, scale(about.z, along));
+    Motion::Orbits { about: *about, distance: dot(off, off).sqrt() }
+}
+
+fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+fn scale(a: [f64; 3], k: f64) -> [f64; 3] {
+    [a[0] * k, a[1] * k, a[2] * k]
+}
+fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+fn norm(a: [f64; 3]) -> f64 {
+    dot(a, a).sqrt()
+}
+
+fn mm(v: f64) -> String {
+    format!("{v:.3}").trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// The point spacing round outlines (`h`) and along sweeps (`hz`) the envelopes are sampled at
+/// for a set of module `m` and a body `span` mm long.
+pub(crate) fn spacing(m: f64, span: f64) -> (f64, f64) {
+    ((0.04 * m).clamp(0.01, 0.25), (span / 120.0).clamp(0.05, 1.0))
+}
+
+/// One axis the clearance revolves about: points of material (position along the axis,
+/// radius) still to be grown by the clearances, and bands already sized (shafts, seats).
+struct Group {
+    frame: Frame,
+    /// (z, r, margin): r is grown by `margin` radially and the point by `axial` along the axis.
+    pts: Vec<(f64, f64, f64)>,
+    /// (z0, z1, r): a cylinder already sized.
+    bands: Vec<(f64, f64, f64)>,
+    /// The row spacing of the points, for the axial reach between rows.
+    hz: f64,
+}
+
+fn coaxial(a: &Frame, b: &Frame) -> bool {
+    let par = norm(cross(a.z, b.z)) < 1e-9;
+    let d = sub(b.origin, a.origin);
+    let off = sub(d, scale(a.z, dot(d, a.z)));
+    par && norm(off) < 1e-6
+}
+
+fn group_of(groups: &mut Vec<Group>, f: &Frame) -> usize {
+    if let Some(i) = groups.iter().position(|g| coaxial(&g.frame, f)) {
+        return i;
+    }
+    groups.push(Group { frame: *f, pts: Vec::new(), bands: Vec::new(), hz: 0.0 });
+    groups.len() - 1
+}
+
+/// A member as the clearance sees it.
+struct Member {
+    who: String,
+    body: Body,
+    motion: Motion,
+    /// Points of its material, its own coordinates.
+    pts: Vec<[f64; 3]>,
+    /// Its material's z range, and the middle of its teeth (the first step), own coordinates.
+    z: (f64, f64),
+    /// The z range of its teeth (its first step), and their middle.
+    teeth: (f64, f64),
+    mid: f64,
+    /// A planet on a carrier: no shaft through the housing, no seats.
+    planet: bool,
+    hz: f64,
+    h: f64,
+    /// Gear 1 (1), gear 2 and its kind (2), or none (0): whose bore and shafts it has.
+    role: u8,
+    /// The group (axis) it turns about, once placed.
+    group: Option<usize>,
+    /// Its shaft's clearance band in its group's coordinates, and the shaft's diameter.
+    shaft: Option<(f64, f64, f64)>,
+    shaft_d: Option<f64>,
+}
+
+/// The set's clearance body (see the module notes), named "<set name> clearance". Its facts
+/// (envelope sizes, the bearing) and warnings go into `p`. `p` is the set as planned and placed;
+/// when it is one member of a set (`only`), the whole set is planned for its clearance.
+pub fn clearance_body(s: &Spec, p: &mut Plan) -> Result<Body, String> {
+    let c = s.clearance_body.clone().unwrap_or_default();
+    check(&c)?;
+    let whole;
+    let (bodies, preview): (&[Body], &[PreviewGear]) = if s.only == 0 {
+        (&p.bodies, &p.preview)
+    } else {
+        whole = crate::plan::plan(&Spec { only: 0, clearance_body: None, ..s.clone() })?;
+        (&whole.bodies, &whole.preview)
+    };
+    let mut facts = Vec::new();
+    let mut warnings = Vec::new();
+    let body = build(s, &c, bodies, preview, &mut facts, &mut warnings)?;
+    for (label, value, unit) in facts {
+        p.fact(label, value, unit);
+    }
+    for w in warnings {
+        p.warn(w);
+    }
+    Ok(body)
+}
+
+fn set_name(s: &Spec) -> String {
+    if s.name.trim().is_empty() { s.kind.label().to_string() } else { s.name.trim().to_string() }
+}
+
+/// A body's name without the set's name in front.
+fn who_of(s: &Spec, body: &Body) -> String {
+    let pre = format!("{} ", s.name.trim());
+    if s.name.trim().is_empty() { body.name.clone() } else { body.name.strip_prefix(&pre).unwrap_or(&body.name).to_string() }
+}
+
+fn bore_of(s: &Spec, role: u8) -> (Bore, bool, f64) {
+    let (bore, front, back) = match role {
+        1 => (s.bore, s.shaft_front, s.shaft_back),
+        2 => (s.bore2, s.shaft2_front, s.shaft2_back),
+        _ => return (Bore::default(), false, 0.0),
+    };
+    let integral = front.exists() || back.exists();
+    let d = if front.exists() { front.diameter } else { back.diameter };
+    (bore, integral, d)
+}
+
+fn build(s: &Spec, c: &Clearance, bodies: &[Body], preview: &[PreviewGear], facts: &mut Vec<(String, f64, Unit)>, warn: &mut Vec<String>) -> Result<Body, String> {
+    if bodies.is_empty() {
+        return Err("clearance: the set has no bodies".into());
+    }
+    let bearing = c.chosen_bearing()?;
+    let motions = motions(s.kind, bodies);
+    let ext = if c.shaft_extension > 0.0 { c.shaft_extension } else { 2.0 * s.face_width };
+    let (rad, ax) = (c.radial, c.axial);
+
+    // Every member: its material's points, its shaft.
+    let mut members: Vec<Member> = Vec::new();
+    for (i, (b, motion)) in bodies.iter().zip(&motions).enumerate() {
+        let coarse = Solid::new(b, 1.0);
+        let span = (coarse.z.1 - coarse.z.0).max(1e-3);
+        let (h, hz) = spacing(s.module, span);
+        let solid = Solid::new(b, h);
+        let pts = solid.material_points(hz);
+        let z = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q[2]), a.1.max(q[2])));
+        let first = Solid::new(&Body { name: String::new(), frame: b.frame, steps: b.steps.iter().take(1).cloned().collect() }, 1.0);
+        let mid = 0.5 * (first.z.0 + first.z.1);
+        let planet = matches!(motion, Motion::Orbits { .. }) && s.kind == Kind::Planetary;
+        let role = match motion {
+            Motion::Ring => 0,
+            _ if i == 0 => 1,
+            _ => 2,
+        };
+        members.push(Member { who: who_of(s, b), body: b.clone(), motion: *motion, pts, z, teeth: first.z, mid, planet, hz, h, role, group: None, shaft: None, shaft_d: None });
+    }
+    let rings_only = members.iter().all(|m| m.motion == Motion::Ring);
+    if rings_only && c.ring_as_housing {
+        warn.push("clearance: the set is only a ring gear, so its rim is cleared although the ring is taken as part of the housing".into());
+    }
+    let skip_ring = c.ring_as_housing && !rings_only;
+
+    let mut groups: Vec<Group> = Vec::new();
+    let mut prisms: Vec<(Frame, Region, f64, f64)> = Vec::new();
+    for m in members.iter_mut() {
+        let f = m.body.frame;
+        let margin = rad + m.h + 0.002;
+        match m.motion {
+            Motion::Ring if skip_ring => continue,
+            Motion::Slides => {
+                // The slot: the rack's box, longer by its travel.
+                let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+                for q in &m.pts {
+                    for k in 0..3 {
+                        lo[k] = lo[k].min(q[k]);
+                        hi[k] = hi[k].max(q[k]);
+                    }
+                }
+                let length = hi[0] - lo[0];
+                let travel = if c.travel > 0.0 { c.travel } else { length };
+                let (x0, x1) = (lo[0] - travel / 2.0 - margin, hi[0] + travel / 2.0 + margin);
+                let (y0, y1) = (lo[1] - margin, hi[1] + margin);
+                let rect = Outline { segs: vec![Seg::Line(V2::new(x0, y0), V2::new(x1, y0)), Seg::Line(V2::new(x1, y0), V2::new(x1, y1)), Seg::Line(V2::new(x1, y1), V2::new(x0, y1)), Seg::Line(V2::new(x0, y1), V2::new(x0, y0))] };
+                prisms.push((f, Region { outer: vec![rect], holes: vec![] }, lo[2] - ax - m.hz, hi[2] - lo[2] + 2.0 * (ax + m.hz)));
+                facts.push((format!("clearance: {} slot length", m.who), x1 - x0, Unit::Mm));
+                facts.push((format!("clearance: {} travel", m.who), travel, Unit::Mm));
+                continue;
+            }
+            _ => {}
+        }
+        let (axis, orbit) = match m.motion {
+            Motion::Orbits { about, distance } => (about, distance),
+            _ => (f, 0.0),
+        };
+        let gi = group_of(&mut groups, &axis);
+        m.group = Some(gi);
+        let g = &mut groups[gi];
+        g.hz = g.hz.max(m.hz);
+        let mut zr = (f64::MAX, f64::MIN);
+        let mut rmax = 0.0f64;
+        for q in &m.pts {
+            let zg = dot(sub(f.world(*q), g.frame.origin), g.frame.z);
+            let r = orbit + q[0].hypot(q[1]);
+            zr = (zr.0.min(zg), zr.1.max(zg));
+            rmax = rmax.max(r);
+            g.pts.push((zg, r, margin));
+        }
+        let what = if orbit > 0.0 { "orbit" } else { "envelope" };
+        facts.push((format!("clearance: {} {what} diameter", m.who), 2.0 * (rmax + margin), Unit::Mm));
+        facts.push((format!("clearance: {} {what} length", m.who), zr.1 - zr.0 + 2.0 * (ax + m.hz), Unit::Mm));
+        // The shaft: through the gear and on past it, unless it is integral (built with the
+        // gear and in its points) or the member orbits on a carrier.
+        let (bore, integral, integral_d) = bore_of(s, m.role);
+        let d = if bore.kind != BoreKind::None && bore.diameter > 0.0 {
+            Some(2.0 * bore.reach())
+        } else if integral {
+            Some(integral_d)
+        } else {
+            bearing.as_ref().map(|(_, b)| b.bore).filter(|d| *d > 0.0)
+        };
+        m.shaft_d = if integral { Some(integral_d) } else { d };
+        if let (Some(d), false, false) = (d, integral, m.planet) {
+            let band = (zr.0 - ext, zr.1 + ext, d / 2.0 + rad);
+            g.bands.push(band);
+            m.shaft = Some(band);
+            facts.push((format!("clearance: {} shaft diameter", m.who), d + 2.0 * rad, Unit::Mm));
+        } else if integral {
+            m.shaft = Some((zr.0, zr.1, integral_d / 2.0 + rad));
+        }
+    }
+
+    // A chain or belt between two wheels, and round a single one.
+    chain_run(s, c, &members, preview, &mut groups, &mut prisms, facts);
+
+    // Bearing seats.
+    if let Some((name, b)) = &bearing {
+        facts.push((format!("clearance bearing {name} bore"), b.bore, Unit::Mm));
+        facts.push((format!("clearance bearing {name} outside diameter"), b.od, Unit::Mm));
+        facts.push((format!("clearance bearing {name} width"), b.width, Unit::Mm));
+        let r = (b.od + c.bearing_fit) / 2.0;
+        let mut mismatched = Vec::new();
+        for (i, seat) in c.seats.iter().enumerate() {
+            let n = i + 1;
+            let (mi, along) = match seat {
+                Seat::Along { member, along } => {
+                    let k = *member as usize;
+                    if k == 0 || k > members.len() {
+                        let list: Vec<String> = members.iter().enumerate().map(|(j, m)| format!("{} {}", j + 1, m.who)).collect();
+                        return Err(format!("clearance: bearing seat {n} is on member {k}, and this set has {}: {}", members.len(), list.join(", ")));
+                    }
+                    (k - 1, *along)
+                }
+                Seat::Point(pt) => match nearest(&members, *pt) {
+                    Some((k, along, off)) => {
+                        if off > b.od {
+                            warn.push(format!("clearance: bearing seat {n}'s point is {} mm off {}'s axis; it is moved onto the axis", mm(off), members[k].who));
+                        }
+                        (k, along)
+                    }
+                    None => {
+                        warn.push(format!("clearance: bearing seat {n}: no member turns on an axis of its own to put it on; left out"));
+                        continue;
+                    }
+                },
+            };
+            let m = &members[mi];
+            let Some(gi) = m.group else {
+                warn.push(format!("clearance: bearing seat {n} is on {}, which has no axis in the housing (a slide or a ring left to the housing); left out", m.who));
+                continue;
+            };
+            if m.planet {
+                warn.push(format!("clearance: bearing seat {n} is on {}, which goes round with the carrier: its seat is not part of the housing; left out", m.who));
+                continue;
+            }
+            let g = &mut groups[gi];
+            // The dot, along the member's own axis from the middle of its teeth, in the group's
+            // coordinates (the disc of a drive sits on the input's axis).
+            let f = m.body.frame;
+            let centre = dot(sub(f.world([0.0, 0.0, m.mid + along]), g.frame.origin), g.frame.z);
+            let (z0, z1) = (centre - b.width / 2.0, centre + b.width / 2.0);
+            g.bands.push((z0, z1, r));
+            facts.push((format!("clearance: bearing seat {n} on {} at", m.who), along, Unit::Mm));
+            match m.shaft {
+                Some((lo, hi, _)) if z0 >= lo - 1e-9 && z1 <= hi + 1e-9 => {}
+                Some((lo, hi, _)) => warn.push(format!(
+                    "clearance: bearing seat {n} ({}…{} mm along {}'s axis) is beyond its shaft ({}…{})",
+                    mm(z0 - centre + along),
+                    mm(z1 - centre + along),
+                    m.who,
+                    mm(lo - centre + along),
+                    mm(hi - centre + along)
+                )),
+                None => warn.push(format!("clearance: bearing seat {n} is on {}, which has no shaft (no bore, integral shaft or bearing bore)", m.who)),
+            }
+            let (zlo, zhi) = (dot(sub(f.world([0.0, 0.0, m.teeth.0]), g.frame.origin), g.frame.z), dot(sub(f.world([0.0, 0.0, m.teeth.1]), g.frame.origin), g.frame.z));
+            let (zlo, zhi) = (zlo.min(zhi), zlo.max(zhi));
+            if z1 > zlo + 1e-9 && z0 < zhi - 1e-9 {
+                warn.push(format!("clearance: bearing seat {n} overlaps the teeth of {} (they run {}…{} mm from their middle)", m.who, mm(m.teeth.0 - m.mid), mm(m.teeth.1 - m.mid)));
+            }
+            if b.bore > 0.0
+                && let Some(d) = m.shaft_d
+                && (d - b.bore).abs() > 1e-6
+                && !mismatched.contains(&mi)
+            {
+                mismatched.push(mi);
+                warn.push(format!("clearance: bearing {name} has a {} mm bore but {}'s shaft is Ø{}", mm(b.bore), m.who, mm(d)));
+            }
+        }
+        if c.seats.is_empty() {
+            warn.push(format!("clearance: bearing {name} chosen but no seats placed"));
+        }
+    }
+
+    // The body: one revolve per axis (each connected stretch of its profile), the prisms.
+    let mut steps = Vec::new();
+    for g in &groups {
+        for poly in profile(g, ax) {
+            let op = if steps.is_empty() { Op::New } else { Op::Join };
+            steps.push(Step::Placed { frame: g.frame, step: Box::new(Step::Revolve { profile: poly, op }) });
+        }
+    }
+    for (frame, region, z0, height) in prisms {
+        let op = if steps.is_empty() { Op::New } else { Op::Join };
+        steps.push(Step::Placed { frame, step: Box::new(Step::Prism { region, z0, height, twist: 0.0, op }) });
+    }
+    if steps.is_empty() {
+        return Err("clearance: nothing to clear (every member is a ring left to the housing)".into());
+    }
+    facts.push(("clearance: radial".into(), rad, Unit::Mm));
+    facts.push(("clearance: axial".into(), ax, Unit::Mm));
+    Ok(Body { name: format!("{} clearance", set_name(s)), frame: Frame::at([0.0; 3]), steps })
+}
+
+/// The member whose axis is nearest a world point: its index, the point's distance along the
+/// axis from the middle of its teeth, and how far off the axis it is.
+fn nearest(members: &[Member], p: [f64; 3]) -> Option<(usize, f64, f64)> {
+    members
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.group.is_some() && !m.planet)
+        .map(|(k, m)| {
+            let f = m.body.frame;
+            let d = sub(p, f.origin);
+            let along = dot(d, f.z);
+            let off = norm(sub(d, scale(f.z, along)));
+            (k, along - m.mid, off)
+        })
+        .min_by(|a, b| a.2.total_cmp(&b.2))
+}
+
+/// Sprockets and pulleys: the chain or belt round a single wheel (a band on its axis), and
+/// between two (a prism round both wheels and the runs).
+fn chain_run(s: &Spec, c: &Clearance, members: &[Member], preview: &[PreviewGear], groups: &mut [Group], prisms: &mut Vec<(Frame, Region, f64, f64)>, facts: &mut Vec<(String, f64, Unit)>) {
+    if !matches!(s.kind, Kind::Sprocket | Kind::Pulley) {
+        return;
+    }
+    let chain = s.kind == Kind::Sprocket;
+    let radius = |names: &[&str]| preview.iter().find(|g| names.contains(&g.name.as_str())).map(|g| g.pitch_radius).filter(|r| *r > 0.0);
+    let (w1, w2): (&[&str], &[&str]) = if chain { (&["sprocket", "sprocket 1"], &["sprocket 2"]) } else { (&["pulley", "pulley 1"], &["pulley 2"]) };
+    let wheels: Vec<(usize, f64, u32)> = [(0usize, radius(w1), s.teeth), (1, radius(w2), s.teeth2)].into_iter().filter_map(|(i, r, z)| Some((i, r?, z))).filter(|(i, _, z)| *i < members.len() && *z > 0).collect();
+    // How far the chain's plates or the belt's back stand out past the pitch circle, and how
+    // much wider than the teeth the chain is on each side.
+    let pitch = |r: f64, z: u32| if chain { 2.0 * r * (std::f64::consts::PI / f64::from(z)).sin() } else { std::f64::consts::TAU * r / f64::from(z) };
+    let Some(&(_, r1, z1)) = wheels.first() else { return };
+    let p = pitch(r1, z1);
+    let (out, side) = if chain { (0.5 * p, 0.4 * p) } else { (0.6 * p, 0.0) };
+    let off = out + c.radial;
+    for (i, r, _) in &wheels {
+        let m = &members[*i];
+        let Some(gi) = m.group else { continue };
+        let g = &mut groups[gi];
+        let f = m.body.frame;
+        let (a, b) = (dot(sub(f.world([0.0, 0.0, m.z.0]), g.frame.origin), g.frame.z), dot(sub(f.world([0.0, 0.0, m.z.1]), g.frame.origin), g.frame.z));
+        g.bands.push((a.min(b) - side - c.axial, a.max(b) + side + c.axial, r + off));
+    }
+    if wheels.len() == 2 {
+        let (m1, m2) = (&members[wheels[0].0], &members[wheels[1].0]);
+        let f1 = m1.body.frame;
+        let d = sub(m2.body.frame.origin, f1.origin);
+        let across = sub(d, scale(f1.z, dot(d, f1.z)));
+        let a = norm(across);
+        let r2 = wheels[1].1;
+        if a > (r1 - r2).abs() + 1e-6
+            && let Some(path) = crate::wrap::belt_path(r1, r2, a, off)
+        {
+            let x = scale(across, 1.0 / a);
+            let frame = Frame { origin: f1.origin, x, z: f1.z };
+            let zs = [m1, m2].iter().flat_map(|m| [m.z.0, m.z.1].map(|z| dot(sub(m.body.frame.world([0.0, 0.0, z]), f1.origin), f1.z))).fold((f64::MAX, f64::MIN), |a, z| (a.0.min(z), a.1.max(z)));
+            let (z0, z1) = (zs.0 - side - c.axial, zs.1 + side + c.axial);
+            prisms.push((frame, Region { outer: vec![path], holes: vec![] }, z0, z1 - z0));
+            let what = if chain { "chain" } else { "belt" };
+            facts.push((format!("clearance: {what} run width"), z1 - z0, Unit::Mm));
+            facts.push((format!("clearance: {what} run height over the pitch line"), off, Unit::Mm));
+        }
+    }
+}
+
+/// The revolved profiles of an axis: closed polygons in its (radius, z) half plane, one for
+/// each stretch along the axis that needs clearing.
+fn profile(g: &Group, axial: f64) -> Vec<Vec<V2>> {
+    // The points' needs, cell by cell: a cell takes the largest radius (grown by the margin) of
+    // the points within the axial clearance and one row spacing of it.
+    let reach = axial + g.hz;
+    let (mut p0, mut p1) = (f64::MAX, f64::MIN);
+    for (z, ..) in &g.pts {
+        p0 = p0.min(z - reach);
+        p1 = p1.max(z + reach);
+    }
+    let have_pts = !g.pts.is_empty() && p1 > p0;
+    let (n, dz) = if have_pts {
+        let span = p1 - p0;
+        let n = ((span / 0.25).ceil() as usize).clamp(8, 2400);
+        (n, span / n as f64)
+    } else {
+        (0, 1.0)
+    };
+    let mut cell = vec![0.0f64; n];
+    if have_pts {
+        let mut own = vec![0.0f64; n];
+        for (z, r, margin) in &g.pts {
+            let k = (((z - p0) / dz).floor() as isize).clamp(0, n as isize - 1) as usize;
+            own[k] = own[k].max(r + margin);
+        }
+        let w = (reach / dz).ceil() as usize + 1;
+        for (k, v) in own.iter().enumerate() {
+            if *v <= 0.0 {
+                continue;
+            }
+            for c in cell.iter_mut().take((k + w + 1).min(n)).skip(k.saturating_sub(w)) {
+                *c = c.max(*v);
+            }
+        }
+    }
+    // The points' need along the axis: linear between cell boundaries, each boundary the larger
+    // of the cells either side (so it is never under a cell's need), nothing outside.
+    let bval = |k: usize| -> f64 {
+        let l = if k > 0 { cell[k - 1] } else { 0.0 };
+        let r = if k < n { cell[k] } else { 0.0 };
+        l.max(r)
+    };
+    let fp = |z: f64, right: bool| -> f64 {
+        if !have_pts || z < p0 - 1e-12 || z > p1 + 1e-12 {
+            return 0.0;
+        }
+        if (z - p0).abs() <= 1e-12 {
+            return if right { bval(0) } else { 0.0 };
+        }
+        if (z - p1).abs() <= 1e-12 {
+            return if right { 0.0 } else { bval(n) };
+        }
+        let t = (z - p0) / dz;
+        let k = (t.floor() as usize).min(n - 1);
+        let f = t - k as f64;
+        bval(k) * (1.0 - f) + bval(k + 1) * f
+    };
+    let band = |z: f64, right: bool| -> f64 {
+        g.bands.iter().filter(|(z0, z1, _)| if right { *z0 <= z && z < *z1 } else { *z0 < z && z <= *z1 }).fold(0.0, |a, b| a.max(b.2))
+    };
+    let mut at: Vec<f64> = if have_pts { (0..=n).map(|k| p0 + dz * k as f64).collect() } else { Vec::new() };
+    if have_pts {
+        at[n] = p1;
+    }
+    for (z0, z1, r) in &g.bands {
+        if *r > 0.0 && z1 > z0 {
+            at.push(*z0);
+            at.push(*z1);
+        }
+    }
+    at.sort_by(f64::total_cmp);
+    at.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    // Walk the breakpoints: vertices where the need is, a vertical step where it jumps.
+    let mut out = Vec::new();
+    let mut cur: Vec<V2> = Vec::new();
+    for &z in &at {
+        let l = fp(z, false).max(band(z, false));
+        let r = fp(z, true).max(band(z, true));
+        let (l, r) = if (l - r).abs() < 1e-4 { (l.max(r), l.max(r)) } else { (l, r) };
+        if l > 0.0 {
+            cur.push(V2::new(l, z));
+        }
+        if r <= 0.0 {
+            if !cur.is_empty() {
+                out.push(close(simplify(std::mem::take(&mut cur))));
+            }
+        } else if (r - l).abs() > 0.0 || l <= 0.0 {
+            cur.push(V2::new(r, z));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(close(simplify(cur)));
+    }
+    out
+}
+
+/// The tolerance a profile's simplified chords may fall under a vertex (the profile is then
+/// moved out by it), and how far they may stand over one.
+const UNDER: f64 = 0.005;
+const OVER: f64 = 0.1;
+
+/// Fewer vertices: on each stretch between vertical steps, a chord replaces the vertices it
+/// passes within (`-UNDER`, `+OVER`) of; then every radius is moved out by `UNDER`.
+fn simplify(v: Vec<V2>) -> Vec<V2> {
+    let mut out: Vec<V2> = Vec::new();
+    let mut i = 0;
+    while i < v.len() {
+        // A run of strictly rising z from i.
+        let mut j = i;
+        while j + 1 < v.len() && v[j + 1].y > v[j].y + 1e-12 {
+            j += 1;
+        }
+        let run = &v[i..=j];
+        let mut a = 0;
+        out.push(run[0]);
+        while a + 1 < run.len() {
+            let (mut lo, mut hi) = (f64::MIN, f64::MAX);
+            let mut best = a + 1;
+            for k in a + 1..run.len() {
+                let dzk = run[k].y - run[a].y;
+                let s = (run[k].x - run[a].x) / dzk;
+                if s >= lo - 1e-12 && s <= hi + 1e-12 {
+                    best = k;
+                }
+                lo = lo.max((run[k].x - UNDER - run[a].x) / dzk);
+                hi = hi.min((run[k].x + OVER - run[a].x) / dzk);
+                if lo > hi {
+                    break;
+                }
+            }
+            out.push(run[best]);
+            a = best;
+        }
+        i = j + 1;
+    }
+    for q in &mut out {
+        q.x += UNDER;
+    }
+    out
+}
+
+/// The profile closed to the axis at both ends.
+fn close(v: Vec<V2>) -> Vec<V2> {
+    let (z0, z1) = (v[0].y, v[v.len() - 1].y);
+    let mut out = Vec::with_capacity(v.len() + 2);
+    out.push(V2::new(0.0, z0));
+    out.extend(v);
+    out.push(V2::new(0.0, z1));
+    // Round off what the kernel would see as noise.
+    for q in &mut out {
+        q.x = (q.x * 1e6).round() / 1e6;
+        q.y = (q.y * 1e6).round() / 1e6;
+    }
+    out.dedup_by(|a, b| (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6);
+    out
+}

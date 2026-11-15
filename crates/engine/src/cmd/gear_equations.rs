@@ -5,18 +5,28 @@
 //! the formulas, the pattern count and the tooth extrusion name design parameters
 //! (`<prefix>_module`, `<prefix>_teeth`…), so editing one regenerates the teeth.
 //!
-//! What a parameter edit moves: the teeth (shape and count) and their extrusion length. What it
-//! does not: where each member sits (a pair's centre distance, the planets' places), hubs,
-//! bores and the like, and a herringbone's upper half starts where it did; `gear.update` reads
-//! the parameters back and regenerates all of it. An undercut gear's fillet/flank crossing is
-//! numeric, so it follows edits only approximately.
+//! What a parameter edit moves: the teeth (shape and count) and their extrusion length; where
+//! a pair's gear 2 and a planetary set's planets sit (their sketches' planes have origins over
+//! the working centre distance, `<prefix>_mesh_cd`, worked out from the module, tooth counts
+//! and shifts) and how they are turned to mesh (`<prefix>_gear2_phase`, `_planet<k>_phase`,
+//! `_ring_phase`); and the clearance body's tip envelopes and face lengths (its profile's
+//! vertices are points over the tip radii, the centre distance and the face width). What it
+//! does not: hub, bore and shaft sizes, bearing seats' sizes, a ring's profile shift and rim,
+//! and a herringbone's upper half starts where it did; `gear.update` reads the parameters back
+//! and regenerates all of it. A tooth count edited into undercut makes the fillet and the flank
+//! cross: the extrusion takes only the gear's own region (picked by a point that stays inside
+//! it), not the small loops between the curves.
 //!
 //! `gear.update` in place redraws an equation sketch from scratch in the same sketch (same
 //! sketch and feature ids; its curve ids come out the same when the tooth is drawn the same way).
 
 use serde_json::{Value, json};
-use solidcraft_gear::equations::{Edge, End, Quantity, Repeat, TeethSource, ToothCell, cell_for, render};
-use solidcraft_gear::plan::{Kind, Plan, Spec, Step};
+use std::collections::BTreeSet;
+
+use solidcraft_gear::clearance::VertexFollow;
+use solidcraft_gear::equations::{Edge, End, Placing, Quantity, Repeat, TeethSource, ToothCell, Vars, cell_for, keys, literal, number, render};
+use solidcraft_gear::plan::{Body, Kind, Plan, Spec, Step};
+use solidcraft_gear::V2;
 use solidcraft_gear::{Outline, Region};
 use solidcraft_sketch::{Analysis, Sketch};
 
@@ -35,6 +45,12 @@ pub(super) struct Mode {
     pub sources: Vec<TeethSource>,
     /// The design parameters' prefix (parametric teeth).
     pub prefix: Option<String>,
+    /// Parametric: where the members sit as formulas, and how the clearance body's profiles
+    /// follow them ([`Plan::placing`], [`Plan::clearance_follow`]).
+    pub placing: Placing,
+    pub follow: Vec<Vec<VertexFollow>>,
+    /// Parametric: every key the set's formulas define (the design parameters it makes).
+    pub keys: BTreeSet<String>,
 }
 
 /// One sketch drawn by [`draw`]: its toothed loops (index into the sketch's loops) as cells, and
@@ -125,8 +141,19 @@ impl Mode {
         } else {
             None
         };
-        let mode = Mode { on: true, sources: plan.teeth.clone(), prefix };
+        let mut mode = Mode { on: true, sources: plan.teeth.clone(), prefix, ..Mode::default() };
         let outlines = prism_outlines(plan);
+        if mode.prefix.is_some() {
+            mode.placing = plan.placing.clone();
+            mode.follow = plan.clearance_follow.clone();
+            let mut known: BTreeSet<String> = mode.placing.vars.list.iter().map(|v| v.key.clone()).collect();
+            for o in &outlines {
+                if let Some(c) = cell_for(&plan.teeth, o) {
+                    known.extend(c.vars.list.iter().map(|v| v.key.clone()));
+                }
+            }
+            mode.keys = known;
+        }
         for src in &plan.teeth {
             let found = outlines.iter().any(|o| cell_for(std::slice::from_ref(src), o).is_some());
             if !found {
@@ -146,6 +173,60 @@ impl Mode {
         }
         let cells: Vec<(usize, ToothCell)> = region.outer.iter().chain(&region.holes).enumerate().filter_map(|(i, o)| cell_for(&self.sources, o).map(|c| (i, c))).collect();
         (!cells.is_empty()).then(|| EqSketch { cells, prefix: self.prefix.clone(), path: None })
+    }
+
+    /// How far body `index` of the plan (`body`) moves from where it was planned when the
+    /// parameters change, per world axis (an expression of the parameters, `None`: it doesn't
+    /// along that axis): a member placed by formulas ([`Placing::centres`]).
+    pub fn moves(&self, index: usize, body: &Body) -> Option<[Option<String>; 3]> {
+        let prefix = self.prefix.as_ref()?;
+        let (_, x, y) = self.placing.centres.iter().find(|(k, ..)| *k == index)?;
+        let (xv, yv) = self.placing.value(x, y).ok()?;
+        let name = |k: &str| format!("{prefix}_{k}");
+        let (ax, ay) = (body.frame.x, body.frame.y());
+        let parts = |tpl: &str, at: f64, dir: [f64; 3], c: usize| {
+            (!keys(tpl).is_empty() && dir[c].abs() > 1e-12).then(|| format!("{} * ({} - {})", number(dir[c]), render(tpl, &name), literal(at, Quantity::Length)))
+        };
+        Some([0, 1, 2].map(|c| {
+            let both: Vec<String> = [parts(x.as_str(), xv, ax, c), parts(y.as_str(), yv, ay, c)].into_iter().flatten().collect();
+            (!both.is_empty()).then(|| both.join(" + "))
+        }))
+    }
+
+    /// A clearance profile's vertices (radius, z; `z` moved by `nudge`) as sketch point
+    /// coordinates following the parameters ([`VertexFollow`]): expressions where they follow,
+    /// numbers elsewhere. `None` when nothing follows, or a key isn't one of the set's.
+    pub fn follow_poly(&self, profile: &[V2], follow: &[VertexFollow], nudge: f64) -> Option<Vec<[Value; 2]>> {
+        let prefix = self.prefix.as_ref()?;
+        if follow.len() != profile.len() || follow.iter().all(|f| f.r.is_none() && f.z.is_none()) {
+            return None;
+        }
+        let name = |k: &str| format!("{prefix}_{k}");
+        let known = |tpl: &str| keys(tpl).iter().all(|k| self.keys.contains(k));
+        let mut out = Vec::new();
+        for (q, f) in profile.iter().zip(follow) {
+            let z = q.y + nudge;
+            let x = match &f.r {
+                Some((tpl, at)) => {
+                    if !known(tpl) {
+                        return None;
+                    }
+                    json!(format!("{} + ({} - {})", literal(q.x, Quantity::Length), render(tpl, &name), literal(*at, Quantity::Length)))
+                }
+                None => json!(q.x),
+            };
+            let y = match &f.z {
+                Some((k, key, face)) => {
+                    if !self.keys.contains(key) {
+                        return None;
+                    }
+                    json!(format!("{} + {} * ({} - {})", literal(z, Quantity::Length), number(*k), name(key), literal(*face, Quantity::Length)))
+                }
+                None => json!(z),
+            };
+            out.push([x, y]);
+        }
+        Some(out)
     }
 
     /// A parametric prism's extrusion distance and twist as expressions (none where the numbers
@@ -190,35 +271,72 @@ fn unit_of(q: Quantity) -> &'static str {
     }
 }
 
-/// Makes or updates the design parameters the sketch's formulas name.
-fn ensure_params(s: &mut Session, def: &SketchDef) -> Result<()> {
-    let Some(eq) = &def.eq else { return Ok(()) };
-    let Some(prefix) = &eq.prefix else { return Ok(()) };
+/// What every parameter the Gear Generator makes is commented with, first.
+const MADE_BY: &str = "Gear Generator: ";
+
+/// Makes or updates the design parameters of `vars`, named `<prefix>_<key>`.
+fn ensure_vars(s: &mut Session, prefix: &str, vars: &Vars) -> Result<()> {
     let name = |k: &str| format!("{prefix}_{k}");
-    for (_, cell) in &eq.cells {
-        for v in &cell.vars.list {
-            let n = name(&v.key);
-            let expr = if v.input { v.expr.clone() } else { render(&v.expr, &name) };
-            let existing = s.doc.param(&n).map(|p| p.expr.clone());
-            match existing {
-                Some(e) if e == expr => {}
-                Some(_) => {
-                    s.execute("parameters.change", &json!({"name": n, "expression": expr}))?;
-                }
-                None => {
-                    let comment = format!("Gear Generator: {}{}", v.comment, if v.input { "" } else { " (worked out)" });
-                    s.execute("parameters.add", &json!({"name": n, "expression": expr, "unit": unit_of(v.quantity), "comment": comment}))?;
-                }
+    for v in &vars.list {
+        let n = name(&v.key);
+        let expr = if v.input { v.expr.clone() } else { render(&v.expr, &name) };
+        let existing = s.doc.param(&n).map(|p| p.expr.clone());
+        match existing {
+            Some(e) if e == expr => {}
+            Some(_) => {
+                s.execute("parameters.change", &json!({"name": n, "expression": expr}))?;
+            }
+            None => {
+                let comment = format!("{MADE_BY}{}{}", v.comment, if v.input { "" } else { " (worked out)" });
+                s.execute("parameters.add", &json!({"name": n, "expression": expr, "unit": unit_of(v.quantity), "comment": comment}))?;
             }
         }
     }
     Ok(())
 }
 
+/// Makes or updates the design parameters the sketch's formulas name.
+fn ensure_params(s: &mut Session, def: &SketchDef) -> Result<()> {
+    let Some(eq) = &def.eq else { return Ok(()) };
+    let Some(prefix) = &eq.prefix else { return Ok(()) };
+    for (_, cell) in &eq.cells {
+        ensure_vars(s, prefix, &cell.vars)?;
+    }
+    Ok(())
+}
+
+/// Makes or updates the design parameters the members' places name (before the sketches whose
+/// planes use them).
+pub(super) fn ensure_placing(s: &mut Session, mode: &Mode) -> Result<()> {
+    match &mode.prefix {
+        Some(prefix) if !mode.placing.vars.list.is_empty() => ensure_vars(s, prefix, &mode.placing.vars),
+        _ => Ok(()),
+    }
+}
+
+/// Deletes the design parameters `<prefix>_*` the Gear Generator made that nothing uses (a set
+/// whose teeth are no longer drawn from parametric formulas): those used by something else, a
+/// feature or another parameter of the user's, stay.
+pub(super) fn prune(s: &mut Session, prefix: &str) {
+    let start = format!("{prefix}_");
+    loop {
+        let names: Vec<String> = s.doc.params.iter().filter(|p| p.name.starts_with(&start) && p.comment.starts_with(MADE_BY)).map(|p| p.name.clone()).collect();
+        let mut removed = false;
+        for n in names {
+            if s.doc.param_users(&n).is_empty() && s.doc_mut().remove_param(&n).is_ok() {
+                removed = true;
+            }
+        }
+        if !removed {
+            break;
+        }
+    }
+}
+
 /// The loops of `def` drawn as plain geometry (those that aren't teeth).
 fn plain_loops(def: &SketchDef) -> Vec<&Vec<solidcraft_io::Geom2>> {
     let eq = def.eq.as_ref();
-    if eq.is_some_and(|e| e.path.is_some()) {
+    if eq.is_some_and(|e| e.path.is_some()) || def.poly.is_some() {
         return Vec::new();
     }
     def.loops.iter().enumerate().filter(|(i, _)| !eq.is_some_and(|e| e.cells.iter().any(|(k, _)| k == i))).map(|(_, g)| g).collect()
@@ -341,6 +459,9 @@ fn draw(s: &mut Session, id: u64, def: &SketchDef) -> Result<()> {
             Ok(((), Left::Unsolved))
         })?;
     }
+    if let Some(poly) = &def.poly {
+        return draw_poly(s, poly);
+    }
     let Some(eq) = &def.eq else { return Ok(()) };
     if let Some(length) = &eq.path {
         s.execute("sketch.line", &json!({"points": [[0.0, 0.0], [length, 0.0]]}))?;
@@ -348,6 +469,23 @@ fn draw(s: &mut Session, id: u64, def: &SketchDef) -> Result<()> {
     }
     for (_, cell) in &eq.cells {
         draw_cell(s, cell, eq.prefix.as_deref())?;
+    }
+    Ok(())
+}
+
+/// A closed polygon of points placed by expressions (or numbers, then fixed), in the sketch
+/// being edited.
+fn draw_poly(s: &mut Session, poly: &[[Value; 2]]) -> Result<()> {
+    let mut ids = Vec::new();
+    for q in poly {
+        let id = id_of(&s.execute("sketch.point", &json!({"point": [q[0], q[1]]}))?, "point", "point")?;
+        if !q[0].is_string() && !q[1].is_string() {
+            s.execute("sketch.constraint.fix", &json!({"entities": [id], "fixed": true}))?;
+        }
+        ids.push(id);
+    }
+    for i in 0..ids.len() {
+        s.execute("sketch.line", &json!({"points": [ids[i], ids[(i + 1) % ids.len()]]}))?;
     }
     Ok(())
 }
@@ -382,9 +520,10 @@ pub(super) fn redraw(s: &mut Session, id: u64, def: &SketchDef) -> Result<()> {
     Ok(())
 }
 
-/// Does sketch `id` hold anything only [`redraw`] clears (equation curves or patterns)?
+/// Does sketch `id` hold anything only [`redraw`] clears (equation curves, patterns, points
+/// placed by expressions)?
 pub(super) fn holds_formulas(s: &Session, id: u64) -> bool {
-    s.doc.sketch(id).is_ok_and(|sk| !sk.equations.is_empty() || !sk.patterns.is_empty())
+    s.doc.sketch(id).is_ok_and(|sk| !sk.equations.is_empty() || !sk.patterns.is_empty() || sk.points.iter().any(|q| q.exprs.is_some()))
 }
 
 /// `gear.update` of a parametric set: the inputs the user changed through the design

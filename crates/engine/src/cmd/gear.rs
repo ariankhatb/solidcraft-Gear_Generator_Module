@@ -16,8 +16,8 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use solidcraft_doc::{Document, FeatureKind};
-use solidcore_record::Vec2;
+use solidcraft_doc::{Document, Expr, FeatureKind, PlaneRef};
+use solidcore_record::{Vec2, Vec3};
 use solidcraft_gear::geom::{Outline, Region, Seg};
 use solidcraft_gear::hub::{Bore, BoreKind, Chamfer, Hardware, Shaft, ShaftEnd};
 use solidcraft_geom::PlaneGeom as _;
@@ -77,8 +77,10 @@ pub static COMMANDS: &[CommandSpec] = &[
              one tooth of equation curves from the gear formulas, involute flank and trochoid root fillet, with tip and root arcs, repeated by a circular \
              pattern; tooth tuning that has no formula (tip relief, tip rounding, elephant foot, crowning) stays fitted), parametric?: bool (with equations: \
              design parameters <prefix>_module, _teeth, _teeth2, _teeth3, _pressure_angle, _helix, _shift, _backlash, _face_width and derived radii drive the \
-             formulas, pattern counts and tooth extrusions: editing one regenerates the teeth; positions, hubs and bores keep their numbers until gear.update, \
-             which reads the parameters back), parameter_prefix? (default from the name); clearance_body?: {radial? (mm, default 0.5), axial? (0.5), shaft_extension? (past each gear, default 2 × face_width), \
+             formulas, pattern counts and tooth extrusions: editing one regenerates the teeth; a pair's gear 2 and the planets follow too, at the working centre \
+             distance <prefix>_mesh_cd and turned to mesh, and so does a clearance body's tip envelope and face length; hub, bore, shaft and seat sizes keep their \
+             numbers until gear.update, which reads the parameters back; made fitted again, the set deletes the parameters it made that nothing else uses), \
+             parameter_prefix? (default from the name); clearance_body?: {radial? (mm, default 0.5), axial? (0.5), shaft_extension? (past each gear, default 2 × face_width), \
              ring_as_housing? (default true: an internal ring or pin ring is part of the housing and left out), bearing?: name (608, 6001, 6902, MR105, ...) | {od, width, bore?}, \
              bearing_fit? (on the diameter), seats?: [{member: 1|2|..., along: mm from the middle of its teeth} | {point: [x,y,z]} (onto the nearest member's axis)], \
              travel? (rack: its slide, default its length)} (one more body, \"<name> clearance\": every member's swept tooth envelope, shafts and bearing seats \
@@ -1448,7 +1450,10 @@ fn must_rebuild(s: &Session, rec: &Record, plan: &Plan, mode: &equations::Mode) 
 
 /// Puts sketch `id` on the plane of `def`.
 fn move_sketch(s: &mut Session, id: u64, def: &SketchDef) -> Result<()> {
-    let plane = super::sketch::plane_ref(s, &json!({"plane": {"origin": def.origin, "x_dir": def.x, "y_dir": def.y}}), "gear.update")?;
+    let plane = match def.placed_plane() {
+        Some(p) => p,
+        None => super::sketch::plane_ref(s, &json!({"plane": {"origin": def.origin, "x_dir": def.x, "y_dir": def.y}}), "gear.update")?,
+    };
     match s.doc_mut().feature_mut(id).map(|f| &mut f.kind) {
         Some(FeatureKind::Sketch { plane: slot, .. }) => {
             *slot = plane;
@@ -1462,8 +1467,9 @@ fn move_sketch(s: &mut Session, id: u64, def: &SketchDef) -> Result<()> {
 /// the old ones' ids in order, as far as there are as many: the faces a feature makes from the
 /// sketch are named after those ids, so what was built on them still finds them.
 fn redraw_sketch(s: &mut Session, id: u64, def: &SketchDef) -> Result<()> {
-    // Teeth from formulas (now or before): the sketch is drawn again from nothing.
-    if def.eq.is_some() || equations::holds_formulas(s, id) {
+    // Teeth from formulas, or points placed by expressions (now or before): the sketch is drawn
+    // again from nothing.
+    if def.eq.is_some() || def.poly.is_some() || equations::holds_formulas(s, id) {
         return equations::redraw(s, id, def);
     }
     let tol = 1e-7;
@@ -1489,8 +1495,9 @@ fn redraw_sketch(s: &mut Session, id: u64, def: &SketchDef) -> Result<()> {
 /// Regenerates the set where it stands: every sketch and feature keeps its id.
 fn in_place(s: &mut Session, rec: &Record, plan: &Plan, names: &[String], mode: &equations::Mode) -> Result<Vec<BodyRecord>> {
     let gone = || EngineError::Other("a step of the set is gone".into());
+    equations::ensure_placing(s, mode)?;
     let mut bodies = Vec::new();
-    for ((old, body), name) in rec.bodies.iter().zip(&built_bodies(plan)).zip(names) {
+    for (index, ((old, body), name)) in rec.bodies.iter().zip(&built_bodies(plan)).zip(names).enumerate() {
         let mut steps = Vec::new();
         for (i, (was, step)) in old.steps.iter().zip(&body.steps).enumerate() {
             let feature = was.feature.ok_or_else(gone)?;
@@ -1502,7 +1509,8 @@ fn in_place(s: &mut Session, rec: &Record, plan: &Plan, names: &[String], mode: 
             let mut done = None;
             let mut last = None;
             for nudge in nudges {
-                let def = step_def(body, i, step, *nudge, mode);
+                let mut def = step_def(body, i, step, *nudge, mode);
+                follow_def(&mut def, mode, plan, index, body, i, step, *nudge);
                 let mut changed = false;
                 for ((sk, id), held) in def.sketches.iter().zip(&ids).zip(&mut held) {
                     let (plane, geometry) = (sk.plane_key(), sk.geometry_key());
@@ -1615,6 +1623,8 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
         s.refresh();
     }
     let mut rec = find(s, cmd, group, body.as_deref())?;
+    // The parameters its teeth were drawn with (parametric), to take away if it isn't now.
+    let old_prefix = parametric_prefix(&rec.request);
     // What was asked last time, with what is given now laid over it.
     let mut request = if reset { serde_json::Map::new() } else { rec.request.as_object().cloned().unwrap_or_default() };
     let given_keys: Vec<String> = given.keys().cloned().collect();
@@ -1663,6 +1673,11 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
         rec.bodies = bodies;
         group = folder;
     }
+    if let Some(old) = &old_prefix
+        && mode.prefix.as_deref() != Some(old.as_str())
+    {
+        equations::prune(s, old);
+    }
     let old_key = record_key(rec.group);
     rec.request = request;
     rec.params = params_of(&asked.spec);
@@ -1702,6 +1717,12 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
             ..GearResult::default()
         },
     )
+}
+
+/// The prefix of the design parameters a set's request draws its teeth with, when parametric.
+fn parametric_prefix(request: &Value) -> Option<String> {
+    let on = request.get("parametric") == Some(&json!(true)) && request.get("tooth_curves") == Some(&json!("equations"));
+    on.then(|| request.get("parameter_prefix").and_then(Value::as_str).map(str::to_string)).flatten()
 }
 
 fn kind_title(k: Kind) -> &'static str {
@@ -1757,13 +1778,7 @@ fn profiles_of(r: &Region) -> Option<Value> {
         .outer
         .iter()
         .filter_map(|o| {
-            let pts = o.polyline(0.01);
-            let n = pts.len().max(1) as f64;
-            let mid = pts.iter().fold(solidcraft_gear::V2::ZERO, |a, q| a + *q) * (1.0 / n);
-            let far = pts.iter().copied().max_by(|a, b| a.dist(mid).total_cmp(&b.dist(mid)))?;
-            let reach = far.dist(mid);
-            let step = (reach * 0.01).min(0.2).max(1e-4);
-            let at = far + (mid - far).norm() * step;
+            let at = near_edge(o, true)?;
             Some(json!({"point": [at.x, at.y]}))
         })
         .collect();
@@ -1773,19 +1788,25 @@ fn profiles_of(r: &Region) -> Option<Value> {
 /// A new sketch on the plane through `origin` with axes `x`, `y` (world), holding the loops;
 /// returns its id.
 fn new_sketch(s: &mut Session, def: &SketchDef) -> Result<u64> {
-    if def.eq.is_some() {
-        return equations::new_sketch(s, def);
+    let id = if def.eq.is_some() || def.poly.is_some() {
+        equations::new_sketch(s, def)?
+    } else {
+        let r = s.execute("sketch.create", &json!({"plane": {"origin": def.origin, "x_dir": def.x, "y_dir": def.y}, "name": def.name, "project_edges": false}))?;
+        let id = r.get("sketch").and_then(Value::as_u64).ok_or_else(|| EngineError::Other("no sketch".into()))?;
+        let tol = 1e-7;
+        edit_solved(s, id, false, Analysis::Freedom, |sk, _| {
+            for g in &def.loops {
+                add_geometry(sk, g, &|q| q, 1.0, tol)?;
+            }
+            Ok(((), Left::Unsolved))
+        })?;
+        s.execute("sketch.finish", &json!({}))?;
+        id
+    };
+    // A member placed by formulas: the plane's origin follows them (it is where it was made).
+    if def.origin_expr.is_some() {
+        move_sketch(s, id, def)?;
     }
-    let r = s.execute("sketch.create", &json!({"plane": {"origin": def.origin, "x_dir": def.x, "y_dir": def.y}, "name": def.name, "project_edges": false}))?;
-    let id = r.get("sketch").and_then(Value::as_u64).ok_or_else(|| EngineError::Other("no sketch".into()))?;
-    let tol = 1e-7;
-    edit_solved(s, id, false, Analysis::Freedom, |sk, _| {
-        for g in &def.loops {
-            add_geometry(sk, g, &|q| q, 1.0, tol)?;
-        }
-        Ok(((), Left::Unsolved))
-    })?;
-    s.execute("sketch.finish", &json!({}))?;
     Ok(id)
 }
 
@@ -1830,19 +1851,80 @@ struct SketchDef {
     loops: Vec<Vec<Geom2>>,
     /// Teeth drawn from their formulas instead (`tooth_curves: equations`).
     eq: Option<equations::EqSketch>,
+    /// The plane's origin as expressions of the design parameters (world, mm), for a member
+    /// placed by formulas ([`equations::Mode::moves`]); its value is `origin`.
+    origin_expr: Option<[String; 3]>,
+    /// The (one) loop as a polygon of points placed by expressions or numbers instead of
+    /// `loops` ([`equations::Mode::follow_poly`]: a parametric clearance body's profile).
+    poly: Option<Vec<[Value; 2]>>,
 }
 
 impl SketchDef {
     /// Tells this plane from another.
     fn plane_key(&self) -> String {
-        digest(&format!("{:?}{:?}{:?}", self.origin, self.x, self.y))
+        match &self.origin_expr {
+            None => digest(&format!("{:?}{:?}{:?}", self.origin, self.x, self.y)),
+            Some(e) => digest(&format!("{:?}{:?}{:?}{e:?}", self.origin, self.x, self.y)),
+        }
     }
     /// Tells this outline from another.
     fn geometry_key(&self) -> String {
-        match &self.eq {
-            None => digest(&format!("{:?}", self.loops)),
-            Some(eq) => digest(&format!("{:?}{:?}", self.loops, eq)),
+        match (&self.eq, &self.poly) {
+            (None, None) => digest(&format!("{:?}", self.loops)),
+            (Some(eq), None) => digest(&format!("{:?}{:?}", self.loops, eq)),
+            (eq, Some(poly)) => digest(&format!("{:?}{:?}{poly:?}", self.loops, eq)),
         }
+    }
+    /// The plane through `origin_expr`, when the origin follows parameters.
+    fn placed_plane(&self) -> Option<PlaneRef> {
+        let e = self.origin_expr.as_ref()?;
+        let v = |a: [f64; 3]| Vec3::new(a[0], a[1], a[2]);
+        Some(PlaneRef::Placed { origin: [Expr::new(e[0].clone()), Expr::new(e[1].clone()), Expr::new(e[2].clone())], x_dir: v(self.x), y_dir: v(self.y) })
+    }
+}
+
+/// What follows the design parameters in step `i` of built body `index` of `plan` (`body`,
+/// the step `step`, a revolved blank moved `nudge`): a member placed by formulas moves all its
+/// sketches with it; a step of the clearance body on such a member's axis moves with it, and a
+/// revolved clearance profile's vertices follow their tip envelopes and faces.
+#[allow(clippy::too_many_arguments)]
+fn follow_def(def: &mut StepDef, mode: &equations::Mode, plan: &Plan, index: usize, body: &Body, i: usize, step: &Step, nudge: f64) {
+    if mode.prefix.is_none() {
+        return;
+    }
+    let moves = if index < plan.bodies.len() {
+        mode.moves(index, &plan.bodies[index])
+    } else {
+        let frame = match step {
+            Step::Placed { frame, .. } => body.frame.compose(frame),
+            _ => body.frame,
+        };
+        let same_axis = |b: &Frame| {
+            let d = [0, 1, 2].map(|c| b.origin[c] - frame.origin[c]);
+            let par = (0..3).map(|c| (b.z[c] - frame.z[c]).abs()).sum::<f64>() < 1e-9;
+            par && d.iter().map(|v| v.abs()).sum::<f64>() < 1e-6
+        };
+        let on = mode.placing.centres.iter().map(|(k, ..)| *k).find(|k| plan.bodies.get(*k).is_some_and(|b| same_axis(&b.frame)));
+        let poly = match (mode.follow.get(i), step) {
+            (Some(f), Step::Placed { step: inner, .. }) => match inner.as_ref() {
+                Step::Revolve { profile, .. } => mode.follow_poly(profile, f, nudge),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let (Some(poly), Some(sk)) = (poly, def.sketches.first_mut()) {
+            sk.poly = Some(poly);
+        }
+        on.and_then(|k| mode.moves(k, &plan.bodies[k]))
+    };
+    let Some(moves) = moves else { return };
+    let lit = |v: f64| solidcraft_gear::equations::literal(v, solidcraft_gear::equations::Quantity::Length);
+    for sk in &mut def.sketches {
+        let o = sk.origin;
+        sk.origin_expr = Some([0, 1, 2].map(|c| match &moves[c] {
+            Some(d) => format!("{} + {d}", lit(o[c])),
+            None => lit(o[c]),
+        }));
     }
 }
 
@@ -1926,7 +2008,73 @@ fn def_params(s: &Session, def: &StepDef, body: &Body, step: &Step, sketches: &[
     if let Some((origin, normal)) = def.mirror {
         return Ok(json!({"bodies": [target], "plane": {"origin": origin, "normal": normal}, "combine": true}));
     }
-    Ok(def.with_exprs(step_params(s, body, step, sketches, target, body_name)?))
+    let mut params = def.with_exprs(step_params(s, body, step, sketches, target, body_name)?);
+    if let (Some(eq), Some(region)) = (def.sketches.first().and_then(|d| d.eq.as_ref()).filter(|e| e.path.is_none()), prism_region(step))
+        && let Some(picks) = formula_picks(region, eq)
+    {
+        params["profiles"] = picks;
+    }
+    Ok(params)
+}
+
+/// A prism step's region.
+fn prism_region(step: &Step) -> Option<&Region> {
+    match step {
+        Step::Prism { region, .. } => Some(region),
+        Step::Placed { step, .. } => prism_region(step),
+        _ => None,
+    }
+}
+
+/// The profiles of a region whose teeth are formulas, each by a point that stays inside it
+/// whatever the parameters do to the teeth: a toothed gear's by a point just outside its bore
+/// (the plain hole nearest its middle), or its middle; a ring's by a point just inside its rim
+/// (as [`profiles_of`]). A tooth count edited into undercut makes the fillet and the flank of
+/// each tooth cross in small loops, profiles of their own that are not to be extruded. A rack
+/// (one profile, straight flanks) takes them all.
+fn formula_picks(r: &Region, eq: &equations::EqSketch) -> Option<Value> {
+    if eq.cells.iter().any(|(_, c)| matches!(c.repeat, solidcraft_gear::equations::Repeat::Linear { .. })) {
+        return None;
+    }
+    let n = r.outer.len();
+    let toothed = |i: usize| eq.cells.iter().any(|(k, _)| *k == i);
+    let middle = |o: &Outline| {
+        let pts = o.polyline(0.01);
+        let k = pts.len().max(1) as f64;
+        pts.iter().fold(solidcraft_gear::V2::ZERO, |a, q| a + *q) * (1.0 / k)
+    };
+    let picks: Vec<Value> = r
+        .outer
+        .iter()
+        .enumerate()
+        .filter_map(|(i, o)| {
+            let at = if toothed(i) {
+                let mid = middle(o);
+                let bore = r.holes.iter().enumerate().filter(|(j, _)| !toothed(n + j)).map(|(_, h)| h).min_by(|a, b| middle(a).dist(mid).total_cmp(&middle(b).dist(mid)));
+                match bore {
+                    Some(h) => near_edge(h, false)?,
+                    None => mid,
+                }
+            } else {
+                near_edge(o, true)?
+            };
+            Some(json!({"point": [at.x, at.y]}))
+        })
+        .collect();
+    (!picks.is_empty()).then_some(Value::Array(picks))
+}
+
+/// A point just inside (`inside`) or just outside an outline, by its farthest point from its
+/// middle (a tooth tip, the rim, a bore's edge), stepped in towards the middle or out from it.
+fn near_edge(o: &Outline, inside: bool) -> Option<solidcraft_gear::V2> {
+    let pts = o.polyline(0.01);
+    let n = pts.len().max(1) as f64;
+    let mid = pts.iter().fold(solidcraft_gear::V2::ZERO, |a, q| a + *q) * (1.0 / n);
+    let far = pts.iter().copied().max_by(|a, b| a.dist(mid).total_cmp(&b.dist(mid)))?;
+    let reach = far.dist(mid);
+    let step = (reach * 0.01).min(0.2).max(1e-4);
+    let toward = if inside { mid - far } else { far - mid };
+    Some(far + toward.norm() * step)
 }
 
 /// How far along its axis a trimming blank (a bevel's back and front cones) is tried: the
@@ -1940,7 +2088,7 @@ fn step_def(body: &Body, i: usize, step: &Step, nudge: f64, mode: &equations::Mo
     let f: &Frame = &body.frame;
     let (x, y, z) = (f.x, f.y(), f.z);
     let label = format!("{} {}", body.name, i + 1);
-    let sketch = |name: String, origin: [f64; 3], x: [f64; 3], y: [f64; 3], loops: Vec<Vec<Geom2>>| SketchDef { name: format!("{label} {name}"), origin, x, y, loops, eq: None };
+    let sketch = |name: String, origin: [f64; 3], x: [f64; 3], y: [f64; 3], loops: Vec<Vec<Geom2>>| SketchDef { name: format!("{label} {name}"), origin, x, y, loops, eq: None, origin_expr: None, poly: None };
     // A sweep's path: a line up the axis, on the plane through it and x.
     let path = |z0: f64, height: f64| sketch("path".into(), f.world([0.0, 0.0, z0]), z, x, vec![vec![Geom2::Line(Vec2::new(0.0, 0.0), Vec2::new(height, 0.0))]]);
     let outline = |o: &Outline| {
@@ -1963,10 +2111,11 @@ fn step_def(body: &Body, i: usize, step: &Step, nudge: f64, mode: &equations::Mo
         }
         Step::Prism { region, z0, height, twist, op } => {
             let mut profile = sketch("profile".into(), f.world([0.0, 0.0, *z0]), x, y, region_loops(region));
-            let picks = !region.holes.is_empty();
             // Teeth from their formulas: the profile's toothed loops, and with parameters the
-            // extrusion (or the sweep's path and twist) from them too.
+            // extrusion (or the sweep's path and twist) from them too. Their profile is picked
+            // by a point ([`formula_picks`]).
             profile.eq = mode.sketch_for(region);
+            let picks = !region.holes.is_empty() || profile.eq.is_some();
             let (distance, turn) = profile.eq.as_ref().map(|eq| mode.prism_exprs(eq, *height, *twist)).unwrap_or_default();
             let mut def = if twist.abs() < 1e-12 {
                 StepDef::new(vec![profile], "solid.extrude", format!("prism ({})", op_name(*op)), picks)
@@ -2092,11 +2241,14 @@ fn build_set(s: &mut Session, plan: &Plan, names: &[String], warnings: &mut Vec<
     let checked = s.validation();
     s.set_validation(solidcraft_kernel::Validation::Off);
     let mut made = Vec::new();
-    let mut built = Ok(());
+    let mut built = equations::ensure_placing(s, mode);
     let gears = plan.bodies.len();
     for (i, body) in built_bodies(plan).iter().enumerate() {
+        if built.is_err() {
+            break;
+        }
         let named = Body { name: names.get(i).cloned().unwrap_or_else(|| body.name.clone()), ..body.clone() };
-        match build_body(s, &named, warnings, mode) {
+        match build_body(s, &named, warnings, mode, plan, i) {
             Ok(b) => made.push(b),
             // The clearance body is worth having, but not at the price of the gears.
             Err(e) if i >= gears => warnings.push(format!("{}: the clearance body could not be made ({e}); the gears are made without it", named.name)),
@@ -2118,7 +2270,7 @@ fn build_set(s: &mut Session, plan: &Plan, names: &[String], warnings: &mut Vec<
 }
 
 /// Builds one body; returns what it was made of, under the name the design gave it.
-fn build_body(s: &mut Session, body: &Body, warnings: &mut Vec<String>, mode: &equations::Mode) -> Result<BodyRecord> {
+fn build_body(s: &mut Session, body: &Body, warnings: &mut Vec<String>, mode: &equations::Mode, plan: &Plan, index: usize) -> Result<BodyRecord> {
     let mut name = body.name.clone();
     let mut steps = Vec::new();
     for (i, step) in body.steps.iter().enumerate() {
@@ -2150,7 +2302,8 @@ fn build_body(s: &mut Session, body: &Body, warnings: &mut Vec<String>, mode: &e
         }
         let mut done = None;
         for (k, (step, nudge)) in attempts.iter().enumerate() {
-            let def = step_def(body, i, step, *nudge, mode);
+            let mut def = step_def(body, i, step, *nudge, mode);
+            follow_def(&mut def, mode, plan, index, body, i, step, *nudge);
             let mut ids = Vec::new();
             for sketch in &def.sketches {
                 ids.push(new_sketch(s, sketch)?);

@@ -962,6 +962,8 @@ pub struct GearSketch {
     pub points: Vec<(String, solidcraft_gear::V2)>,
     pub circles: Vec<(String, sketch_rules::Circle)>,
     pub lines: Vec<(String, sketch_rules::Line)>,
+    /// The last point is the sketch's own origin (not one the user drew).
+    pub has_origin: bool,
 }
 
 impl GearSketch {
@@ -971,6 +973,16 @@ impl GearSketch {
             circles: self.circles.iter().map(|(_, c)| *c).collect(),
             lines: self.lines.iter().map(|(_, l)| *l).collect(),
         }
+    }
+    /// What the user drew: [`Self::drawn`] without the sketch's own origin point (last), for
+    /// recognising the set and picking its slots (the origin is not a dot the user placed; a
+    /// bevel's apex away from it would otherwise be missed). Indices match [`Self::drawn`]'s.
+    pub fn user_drawn(&self) -> sketch_rules::Drawn {
+        let mut d = self.drawn();
+        if self.has_origin {
+            d.points.pop();
+        }
+        d
     }
     /// Where the entity `id` is among the slots' role (points, circles or lines).
     pub fn index(&self, role: sketch_rules::Role, id: &str) -> Option<usize> {
@@ -1032,8 +1044,26 @@ pub fn sketch_entities(s: &Session, sketch: u64) -> std::result::Result<GearSket
             _ => {}
         }
     }
-    let points = sk.points.iter().enumerate().filter(|(i, _)| !used[*i]).map(|(_, p)| (p.id.clone(), solidcraft_gear::V2::new(p.pos.x, p.pos.y))).collect();
-    Ok(GearSketch { sketch, frame, points, circles, lines })
+    // The sketch's own origin point (every sketch has one) goes last: a dot the user drew comes
+    // first, and the origin is only ever picked by name (`picks`), never by auto picking.
+    let mut points: Vec<(String, solidcraft_gear::V2)> = Vec::new();
+    let mut origin = None;
+    for (i, p) in sk.points.iter().enumerate().filter(|(i, _)| !used[*i]) {
+        let entry = (p.id.clone(), solidcraft_gear::V2::new(p.pos.x, p.pos.y));
+        if i == 0 && p.id == "origin" { origin = Some(entry) } else { points.push(entry) }
+    }
+    let has_origin = origin.is_some();
+    points.extend(origin);
+    Ok(GearSketch { sketch, frame, points, circles, lines, has_origin })
+}
+
+/// The bevel planetary mode asked for, as the gear crate names it.
+fn base_mode(p: &GearParams) -> Option<solidcraft_gear::plan::BevelPlanetMode> {
+    p.bevel_planet_mode.map(|m| match m {
+        GearBevelPlanetMode::Single => solidcraft_gear::plan::BevelPlanetMode::Single,
+        GearBevelPlanetMode::Differential => solidcraft_gear::plan::BevelPlanetMode::Differential,
+        GearBevelPlanetMode::Ring => solidcraft_gear::plan::BevelPlanetMode::Ring,
+    })
 }
 
 /// A set drawn in one sketch (`sketch`, with `type` the mode and `picks` the slots' entity
@@ -1046,9 +1076,10 @@ fn from_sketch(s: &Session, cmd: &str, p: &GearParams) -> Result<Solved> {
     let id = super::features::sketch_id(s, p.sketch.as_ref(), cmd, "sketch")?;
     let sk = sketch_entities(s, id).map_err(|e| bad(cmd, e))?;
     let drawn = sk.drawn();
+    let user = sk.user_drawn();
     let kind = match p.kind {
         Some(t) => KINDS.iter().find(|(x, _)| *x == t).map(|(_, k)| *k).unwrap_or(Kind::Spur),
-        None => sketch_rules::recognize(&drawn).ok_or_else(|| {
+        None => sketch_rules::recognize(&user).ok_or_else(|| {
             bad(cmd, "the sketch's circles and lines don't make a set: draw a pitch circle (and a second touching it, or a shaft line), two shaft lines meeting at a dot for bevels, or give `type`")
         })?,
     };
@@ -1057,7 +1088,7 @@ fn from_sketch(s: &Session, cmd: &str, p: &GearParams) -> Result<Solved> {
     }
     let slots = sketch_rules::slots(kind);
     let picks = match &p.picks {
-        None => sketch_rules::auto_picks(kind, &drawn),
+        None => sketch_rules::auto_picks(kind, &user),
         Some(ids) => {
             if ids.len() > slots.len() {
                 return Err(bad(cmd, format!("`picks`: a {} takes {} ({}), not {}", kind.label(), slots.len(), slots.iter().map(|s| s.label).collect::<Vec<_>>().join(", "), ids.len())));
@@ -1082,7 +1113,21 @@ fn from_sketch(s: &Session, cmd: &str, p: &GearParams) -> Result<Solved> {
     let base = spec_of(&GearParams { kind: Some(gear_type(kind)), ..p.clone() }).map_err(|e| bad(cmd, e))?;
     // Sized as the window's Simple mode sizes it: what the drawing gives, and what the
     // parameters say besides (the shaft angle a single sketch can't show, a ratio).
-    let settings = solidcraft_gear::simple::Simple { shaft_angle: p.shaft_angle, ratio: p.ratio, ..Default::default() };
+    // Settings the drawing can't show are taken as given: face width, module, helix and
+    // spiral, planets and starts (sizes the drawing shows win over teeth asked).
+    let settings = solidcraft_gear::simple::Simple {
+        shaft_angle: p.shaft_angle,
+        ratio: p.ratio,
+        face_width: p.face_width,
+        face_width2: p.face_width2,
+        module: p.module,
+        helix: p.helix_angle,
+        spiral_angle: p.spiral_angle,
+        planets: p.planets,
+        starts: p.starts,
+        bevel_planet_mode: base_mode(p),
+        ..Default::default()
+    };
     let sized = solidcraft_gear::simple::solve(&sketch_rules::simple_of(&m, &settings), &base);
     if let Some(e) = sized.error {
         return Err(bad(cmd, e));
@@ -1094,6 +1139,11 @@ fn from_sketch(s: &Session, cmd: &str, p: &GearParams) -> Result<Solved> {
     }
     let (a1, a2) = sketch_rules::axes_for(&m, &spec, &sk.frame, turn);
     let mut solved = axes::solve(&a1, a2.as_ref(), Some(kind), &spec, &Drive::default()).map_err(|e| bad(cmd, e))?;
+    // A rack lies on its drawn pitch line, not across the pinion's centre.
+    if let Some(f) = sketch_rules::rack_frame(&m, &sk.frame, turn) {
+        solved.frames = [f; 2];
+        solved.spec.placement = Some(f);
+    }
     solved.notes.extend(notes);
     Ok(solved)
 }
@@ -1426,7 +1476,8 @@ fn inspect(s: &mut Session, p: &Value) -> Result<Value> {
 fn must_rebuild(s: &Session, rec: &Record, plan: &Plan, mode: &equations::Mode) -> Option<String> {
     let all = built_bodies(plan);
     if rec.bodies.len() != all.len() {
-        return Some(format!("the set had {} bodies and now has {}", rec.bodies.len(), all.len()));
+        let n = |k: usize| if k == 1 { "1 body".to_string() } else { format!("{k} bodies") };
+        return Some(format!("the set had {} and now has {}", n(rec.bodies.len()), all.len()));
     }
     for (old, new) in rec.bodies.iter().zip(&all) {
         if old.steps.len() != new.steps.len() {
@@ -1488,6 +1539,17 @@ fn redraw_sketch(s: &mut Session, id: u64, def: &SketchDef) -> Result<()> {
 
 /// Regenerates the set where it stands: every sketch and feature keeps its id.
 fn in_place(s: &mut Session, rec: &Record, plan: &Plan, names: &[String], mode: &equations::Mode) -> Result<Vec<BodyRecord>> {
+    // As a new set is built: without the kernel's full check of every face, which made an
+    // update in place three times slower than building the set again (a 2-start worm 55 s
+    // against 17 s). It runs when the features are next computed.
+    let checked = s.validation();
+    s.set_validation(solidcraft_kernel::Validation::Off);
+    let r = in_place_steps(s, rec, plan, names, mode);
+    s.set_validation(checked);
+    r
+}
+
+fn in_place_steps(s: &mut Session, rec: &Record, plan: &Plan, names: &[String], mode: &equations::Mode) -> Result<Vec<BodyRecord>> {
     let gone = || EngineError::Other("a step of the set is gone".into());
     let mut bodies = Vec::new();
     for ((old, body), name) in rec.bodies.iter().zip(&built_bodies(plan)).zip(names) {
@@ -2094,8 +2156,24 @@ fn build_set(s: &mut Session, plan: &Plan, names: &[String], warnings: &mut Vec<
     let mut made = Vec::new();
     let mut built = Ok(());
     let gears = plan.bodies.len();
+    // New bodies take names no body has yet (two z20 gears, or a second set like the first,
+    // would otherwise fall back to "Body1"): "Gear z20 (2)".
+    let mut taken: std::collections::BTreeSet<String> = s.model.state().bodies.iter().map(|b| b.name.clone()).collect();
     for (i, body) in built_bodies(plan).iter().enumerate() {
-        let named = Body { name: names.get(i).cloned().unwrap_or_else(|| body.name.clone()), ..body.clone() };
+        let name = match names.get(i) {
+            Some(n) => n.clone(),
+            None => {
+                let mut n = body.name.clone();
+                let mut k = 2;
+                while taken.contains(&n) {
+                    n = format!("{} ({k})", body.name);
+                    k += 1;
+                }
+                n
+            }
+        };
+        taken.insert(name.clone());
+        let named = Body { name, ..body.clone() };
         match build_body(s, &named, warnings, mode) {
             Ok(b) => made.push(b),
             // The clearance body is worth having, but not at the price of the gears.

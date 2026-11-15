@@ -347,3 +347,34 @@ fn dump_ring_steps() {
     }
     std::fs::write(path, format!("[{}]", bodies.join(","))).unwrap();
 }
+
+/// Simple mode's path for a bevel planetary set (the side-view picture, auto picks, sizing)
+/// gives a spec equal to itself: the window re-plans whenever the spec differs from the one it
+/// planned, so a NaN anywhere in it re-plans (and re-meshes, re-checks) every frame.
+#[test]
+fn simple_mode_bevel_planetary_spec_is_stable() {
+    use crate::geom::V2;
+    use crate::sketch_rules::{self, Drawn, Line};
+    for (from, mode) in [(Kind::FaceGear, None), (Kind::Spur, None), (Kind::Bevel, Some(BevelPlanetMode::Ring)), (Kind::Bevel, Some(BevelPlanetMode::Single))] {
+        let base = Spec::defaults_for(Kind::BevelPlanetary);
+        // A ring needs a cone angle that can take one: drawn at 45°.
+        let s = if mode == Some(BevelPlanetMode::Ring) { Spec { shaft_angle: 45.0, ..base.clone() } } else { base.clone() };
+        let r = |z: u32| s.module * f64::from(z) / 2.0;
+        let len = 1.6 * r(s.teeth.max(10));
+        let a = s.shaft_angle.to_radians();
+        let l = |ax: f64, ay: f64, bx: f64, by: f64| Line { a: V2::new(ax, ay), b: V2::new(bx, by) };
+        let d = Drawn { points: vec![V2::ZERO], circles: vec![], lines: vec![l(0.0, 0.0, 0.0, -len), l(0.0, 0.0, len * a.sin(), -len * a.cos())] };
+        let picks = sketch_rules::auto_picks(Kind::BevelPlanetary, &d);
+        let m = sketch_rules::measure(Kind::BevelPlanetary, &d, &picks).unwrap();
+        let settings = crate::simple::Simple { bevel_planet_mode: mode, ..Default::default() };
+        let sol = crate::simple::solve(&sketch_rules::simple_of(&m, &settings), &Spec::defaults_for(from).clone());
+        let sol = if sol.error.is_some() { crate::simple::solve(&sketch_rules::simple_of(&m, &settings), &base) } else { sol };
+        assert!(sol.error.is_none(), "{from:?} {mode:?}: {:?}", sol.error);
+        assert_eq!(sol.spec, sol.spec.clone(), "{from:?} {mode:?}: the spec has a NaN: {:?}", sol.spec);
+        // Solving again from what it gave is a fixed point (no drift from frame to frame).
+        let again = crate::simple::solve(&sketch_rules::simple_of(&m, &settings), &sol.spec);
+        assert_eq!(again.spec, sol.spec, "{from:?} {mode:?}: solving again moves the spec");
+        let p = plan(&sol.spec).unwrap();
+        assert!(p.meshes3d.len() <= 16, "{} mesh pairs", p.meshes3d.len());
+    }
+}

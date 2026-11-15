@@ -445,7 +445,9 @@ impl Spec {
             Kind::Planetary => {
                 s.teeth = 18;
                 s.teeth2 = 18;
-                s.teeth3 = 54;
+                // Ring teeth follow sun + 2 × planet unless asked (54 here): a fixed 54 left a
+                // ring that no longer meshed once the sun or planets changed.
+                s.teeth3 = 0;
                 s.planets = 3;
             }
             Kind::Bevel => {
@@ -1660,7 +1662,7 @@ fn crossed(s: &Spec, p: &mut Plan) {
         ));
         return;
     }
-    if b2.abs() >= 60f64.to_radians() || b1.abs() >= 60f64.to_radians() {
+    if b2.abs() > 60f64.to_radians() + 1e-9 || b1.abs() > 60f64.to_radians() + 1e-9 {
         p.warn("a helix angle over 60° makes impractical gears; balance gear 1's helix against the shaft angle");
     }
     let g1 = s.involute(s.teeth, s.shift, b1.to_degrees());

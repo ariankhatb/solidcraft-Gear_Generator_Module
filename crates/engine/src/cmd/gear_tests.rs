@@ -746,3 +746,92 @@ fn a_worm_sets_loft_sketches_are_hidden() {
         assert!(s.visibility.hidden_sketches.contains(&id), "sketch {id} shows: {:?}", s.visibility.hidden_sketches);
     }
 }
+
+// ---- Bugs found by testing build 3 (sketch-driven sets).
+
+#[test]
+fn a_bevel_side_view_away_from_the_sketch_origin_is_recognised() {
+    // Two shaft lines meeting at (30, 20), no dot: the sketch's own origin is not the apex.
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[line([30.0, 20.0], [30.0, -30.0], "s1"), line([30.0, 20.0], [80.0, 20.0], "s2")]);
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk}));
+    assert!(r["facts"].as_array().is_some_and(|f| !f.is_empty()), "{r}");
+    // With a dot at the apex too.
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[("sketch.point", json!({"point": [30, 20], "id": "a"})), line([30.0, 20.0], [30.0, -30.0], "s1"), line([30.0, 20.0], [80.0, 20.0], "s2")]);
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk}));
+    assert!(r["facts"].as_array().is_some_and(|f| !f.is_empty()), "{r}");
+}
+
+#[test]
+fn a_drawn_dot_is_the_origin_a_sketch_set_turns_about() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(10.0, 5.0, 20.0, "g1"), circle(10.0, 55.0, 30.0, "g2"), ("sketch.point", json!({"point": [100, 0], "id": "o"}))]);
+    let auto = run(&mut s, "gear.create", json!({"sketch": sk, "sketch_turn": [0, 0, 90]}));
+    let c = centre(&mut s, &auto["bodies"][0]);
+    // Gear 1's centre (10, 5) turned 90° about the dot (100, 0): (95, -90).
+    assert!((c[0] - 95.0).abs() < 0.5 && (c[1] + 90.0).abs() < 0.5, "{c:?}");
+}
+
+#[test]
+fn a_sketch_set_keeps_the_face_width_asked() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 45.0, "g1"), circle(112.5, 0.0, 67.5, "g2")]);
+    let r = run(&mut s, "gear.create", json!({"sketch": sk, "face_width": 8, "module": 3}));
+    // 8 mm thick from the sketch's plane: the centre of mass 4 mm up (not 25 for 50 mm).
+    let c = centre(&mut s, &r["bodies"][0]);
+    assert!((c[2].abs() - 4.0).abs() < 0.5, "{c:?}");
+}
+
+#[test]
+fn a_sketch_rack_lies_on_its_pitch_line() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(20.0, 10.0, 30.0, "p"), line([-20.0, 40.0], [60.0, 40.0], "l")]);
+    let r = run(&mut s, "gear.create", json!({"sketch": sk, "type": "rack", "face_width": 8}));
+    let c = centre(&mut s, &r["bodies"][0]);
+    // Along the line (x from -20), below it (teeth up to the pitch line at y = 40, the body
+    // under it, towards the pinion above? the pinion's centre is below at y = 10: teeth face it).
+    assert!(c[0] > -20.0 && c[0] < 80.0, "{c:?}");
+    assert!((c[1] - 40.0).abs() < 15.0, "rack centre {c:?} is not by the pitch line y = 40");
+}
+
+#[test]
+fn a_sketch_crossed_helical_takes_its_drawn_sizes() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 20.0, "g"), line([-60.0, 45.0], [60.0, 45.0], "l")]);
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "crossed_helical"}));
+    let (d1, d2) = (fact(&r, "gear 1 pitch diameter"), fact(&r, "gear 2 pitch diameter"));
+    // Gear 1 near the drawn Ø40, gear 2 near the Ø50 the 45 mm offset leaves.
+    assert!((d2 / d1 - 50.0 / 40.0).abs() < 0.2, "{d1} / {d2}");
+}
+
+#[test]
+fn a_bevel_planetary_at_60_degrees_builds_without_a_mode() {
+    let mut s = Session::default();
+    let a = 60f64.to_radians();
+    let sk = sketch_with(&mut s, &[("sketch.point", json!({"point": [0, 0], "id": "apex"})), line([0.0, 0.0], [0.0, -50.0], "s1"), line([0.0, 0.0], [50.0 * a.sin(), -50.0 * a.cos()], "s2")]);
+    let r = run(&mut s, "gear.create", json!({"sketch": sk, "type": "bevel_planetary"}));
+    assert!(r["bodies"].as_array().is_some_and(|b| b.len() >= 3), "{r}");
+}
+
+// ---- Bugs found by testing build 3 (gear.create / gear.update options).
+
+#[test]
+fn a_planetary_ring_follows_its_sun_and_planets() {
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "planetary", "module": 0.5, "teeth": 24, "teeth2": 12}));
+    let names: Vec<&str> = r["bodies"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(names.iter().any(|n| n.contains("z48")), "{names:?}");
+    assert!(!r["warnings"].as_array().is_some_and(|w| w.iter().any(|x| x.as_str().is_some_and(|x| x.contains("ring teeth = sun")))), "{r}");
+}
+
+#[test]
+fn equal_gears_and_a_second_set_get_distinct_names() {
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "pair", "teeth": 20, "teeth2": 20}));
+    let a: Vec<String> = r["bodies"].as_array().unwrap().iter().filter_map(|v| v.as_str().map(String::from)).collect();
+    assert_eq!(a, ["Gear z20", "Gear z20 (2)"]);
+    let r = run(&mut s, "gear.create", json!({"origin": [60, 0, 0]}));
+    assert_eq!(r["bodies"][0].as_str(), Some("Gear z20 (3)"));
+    assert!(!s.model.state().bodies.iter().any(|b| b.name.starts_with("Body")));
+}

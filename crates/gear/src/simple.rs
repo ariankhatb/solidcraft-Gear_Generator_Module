@@ -1497,7 +1497,7 @@ fn bevel(c: &mut Ctx, kind: Kind) -> Result<(), String> {
 /// are chosen to keep it near the one asked, and to space the planets evenly and apart.
 fn bevel_planetary(c: &mut Ctx) -> Result<(), String> {
     let s = c.s;
-    let mode = s.bevel_planet_mode.unwrap_or(c.spec.bevel_planet_mode);
+    let mut mode = s.bevel_planet_mode.unwrap_or(c.spec.bevel_planet_mode);
     c.spec.bevel_planet_mode = mode;
     let n = s.planets.unwrap_or(c.spec.planets).clamp(1, 24);
     c.spec.planets = n;
@@ -1513,6 +1513,16 @@ fn bevel_planetary(c: &mut Ctx) -> Result<(), String> {
     }
     if !(5.0..=175.0).contains(&sigma) {
         return Err(format!("the cone angle (sun shaft to planet shaft) must be 5° to 175°; {} asked", num(sigma)));
+    }
+    // A differential (the default) whose second sun can't stand at this cone angle, with no
+    // mode asked: the sun and planets alone.
+    if mode == BevelPlanetMode::Differential
+        && s.bevel_planet_mode.is_none()
+        && bevel_planet::geometry(&Spec { shaft_angle: sigma, teeth3: 0, ..c.spec.clone() }).is_err()
+    {
+        c.note(format!("a second sun can't be made at the {}° cone angle: built as sun and planets (single); set the mode to choose", num(sigma)));
+        mode = BevelPlanetMode::Single;
+        c.spec.bevel_planet_mode = mode;
     }
     c.spec.shaft_angle = sigma;
     let (d1, d2) = (s.pitch_diameter.filter(|d| *d > 0.0), s.pitch_diameter2.filter(|d| *d > 0.0));

@@ -777,7 +777,8 @@ pub fn simple_of(m: &Measured, settings: &crate::simple::Simple) -> crate::simpl
             (s.pitch_diameter2, s.pitch_diameter, s.offset) = (d(m.d1), None, Some(m.offset));
         }
         Kind::CrossedHelical => {
-            (s.pitch_diameter, s.center_distance, s.ratio) = (d(m.d1), Some(m.offset), None);
+            // Gear 2's size is what the drawn offset leaves beyond gear 1's circle.
+            (s.pitch_diameter, s.pitch_diameter2, s.center_distance, s.ratio) = (d(m.d1), d(m.d2), Some(m.offset), None);
         }
         _ => s.pitch_diameter = d(m.d1),
     }
@@ -806,6 +807,27 @@ pub fn axes_for(m: &Measured, spec: &Spec, frame: &Frame, turn: [f64; 3]) -> (Ax
         Axis::new(frame.world(p), frame.dir(r(a.dir))).unwrap_or(a)
     };
     (place(a1), a2.map(place))
+}
+
+/// Where a rack drawn as a pinion circle and its pitch line goes: its pitch line on the drawn
+/// line, from the line's first end along it, its teeth towards the pinion (in the world, turned
+/// as [`axes_for`] turns the shafts). None for anything else.
+pub fn rack_frame(m: &Measured, frame: &Frame, turn: [f64; 3]) -> Option<Frame> {
+    if m.kind != Kind::Rack {
+        return None;
+    }
+    let (l, c) = (m.line?, m.c1?);
+    let x = l.dir();
+    let foot = l.foot(c.c);
+    let mut y = V2::new(-x.y, x.x);
+    if (c.c - foot).dot(y) < 0.0 {
+        y = y * -1.0;
+    }
+    let z = [0.0, 0.0, x.x * y.y - x.y * y.x];
+    let o = [m.origin.x, m.origin.y, 0.0];
+    let r = |v: [f64; 3]| rotate(v, turn);
+    let origin = frame.world(add3(r(sub3([l.a.x, l.a.y, 0.0], o)), o));
+    Some(Frame { origin, x: frame.dir(r([x.x, x.y, 0.0])), z: frame.dir(r(z)) })
 }
 
 fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {

@@ -363,3 +363,19 @@ rings overlap the housing by design when `ring_as_housing`). Scripts come from t
   engine draws those profiles as expression-placed points. Shaft, bore, seat sizes stay numbers.
 - `gear.update` back to fitted / non-parametric deletes the `<prefix>_*` parameters the set made
   that nothing else uses.
+
+## Assembly package (branch `gear-assembly`, 2026-11-15)
+
+- `Plan::assembly` (`crates/gear/src/plan.rs`, filled in `plan/assembly.rs` after placement): one
+  `AssemblyMember` per body (axis = body frame z, world; flipped for a left-hand worm and a face
+  gear's pinion; a rack's axis is its frame x), `grounded` (cycloidal drive pin ring), `carrier`
+  (none of today's kinds has a carrier body: planetary and bevel planetary hold the carrier).
+  `AssemblyLink::{Gear, RackPinion, Worm, Rigid}` with `joint.gear`'s sign rules, as a tree (each
+  member driven once). Tests: `crates/gear/src/assembly_tests.rs` (ratios vs mesh3d and the 2D
+  preview for every kind and variant; keep-out body for every set).
+- Engine: `assembly: true` on gear.create/gear.update (`cmd/gear_assembly.rs`): from_bodies,
+  grounding, keep-out component "<set> keep-out" (grounded, 25 % opacity), revolute/slider/rigid
+  joints to the world (or carrier), joint.gear/joint.rack_pinion links, moved into the set's
+  folder; the record keeps component and joint ids; update removes them first (warning names
+  hand-made joints to them) and makes them again. NOT COMPILED: tests in `cmd/gear_tests.rs`.
+- Window: "Assembly (components + joints)" checkbox under the body (next to Create), kept in `ui`.

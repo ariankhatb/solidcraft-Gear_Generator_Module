@@ -208,7 +208,7 @@ impl Mode {
             let z = q.y + nudge;
             let x = match &f.r {
                 Some((tpl, at)) => {
-                    if !known(tpl) {
+                    if !known(tpl.as_str()) {
                         return None;
                     }
                     json!(format!("{} + ({} - {})", literal(q.x, Quantity::Length), render(tpl, &name), literal(*at, Quantity::Length)))
@@ -220,7 +220,7 @@ impl Mode {
                     if !self.keys.contains(key) {
                         return None;
                     }
-                    json!(format!("{} + {} * ({} - {})", literal(z, Quantity::Length), number(*k), name(key), literal(*face, Quantity::Length)))
+                    json!(format!("{} + {} * ({} - {})", literal(z, Quantity::Length), number(*k), name(key.as_str()), literal(*face, Quantity::Length)))
                 }
                 None => json!(z),
             };

@@ -2050,7 +2050,7 @@ fn formula_picks(r: &Region, eq: &equations::EqSketch) -> Option<Value> {
         .filter_map(|(i, o)| {
             let at = if toothed(i) {
                 let mid = middle(o);
-                let bore = r.holes.iter().enumerate().filter(|(j, _)| !toothed(n + j)).map(|(_, h)| h).min_by(|a, b| middle(a).dist(mid).total_cmp(&middle(b).dist(mid)));
+                let bore = r.holes.iter().enumerate().filter(|(j, _)| !toothed(n + j)).map(|(_, h)| h).min_by(|a, b| middle(*a).dist(mid).total_cmp(&middle(*b).dist(mid)));
                 match bore {
                     Some(h) => near_edge(h, false)?,
                     None => mid,

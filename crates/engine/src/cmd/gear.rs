@@ -86,12 +86,14 @@ pub static COMMANDS: &[CommandSpec] = &[
              measurements; with a load: forces, stresses, safety factors SF and SH) and warnings (undercut, pointed teeth, low contact ratio, interference, SF < 1.4, SH < 1)",
         ),
     CommandSpec::new("gear.calculate", "Gear Calculator", crate::checked!("gear.calculate", calculate))
+        .icon("gear_generator")
         .noundo()
         .read_only()
         .contract(&GEAR_CONTRACT)
         .output(output_schema_for::<GearResult>)
         .params("the same as gear.create; builds nothing: returns the facts and warnings gear.create would"),
     CommandSpec::new("gear.from_axes", "Gears From Axes", crate::checked!("gear.from_axes", from_axes))
+        .icon("gear_generator")
         .noundo()
         .read_only()
         .contract(&GEAR_CONTRACT)

@@ -131,6 +131,7 @@ fold	false
 folder	false
 frame_member	false
 gear	false
+gear_generator	false
 graph	false
 grid	false
 ground	false

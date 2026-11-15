@@ -4220,6 +4220,7 @@ fn feature_operation(f: &Feature) -> Option<Operation> {
         | FeatureKind::Sweep { operation, .. }
         | FeatureKind::Pipe { operation, .. }
         | FeatureKind::Coil { operation, .. }
+        | FeatureKind::Gears { operation, .. }
         | FeatureKind::BoundaryFill { operation, .. }
         | FeatureKind::Thicken { operation, .. }
         | FeatureKind::SurfaceNetwork { operation, .. } => *operation,
@@ -8164,6 +8165,7 @@ fn feature_op(f: &Feature) -> (Operation, Vec<String>) {
         FeatureKind::Pipe { operation, targets, .. } => (*operation, crate::plain(targets)),
         FeatureKind::Loft { operation, targets, .. } | FeatureKind::Sweep { operation, targets, .. } => (*operation, crate::plain(targets)),
         FeatureKind::Coil { operation, targets, .. } => (*operation, crate::plain(targets)),
+        FeatureKind::Gears { operation, targets, .. } => (*operation, crate::plain(targets)),
         FeatureKind::CellGrid { targets, .. } => (Operation::Cut, crate::plain(targets)),
         FeatureKind::Rib { .. } => (Operation::Join, Vec::new()),
         _ => (Operation::NewBody, Vec::new()),
@@ -9114,6 +9116,8 @@ mod more;
 pub use model_cache::SavedModel;
 #[path = "eval_cell_grid.rs"]
 pub mod cell_grid;
+#[path = "eval_gears.rs"]
+pub mod gears;
 #[path = "eval_frame.rs"]
 pub(crate) mod frame_member;
 #[path = "eval_surface.rs"]
@@ -9616,6 +9620,7 @@ fn eval_feature(
             unchanged(st, warning);
             Ok(())
         }
+        FeatureKind::Gears { .. } => gears::eval(doc, f, st, warning),
         FeatureKind::CellGrid { targets, .. } => {
             let tools = cell_grid::tools(doc, vals, f, st, warning)?;
             // A grid beside the body, or cut the wrong way, changes nothing: say so, as a cut does.
@@ -10815,6 +10820,7 @@ fn drawn_tools_change_bodies(kind: &FeatureKind) -> bool {
         | FeatureKind::Sweep { operation, .. }
         | FeatureKind::Pipe { operation, .. }
         | FeatureKind::Coil { operation, .. } => *operation != Operation::NewBody,
+        FeatureKind::Gears { operation, keep_out_cuts, .. } => *operation != Operation::NewBody || !keep_out_cuts.is_empty(),
         FeatureKind::CellGrid { .. } => true,
         _ => false,
     }

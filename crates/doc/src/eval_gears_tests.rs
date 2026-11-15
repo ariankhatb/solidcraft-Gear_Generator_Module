@@ -1,0 +1,128 @@
+//! The Gears feature: a whole set built in memory as one feature, following its sketch, and its
+//! keep-out cut from a housing in the same step. The planner here stands in for the app's
+//! (`gear.create`'s reading): `params.set` names the set.
+
+use serde_json::{Value, json};
+use solidcore_record::{Vec2, Vec3};
+use solidcraft_gear::plan::{Kind, Plan, Spec};
+use solidcraft_kernel::measure;
+use solidcraft_sketch::Sketch;
+
+use super::{GearsInput, set_planner};
+use crate::{BodyName, Document, FeatureKind, Model, Operation, PlaneRef, SketchId, point_expr};
+
+/// The test planner: a helical pair, a bevel pair, a pair with its keep-out, or a pair whose
+/// gear 1 is the sketch's circle (module 2: its diameter in mm is twice its teeth).
+fn planner(input: &GearsInput<'_>) -> Result<Plan, String> {
+    let mut spec = match input.params.get("set").and_then(Value::as_str) {
+        Some("helical") => Spec { helix: 20.0, ..Spec::defaults_for(Kind::Pair) },
+        Some("bevel") => Spec::defaults_for(Kind::Bevel),
+        Some("keep_out") => Spec { clearance_body: Some(Default::default()), ..Spec::defaults_for(Kind::Pair) },
+        Some("sketch") => {
+            let id = *input.sketches.first().ok_or("no sketch")?;
+            let ss = input.state.sketch(id).ok_or("no sketch")?;
+            let r = ss.sketch.curves.iter().find_map(|c| if let solidcraft_sketch::CurveKind::Circle { r, .. } = c.kind { Some(r) } else { None }).ok_or("no circle")?;
+            Spec { module: 2.0, teeth: (r.round() as u32).max(8), ..Spec::defaults_for(Kind::Pair) }
+        }
+        other => return Err(format!("no test set {other:?}")),
+    };
+    spec.name = String::new();
+    solidcraft_gear::plan(&spec)
+}
+
+fn gears(params: Value, sketches: Vec<u64>, keep_out_cuts: Vec<&str>) -> FeatureKind {
+    FeatureKind::Gears {
+        params,
+        sketches: sketches.into_iter().map(SketchId).collect(),
+        operation: Operation::NewBody,
+        targets: Vec::new(),
+        keep_out_cuts: keep_out_cuts.into_iter().map(|n| BodyName(n.to_string())).collect(),
+    }
+}
+
+fn evaluated(doc: &Document) -> Model {
+    set_planner(planner);
+    let mut m = Model::new();
+    m.evaluate(doc);
+    for r in &m.results {
+        assert!(r.error.is_none(), "{}: {:?}", r.name, r.error);
+    }
+    m
+}
+
+fn one_feature_set(set: &str) {
+    let mut doc = Document::new("gears");
+    let id = doc.add_feature(gears(json!({"set": set}), Vec::new(), Vec::new()), Some("Gears")).unwrap();
+    let m = evaluated(&doc);
+    assert_eq!(doc.features.len(), 1, "one feature, no sketches");
+    let st = m.state();
+    assert_eq!(st.bodies.len(), 2, "{:?}", st.bodies.iter().map(|b| &b.name).collect::<Vec<_>>());
+    assert!(st.bodies.iter().all(|b| b.feature == id));
+    assert!(st.sketches.is_empty());
+    for b in &st.bodies {
+        let v = measure(&b.body).unwrap().volume;
+        assert!(v > 100.0, "{}: {v}", b.name);
+    }
+    let saved = serde_json::to_value(&doc.features[0].kind).unwrap();
+    assert_eq!(saved["type"], "gears");
+    assert_eq!(serde_json::from_value::<FeatureKind>(saved).unwrap(), doc.features[0].kind, "saves and reads back");
+}
+
+#[test]
+fn a_helical_pair_is_one_feature_with_no_sketches() {
+    one_feature_set("helical");
+}
+
+#[test]
+fn a_bevel_pair_is_one_feature_with_no_sketches() {
+    one_feature_set("bevel");
+}
+
+#[test]
+fn an_edited_sketch_recomputes_the_set_in_place_under_the_same_names() {
+    let mut doc = Document::new("follow");
+    let mut sk = Sketch::new();
+    sk.add_circle(Vec2::new(0.0, 0.0), 20.0, None, None).unwrap();
+    let s = doc.add_feature(FeatureKind::Sketch { plane: PlaneRef::Origin { name: "XY".into() }, sketch: sk }, None).unwrap();
+    let id = doc.add_feature(gears(json!({"set": "sketch"}), vec![s], Vec::new()), Some("Gears")).unwrap();
+    doc.feature_mut(id).unwrap().body_names = vec!["Input".into(), "Output".into()];
+    let m = evaluated(&doc);
+    let names = |m: &Model| m.state().bodies.iter().map(|b| b.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&m), vec!["Input", "Output"]);
+    let small = measure(&m.state().bodies[0].body).unwrap().volume;
+    // The circle made bigger: gear 1 has more teeth, under the same name, from the same feature.
+    if let Some(FeatureKind::Sketch { sketch, .. }) = doc.feature_mut(s).map(|f| &mut f.kind) {
+        for curve in &mut sketch.curves {
+            if let solidcraft_sketch::CurveKind::Circle { r, .. } = &mut curve.kind {
+                *r = 30.0;
+            }
+        }
+    }
+    let m2 = evaluated(&doc);
+    assert_eq!(names(&m2), vec!["Input", "Output"]);
+    assert!(m2.state().bodies.iter().all(|b| b.feature == id));
+    let big = measure(&m2.state().bodies[0].body).unwrap().volume;
+    assert!(big > small * 1.5, "{small} -> {big}");
+}
+
+#[test]
+fn the_keep_out_hollows_a_housing_in_the_same_feature() {
+    let mut doc = Document::new("housing");
+    doc.add_feature(
+        FeatureKind::Box { corner: point_expr(Vec3::new(-40.0, -40.0, -10.0)), length: "140".into(), width: "80".into(), height: "40".into(), operation: Operation::NewBody, centred: false },
+        Some("Case"),
+    )
+    .unwrap();
+    doc.features[0].body_names = vec!["Case".into()];
+    let solid = measure(&evaluated(&doc).state().bodies[0].body).unwrap().volume;
+    let id = doc.add_feature(gears(json!({"set": "keep_out"}), Vec::new(), vec!["Case"]), Some("Gears")).unwrap();
+    let m = evaluated(&doc);
+    let st = m.state();
+    let names: Vec<&str> = st.bodies.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(names.len(), 3, "the case and two gears, no keep-out body: {names:?}");
+    let case = st.body("Case").unwrap();
+    let hollow = measure(&case.body).unwrap().volume;
+    assert!(hollow < solid - 1000.0, "the case is hollowed where the gears turn: {solid} -> {hollow}");
+    assert_eq!(st.bodies.iter().filter(|b| b.feature == id).count(), 2);
+    assert_eq!(doc.features.len(), 2, "the box and one Gears feature");
+}

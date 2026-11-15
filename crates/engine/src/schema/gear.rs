@@ -1207,6 +1207,24 @@ pub struct GearParams {
     /// through the motion links, each link driven from the end nearer it.
     #[serde(default)]
     pub assembly_driver: Option<u32>,
+    /// How the set goes into the timeline: `feature` (the default), one Gears feature that reads
+    /// its sketches again and builds every body itself whenever they change; `features`, a
+    /// folder of ordinary sketches and features (always so for teeth drawn as formulas,
+    /// `tooth_curves: equations`). `gear.update` with `build: feature` turns a folder into the
+    /// feature.
+    #[serde(default)]
+    pub build: Option<String>,
+    /// The Gears feature's bodies: `new` bodies (the default), or tools that `join`, `cut` or
+    /// `intersect` the bodies in `targets`.
+    #[serde(default)]
+    pub operation: Option<String>,
+    /// The bodies `operation` works on.
+    #[serde(default)]
+    pub targets: Option<Vec<String>>,
+    /// Bodies the set's keep-out body is cut from (a housing gets its cavity in the same
+    /// feature; the set needs `clearance_body`). The keep-out is then no body of its own.
+    #[serde(default)]
+    pub keep_out_cuts: Option<Vec<String>>,
     /// Differential (`type: differential`): its settings.
     #[serde(default)]
     pub differential: Option<DifferentialParams>,
@@ -1277,8 +1295,11 @@ pub struct GearBroken {
 /// A gear set kept in the design: what `gear.create` or `gear.update` last made it from.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct GearSet {
-    /// The set's timeline folder.
+    /// The set's timeline folder, or its Gears feature (`feature`).
     pub group: u64,
+    /// The Gears feature that builds the set, when it is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature: Option<u64>,
     /// The folder's name.
     pub name: String,
     /// The set's bodies.
@@ -1388,6 +1409,9 @@ pub struct GearAssembly {
 pub struct GearResult {
     /// The bodies made (empty for `gear.calculate`).
     pub bodies: Vec<String>,
+    /// The Gears feature that builds the set (`build: feature`); `group` is its id too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature: Option<u64>,
     /// The timeline group holding the gear's features, if any were made.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<u64>,

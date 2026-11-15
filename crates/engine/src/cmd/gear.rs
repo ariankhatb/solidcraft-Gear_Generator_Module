@@ -24,7 +24,7 @@ use solidcraft_geom::PlaneGeom as _;
 use solidcraft_gear::involute::BasicRack;
 use solidcraft_gear::axes::{self, Axis, Drive, Relation, Solved};
 use solidcraft_gear::clearance::{BearingSize, Clearance, Seat};
-use solidcraft_gear::plan::{Body, Fact, Frame, Kind, Op, Plan, Spec, Step, Unit};
+use solidcraft_gear::plan::{Body, Fact, Frame, Kind, Op, Plan, Spec, Step, Unit, solid};
 use solidcraft_gear::drivetrain;
 use solidcraft_gear::sketch_rules;
 use solidcraft_io::Geom2;
@@ -1094,20 +1094,18 @@ fn gear_type(k: Kind) -> GearType {
 }
 
 /// A shaft axis from its parameter, where it is now.
-fn axis_of(s: &Session, v: &GearAxis, cmd: &str, what: &str) -> Result<Axis> {
+fn axis_of(s: &dyn Reads, v: &GearAxis, cmd: &str, what: &str) -> Result<Axis> {
     let v = &v.0;
     let (o, d) = if let Some(point) = v.get("point").filter(|_| v.get("sketch").is_some()) {
         // A sketch point: the shaft through it, normal to its sketch.
-        let id = super::features::sketch_id(s, v.get("sketch"), cmd, what)?;
+        let id = s.sketch_id(v.get("sketch"), cmd, what)?;
         let point = point.as_str().unwrap_or_default();
-        let st = s.world_state()?;
-        let found = st.sketch(id).and_then(|ss| Some((ss.plane.to_world(ss.sketch.point(ss.sketch.point_index(point)?)?), ss.plane.normal())));
+        let found = s.solved(id).and_then(|ss| Some((ss.plane.to_world(ss.sketch.point(ss.sketch.point_index(point)?)?), ss.plane.normal())));
         found.ok_or_else(|| bad(cmd, format!("`{what}`: sketch {id} has no point `{point}`")))?
     } else if v.get("curve").is_some() {
-        let id = super::features::sketch_id(s, v.get("sketch"), cmd, what)?;
+        let id = s.sketch_id(v.get("sketch"), cmd, what)?;
         let curve = v.get("curve").and_then(Value::as_str).unwrap_or_default();
-        let st = s.world_state()?;
-        let line = st.sketch(id).and_then(|ss| {
+        let line = s.solved(id).and_then(|ss| {
             let c = ss.sketch.curves.get(ss.sketch.curve_index(curve)?)?;
             let crate::sketch::CurveKind::Line { a, b } = c.kind else { return None };
             Some((ss.plane.to_world(ss.sketch.point(a)?), ss.plane.to_world(ss.sketch.point(b)?)))
@@ -1115,7 +1113,7 @@ fn axis_of(s: &Session, v: &GearAxis, cmd: &str, what: &str) -> Result<Axis> {
         let (a, b) = line.ok_or_else(|| bad(cmd, format!("`{what}`: sketch {id} has no straight line `{curve}`")))?;
         (a, b - a)
     } else {
-        let (o, d, _, _) = super::features::axis_line(s, &json!({"axis": v}), cmd).map_err(|e| match e {
+        let (o, d) = s.axis_line(&json!({"axis": v}), cmd).map_err(|e| match e {
             EngineError::BadParams { msg, .. } => bad(cmd, format!("`{what}`: {msg}")),
             e => e,
         })?;
@@ -1133,7 +1131,7 @@ struct Asked {
 }
 
 /// The axes of an axis-first request, where they are now.
-fn axes_of(s: &Session, cmd: &str, p: &GearParams) -> Result<Option<(Axis, Option<Axis>)>> {
+fn axes_of(s: &dyn Reads, cmd: &str, p: &GearParams) -> Result<Option<(Axis, Option<Axis>)>> {
     let Some(a1) = &p.axis1 else {
         let stray = [("axis2", p.axis2.is_some()), ("ratio", p.ratio.is_some()), ("cone_distance", p.cone_distance.is_some()), ("along", p.along.is_some())];
         return match stray.iter().find(|(_, given)| *given) {
@@ -1244,6 +1242,11 @@ impl GearSketch {
 pub fn sketch_entities(s: &Session, sketch: u64) -> std::result::Result<GearSketch, String> {
     let st = s.world_state().map_err(|e| e.to_string())?;
     let ss = st.sketch(sketch).ok_or_else(|| format!("no sketch {sketch}"))?;
+    Ok(entities_of(sketch, ss))
+}
+
+/// [`sketch_entities`] of a sketch as solved.
+fn entities_of(sketch: u64, ss: &solidcraft_doc::SolvedSketch) -> GearSketch {
     let o = ss.plane.to_world(Vec2::new(0.0, 0.0));
     let ex = ss.plane.to_world(Vec2::new(1.0, 0.0)) - o;
     let n = ss.plane.normal();
@@ -1314,7 +1317,37 @@ pub fn sketch_entities(s: &Session, sketch: u64) -> std::result::Result<GearSket
     let has_origin = origin.is_some();
     points.extend(origin);
     let things = sk.wires.iter().filter_map(|w| Some((w.id.clone(), wire_thing(w)?))).collect();
-    Ok(GearSketch { sketch, frame, points, circles, lines, has_origin, things })
+    GearSketch { sketch, frame, points, circles, lines, has_origin, things }
+}
+
+/// Where a set's references are read: the session (the commands), or the design before a Gears
+/// feature as it is evaluated (`feature::Before`).
+pub(crate) trait Reads {
+    /// A sketch by id or name, as `features::sketch_id`.
+    fn sketch_id(&self, v: Option<&Value>, cmd: &str, what: &str) -> Result<u64>;
+    /// A sketch as solved where the set is read.
+    fn solved(&self, id: u64) -> Option<solidcraft_doc::SolvedSketch>;
+    /// An axis line (`{axis}`), as `features::axis_line`.
+    fn axis_line(&self, p: &Value, cmd: &str) -> Result<(solidcore_record::Vec3, solidcore_record::Vec3)>;
+    /// A sketch's points, circles and lines ([`sketch_entities`]).
+    fn gear_sketch(&self, id: u64) -> std::result::Result<GearSketch, String> {
+        self.solved(id).map(|ss| entities_of(id, &ss)).ok_or_else(|| format!("no sketch {id}"))
+    }
+}
+
+impl Reads for Session {
+    fn sketch_id(&self, v: Option<&Value>, cmd: &str, what: &str) -> Result<u64> {
+        super::features::sketch_id(self, v, cmd, what)
+    }
+    fn solved(&self, id: u64) -> Option<solidcraft_doc::SolvedSketch> {
+        self.world_state().ok()?.sketch(id).cloned()
+    }
+    fn axis_line(&self, p: &Value, cmd: &str) -> Result<(solidcore_record::Vec3, solidcore_record::Vec3)> {
+        super::features::axis_line(self, p, cmd).map(|(o, d, _, _)| (o, d))
+    }
+    fn gear_sketch(&self, id: u64) -> std::result::Result<GearSketch, String> {
+        sketch_entities(self, id)
+    }
 }
 
 /// The bevel planetary mode asked for, as the gear crate names it.
@@ -1513,7 +1546,7 @@ fn wire_thing(w: &crate::sketch::Wire) -> Option<drivetrain::Thing> {
 ///
 /// Then sized (the Simple solver for a mode, [`sketch_rules::size_train`] for a train) and
 /// placed on the sketch. Construction geometry is left out.
-fn from_sketch(s: &Session, cmd: &str, p: &GearParams, assembly: bool) -> Result<Got> {
+fn from_sketch(s: &dyn Reads, cmd: &str, p: &GearParams, assembly: bool) -> Result<Got> {
     if p.axis1.is_some() || p.axis2.is_some() || p.placement.is_some() {
         return Err(bad(cmd, "give `sketch`, or `axis1` (`axis2`) or `placement`: not both"));
     }
@@ -1526,20 +1559,20 @@ fn from_sketch(s: &Session, cmd: &str, p: &GearParams, assembly: bool) -> Result
         let mut items: Vec<(String, String, drivetrain::Item)> = Vec::new();
         let mut names = Vec::new();
         for v in list {
-            let id = super::features::sketch_id(s, Some(v), cmd, "sketch")?;
+            let id = s.sketch_id(Some(v), cmd, "sketch")?;
             if names.contains(&id) {
                 continue;
             }
             names.push(id);
-            let sk = sketch_entities(s, id).map_err(|e| bad(cmd, e))?;
+            let sk = s.gear_sketch(id).map_err(|e| bad(cmd, e))?;
             let name = super::features::sketch_key(Some(v)).unwrap_or_default();
             items.extend(sketch_items(&sk).into_iter().map(|(k, it)| (name.clone(), k, it)));
         }
         let only = pick_items(cmd, items, p.picks.as_deref())?;
         return read_drivetrain(cmd, p, &only, None, assembly);
     }
-    let id = super::features::sketch_id(s, p.sketch.as_ref(), cmd, "sketch")?;
-    let sk = sketch_entities(s, id).map_err(|e| bad(cmd, e))?;
+    let id = s.sketch_id(p.sketch.as_ref(), cmd, "sketch")?;
+    let sk = s.gear_sketch(id).map_err(|e| bad(cmd, e))?;
     let turn = p.sketch_turn.unwrap_or([0.0; 3]);
     if turn.iter().any(|t| !t.is_finite()) {
         return Err(bad(cmd, "`sketch_turn` must be three finite angles"));
@@ -1681,7 +1714,7 @@ fn solve_measured(cmd: &str, p: &GearParams, sk: &GearSketch, m: sketch_rules::M
 ///   sizes filling the spacing).
 ///
 /// Bearings become seats of the keep-out body.
-fn from_selection(s: &Session, cmd: &str, p: &GearParams, items: &[GearSelection], assembly: bool) -> Result<Got> {
+fn from_selection(s: &dyn Reads, cmd: &str, p: &GearParams, items: &[GearSelection], assembly: bool) -> Result<Got> {
     use solidcraft_gear::select::{Ask, Shaft, bearing_point, set_on_shafts};
     if p.sketch.is_some() || p.axis1.is_some() || p.axis2.is_some() || p.placement.is_some() {
         return Err(bad(cmd, "give `selection`, or `sketch`, or `axis1` (`axis2`) or `placement`: one of them"));
@@ -1734,8 +1767,8 @@ fn from_selection(s: &Session, cmd: &str, p: &GearParams, items: &[GearSelection
         // A sketch's point, circle or line (flat or 3D), else an axis line.
         let thing = match (&it.sketch, it.curve.as_ref().or(it.point.as_ref())) {
             (Some(sk), Some(entity)) => {
-                let id = super::features::sketch_id(s, Some(sk), cmd, &what)?;
-                let gs = sketch_entities(s, id).map_err(|e| bad(cmd, format!("`{what}`: {e}")))?;
+                let id = s.sketch_id(Some(sk), cmd, &what)?;
+                let gs = s.gear_sketch(id).map_err(|e| bad(cmd, format!("`{what}`: {e}")))?;
                 let found = sketch_items(&gs).into_iter().find(|(k, _)| k == entity).map(|(_, t)| t.thing);
                 match found {
                     Some(t) => t,
@@ -1844,7 +1877,7 @@ enum Read {
     Wrong { error: String, members: Vec<GearMember>, notes: Vec<String> },
 }
 
-fn ask_read(s: &Session, cmd: &str, p: &Value) -> Result<Read> {
+fn ask_read(s: &dyn Reads, cmd: &str, p: &Value) -> Result<Read> {
     let params = read(cmd, p)?;
     let got = if let Some(items) = &params.selection {
         Some(from_selection(s, cmd, &params, items, assembly::wanted(p))?)
@@ -1873,7 +1906,7 @@ fn ask_read(s: &Session, cmd: &str, p: &Value) -> Result<Read> {
     Ok(Read::Set(asked, plan))
 }
 
-fn ask(s: &Session, cmd: &str, p: &Value) -> Result<(Asked, Plan)> {
+fn ask(s: &dyn Reads, cmd: &str, p: &Value) -> Result<(Asked, Plan)> {
     match ask_read(s, cmd, p)? {
         Read::Set(asked, plan) => Ok((asked, plan)),
         Read::Wrong { error, .. } => Err(bad(cmd, error)),
@@ -2017,6 +2050,9 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
         kind_title(spec.kind).to_string()
     };
     let mut request = if p.is_object() { p.clone() } else { json!({}) };
+    if feature::wanted(cmd, &request)? {
+        return feature::create(s, cmd, &asked, &plan, group_name, request, warnings, sketch_print);
+    }
     let (mode, notes_eq) = equations::Mode::of(s, cmd, &request, spec, &plan, &group_name, true)?;
     warnings.extend(notes_eq);
     if let Some(prefix) = &mode.prefix {
@@ -2045,7 +2081,7 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (assembly_record, assembly_made) = built.map_or((None, None), |(r, m)| (Some(r), Some(m)));
     if let Some(group) = group {
-        keep(s, &Record { version: RECORD_VERSION, group, name: group_name, request, params: params_of(spec), bodies, assembly: assembly_record, sketch_print }, &mut warnings);
+        keep(s, &Record { version: RECORD_VERSION, group, name: group_name, request, params: params_of(spec), bodies, assembly: assembly_record, sketch_print, feature: None }, &mut warnings);
     }
     reply(cmd, GearResult { bodies: made, group, clearance, assembly: assembly_made, facts: facts(&asked, &plan), warnings, notes: notes(&asked), members: asked.members.clone(), ..GearResult::default() })
 }
@@ -2120,10 +2156,17 @@ struct Record {
     /// the set follows the sketch when it reads differently.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sketch_print: Option<String>,
+    /// Built by one Gears feature (`build: feature`, [`feature`]): its id, which is also
+    /// `group`. Its bodies have no steps of their own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    feature: Option<u64>,
 }
 
 impl Record {
     fn features(&self) -> Vec<u64> {
+        if let Some(f) = self.feature {
+            return vec![f];
+        }
         self.bodies.iter().flat_map(BodyRecord::features).collect()
     }
 }
@@ -2174,6 +2217,9 @@ fn keep(s: &mut Session, rec: &Record, warnings: &mut Vec<String>) {
 /// The names the set's bodies have now: a body follows the feature that made it through a
 /// rename.
 fn current_names(s: &Session, rec: &Record) -> Vec<String> {
+    if let Some(f) = rec.feature {
+        return feature::current_names(s, f, rec);
+    }
     let state = s.model.state();
     rec.bodies
         .iter()
@@ -2185,9 +2231,11 @@ fn current_names(s: &Session, rec: &Record) -> Vec<String> {
 }
 
 fn set_of(s: &Session, rec: &Record) -> GearSet {
-    let name = s.doc.timeline_groups.iter().find(|g| g.id == rec.group).map(|g| g.name.clone()).unwrap_or_else(|| rec.name.clone());
+    let name = s.doc.timeline_groups.iter().find(|g| g.id == rec.group).map(|g| g.name.clone());
+    let name = name.or_else(|| rec.feature.and_then(|f| s.doc.feature(f)).map(|f| f.name.clone())).unwrap_or_else(|| rec.name.clone());
     GearSet {
         group: rec.group,
+        feature: rec.feature,
         name,
         bodies: current_names(s, rec),
         features: rec.features(),
@@ -2336,7 +2384,7 @@ fn in_place_steps(s: &mut Session, rec: &Record, plan: &Plan, names: &[String], 
             // What each sketch holds now, as the tries below leave it.
             let mut held: Vec<(String, String)> = was.sketches.iter().map(|k| (k.plane.clone(), k.geometry.clone())).collect();
             let trims = matches!(step, Step::Revolve { op, .. } if *op != Op::New);
-            let nudges: &[f64] = if trims { &NUDGES } else { &NUDGES[..1] };
+            let nudges: &[f64] = if trims { &solid::NUDGES } else { &solid::NUDGES[..1] };
             let mut done = None;
             let mut last = None;
             for nudge in nudges {
@@ -2477,6 +2525,9 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     let (asked, plan) = ask(s, cmd, &request)?;
     let sketch_print = sketch_link::sketch_print(s, &request);
     let mut warnings = plan.warnings.clone();
+    if rec.feature.is_some() || feature::wanted(cmd, &request)? && request.get("build").is_some() {
+        return feature::update(s, cmd, rec, request, &asked, &plan, warnings, sketch_print);
+    }
     let (mode, notes_eq) = equations::Mode::of(s, cmd, &request, &asked.spec, &plan, &rec.name, false)?;
     warnings.extend(notes_eq);
     let own: std::collections::BTreeSet<u64> = rec.features().into_iter().collect();
@@ -2515,7 +2566,8 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Bodies (and their components) still called what the generator named them take the new
     // set's names ("Gear z32" that now has 40 teeth becomes "Gear z40"); names the user gave stay.
-    follow_auto_names(s, &mut rec, &plan, &names, &auto_before, &mut warnings);
+    let bases: Vec<String> = built_bodies(&plan).into_iter().map(|b| b.name).collect();
+    follow_auto_names(s, &mut rec, &bases, &names, &auto_before, &mut warnings);
     // The set's components, joints and links, brought up to date where they stand: the bodies
     // were regenerated inside their components (same names), the joints are moved onto the new
     // shafts and the links given the new ratios; what users built on them stays. Switched off,
@@ -2579,8 +2631,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
 /// so every feature that names the body follows (the set's own steps, a component's Body
 /// Transfer, the user's features); a member's component named after its body follows too, and
 /// so does the set's record. Each body's generator name is kept for the next update.
-fn follow_auto_names(s: &mut Session, rec: &mut Record, plan: &Plan, names: &[String], auto_before: &[String], warnings: &mut Vec<String>) {
-    let all = built_bodies(plan);
+fn follow_auto_names(s: &mut Session, rec: &mut Record, bases: &[String], names: &[String], auto_before: &[String], warnings: &mut Vec<String>) {
     if s.model.is_stale() {
         s.refresh();
     }
@@ -2594,7 +2645,7 @@ fn follow_auto_names(s: &mut Session, rec: &mut Record, plan: &Plan, names: &[St
             (Some(now), Some(auto)) => now == auto,
             _ => true,
         };
-        let Some(base) = all.get(i).map(|p| p.name.clone()) else { continue };
+        let Some(base) = bases.get(i).cloned() else { continue };
         if !generated {
             b.auto = auto_before.get(i).cloned();
             continue;
@@ -2907,31 +2958,13 @@ impl StepDef {
     }
 }
 
-/// A herringbone's second half, when step `i` of `body` is it: the first step's twisted prism
-/// turned back the other way above it, which is that prism mirrored in the plane between them
-/// (each point of the upper half at height `d` above it lies where the lower half's point `d`
-/// below it does, turned the same). Mirrored and joined, it is the same solid for one sweep and
-/// a mirror in place of two sweeps (a 20-tooth gear's halves 2.7 s and 5.4 s swept and joined,
-/// 3.1 s and 2.8 s swept and mirrored, the volume the same to 1e-13). The plane's height, in the
-/// body's frame. Teeth drawn from their formulas keep their two sweeps: their heights follow
-/// the design's parameters, which the mirror's plane does not.
+/// A herringbone's second half, when step `i` of `body` is it ([`solid::mirrored_half`]): one
+/// sweep and a mirror in place of two sweeps. Teeth drawn from their formulas keep their two
+/// sweeps: their heights follow the design's parameters, which the mirror's plane does not.
 fn mirrored_half(body: &Body, i: usize, step: &Step, mode: &equations::Mode) -> Option<f64> {
-    let (Some(Step::Prism { region: r0, z0: a, height: h, twist: t, op: Op::New }), Some(Step::Prism { region: r1, z0: b, height: h1, twist: t1, op: Op::Join })) =
-        (body.steps.first(), body.steps.get(1))
-    else {
-        return None;
-    };
-    let turned = Region { outer: r0.outer.iter().map(|o| o.rotated(*t)).collect(), holes: r0.holes.iter().map(|o| o.rotated(*t)).collect() };
-    let same = i == 1
-        && matches!(step, Step::Prism { .. })
-        && t.abs() > 1e-12
-        && *t1 == -*t
-        && h1 == h
-        && (b - (a + h)).abs() <= 1e-9 * (1.0 + h.abs())
-        && *r1 == turned
-        && mode.sketch_for(r0).is_none()
-        && mode.sketch_for(r1).is_none();
-    same.then_some(*b)
+    let z = solid::mirrored_half(body, i, step)?;
+    let formulas = body.steps.iter().take(2).filter_map(prism_region).any(|r| mode.sketch_for(r).is_some());
+    (!formulas).then_some(z)
 }
 
 /// The parameters of a step's feature: [`step_params`], or a mirrored half's own.
@@ -3007,11 +3040,6 @@ fn near_edge(o: &Outline, inside: bool) -> Option<solidcraft_gear::V2> {
     let toward = if inside { mid - far } else { far - mid };
     Some(far + toward.norm() * step)
 }
-
-/// How far along its axis a trimming blank (a bevel's back and front cones) is tried: the
-/// kernel sometimes refuses the intersection where the cones graze a root fillet, and takes it
-/// a hair further along.
-const NUDGES: [f64; 4] = [0.0, 0.0137, -0.0213, 0.0391];
 
 /// The sketches and the command of step `i` of `body` (a revolved blank moved `nudge` along
 /// the axis).
@@ -3106,7 +3134,7 @@ fn step_def(body: &Body, i: usize, step: &Step, nudge: f64, mode: &equations::Mo
             StepDef::new(sketches, "solid.loft", shape, false)
         }
         Step::Revolve { profile, op } => {
-            let moved: Vec<solidcraft_gear::V2> = profile.iter().map(|q| solidcraft_gear::V2::new(q.x, q.y + nudge)).collect();
+            let moved = solid::nudged(profile, nudge);
             StepDef::new(vec![sketch("blank".into(), f.origin, x, z, vec![polygon(&moved)])], "solid.revolve", format!("revolve ({})", op_name(*op)), false)
         }
         Step::Coil { section, op, .. } => {
@@ -3226,27 +3254,9 @@ fn build_body(s: &mut Session, body: &Body, warnings: &mut Vec<String>, mode: &e
         // every other section, then through its two ends: a coarser twist beats no gear. Any
         // step that changes a body already made (a hub, web, bore or trim) is left out with a
         // warning if it still fails: the gear is still worth having.
-        let trims = matches!(step, Step::Revolve { op, .. } if *op != Op::New);
+        let trims = solid::trims(step);
         let optional = !matches!(step_op(step), Op::New);
-        let mut attempts: Vec<(Step, f64)> = if trims { NUDGES.iter().map(|n| (step.clone(), *n)).collect() } else { vec![(step.clone(), 0.0)] };
-        // (Not a loft of many sections, as a hypoid's: they are as many as the kernel needs to
-        // line them up tooth to tooth, and through fewer it would pair the wrong segments and cut
-        // across the flanks.)
-        if let Step::Loft { sections, op } = step
-            && sections.len() <= 12
-        {
-            let n = sections.len();
-            if n > 3 {
-                let mut every_other: Vec<usize> = (0..n).step_by(2).collect();
-                if every_other.last() != Some(&(n - 1)) {
-                    every_other.push(n - 1);
-                }
-                attempts.push((Step::Loft { sections: every_other.iter().map(|k| sections[*k].clone()).collect(), op: *op }, 0.0));
-            }
-            if n > 2 {
-                attempts.push((Step::Loft { sections: vec![sections[0].clone(), sections[n - 1].clone()], op: *op }, 0.0));
-            }
-        }
+        let attempts = solid::attempts(step);
         let mut done = None;
         for (k, (step, nudge)) in attempts.iter().enumerate() {
             let mut def = step_def(body, i, step, *nudge, mode);
@@ -3326,10 +3336,7 @@ fn keep_point_picks(s: &mut Session, feature: Option<u64>, params: &Value) {
 
 /// What a step does to its body.
 fn step_op(step: &Step) -> Op {
-    match step {
-        Step::Prism { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => *op,
-        Step::Placed { step, .. } => step_op(step),
-    }
+    solid::op_of(step)
 }
 
 fn polygon(pts: &[solidcraft_gear::V2]) -> Vec<Geom2> {
@@ -3347,6 +3354,10 @@ mod equations;
 
 #[path = "gear_assembly.rs"]
 mod assembly;
+
+#[path = "gear_feature.rs"]
+mod feature;
+pub(crate) use feature::install as install_gears_feature;
 
 #[cfg(test)]
 #[path = "gear_tests.rs"]

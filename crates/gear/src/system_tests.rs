@@ -68,37 +68,45 @@ fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
 }
 
+/// The body (assembly member) gear `k` of the drawing is on: one body per member that turns as
+/// one (a compound cluster's gears and its shaft joined).
+fn body_of(p: &Plan, k: usize) -> usize {
+    p.members[k].body.unwrap_or_else(|| panic!("gear {} has no body", k + 1))
+}
+
 #[test]
 fn a_ten_gear_train_with_two_compound_clusters_turns_every_gear_by_its_ratio() {
     let (spec, p) = system(false);
     assert_eq!(gear_teeth(&spec), vec![20, 30, 15, 20, 25, 12, 18, 20, 10, 16], "the drawing's gears, in order");
     let a = &p.assembly;
-    assert_eq!(a.members.len(), 10);
+    // One member per shaft: eight; each cluster's two gears on one body.
+    assert_eq!(a.members.len(), 8);
+    assert_eq!((body_of(&p, 1), body_of(&p, 4)), (body_of(&p, 2), body_of(&p, 5)), "compounds share a body");
     assert!(p.assembly_issues.is_empty(), "{:?}", p.assembly_issues);
-    // One shaft per cluster: the second gear of each is rigid on the first.
-    let rigid: Vec<(usize, usize)> = a.links.iter().filter_map(|l| matches!(l, AssemblyLink::Rigid { .. }).then(|| l.members())).collect();
-    assert_eq!(rigid, vec![(1, 2), (4, 5)]);
-    assert_eq!(a.links.len(), 9, "a tree over ten members");
+    assert!(!a.links.iter().any(|l| matches!(l, AssemblyLink::Rigid { .. })), "no rigid links: a cluster is one body");
+    assert_eq!(a.links.len(), 7, "a gear link per mesh, a tree over eight members");
     // Gear 1 turned by 30°: every gear where the teeth say.
     let want = by_hand();
     let theta = 30f64.to_radians();
-    for (i, w) in want.iter().enumerate() {
-        let got = a.ratio(0, i).unwrap_or_else(|| panic!("gear {} is not linked", i + 1)) * theta;
-        assert!(close(got, w * theta), "gear {}: {got} rad, by hand {}", i + 1, w * theta);
+    let g1 = body_of(&p, 0);
+    for (k, w) in want.iter().enumerate() {
+        let got = a.ratio(g1, body_of(&p, k)).unwrap_or_else(|| panic!("gear {} is not linked", k + 1)) * theta;
+        assert!(close(got, w * theta), "gear {}: {got} rad, by hand {}", k + 1, w * theta);
     }
     // Driven from gear 7 instead: the same motion, gear 7's turn as the unit.
-    let from7 = a.rooted(6);
-    assert_eq!(from7.links.len(), 9);
-    for i in 0..10 {
-        let got = from7.ratio(6, i).unwrap();
-        assert!(close(got, want[i] / want[6]), "gear {} from gear 7: {got} vs {}", i + 1, want[i] / want[6]);
+    let g7 = body_of(&p, 6);
+    let from7 = a.rooted(g7);
+    assert_eq!(from7.links.len(), 7);
+    for k in 0..10 {
+        let got = from7.ratio(g7, body_of(&p, k)).unwrap();
+        assert!(close(got, want[k] / want[6]), "gear {} from gear 7: {got} vs {}", k + 1, want[k] / want[6]);
     }
     // Rooted from gear 7, every link points away from it: each member is driven once, and not
-    // gear 7.
-    let mut driven = vec![false; 10];
+    // gear 7's.
+    let mut driven = vec![false; a.members.len()];
     for l in &from7.links {
         let (_, b) = l.members();
-        assert!(!driven[b] && b != 6, "{l:?}");
+        assert!(!driven[b] && b != g7, "{l:?}");
         driven[b] = true;
     }
 }
@@ -106,12 +114,15 @@ fn a_ten_gear_train_with_two_compound_clusters_turns_every_gear_by_its_ratio() {
 #[test]
 fn the_ten_gear_train_stays_in_mesh_as_the_assembly_turns_it() {
     let (_, mut p) = system(false);
-    // The 2D checker turns each gear by its preview speed: give it the assembly's ratios, and it
-    // probes every mesh through a tooth pitch of its driver for overlap and lost contact.
-    for i in 0..p.preview.len() {
-        let r = p.assembly.ratio(0, i).unwrap();
-        assert!(close(r, p.preview[i].speed), "gear {}: assembly {r}, preview {}", i + 1, p.preview[i].speed);
-        p.preview[i].speed = r;
+    // The 2D checker turns each gear (a preview member each) by its preview speed: give it the
+    // assembly's ratios, and it probes every mesh through a tooth pitch of its driver for
+    // overlap and lost contact.
+    assert_eq!(p.preview.len(), 10);
+    let g1 = body_of(&p, 0);
+    for k in 0..p.preview.len() {
+        let r = p.assembly.ratio(g1, body_of(&p, k)).unwrap();
+        assert!(close(r, p.preview[k].speed), "gear {}: assembly {r}, preview {}", k + 1, p.preview[k].speed);
+        p.preview[k].speed = r;
     }
     let results = check_mesh(&p);
     assert_eq!(results.len(), 7, "seven meshes (the two shared shafts aren't meshes)");
@@ -335,9 +346,14 @@ fn the_gaerbox_drawn_as_circles_turns_and_meshes() {
     assert_eq!(gear_teeth(&spec), vec![30, 15, 25, 15, 25, 15]);
     assert!(p.assembly_issues.is_empty(), "{:?}", p.assembly_issues);
     let a = &p.assembly;
-    for (i, want) in [(1, -2.0), (2, -2.0), (3, -2.0), (4, -2.0), (5, 2.0 * 25.0 / 15.0)] {
-        let got = a.ratio(0, i).unwrap();
-        assert!(close(got, want), "member {}: {got} vs {want}", i + 1);
+    // Four members (input, countershaft A, countershaft B, output), three gear links: the fourth
+    // mesh closes the loop and agrees.
+    assert_eq!(a.members.len(), 4, "{:?}", p.members);
+    assert_eq!(a.links.len(), 3);
+    let input = body_of(&p, 0);
+    for (k, want) in [(1, -2.0), (2, -2.0), (3, -2.0), (4, -2.0), (5, 2.0 * 25.0 / 15.0)] {
+        let got = a.ratio(input, body_of(&p, k)).unwrap();
+        assert!(close(got, want), "gear {}: {got} vs {want}", k + 1);
     }
     for m in &check_mesh(&p) {
         assert_eq!(m.verdict, Verdict::Ok, "{}", m.message);

@@ -1608,21 +1608,26 @@ fn adding_a_gear_to_the_sketch_keeps_the_systems_components_and_joints() {
     run(&mut s, "sketch.finish", json!({}));
     let u = run(&mut s, "gear.update", json!({"group": group}));
     no_errors(&s);
-    let members = u["assembly"]["members"].as_array().unwrap();
-    assert_eq!(members.len(), 11, "{u}");
-    for i in 0..10 {
-        assert_eq!(members[i]["component"], r["assembly"]["members"][i]["component"], "gear {} keeps its component: {u}", i + 1);
-        assert_eq!(members[i]["joint"], r["assembly"]["members"][i]["joint"], "gear {} keeps its joint: {u}", i + 1);
+    let before = r["assembly"]["members"].as_array().unwrap().clone();
+    let members = u["assembly"]["members"].as_array().unwrap().clone();
+    assert_eq!(members.len(), before.len() + 1, "{u}");
+    // Every shaft that was there keeps its component and joint (found by where it turns).
+    for m in &before {
+        let o = &m["axis"][0];
+        let (x, y) = (o[0].as_f64().unwrap(), o[1].as_f64().unwrap());
+        let now = &members[member_on(&u, x, y)];
+        assert_eq!((&now["component"], &now["joint"]), (&m["component"], &m["joint"]), "the shaft at ({x}, {y}) keeps its component and joint: {u}");
     }
     assert_eq!(u["assembly"]["links"].as_array().map(Vec::len), Some(8), "{u}");
+    let new = member_on(&u, 148.0, 136.0);
     // And taken away again: the eleventh's component and joint go, the rest stay.
     run(&mut s, "sketch.edit", json!({"sketch": sk}));
     run(&mut s, "sketch.delete", json!({"entities": ["g11"]}));
     run(&mut s, "sketch.finish", json!({}));
     let v = run(&mut s, "gear.update", json!({"group": group}));
     no_errors(&s);
-    assert_eq!(v["assembly"]["members"].as_array().map(Vec::len), Some(10), "{v}");
-    let gone = members[10]["component"].as_u64().unwrap();
+    assert_eq!(v["assembly"]["members"].as_array().map(Vec::len), Some(before.len()), "{v}");
+    let gone = members[new]["component"].as_u64().unwrap();
     assert!(!s.doc.components.iter().any(|c| c.id == gone));
 }
 

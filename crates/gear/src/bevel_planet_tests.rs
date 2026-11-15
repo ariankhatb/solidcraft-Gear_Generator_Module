@@ -277,12 +277,12 @@ fn placement_from_a_side_view_sketch() {
     assert!(placement_from_shafts([0.0; 3], [0.0, 0.0, 1.0], [0.0, 0.0, 2.0]).is_err());
 }
 
-/// The ring is a blank with its spaces cut: the kernel left the cut out (keeping the blank) while
-/// the cutter ended level with the blank's faces, and the planets then sat 173 to 175 mm³ inside
-/// the ring of the 45° default. The cutter now runs past both faces; the planets mesh with the
-/// ring as planned, and without its cut each one would overlap the blank by that much.
+/// The ring is one solid (a [`Step::RingTaper`]: its rim and its teeth), not a blank with the
+/// planets' spaces cut out of it: the kernel's cut came out an open shell and the build kept the
+/// blank, so the planets of the 45° default sat 173 to 175 mm³ inside it. The planets mesh with
+/// the ring as planned.
 #[test]
-fn bevel_ring_cut_runs_through_the_blank() {
+fn bevel_ring_is_one_solid_without_a_cut() {
     use crate::mesh3d::{Solid, overlap};
     for (label, s) in [
         ("ring 45 16:10 x4 (default, uneven)", Spec { bevel_planet_mode: BevelPlanetMode::Ring, shaft_angle: 45.0, ..d() }),
@@ -292,20 +292,58 @@ fn bevel_ring_cut_runs_through_the_blank() {
     ] {
         let p = prove(label, &s);
         let ring = p.bodies.last().unwrap();
-        let [Step::Revolve { profile, .. }, Step::Taper { z0, height, op: crate::plan::Op::Cut, .. }] = ring.steps.as_slice() else { panic!("{label}: {:?}", ring.steps) };
-        let (lo, hi) = profile.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q.y), a.1.max(q.y)));
-        let gap = 0.099 * s.module;
-        assert!(*z0 <= lo - gap && z0 + height >= hi + gap, "{label}: the cutter {z0}..{} ends within {gap} mm of the blank {lo}..{hi}", z0 + height);
+        let [Step::RingTaper { op: crate::plan::Op::New, .. }] = ring.steps.as_slice() else { panic!("{label}: {:?}", ring.steps) };
+        assert!(p.bodies.iter().all(|b| b.steps.iter().all(|st| !matches!(st, Step::Taper { op: crate::plan::Op::Cut, .. }))), "{label}");
         let n = p.bodies.len();
-        let mut blank = ring.clone();
-        blank.steps.truncate(1);
-        let (cut, blank) = (Solid::new(ring, 0.05), Solid::new(&blank, 0.05));
+        let cut = Solid::new(ring, 0.05);
         for b in &p.bodies[1..n - 1] {
-            let pl = Solid::new(b, 0.05);
-            let (with, without) = (overlap(&pl, &cut, 0.1), overlap(&pl, &blank, 0.1));
-            eprintln!("{label}: {} in the ring {with:.3} mm3, in the uncut blank {without:.1} mm3", b.name);
+            let with = overlap(&Solid::new(b, 0.05), &cut, 0.1);
+            eprintln!("{label}: {} in the ring {with:.3} mm3", b.name);
             assert!(with < 0.01 * s.module.powi(3), "{label}: {} overlaps the ring by {with} mm3", b.name);
-            assert!(without > 2.0 * s.module.powi(3), "{label}: {} hardly reaches the blank ({without} mm3)", b.name);
         }
     }
+}
+
+/// Writes the plan's bodies (frames and steps, outlines as segments) as JSON to the file named by
+/// `BP_DUMP`, for trying constructions with the kernel's CLI.
+#[test]
+#[ignore]
+fn dump_ring_steps() {
+    use crate::geom::{Outline, Seg};
+    let Ok(path) = std::env::var("BP_DUMP") else { return };
+    let s = match std::env::var("BP_DUMP_SET").as_deref() {
+        Ok("spiral") => Spec { spiral_angle: 25.0, backlash: 0.1, ..set(BevelPlanetMode::Ring, 60.0, 24, 12, 3) },
+        _ => Spec { bevel_planet_mode: BevelPlanetMode::Ring, shaft_angle: 45.0, ..d() },
+    };
+    let p = plan(&s).unwrap();
+    let v2 = |q: crate::geom::V2| format!("[{},{}]", q.x, q.y);
+    let ol = |o: &Outline| {
+        let segs: Vec<String> = o
+            .segs
+            .iter()
+            .map(|sg| match sg {
+                Seg::Line(a, b) => format!("{{\"line\":[{},{}]}}", v2(*a), v2(*b)),
+                Seg::Arc { c, a, b, ccw } => format!("{{\"arc\":[{},{},{}],\"ccw\":{ccw}}}", v2(*c), v2(*a), v2(*b)),
+                Seg::Spline(q) => format!("{{\"spline\":[{}]}}", q.iter().map(|x| v2(*x)).collect::<Vec<_>>().join(",")),
+                Seg::Circle(c, r) => format!("{{\"circle\":[{},{r}]}}", v2(*c)),
+            })
+            .collect();
+        format!("[{}]", segs.join(","))
+    };
+    let mut bodies = Vec::new();
+    for b in &p.bodies {
+        let steps: Vec<String> = b
+            .steps
+            .iter()
+            .map(|st| match st {
+                Step::Taper { outline, z0, height, twist, scale, op } => format!("{{\"taper\":{{\"outline\":{},\"z0\":{z0},\"height\":{height},\"twist\":{twist},\"scale\":{scale},\"op\":\"{op:?}\"}}}}", ol(outline)),
+                Step::Revolve { profile, op } => format!("{{\"revolve\":{{\"profile\":[{}],\"op\":\"{op:?}\"}}}}", profile.iter().map(|q| v2(*q)).collect::<Vec<_>>().join(",")),
+                Step::RingTaper { outline, rim, z0, height, twist, scale, op } => format!("{{\"ringtaper\":{{\"outline\":{},\"rim\":{rim},\"z0\":{z0},\"height\":{height},\"twist\":{twist},\"scale\":{scale},\"op\":\"{op:?}\"}}}}", ol(outline)),
+                _ => "{}".into(),
+            })
+            .collect();
+        let f = b.frame;
+        bodies.push(format!("{{\"name\":\"{}\",\"origin\":{:?},\"x\":{:?},\"z\":{:?},\"steps\":[{}]}}", b.name, f.origin, f.x, f.z, steps.join(",")));
+    }
+    std::fs::write(path, format!("[{}]", bodies.join(","))).unwrap();
 }

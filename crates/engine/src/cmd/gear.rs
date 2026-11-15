@@ -2004,6 +2004,22 @@ fn step_def(body: &Body, i: usize, step: &Step, nudge: f64, mode: &equations::Mo
                 .collect();
             StepDef::new(sketches, "solid.loft", format!("spiral taper ({})", op_name(*op)), false)
         }
+        // An internal bevel's teeth and rim in one loft: every section the rim circle and the
+        // toothed loop (scaled and turned as a taper's), the profile between them picked.
+        Step::RingTaper { outline: o, rim, z0, height, twist, scale, op } => {
+            let n = if twist.abs() <= 1e-12 { 2 } else { solidcraft_gear::plan::taper_sections(o, *twist, *scale) };
+            let sketches = (0..n)
+                .map(|i| {
+                    let t = i as f64 / (n - 1) as f64;
+                    let k = 1.0 + (scale - 1.0) * t;
+                    let section = o.scaled(k).rotated(solidcraft_gear::plan::taper_turn(*twist, *scale, k));
+                    let mut loops = vec![vec![Geom2::Circle(Vec2::new(0.0, 0.0), *rim)]];
+                    loops.extend(outline(&section));
+                    sketch(format!("section {}", i + 1), f.world([0.0, 0.0, z0 + height * t]), x, y, loops)
+                })
+                .collect();
+            StepDef::new(sketches, "solid.loft", format!("ring taper ({})", op_name(*op)), true)
+        }
         Step::Loft { sections, op } => {
             let sketches: Vec<SketchDef> = sections.iter().enumerate().map(|(k, (o, h))| sketch(format!("section {}", k + 1), f.world([0.0, 0.0, *h]), x, y, outline(o))).collect();
             let shape = format!("loft of {} ({})", sketches.len(), op_name(*op));
@@ -2050,6 +2066,13 @@ fn step_params(s: &Session, body: &Body, step: &Step, sketches: &[u64], target: 
         }
         Step::Loft { sections, op } => {
             let ids = (0..sections.len()).map(|k| id(k).map(|i| json!({"sketch": i}))).collect::<Result<Vec<Value>>>()?;
+            merge(json!({"sections": ids}), own(*op))
+        }
+        // The profile between the rim and the teeth: picked by a point half way across the rim
+        // at the large end (the teeth only shrink towards the small end).
+        Step::RingTaper { outline, rim, op, .. } => {
+            let r = 0.5 * (rim + outline.max_radius());
+            let ids = (0..sketches.len()).map(|k| id(k).map(|i| json!({"sketch": i, "profiles": [{"point": [r, 0.0]}]}))).collect::<Result<Vec<Value>>>()?;
             merge(json!({"sections": ids}), own(*op))
         }
         Step::Revolve { op, .. } => merge(json!({"sketch": id(0)?, "axis": "y"}), own(*op)),
@@ -2197,7 +2220,7 @@ fn keep_point_picks(s: &mut Session, feature: Option<u64>, params: &Value) {
 /// What a step does to its body.
 fn step_op(step: &Step) -> Op {
     match step {
-        Step::Prism { op, .. } | Step::Taper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => *op,
+        Step::Prism { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => *op,
         Step::Placed { step, .. } => step_op(step),
     }
 }

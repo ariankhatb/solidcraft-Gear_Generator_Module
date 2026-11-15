@@ -145,6 +145,7 @@ fn crosses(a: V2, b: V2, u: V2, rho: f64) -> bool {
 }
 
 /// A closed polygon with its edges bucketed by angle about the origin, for fast inside tests.
+#[derive(Clone)]
 pub struct Poly {
     pub pts: Vec<V2>,
     buckets: Vec<Vec<u32>>,
@@ -361,6 +362,8 @@ fn across(polys: &[Vec<V2>], zs: &[f64], sub: usize) -> (Vec<Vec<V2>>, Vec<f64>)
 enum Part {
     Prism { outer: Vec<Poly>, holes: Vec<Poly>, z0: f64, height: f64, twist: f64 },
     Taper { poly: Poly, z0: f64, height: f64, twist: f64, scale: f64 },
+    /// Inside the cylinder of radius `rim` and outside the taper.
+    RingTaper { poly: Poly, rim: f64, z0: f64, height: f64, twist: f64, scale: f64 },
     Loft { slabs: Vec<Slab> },
     Revolve { profile: Vec<V2> },
     Coil { section: Vec<V2>, pitch: f64, turns: f64, left: bool, zlo: f64, zhi: f64 },
@@ -382,6 +385,10 @@ fn make_part(st: &Step, h: f64) -> (Part, Op, (f64, f64, f64)) {
             let poly = Poly::new(outline, h);
             let r = poly.rmax * scale.max(1.0);
             (Part::Taper { poly, z0: *z0, height: *height, twist: *twist, scale: *scale }, *op, (r, *z0, z0 + height))
+        }
+        Step::RingTaper { outline, rim, z0, height, twist, scale, op } => {
+            let poly = Poly::new(outline, h);
+            (Part::RingTaper { poly, rim: *rim, z0: *z0, height: *height, twist: *twist, scale: *scale }, *op, (*rim, *z0, z0 + height))
         }
         Step::Loft { sections, op } => {
             // The same cut of every section, fine enough for the largest.
@@ -454,6 +461,14 @@ impl Part {
                 let s = 1.0 + (scale - 1.0) * t;
                 poly.contains(q.rot(-taper_turn(*twist, *scale, s)) * (1.0 / s))
             }
+            Part::RingTaper { poly, rim, z0, height, twist, scale } => {
+                let t = (p[2] - z0) / height;
+                if !(0.0..=1.0).contains(&t) || q.len() > *rim {
+                    return false;
+                }
+                let s = 1.0 + (scale - 1.0) * t;
+                !poly.contains(q.rot(-taper_turn(*twist, *scale, s)) * (1.0 / s))
+            }
             Part::Loft { slabs } => {
                 // Slabs that run up z in order: the first whose top is at or above the point.
                 if slabs.first().zip(slabs.last()).is_some_and(|(a, b)| a.z0 <= b.z1) {
@@ -512,6 +527,12 @@ impl Part {
                             .collect(),
                     );
                 }
+            }
+            Part::RingTaper { poly, rim, z0, height, twist, scale } => {
+                let teeth = Part::Taper { poly: poly.clone(), z0: *z0, height: *height, twist: *twist, scale: *scale };
+                out.extend(teeth.sheets(h, hz, band));
+                let wall = Part::Revolve { profile: vec![V2::new(0.0, *z0), V2::new(*rim, *z0), V2::new(*rim, z0 + height), V2::new(0.0, z0 + height)] };
+                out.extend(wall.sheets(h, hz, band));
             }
             Part::Taper { poly, z0, height, twist, scale } => {
                 let n = layers(height.hypot(poly.rmax * twist.abs()));

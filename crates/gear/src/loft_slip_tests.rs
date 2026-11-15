@@ -23,6 +23,11 @@ fn lofted(step: &Step) -> Option<Vec<Outline>> {
                 .collect()
         }),
         Step::Taper { outline, scale, .. } => Some(vec![outline.clone(), outline.scaled(*scale)]),
+        // Its rim circle is the same in every section: the toothed loop is what lines up.
+        Step::RingTaper { outline, twist, scale, z0, height, rim, op } => lofted(&Step::Taper { outline: outline.clone(), z0: *z0, height: *height, twist: *twist, scale: *scale, op: *op }).map(|v| {
+            let _ = rim;
+            v
+        }),
         Step::Placed { step, .. } => lofted(step),
         _ => None,
     }

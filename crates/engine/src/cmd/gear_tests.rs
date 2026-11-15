@@ -617,6 +617,8 @@ fn a_sketch_point_is_a_shaft_normal_to_its_sketch() {
     let r = run(&mut s, "gear.from_axes", json!({"axis1": {"sketch": sk, "point": "c"}, "axis2": "Z"}));
     assert_eq!(r["relation"]["kind"], "parallel", "{r}");
     assert!((r["relation"]["distance"].as_f64().unwrap() - 30.0).abs() < 1e-9);
+}
+
 // ---------------------------------------------------------------------------------------------
 // The clearance body (keep-out volume for a housing)
 // ---------------------------------------------------------------------------------------------

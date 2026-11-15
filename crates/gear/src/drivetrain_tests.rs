@@ -155,12 +155,14 @@ fn shafts_meeting_make_a_bevel_pair_and_the_circles_must_touch() {
 
 #[test]
 fn per_member_errors_name_the_member() {
-    // A circle off every shaft line; a bearing point off every line; a style mix.
+    // A circle moved off its place (touching nothing now); a bearing point off every line; a
+    // style mix.
     let mut items = compound();
     items[6] = circle([85.0, 5.0, 20.0], Z, 20.0);
     items[8].ask.role = Some(Role::Bearing);
     let o = read(&items, None, &Simple::default(), &Spec::default());
-    assert!(o.members[6].error.as_deref().unwrap_or_default().contains("member 7: its axis lies on no shaft line"), "{:?}", o.members[6]);
+    assert!(o.members[6].error.as_deref().unwrap_or_default().contains("member 7 meshes with nothing"), "{:?}", o.members[6]);
+    assert_eq!(o.members[6].shaft, None);
     assert!(o.members[8].error.as_deref().unwrap_or_default().contains("member 9: a bearing must lie on a shaft line"), "{:?}", o.members[8]);
     assert!(o.members[3].error.is_none() && o.solved.is_none());
     let e = o.error.unwrap();
@@ -201,4 +203,44 @@ fn build_6_sketch_names_the_circle_that_meshes_with_nothing() {
     let fixed = vec![circles[0], circles[1], Circle { c: V2::new(0.0, 22.5).rot(-0.5), r: 7.5 }];
     let (spec, _) = crate::sketch_rules::train_spec(&fixed, Kind::Spur, &Simple::default(), &Spec::default()).unwrap();
     clean(&crate::plan(&spec).unwrap(), 2);
+}
+
+/// A sketch's flat geometry in model space: (x, y) on the plane through `origin` with axes
+/// `x` and `y` (its normal x × y).
+fn on_plane(origin: [f64; 3], x: [f64; 3], y: [f64; 3], p: (f64, f64)) -> [f64; 3] {
+    [0, 1, 2].map(|i| origin[i] + p.0 * x[i] + p.1 * y[i])
+}
+
+/// One gear system in three ordinary sketches: gears 1 and 2 in a sketch on z = 0, gears 3 and
+/// 4 in a sketch on z = 20 (gear 3 on gear 2's axis), and the shared shaft line in a third
+/// sketch on the XZ plane. Read together: a compound of gears 2 and 3 on that shaft.
+#[test]
+fn a_compound_from_two_sketches_on_parallel_planes_and_a_shaft_line_in_a_third() {
+    let (x, y) = ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+    let a = |p| on_plane([0.0; 3], x, y, p);
+    let b = |p| on_plane([0.0, 0.0, 20.0], x, y, p);
+    // The third sketch is on XZ: its x along world X, its y along world -Z... any plane holding
+    // the line; here (u, v) -> (u, 0, v).
+    let c = |p: (f64, f64)| [p.0, 0.0, p.1];
+    let items = vec![
+        circle(a((0.0, 0.0)), Z, 20.0),
+        circle(a((50.0, 0.0)), Z, 30.0),
+        circle(b((50.0, 0.0)), Z, 15.0),
+        circle(b((85.0, 0.0)), Z, 20.0),
+        line(c((50.0, -10.0)), c((50.0, 40.0))),
+        point(c((50.0, 30.0))),
+    ];
+    let o = read(&items, None, &Simple { face_width: Some(8.0), ..Simple::default() }, &Spec::default());
+    let p = planned(&o);
+    clean(&p, 2);
+    let m = &o.members;
+    assert!(m[1].cluster.is_some() && m[1].cluster == m[2].cluster && m[0].cluster.is_none() && m[3].cluster.is_none());
+    assert_eq!((m[1].shaft, m[2].shaft, m[0].shaft), (Some(4), Some(4), None));
+    assert_eq!((m[5].role, m[5].shaft), ("bearing", Some(4)));
+    assert_eq!(p.clusters, vec![vec![1, 2]]);
+    assert!(p.assembly.links.iter().any(|l| matches!(l, AssemblyLink::Rigid { a: 1, b: 2 })));
+    // Without the shaft line, the shared axis alone makes the cluster.
+    let o = read(&items[..4], None, &Simple { face_width: Some(8.0), ..Simple::default() }, &Spec::default());
+    planned(&o);
+    assert!(o.members[1].cluster.is_some() && o.members[1].cluster == o.members[2].cluster);
 }

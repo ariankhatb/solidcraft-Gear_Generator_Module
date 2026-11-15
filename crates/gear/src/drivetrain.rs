@@ -2,12 +2,15 @@
 //! sketch and model geometry. Each thing read is a member:
 //!
 //! - a circle is a gear's pitch circle: its centre and the normal to its plane are the gear's
-//!   axis, which must lie along a shaft line when shaft lines are drawn;
+//!   axis (on a shaft line, when one is drawn along it);
 //! - a line is a shaft, in any direction (a line asked to be a gear carries one, sized by its
 //!   pitch diameter, or teeth and module, `along` it from its first end);
 //! - a point lying on a shaft line is a bearing seat (elsewhere, a point is only a dot);
 //! - circles on one shaft at different places along it are a cluster (compound gears, joined
 //!   as one part); circles touching in one plane mesh.
+//!
+//! The things may come from several sketches on different planes (and 3D sketches), read
+//! together in model space: a shaft line in one sketch, circles in sketches square to it.
 //!
 //! Gears on parallel shafts (any number) are a gear train ([`crate::sketch_rules::size_train`],
 //! planned by [`crate::plan::train`]); two gears on shafts at an angle are the set their shafts
@@ -267,16 +270,9 @@ pub fn read(items: &[Item], style: Option<Kind>, settings: &Simple, base: &Spec)
             Thing::Circle(c) => {
                 let n = unit(c.n).unwrap_or([0.0, 0.0, 1.0]);
                 let c = Circle3 { n, ..c };
-                // Its axis on a shaft line (when shafts are drawn).
-                let shaft = lines.iter().copied().find(|&k| line(k).dir().is_some_and(|u| parallel(u, n)) && line(k).distance(c.c) <= 1e-6 + TOLERANCE * c.r);
-                match shaft {
-                    Some(k) => out.members[i].shaft = Some(k),
-                    None if !lines.is_empty() => {
-                        fail(&mut err, i, format!("{}: its axis lies on no shaft line; draw its shaft through its centre, square to it", who(items, i)));
-                        continue;
-                    }
-                    None => {}
-                }
+                // The shaft line its axis lies along, if one is drawn (else its axis is its shaft:
+                // a drivetrain may be drawn in several sketches, its shafts in only some).
+                out.members[i].shaft = lines.iter().copied().find(|&k| line(k).dir().is_some_and(|u| parallel(u, n)) && line(k).distance(c.c) <= 1e-6 + TOLERANCE * c.r);
                 gears.push((i, c));
             }
             Thing::Line(l) => {

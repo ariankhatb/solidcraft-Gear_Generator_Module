@@ -1458,6 +1458,19 @@ fn sketch_items(sk: &GearSketch) -> Vec<(String, drivetrain::Item)> {
     circles.into_iter().chain(lines).chain(points).collect()
 }
 
+/// The items `picks` names (all of them when it is left out), in the sketches' order: an
+/// entity's id (in any of the sketches read), or `<sketch>/<id>` for one sketch's (its name or
+/// id), when ids repeat across sketches.
+fn pick_items(cmd: &str, items: Vec<(String, String, drivetrain::Item)>, picks: Option<&[Option<String>]>) -> Result<Vec<drivetrain::Item>> {
+    let Some(ids) = picks else { return Ok(items.into_iter().map(|(_, _, it)| it).collect()) };
+    let want: Vec<&str> = ids.iter().flatten().map(String::as_str).filter(|w| !w.is_empty()).collect();
+    let hit = |sketch: &str, k: &str, w: &str| w == k || w.split_once('/').is_some_and(|(sk, id)| sk == sketch && id == k);
+    if let Some(missing) = want.iter().find(|w| !items.iter().any(|(sk, k, _)| hit(sk, k, w))) {
+        return Err(bad(cmd, format!("`picks`: no point, circle or line `{missing}` in the sketches read (picks come from them)")));
+    }
+    Ok(items.into_iter().filter(|(sk, k, _)| want.iter().any(|w| hit(sk, k, w))).map(|(_, _, it)| it).collect())
+}
+
 /// A 3D sketch curve or point (a drawn or included wire) as a drivetrain's thing: an exact arc
 /// or an included circle is a pitch circle (a partial arc stands for its whole circle), a
 /// straight one a shaft line, a single point a point. Other curves (splines) are none.
@@ -1504,6 +1517,27 @@ fn from_sketch(s: &Session, cmd: &str, p: &GearParams, assembly: bool) -> Result
     if p.axis1.is_some() || p.axis2.is_some() || p.placement.is_some() {
         return Err(bad(cmd, "give `sketch`, or `axis1` (`axis2`) or `placement`: not both"));
     }
+    // Several sketches (`sketch: [a, b, ...]`): read together in model space, each through its
+    // plane, as one drivetrain.
+    if let Some(Value::Array(list)) = &p.sketch {
+        if list.is_empty() || list.len() > 32 {
+            return Err(bad(cmd, "`sketch`: a list of 1 to 32 sketches"));
+        }
+        let mut items: Vec<(String, String, drivetrain::Item)> = Vec::new();
+        let mut names = Vec::new();
+        for v in list {
+            let id = super::features::sketch_id(s, Some(v), cmd, "sketch")?;
+            if names.contains(&id) {
+                continue;
+            }
+            names.push(id);
+            let sk = sketch_entities(s, id).map_err(|e| bad(cmd, e))?;
+            let name = super::features::sketch_key(Some(v)).unwrap_or_default();
+            items.extend(sketch_items(&sk).into_iter().map(|(k, it)| (name.clone(), k, it)));
+        }
+        let only = pick_items(cmd, items, p.picks.as_deref())?;
+        return read_drivetrain(cmd, p, &only, None, assembly);
+    }
     let id = super::features::sketch_id(s, p.sketch.as_ref(), cmd, "sketch")?;
     let sk = sketch_entities(s, id).map_err(|e| bad(cmd, e))?;
     let turn = p.sketch_turn.unwrap_or([0.0; 3]);
@@ -1511,15 +1545,9 @@ fn from_sketch(s: &Session, cmd: &str, p: &GearParams, assembly: bool) -> Result
         return Err(bad(cmd, "`sketch_turn` must be three finite angles"));
     }
     if !sk.things.is_empty() {
-        let mut items = sketch_items(&sk);
-        if let Some(ids) = &p.picks {
-            let want: Vec<&str> = ids.iter().flatten().map(String::as_str).filter(|w| !w.is_empty()).collect();
-            if let Some(missing) = want.iter().find(|w| !items.iter().any(|(k, _)| k == *w)) {
-                return Err(bad(cmd, format!("`picks`: sketch {id} has no point, circle or line `{missing}` (picks come from the one sketch)")));
-            }
-            items.retain(|(k, _)| want.contains(&k.as_str()));
-        }
-        let only: Vec<drivetrain::Item> = items.into_iter().map(|(_, it)| it).collect();
+        let name = id.to_string();
+        let items = sketch_items(&sk).into_iter().map(|(k, it)| (name.clone(), k, it)).collect();
+        let only = pick_items(cmd, items, p.picks.as_deref())?;
         return read_drivetrain(cmd, p, &only, None, assembly);
     }
     let style = p.kind.map(kind_of);

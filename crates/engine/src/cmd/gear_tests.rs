@@ -1458,3 +1458,32 @@ fn selected_circles_with_roles_and_sizes_report_each_member() {
     let r = run(&mut s, "gear.calculate", json!({"selection": sel}));
     assert!(r["members"].as_array().is_some(), "{r}");
 }
+
+/// One gear system in three ordinary sketches: gears 1 and 2 on XY, gears 3 and 4 on a plane
+/// 20 mm up (gear 3 on gear 2's axis), the shared shaft line in a sketch on XZ. Read together
+/// (`sketch` a list): a compound of gears 2 and 3; the set follows all three sketches.
+#[test]
+fn a_compound_from_two_sketches_on_parallel_planes_and_a_shaft_in_a_third() {
+    let mut s = Session::default();
+    let low = sketch_with(&mut s, &[circle(0.0, 0.0, 20.0, "g1"), circle(50.0, 0.0, 30.0, "g2")]);
+    let high = run(&mut s, "sketch.create", json!({"plane": {"origin": [0, 0, 20], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.circle.center", json!({"center": [50, 0], "radius": 15, "id": "g3"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [85, 0], "radius": 20, "id": "g4"}));
+    run(&mut s, "sketch.finish", json!({}));
+    // XZ: sketch y along world -Z.
+    let side = run(&mut s, "sketch.create", json!({"plane": "XZ"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.line", json!({"points": [[50, 10], [50, -40]], "ids": ["shaft"]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let ask = json!({"sketch": [low, high, side], "face_width": 8});
+    let r = run(&mut s, "gear.calculate", ask.clone());
+    let m = r["members"].as_array().unwrap_or_else(|| panic!("{r}"));
+    assert_eq!(m.len(), 5, "{r}");
+    assert!(m.iter().all(|m| m["error"].is_null()), "{r}");
+    assert!(m[1]["cluster"].is_number() && m[1]["cluster"] == m[2]["cluster"] && m[0]["cluster"].is_null(), "{r}");
+    assert_eq!((m[1]["shaft"].as_u64(), m[2]["shaft"].as_u64()), (Some(4), Some(4)), "{r}");
+    let made = run(&mut s, "gear.create", ask);
+    let group = made["group"].as_u64().unwrap();
+    // Linked to every sketch it read: moving gear 4's circle in the second regenerates it.
+    let st = run(&mut s, "gear.inspect", json!({"group": group}));
+    assert_eq!(st["sets"][0]["sketch_changed"], false, "{st}");
+}

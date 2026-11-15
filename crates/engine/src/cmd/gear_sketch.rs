@@ -205,13 +205,33 @@ pub(super) fn new_sketch(s: &mut Session, cmd: &str, p: &Value) -> Result<Option
     Ok(Some(out))
 }
 
-/// A short, stable print of what the sketch rules read from a set's sketch (its plane and its
-/// points, circles and lines with their ids), or `None` when the request names no sketch or
-/// the sketch can't be read.
+/// A short, stable print of what the sketch rules read from a set's sketches (each one's plane
+/// and its points, circles and lines with their ids; every sketch the request names, in its
+/// `sketch` or its `selection`), or `None` when the request names no sketch or one can't be
+/// read.
 pub(super) fn sketch_print(s: &Session, request: &Value) -> Option<String> {
-    let id = sketch_of(s, request)?;
-    let gs = sketch_entities(s, id).ok()?;
+    let ids = sketches_of(s, request);
+    if ids.is_empty() {
+        return None;
+    }
     let mut text = String::new();
+    for id in &ids {
+        text.push_str(&format!("#{id};"));
+        print_one(s, *id, &mut text)?;
+    }
+    // FNV-1a: the same in every build (kept with the design).
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in text.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    let names: Vec<String> = ids.iter().map(u64::to_string).collect();
+    Some(format!("{}:{h:016x}", names.join("+")))
+}
+
+/// What [`sketch_print`] reads of one sketch.
+fn print_one(s: &Session, id: u64, text: &mut String) -> Option<()> {
+    let gs = sketch_entities(s, id).ok()?;
     let num = |v: f64| format!("{:.6}", if v.abs() < 5e-7 { 0.0 } else { v });
     let f = gs.frame;
     for v in f.origin.iter().chain(f.x.iter()).chain(f.z.iter()) {
@@ -236,23 +256,36 @@ pub(super) fn sketch_print(s: &Session, request: &Value) -> Option<String> {
             solidcraft_gear::drivetrain::Thing::Point(q) => text.push_str(&format!("P{k}:{};", v(q))),
         }
     }
-    // FNV-1a: the same in every build (kept with the design).
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in text.bytes() {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(0x0100_0000_01b3);
+    Some(())
+}
+
+/// Every sketch a set's request names: its `sketch` (one, or a list) and the sketches of its
+/// `selection`'s entries, each once, in that order; those still there.
+pub(super) fn sketches_of(s: &Session, request: &Value) -> Vec<u64> {
+    let mut keys: Vec<&Value> = Vec::new();
+    match request.get("sketch") {
+        Some(Value::Array(list)) => keys.extend(list.iter()),
+        Some(v) if !v.is_null() => keys.push(v),
+        _ => {}
     }
-    Some(format!("{id}:{h:016x}"))
+    if let Some(items) = request.get("selection").and_then(Value::as_array) {
+        keys.extend(items.iter().filter_map(|item| item.get("sketch").filter(|v| !v.is_null())));
+    }
+    let mut ids = Vec::new();
+    for k in keys {
+        if let Ok(id) = super::super::features::sketch_id(s, Some(k), "gear.update", "sketch")
+            && !ids.contains(&id)
+        {
+            ids.push(id);
+        }
+    }
+    ids
 }
 
 /// The sketch a set's request names (its `sketch`, or the sketch of the first shaft or
 /// bearing picked in one in its `selection`), if it is still there.
 pub(super) fn sketch_of(s: &Session, request: &Value) -> Option<u64> {
-    let v = request
-        .get("sketch")
-        .filter(|v| !v.is_null())
-        .or_else(|| request.get("selection")?.as_array()?.iter().find_map(|item| item.get("sketch").filter(|v| !v.is_null())))?;
-    super::super::features::sketch_id(s, Some(v), "gear.update", "sketch").ok()
+    sketches_of(s, request).first().copied()
 }
 
 /// Whether the set's sketch reads differently from when the set was last made.

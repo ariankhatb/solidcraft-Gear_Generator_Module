@@ -350,6 +350,10 @@ pub struct Spec {
     /// Also plan the set's clearance body (keep-out volume for a housing; see
     /// [`crate::clearance`]): `Plan::clearance`. None: not made.
     pub clearance_body: Option<crate::clearance::Clearance>,
+    /// Space that must stay empty (a sketch's clearance circles: [`crate::clearance::Zone`], in
+    /// world coordinates): no gear's tip or shaft may enter one as the set turns
+    /// (`Plan::zone_clashes`), and the keep-out body holds them.
+    pub clearance_zones: Vec<crate::clearance::Zone>,
     /// A differential's own settings (`Kind::Differential`; see [`crate::diff::Diff`]).
     pub diff: crate::diff::Diff,
     /// A gear train (any number of parallel-axis gears meshing outside, inside rings or on
@@ -447,6 +451,7 @@ impl Default for Spec {
             first_azimuth: 0.0,
             bevel_planet_mode: BevelPlanetMode::Single,
             clearance_body: None,
+            clearance_zones: Vec::new(),
             diff: crate::diff::Diff::default(),
             train: None,
         }
@@ -788,6 +793,9 @@ pub struct Plan {
     /// would lock), one per closing mesh, naming the members round the loop
     /// ([`Assembly::from_graph`]). The assembly leaves the closing mesh out.
     pub assembly_issues: Vec<AssemblyIssue>,
+    /// Members whose tips or shafts enter a clearance zone (`Spec::clearance_zones`) as the set
+    /// turns, one per member and zone, with how far in.
+    pub zone_clashes: Vec<crate::clearance::ZoneClash>,
     /// The bearings placed at the clearance body's seats (`Spec::clearance_body`), where they
     /// are; built as bodies too when it asks for `bearing_bodies`.
     pub bearings: Vec<crate::clearance::PlacedBearing>,
@@ -1216,6 +1224,9 @@ pub fn check(s: &Spec) -> Result<(), String> {
     if let Some(c) = &s.clearance_body {
         crate::clearance::check(c)?;
     }
+    for (i, z) in s.clearance_zones.iter().enumerate() {
+        crate::clearance::check_zone(z).map_err(|e| format!("clearance zone {}: {e}", i + 1))?;
+    }
     extras::check(s)
 }
 
@@ -1289,6 +1300,13 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
     }
     // How the bodies go together, where they are (a differential's is planned with it).
     assembly::fill(s, &mut p);
+    // Clearance zones: which members' tips or shafts enter them as the set turns.
+    if !s.clearance_zones.is_empty() {
+        p.zone_clashes = crate::clearance::zone_clashes(&s.clearance_zones, &p);
+        for c in p.zone_clashes.clone() {
+            p.warn(c.message);
+        }
+    }
     // The clearance body, from the bodies where they are.
     if let Some(c) = s.clearance_body.as_ref().filter(|_| s.kind != Kind::Differential) {
         let body = crate::clearance::clearance_body(s, &mut p)?;

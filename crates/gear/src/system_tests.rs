@@ -306,3 +306,33 @@ fn a_gearbox_whose_branches_disagree_is_reported() {
         assert!(a.ratio(0, i).is_some(), "member {}", i + 1);
     }
 }
+
+/// Clearance zones (a sketch's clearance circles): the keep-out holds them, and a member whose
+/// tips or shaft enter one as it turns is reported with how far in; one that stays out isn't.
+#[test]
+fn clearance_zones_are_kept_out_and_clashes_reported_per_member() {
+    use crate::clearance::Zone;
+    let z = [0.0, 0.0, 1.0];
+    // A pair, module 2: gear 1 z20 (tips at r 22) at the origin, gear 2 z32 (tips at r 34) at
+    // x = 52. A Ø10 zone at x = 26 between them: gear 1's tips come 1 mm in, gear 2's teeth
+    // cover the zone's axis (5 mm in). A Ø10 zone at (0, 60) is clear of both.
+    let zones = vec![
+        Zone { axis: Axis { origin: [26.0, 0.0, 0.0], dir: z }, radius: 5.0, from: -1.0, to: 20.0, name: "clearance Ø10 between".into() },
+        Zone { axis: Axis { origin: [0.0, 60.0, 0.0], dir: z }, radius: 5.0, from: -1.0, to: 20.0, name: String::new() },
+    ];
+    let s = Spec { module: 2.0, teeth: 20, teeth2: 32, clearance_body: Some(Clearance::default()), clearance_zones: zones, ..Spec::defaults_for(Kind::Pair) };
+    let p = crate::plan(&s).unwrap_or_else(|e| panic!("{e}"));
+    let clash = |body: usize| p.zone_clashes.iter().find(|c| c.zone == 0 && c.body == body).unwrap_or_else(|| panic!("no clash of member {}: {:?}", body + 1, p.zone_clashes));
+    assert!((clash(0).depth - 1.0).abs() < 0.05, "gear 1: {}", clash(0).depth);
+    assert!((clash(1).depth - 5.0).abs() < 1e-6, "gear 2: {}", clash(1).depth);
+    assert!(!p.zone_clashes.iter().any(|c| c.zone == 1), "the far zone is clear: {:?}", p.zone_clashes);
+    assert!(p.warnings.iter().any(|w| w.contains("enters clearance Ø10 between by")), "{:?}", p.warnings);
+    // In the keep-out, with the gears'.
+    let keep = crate::mesh3d::Solid::new(p.clearance.as_ref().unwrap(), 0.05);
+    assert!(keep.contains([0.0, 60.0, 5.0]) && keep.contains([26.0, 0.0, 19.0]));
+    assert!(!keep.contains([0.0, 66.0, 5.0]));
+    // A zone with no length is refused.
+    let bad = vec![Zone { axis: Axis { origin: [0.0; 3], dir: z }, radius: 5.0, from: 2.0, to: 2.0, name: String::new() }];
+    let e = crate::plan(&Spec { clearance_zones: bad, ..Spec::defaults_for(Kind::Pair) }).unwrap_err();
+    assert!(e.contains("clearance zone 1"), "{e}");
+}

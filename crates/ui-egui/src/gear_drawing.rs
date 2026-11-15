@@ -421,7 +421,7 @@ pub(crate) fn sketch(ui: &mut Ui, cv: &mut Canvas, d: &mut Drawn, cx: Ctx<'_>, s
                 }
             }
         }
-        Kind::Bevel | Kind::SpiralBevel => {
+        Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary => {
             if let (Some(l1), Some(l2)) = (pick(1).filter(|i| *i < d.lines.len()), pick(2).filter(|i| *i < d.lines.len())) {
                 let dot = pick(0).and_then(|i| d.points.get(i).copied());
                 if let Some(h) = bevel_dims(&painter, &to_screen, d.lines[l1], d.lines[l2], dot, cx.spec, view.scale, ink, bg, (l1, l2)) {

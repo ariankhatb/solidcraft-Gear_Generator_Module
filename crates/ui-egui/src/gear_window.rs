@@ -167,7 +167,7 @@ impl AxesStep {
 
 /// What the window shows or hides besides the set's own numbers.
 #[derive(Clone, Debug, PartialEq)]
-struct Opts {
+pub(crate) struct Opts {
     /// Module given as diametral pitch (teeth per inch).
     inch: bool,
     /// Show the basic rack's coefficients.
@@ -189,7 +189,7 @@ struct Opts {
 
 /// The set being edited (the window's main button is then Update).
 #[derive(Clone, Debug, PartialEq)]
-struct Editing {
+pub(crate) struct Editing {
     /// The set's history folder.
     group: u64,
     name: String,
@@ -289,7 +289,7 @@ pub(crate) enum RightView {
     Profile,
 }
 
-struct GearMesh {
+pub(crate) struct GearMesh {
     fill: Vec<[V2; 3]>,
     holes: Vec<Vec<[V2; 3]>>,
     outlines: Vec<Vec<V2>>,
@@ -872,6 +872,7 @@ fn report_update(app: &mut SolveApp, reply: &Value) {
 /// such items selected, slot 1 takes the first and slot 2 the second.
 fn capture(app: &SolveApp, w: &mut GearWindow, slot: usize) {
     use solidcraft_engine::Sel;
+    use solidcraft_engine::geom::prelude::*;
     let found: Vec<Slot> = app
         .session
         .selection
@@ -880,8 +881,12 @@ fn capture(app: &SolveApp, w: &mut GearWindow, slot: usize) {
             if let Sel::SketchPoint { id } = sel {
                 // A sketch point: the shaft through it, normal to its sketch.
                 let st = crate::open_meshing::session_world(&app.session);
-                let ss = st.sketches.iter().rev().find(|ss| ss.sketch.point_index(id).is_some())?;
-                let p = ss.plane.to_world(ss.sketch.point(ss.sketch.point_index(id)?)?);
+                let (sketch, point) = match id.split_once(':') {
+                    Some((sketch, point)) => (sketch.parse().ok()?, point),
+                    None => (app.session.active_sketch?, id.as_str()),
+                };
+                let ss = st.sketch(sketch)?;
+                let p = ss.plane.to_world(ss.sketch.point(ss.sketch.resolve_point(point)?)?);
                 let n = ss.plane.normal();
                 let axis = Axis::new([p.x, p.y, p.z], [n.x, n.y, n.z])?;
                 return Some(Slot { axis, label: format!("sketch point {id}") });

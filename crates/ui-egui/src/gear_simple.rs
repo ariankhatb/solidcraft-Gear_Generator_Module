@@ -349,10 +349,10 @@ fn unit_suffix(u: Unit) -> &'static str {
 /// The form's settings: the family's fields the drawing doesn't give.
 fn settings_ui(ui: &mut Ui, w: &mut GearWindow) {
     let k = w.spec.kind;
-    let gen = w.plan_gen;
+    let plan_gen = w.plan_gen;
     let s = &mut w.simple;
-    if s.outputs.as_ref().is_none_or(|(g, _)| *g != gen) {
-        s.outputs = Some((gen, simple::outputs_of(&w.spec)));
+    if s.outputs.as_ref().is_none_or(|(g, _)| *g != plan_gen) {
+        s.outputs = Some((plan_gen, simple::outputs_of(&w.spec)));
     }
     let outputs = s.outputs.as_ref().map(|(_, o)| o.clone()).unwrap_or_default();
     let rows: Vec<_> = simple::fields(Some(k)).into_iter().filter(|f| !drawn_field(k, f.field, s.measured.as_ref())).collect();

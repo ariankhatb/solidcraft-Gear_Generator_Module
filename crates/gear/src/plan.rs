@@ -52,6 +52,9 @@ pub enum Kind {
     /// Bevel sun with bevel planets whose shafts meet its axis at one apex at the cone angle
     /// (`shaft_angle`); optionally a second sun (differential) or a bevel ring.
     BevelPlanetary,
+    /// A complete differential: side gears, pinions or element gears, the case and its drive gear
+    /// (settings in `Spec::diff`; see [`crate::diff`]).
+    Differential,
 }
 
 /// How the axes of a set lie, for grouping types in a picker.
@@ -66,7 +69,7 @@ pub enum Axes {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 20] = [
+    pub const ALL: [Kind; 21] = [
         Kind::Spur,
         Kind::Helical,
         Kind::Herringbone,
@@ -87,6 +90,7 @@ impl Kind {
         Kind::FaceGear,
         Kind::Elliptical,
         Kind::BevelPlanetary,
+        Kind::Differential,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -110,6 +114,7 @@ impl Kind {
             Kind::FaceGear => "face_gear",
             Kind::Elliptical => "elliptical",
             Kind::BevelPlanetary => "bevel_planetary",
+            Kind::Differential => "differential",
         }
     }
     pub fn label(self) -> &'static str {
@@ -134,6 +139,7 @@ impl Kind {
             Kind::FaceGear => "Face (crown) gear",
             Kind::Elliptical => "Elliptical pair",
             Kind::BevelPlanetary => "Bevel planetary (differential)",
+            Kind::Differential => "Differential (gears, case and drive)",
         }
     }
     pub fn axes(self) -> Axes {
@@ -141,7 +147,7 @@ impl Kind {
             Kind::Spur | Kind::Helical | Kind::Herringbone | Kind::Internal | Kind::Rack | Kind::Pair | Kind::Planetary => Axes::Parallel,
             Kind::Bevel | Kind::SpiralBevel | Kind::FaceGear | Kind::BevelPlanetary => Axes::Intersecting,
             Kind::Hypoid | Kind::CrossedHelical | Kind::Worm => Axes::Crossed,
-            Kind::Cycloidal | Kind::CycloidalDrive | Kind::Spline | Kind::Elliptical => Axes::Special,
+            Kind::Cycloidal | Kind::CycloidalDrive | Kind::Spline | Kind::Elliptical | Kind::Differential => Axes::Special,
             Kind::Sprocket | Kind::Pulley => Axes::Wrapped,
         }
     }
@@ -171,6 +177,7 @@ impl Kind {
                 | Kind::FaceGear
                 | Kind::Elliptical
                 | Kind::BevelPlanetary
+                | Kind::Differential
         )
     }
 }
@@ -338,6 +345,8 @@ pub struct Spec {
     /// Also plan the set's clearance body (keep-out volume for a housing; see
     /// [`crate::clearance`]): `Plan::clearance`. None: not made.
     pub clearance_body: Option<crate::clearance::Clearance>,
+    /// A differential's own settings (`Kind::Differential`; see [`crate::diff::Diff`]).
+    pub diff: crate::diff::Diff,
 }
 
 impl Default for Spec {
@@ -428,6 +437,7 @@ impl Default for Spec {
             first_azimuth: 0.0,
             bevel_planet_mode: BevelPlanetMode::Single,
             clearance_body: None,
+            diff: crate::diff::Diff::default(),
         }
     }
 }
@@ -525,6 +535,12 @@ impl Spec {
                 s.spiral_angle = 0.0;
                 s.face_width = 7.0;
                 s.bevel_planet_mode = BevelPlanetMode::Differential;
+            }
+            Kind::Differential => {
+                s.diff = crate::diff::Diff::default();
+                s.module = s.diff.module;
+                s.teeth = s.diff.side_teeth;
+                s.teeth2 = s.diff.pinion_teeth;
             }
             Kind::FaceGear => {
                 s.module = 2.0;
@@ -789,6 +805,9 @@ impl Plan {
 
 /// Validates the spec; an error says which value and why.
 pub fn check(s: &Spec) -> Result<(), String> {
+    if s.kind == Kind::Differential {
+        return crate::diff::check(s);
+    }
     let pos = |v: f64, what: &str| if v.is_finite() && v > 0.0 { Ok(()) } else { Err(format!("{what} must be greater than 0")) };
     pos(s.module, "module")?;
     pos(s.face_width, "face width")?;
@@ -953,6 +972,7 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
         Kind::FaceGear => extras::face_gear(s, &mut p),
         Kind::Elliptical => extras::elliptical(s, &mut p),
         Kind::BevelPlanetary => bevel_planet::build(s, &mut p),
+        Kind::Differential => crate::diff::build(s, &mut p)?,
     }
     left_out::left_out(s, &mut p);
     // The inputs the phase formulas name beyond each member's own.
@@ -983,9 +1003,14 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
         for b in &mut p.bodies {
             b.frame = place.compose(&b.frame);
         }
+        // A differential's keep-out body is planned with the set (in the set's frame).
+        if let Some(c) = &mut p.clearance {
+            c.frame = place.compose(&c.frame);
+        }
     }
+    crate::diff::place_assembly(&mut p);
     // The clearance body, from the bodies where they are.
-    if s.clearance_body.is_some() {
+    if s.clearance_body.is_some() && s.kind != Kind::Differential {
         p.clearance = Some(crate::clearance::clearance_body(s, &mut p)?);
     }
     Ok(p)

@@ -48,6 +48,7 @@ pub mod cycloid;
 pub mod elliptic;
 pub mod face_gear;
 pub mod design;
+pub mod diff;
 pub mod equations;
 pub mod geom;
 pub mod hub;
@@ -74,6 +75,8 @@ pub use plan::{Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit,
 
 #[cfg(test)]
 mod bevel_planet_tests;
+#[cfg(test)]
+mod diff_tests;
 #[cfg(test)]
 mod axes_tests;
 #[cfg(test)]

@@ -733,3 +733,16 @@ fn every_type_builds_its_clearance_body() {
         eprintln!("{k:?} {name}: {v:.1} mm³");
     }
 }
+
+#[test]
+fn a_worm_sets_loft_sketches_are_hidden() {
+    let mut s = Session::default();
+    run(&mut s, "gear.create", json!({"type": "worm"}));
+    // Every sketch the set made (the wheel's loft sections, the thread) is hidden: shown, they
+    // draw their outlines over the teeth.
+    let sketches: Vec<u64> = s.doc.features.iter().filter(|f| matches!(f.kind, solidcraft_doc::FeatureKind::Sketch { .. })).map(|f| f.id).collect();
+    assert!(sketches.len() > 3, "{sketches:?}");
+    for id in sketches {
+        assert!(s.visibility.hidden_sketches.contains(&id), "sketch {id} shows: {:?}", s.visibility.hidden_sketches);
+    }
+}

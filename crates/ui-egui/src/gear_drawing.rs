@@ -417,7 +417,11 @@ pub(crate) fn sketch(ui: &mut Ui, cv: &mut Canvas, d: &mut Drawn, cx: Ctx<'_>, s
                 let (c, l) = (d.circles[ci].c, d.lines[li]);
                 let foot = l.foot(c);
                 if foot.dist(c) > 1e-6 {
-                    hits.push(linear_dim(&painter, to_screen(c), to_screen(foot), 0.0, &format!("e {}", fmt(foot.dist(c))), Dim::Offset(li, ci), foot.dist(c), ink, bg));
+                    // A worm's or rack's line is its pitch line, tangent to the wheel's pitch
+                    // circle: the distance is that circle's radius, not the shaft offset e (the
+                    // 3D view's e is centre to centre).
+                    let tag = if matches!(k, Kind::Rack | Kind::Worm) { "r" } else { "e" };
+                    hits.push(linear_dim(&painter, to_screen(c), to_screen(foot), 0.0, &format!("{tag} {}", fmt(foot.dist(c))), Dim::Offset(li, ci), foot.dist(c), ink, bg));
                 }
             }
         }

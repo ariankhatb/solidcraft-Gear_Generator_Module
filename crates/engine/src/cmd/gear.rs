@@ -2107,6 +2107,13 @@ fn build_set(s: &mut Session, plan: &Plan, names: &[String], warnings: &mut Vec<
         }
     }
     s.set_validation(checked);
+    // Lofts, sweeps and coils leave their sketches showing (an extrude hides its own): a worm
+    // wheel's sections would draw over its teeth. The set's sketches are hidden; they stay in
+    // the browser to show again.
+    let sketches: Vec<Value> = made.iter().flat_map(|b: &BodyRecord| b.steps.iter()).flat_map(|st| st.sketches.iter()).map(|k| json!(k.id)).collect();
+    if built.is_ok() && !sketches.is_empty() {
+        s.execute("browser.visibility", &json!({"visible": false, "items": sketches})).ok();
+    }
     built.map(|()| made)
 }
 

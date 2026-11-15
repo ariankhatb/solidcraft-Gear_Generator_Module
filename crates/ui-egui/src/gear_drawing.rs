@@ -349,7 +349,7 @@ pub(crate) fn sketch(ui: &mut Ui, cv: &mut Canvas, d: &mut Drawn, cx: Ctx<'_>, s
     let (ink, bg, weak) = (vis.text_color(), vis.extreme_bg_color, vis.weak_text_color());
     painter.rect_filled(rect, 6.0, bg);
     // Fit what is drawn (frozen while dragging).
-    let view = cv.frozen.unwrap_or_else(|| fit(d, rect));
+    let view = cv.frozen.unwrap_or_else(|| fit(d, rect, cone_reach(d, cx.kind, cx.spec)));
     let to_screen = |p: V2| -> Pos2 { pos2(rect.center().x + ((p.x - view.mid.x) * view.scale) as f32, rect.center().y - ((p.y - view.mid.y) * view.scale) as f32) };
     let to_sketch = |p: Pos2| -> V2 { V2::new(view.mid.x + f64::from(p.x - rect.center().x) / view.scale, view.mid.y - f64::from(p.y - rect.center().y) / view.scale) };
     let tol = 9.0 / view.scale;
@@ -640,8 +640,32 @@ fn remove(d: &mut Drawn, item: Item) {
     }
 }
 
-/// The view that fits what is drawn.
-fn fit(d: &Drawn, rect: Rect) -> View {
+/// A bevel side view's apex and the reach of its pitch cones (their cone distance), which can
+/// be longer than the shaft lines drawn: the view fits them too.
+fn cone_reach(d: &Drawn, k: Kind, spec: &Spec) -> Option<(V2, f64)> {
+    if k.axes() != solidcraft_gear::plan::Axes::Intersecting || d.lines.len() < 2 {
+        return None;
+    }
+    let (l1, l2) = (d.lines[0], d.lines[1]);
+    let apex = d.points.first().copied().or_else(|| {
+        let (u, v) = (l1.dir(), l2.dir());
+        let den = u.cross(v);
+        (den.abs() > 1e-9).then(|| l1.a + u * ((l2.a - l1.a).cross(v) / den))
+    })?;
+    let ray = |l: &Line| {
+        let far = if l.a.dist(apex) >= l.b.dist(apex) { l.a } else { l.b };
+        unit(far - apex)
+    };
+    let (r1, r2) = (ray(&l1), ray(&l2));
+    let sigma = r1.cross(r2).abs().atan2(r1.dot(r2));
+    let (z1, z2) = (f64::from(spec.teeth.max(1)), f64::from(spec.teeth2.max(1)));
+    let d1 = sigma.sin().atan2(z2 / z1 + sigma.cos());
+    let re = spec.module * z1 / 2.0 / d1.sin().max(1e-6);
+    (re.is_finite() && re > 0.0).then_some((apex, re.min(1e5)))
+}
+
+/// The view that fits what is drawn (and a bevel's pitch cones, `reach` about the apex).
+fn fit(d: &Drawn, rect: Rect, reach: Option<(V2, f64)>) -> View {
     let (mut lo, mut hi) = (V2::new(f64::MAX, f64::MAX), V2::new(f64::MIN, f64::MIN));
     let mut take = |p: V2, r: f64| {
         lo = V2::new(lo.x.min(p.x - r), lo.y.min(p.y - r));
@@ -657,6 +681,9 @@ fn fit(d: &Drawn, rect: Rect) -> View {
     for l in &d.lines {
         take(l.a, 0.0);
         take(l.b, 0.0);
+    }
+    if let Some((apex, re)) = reach {
+        take(apex, re);
     }
     let span = V2::new((hi.x - lo.x).max(10.0), (hi.y - lo.y).max(10.0));
     let scale = (f64::from(rect.width()) / (span.x * 1.45)).min(f64::from(rect.height()) / (span.y * 1.45));

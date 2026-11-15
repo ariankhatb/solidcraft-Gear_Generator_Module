@@ -1136,6 +1136,11 @@ fn right_views(ui: &mut Ui, w: &mut GearWindow, width: f32) {
     if !simple && w.right == RightView::Drawing {
         w.right = RightView::View3d;
     }
+    // Why the previews are empty and the main button is off, where it is seen (not under the
+    // previews, out of sight).
+    if let Err(e) = &w.plan {
+        ui.note(format!("⛔ {e}"), ui.visuals().error_fg_color);
+    }
     let side = width >= 640.0;
     let half = if side { (width - 8.0) / 2.0 } else { width };
     let tall = |w: f32| (w * 0.78).clamp(220.0, 420.0);
@@ -1200,8 +1205,8 @@ fn view3d_ui(ui: &mut Ui, w: &mut GearWindow, size: Vec2) {
 /// Simple mode's numbers: what the solver chose, then the warnings; everything else under
 /// "All numbers".
 fn simple_facts(ui: &mut Ui, w: &GearWindow) {
-    if let Err(e) = &w.plan {
-        ui.note(e, ui.visuals().error_fg_color);
+    // A plan error is shown above the previews.
+    if w.plan.is_err() {
         return;
     }
     if let Ok(p) = &w.plan {
@@ -1210,9 +1215,10 @@ fn simple_facts(ui: &mut Ui, w: &GearWindow) {
         }
     }
     if !w.simple.chosen.is_empty() {
-        egui::Grid::new("gear_simple_chosen").num_columns(2).striped(true).spacing([12.0, 2.0]).show(ui, |ui| {
+        egui::Grid::new("gear_simple_chosen").num_columns(2).striped(true).spacing([12.0, 2.0]).min_col_width(160.0).show(ui, |ui| {
             for f in w.simple.chosen.iter().take(10) {
-                ui.label(egui::RichText::new(&f.label).small());
+                // The whole name: a narrow column cut them to "gear 1 t…".
+                ui.add(egui::Label::new(egui::RichText::new(&f.label).small()).wrap_mode(egui::TextWrapMode::Extend));
                 ui.label(egui::RichText::new(fact_value(f)).small().monospace());
                 ui.end_row();
             }
@@ -2068,11 +2074,20 @@ fn section_member(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
             num(ui, "First planet at", "The first planet's azimuth about the sun's shaft", &mut s.first_azimuth, -360.0..=360.0, 0.5, "°");
             row(ui, "Mode", "What meshes the planets besides the sun", |ui| {
                 use solidcraft_gear::plan::BevelPlanetMode;
+                let before = s.bevel_planet_mode;
                 egui::ComboBox::from_id_salt("gear_bevel_planet_mode").selected_text(s.bevel_planet_mode.label()).show_ui(ui, |ui| {
                     for m in BevelPlanetMode::ALL {
                         ui.selectable_value(&mut s.bevel_planet_mode, m, m.label());
                     }
                 });
+                // Switched to a ring at a cone angle that can't take one (a differential's 90°):
+                // a bevel epicyclic's usual 45°, as Simple mode does, not a refusal.
+                if s.bevel_planet_mode == BevelPlanetMode::Ring
+                    && before != BevelPlanetMode::Ring
+                    && solidcraft_gear::plan::bevel_planet::geometry(&solidcraft_gear::Spec { teeth3: 0, ..s.clone() }).is_err()
+                {
+                    s.shaft_angle = 45.0;
+                }
             });
             bore(ui, "Bore", "bore2", &mut s.bore2);
         }
@@ -2593,9 +2608,8 @@ fn bore(ui: &mut Ui, label: &str, id: &str, b: &mut Bore) {
 
 fn facts(ui: &mut Ui, w: &GearWindow) {
     match &w.plan {
-        Err(e) => {
-            ui.note(e, ui.visuals().error_fg_color);
-        }
+        // Shown above the previews.
+        Err(_) => {}
         Ok(p) => {
             for warn in &p.warnings {
                 ui.note(format!("⚠ {warn}"), ui.visuals().warn_fg_color);

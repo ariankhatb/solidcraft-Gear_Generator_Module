@@ -232,6 +232,8 @@ pub struct Diff {
     pub ring_bolts: bool,
     pub bolts: u32,
     pub bolt_diameter: f64,
+    /// Which parts are built (all by default); the differential is designed whole either way.
+    pub parts: Parts,
     /// Also make the keep-out body (the space the turning assembly needs, for cutting the axle
     /// housing): `Plan::clearance` (also made when `Spec::clearance_body` is set; Simple mode's
     /// designs turn it on).
@@ -274,6 +276,7 @@ impl Default for Diff {
             bolts: 0,
             bolt_diameter: 0.0,
             keep_out: false,
+            parts: Parts::default(),
         }
     }
 }
@@ -321,6 +324,37 @@ impl Diff {
     }
     fn clr(&self) -> f64 {
         if self.clearance > 0.0 { self.clearance } else { 0.5 }
+    }
+}
+
+/// Which of a differential's bodies are built. The set is designed whole either way (sizes,
+/// meshes, phasing, facts); what is left out is just not made, and drops out of the meshes the
+/// window checks and of the assembly.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Parts {
+    pub side_a: bool,
+    pub side_b: bool,
+    /// The spider pinions or element gears, and which of them (1-based, in plan order: pinion 1,
+    /// 2, …; Torsen elements 1a, 1b, 2a, … counted 1, 2, 3, …; empty: all).
+    pub pinions: bool,
+    pub which_pinions: Vec<u32>,
+    /// The pinion pins (cross shaft).
+    pub pins: bool,
+    pub case: bool,
+    pub ring: bool,
+    pub drive_pinion: bool,
+}
+
+impl Default for Parts {
+    fn default() -> Self {
+        Self { side_a: true, side_b: true, pinions: true, which_pinions: Vec::new(), pins: true, case: true, ring: true, drive_pinion: true }
+    }
+}
+
+impl Parts {
+    /// Only the gear set's toothed members: the side gears and the pinions or elements.
+    pub fn gears_only() -> Parts {
+        Parts { pins: false, case: false, ring: false, drive_pinion: false, ..Parts::default() }
     }
 }
 
@@ -432,6 +466,9 @@ pub fn check(s: &Spec) -> Result<(), String> {
         if !d.drive_helix.is_finite() || d.drive_helix.abs() >= 45.0 {
             return Err("the helical drive's helix angle must be under 45°".into());
         }
+    }
+    if d.parts.which_pinions.len() > 64 || d.parts.which_pinions.contains(&0) {
+        return Err("which pinions: numbers from 1 (64 at most)".into());
     }
     if d.bolts > 64 {
         return Err("64 ring bolts at most".into());
@@ -1812,6 +1849,16 @@ fn rate(s: &Spec, core: &Core, drive: Option<&Drive>, p: &mut Plan) {
 
 /// Plans a differential (`Spec::kind` = [`Kind::Differential`]).
 pub(crate) fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
+    // An integral ring with the case or the ring left out: planned as a separate ring, so the one
+    // that is built stands on its own.
+    let adjusted;
+    let s = if s.diff.mount == Mount::Integral && s.diff.drive != DriveKind::None && (!s.diff.parts.case || !s.diff.parts.ring) {
+        p.warn("the integral ring is planned as a separate ring here, since the case or the ring is left out");
+        adjusted = Spec { diff: Diff { mount: Mount::Bolted, ..s.diff.clone() }, ..s.clone() };
+        &adjusted
+    } else {
+        s
+    };
     let d = &s.diff;
     let mut core = match d.style {
         Style::Open | Style::Biased => bevel_core(s, p)?,
@@ -1894,19 +1941,69 @@ pub(crate) fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
         }
         meshes.push(mp);
     }
-    // The assembly: case on the axle, everything else on its axis, carried members on the case.
+    // Which bodies are built: the part toggles (and `only`, kept for old requests: 1 the gear set,
+    // 2 the case and pins, 3 the drive). The whole differential is designed either way.
+    let parts = &d.parts;
+    let mut carried_k = 0u32;
+    let keep: Vec<bool> = (0..bodies.len())
+        .map(|i| {
+            let part = if i == 0 {
+                parts.case
+            } else if Some(i) == ring_i {
+                parts.ring
+            } else if Some(i) == pin_i {
+                parts.drive_pinion
+            } else {
+                match roles[i] {
+                    Some(Role::Side) if i == first => parts.side_a,
+                    Some(Role::Side) => parts.side_b,
+                    Some(Role::Carried) => {
+                        carried_k += 1;
+                        parts.pinions && (parts.which_pinions.is_empty() || parts.which_pinions.contains(&carried_k))
+                    }
+                    Some(Role::Fixed) => parts.pins,
+                    None => true,
+                }
+            };
+            let old = match s.only {
+                0 => true,
+                1 => i >= first && roles[i] != Some(Role::Fixed),
+                2 => i == 0 || roles[i] == Some(Role::Fixed),
+                _ => i > 0 && i < first,
+            };
+            part && old
+        })
+        .collect();
+    // Only what is built: the meshes between built members, and the assembly over them.
+    let built = |name: &str| bodies.iter().zip(&keep).any(|(b, k)| *k && b.name == name);
+    meshes.retain(|mp| mp.bodies.as_ref().is_none_or(|[a, b]| built(&a.name) && built(&b.name)));
+    let mut new_index = vec![None; bodies.len()];
+    let mut n_kept = 0;
+    for (i, k) in keep.iter().enumerate() {
+        if *k {
+            new_index[i] = Some(n_kept);
+            n_kept += 1;
+        }
+    }
+    // The assembly: case on the axle, everything else on its axis, carried members on the case
+    // (when it isn't built, they turn on fixed axes: the case held).
+    let case_i = new_index[0];
     let mut asm = Assembly::default();
     for (i, b) in bodies.iter().enumerate() {
+        if !keep[i] {
+            continue;
+        }
         let carrier = match roles[i] {
-            Some(Role::Carried) => Some(0),
+            Some(Role::Carried) => case_i,
             _ => None,
         };
-        asm.members.push(AssemblyMember { body: i, axis: Axis { origin: b.frame.origin, dir: b.frame.z }, grounded: false, carrier });
+        asm.members.push(AssemblyMember { body: asm.members.len(), axis: Axis { origin: b.frame.origin, dir: b.frame.z }, grounded: false, carrier });
     }
-    // The links as a tree (each member driven by one link at most): the drive pinion turns the
-    // ring, the ring the case, the case holds the pins; side gear A turns every pinion or element
-    // chain (their turns relative to the case), and side gear B follows pinion 1 (or element
-    // pair 1). Side gear A is left free: an open differential has two degrees of freedom.
+    // The links as a tree (each member driven by one link at most), over the built members: the
+    // drive pinion turns the ring, the ring the case, the case holds the pins; side gear A turns
+    // every pinion or element chain (their turns relative to the case), side gear B follows the
+    // first built pinion (or element pair). Side gear A is left free: an open differential has
+    // two degrees of freedom.
     let radius = |a: usize, b: usize| -> Option<(f64, f64)> {
         if let (Some(dr), Some(pi)) = (&drive, pin_i)
             && a == pi
@@ -1921,52 +2018,51 @@ pub(crate) fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
     for mp in &meshes {
         let Some([ba, bb]) = &mp.bodies else { continue };
         let (Some(a), Some(b)) = (index(&ba.name), index(&bb.name)) else { continue };
+        let (Some(na), Some(nb)) = (new_index[a], new_index[b]) else { continue };
         if driven[b] || mp.ratio == 0.0 || !mp.ratio.is_finite() {
             continue;
         }
         let Some((ra, _)) = radius(a, b) else { continue };
         driven[b] = true;
-        asm.links.push(AssemblyLink::Gear { a, b, ra, rb: ra / mp.ratio.abs(), internal: mp.ratio > 0.0, reverse: false });
+        asm.links.push(AssemblyLink::Gear { a: na, b: nb, ra, rb: ra / mp.ratio.abs(), internal: mp.ratio > 0.0, reverse: false });
     }
-    if let Some(r) = ring_i {
-        asm.links.push(AssemblyLink::Rigid { a: r, b: 0 });
+    if let (Some(r), Some(c)) = (ring_i.and_then(|r| new_index[r]), case_i) {
+        asm.links.push(AssemblyLink::Rigid { a: r, b: c });
     }
     for (i, r) in roles.iter().enumerate() {
-        if *r == Some(Role::Fixed) {
-            asm.links.push(AssemblyLink::Rigid { a: 0, b: i });
+        if *r == Some(Role::Fixed)
+            && let (Some(c), Some(pi)) = (case_i, new_index[i])
+        {
+            asm.links.push(AssemblyLink::Rigid { a: c, b: pi });
         }
     }
-    if s.only == 0 {
-        p.warn("assembly: the case is driven and side gear A is left free to turn (an open differential has two degrees of freedom: the pinions and side gear B follow side gear A relative to the case)");
+    if keep[first] && keep.iter().skip(first + 1).any(|k| *k) {
+        p.warn("assembly: side gear A is left free to turn (an open differential has two degrees of freedom: the pinions and side gear B follow side gear A relative to the case)");
     }
-
-    // `only`: 1 the gear set, 2 the case (and pins), 3 the drive.
-    let keep = |i: usize| match s.only {
-        0 => true,
-        1 => i >= first && roles[i] != Some(Role::Fixed),
-        2 => i == 0 || roles[i] == Some(Role::Fixed),
-        _ => i > 0 && i < first,
-    };
+    if !keep[0] && keep.iter().enumerate().any(|(i, k)| *k && roles[i] == Some(Role::Carried)) {
+        p.warn("assembly: the case isn't built, so the pinions or elements turn on fixed axes (as if the case were held)");
+    }
+    if !keep.iter().all(|k| *k) {
+        let left: Vec<String> = bodies.iter().zip(&keep).filter(|(_, k)| !**k).map(|(b, _)| b.name.clone()).collect();
+        p.fact("bodies left out (designed with the set, not built)", left.len() as f64, Unit::None);
+        p.warn(format!("not built (designed with the rest): {}", left.join(", ")));
+    }
     let origin = s.origin;
-    let mut kept = Vec::new();
     for (i, b) in bodies.iter().enumerate() {
-        if keep(i) {
-            kept.push(shifted(b, origin));
+        if keep[i] {
+            p.bodies.push(shifted(b, origin));
         }
     }
-    p.bodies.extend(kept);
-    if s.only == 0 {
-        for m in &mut asm.members {
-            for k in 0..3 {
-                m.axis.origin[k] += origin[k];
-            }
+    for m in &mut asm.members {
+        for k in 0..3 {
+            m.axis.origin[k] += origin[k];
         }
-        p.assembly = asm;
     }
+    p.assembly = asm;
     p.meshes3d = meshes;
     p.preview = core.preview.clone();
     p.preview_note = core.preview_note.clone();
-    if (d.keep_out || s.clearance_body.is_some()) && s.only == 0 {
+    if d.keep_out || s.clearance_body.is_some() {
         let n_outer = 1 + usize::from(drive.is_some()) + usize::from(ring_i.is_some());
         let outer: Vec<Body> = bodies[..n_outer].iter().map(|b| shifted(b, origin)).collect();
         p.clearance = Some(keep_out(s, outer, &shape, p)?);

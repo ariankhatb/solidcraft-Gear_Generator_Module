@@ -361,9 +361,40 @@ pub struct DifferentialParams {
     pub bolts: Option<u32>,
     #[serde(default)]
     pub bolt_diameter: Option<f64>,
-    /// Also make the keep-out body for the axle housing (default true).
+    /// Also make the keep-out body for the axle housing.
     #[serde(default)]
     pub keep_out: Option<bool>,
+    /// Which bodies are built (every one by default); the differential is designed whole
+    /// either way.
+    #[serde(default)]
+    pub parts: Option<DiffPartsParams>,
+}
+
+/// A differential's bodies to build, each on (default) or off.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct DiffPartsParams {
+    #[serde(default)]
+    pub side_a: Option<bool>,
+    #[serde(default)]
+    pub side_b: Option<bool>,
+    /// The spider pinions or element gears.
+    #[serde(default)]
+    pub pinions: Option<bool>,
+    /// Which of them, 1-based in plan order (Torsen elements 1a, 1b, 2a… are 1, 2, 3…; empty:
+    /// all).
+    #[serde(default)]
+    pub which_pinions: Option<Vec<u32>>,
+    /// The pinion pins (cross shaft).
+    #[serde(default)]
+    pub pins: Option<bool>,
+    #[serde(default)]
+    pub case: Option<bool>,
+    #[serde(default)]
+    pub ring: Option<bool>,
+    #[serde(default)]
+    pub drive_pinion: Option<bool>,
 }
 
 /// A differential designed by what it must do (Simple mode): the solver picks teeth, modules

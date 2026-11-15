@@ -141,6 +141,42 @@ fn material_combo(ui: &mut Ui, id: &str, v: &mut Material) {
     });
 }
 
+/// Which bodies are built: a row of checkboxes (the differential is designed whole either way).
+fn parts_row(ui: &mut Ui, d: &mut Diff) {
+    let bevel = d.style.bevel();
+    let p = &mut d.parts;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("Build").strong()).on_hover_text("Which bodies are made; the set is sized, meshed and checked as a whole either way");
+        ui.checkbox(&mut p.side_a, "Side gear A");
+        ui.checkbox(&mut p.side_b, "Side gear B");
+        ui.checkbox(&mut p.pinions, if bevel { "Pinions" } else { "Elements" });
+        if bevel {
+            ui.checkbox(&mut p.pins, "Pins");
+        }
+        ui.checkbox(&mut p.case, "Case");
+        if d.drive != DriveKind::None {
+            ui.checkbox(&mut p.ring, "Ring gear");
+            ui.checkbox(&mut p.drive_pinion, "Drive pinion");
+        }
+        if ui.small_button("Gears only").on_hover_text("Just the side gears and the pinions or elements").clicked() {
+            *p = solidcraft_gear::diff::Parts::gears_only();
+        }
+        if ui.small_button("All").clicked() {
+            *p = solidcraft_gear::diff::Parts::default();
+        }
+    });
+    if p.pinions {
+        // Which ones, by number (empty: all).
+        let mut text = p.which_pinions.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(if bevel { "Which pinions" } else { "Which elements" }).small());
+            if ui.add(egui::TextEdit::singleline(&mut text).desired_width(90.0).hint_text("all")).on_hover_text("Numbers in order, e.g. 1, 3 (Torsen elements 1a, 1b, 2a… are 1, 2, 3…); empty: all").changed() {
+                p.which_pinions = text.split(|c: char| c == ',' || c.is_whitespace()).filter_map(|t| t.trim().parse::<u32>().ok()).filter(|n| *n > 0).collect();
+            }
+        });
+    }
+}
+
 /// Simple mode's left column for a differential: the style, then what it must do; Design solves
 /// it (a few seconds: it plans every candidate) and fills the set.
 pub(crate) fn simple_panel(ui: &mut Ui, w: &mut GearWindow) {
@@ -194,6 +230,7 @@ pub(crate) fn simple_panel(ui: &mut Ui, w: &mut GearWindow) {
     for n in &w.diff_notes {
         ui.label(RichText::new(n).small());
     }
+    parts_row(ui, &mut w.spec.diff);
     ui.checkbox(&mut w.spec.diff.keep_out, "Keep-out body for the axle housing").on_hover_text("One solid of the space the turning differential needs (case, ring and pinion envelopes, axles, bearing seats): cut it out of a housing");
 }
 
@@ -201,6 +238,7 @@ pub(crate) fn simple_panel(ui: &mut Ui, w: &mut GearWindow) {
 pub(crate) fn advanced(ui: &mut Ui, s: &mut Spec) {
     let d = &mut s.diff;
     style_picker(ui, d);
+    parts_row(ui, d);
     let st = d.style;
     if st == Style::TorsenA {
         ui.label(RichText::new("Torsen Type A: side gears are worms (helix = 90° − lead angle), elements are crossed helical wheels with spur ends; two pairs fit elements this size").small().weak());

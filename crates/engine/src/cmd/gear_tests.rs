@@ -1198,3 +1198,38 @@ fn a_users_joint_to_an_assembled_gear_survives_an_update() {
     let got = drive_and_read(&mut s, jj[0].unwrap(), 32.0, jj[1].unwrap());
     assert!((got + 24.0).abs() < 1e-6, "{got}");
 }
+
+/// Bevels up to a 70° pitch cone (their teeth ending on planes square to the axis) pass the
+/// kernel's own check of every step; the flatter ones, trimmed by their back and front cones,
+/// are refused by SMLib only for near-cusps in the boolean's 2D curves ("Bad CurveCusp") and
+/// nothing else (slow: run with --ignored).
+#[test]
+#[ignore]
+fn bevel_bodies_pass_the_kernels_check() {
+    let check = |p: Value| -> std::result::Result<(), String> {
+        let mut s = Session::default();
+        run(&mut s, "diagnostics.validation", json!({"mode": "each_step"}));
+        run(&mut s, "gear.create", p.clone());
+        // (A feature the check refuses fails the command or is listed in its reply.)
+        match s.execute("timeline.compute_all", &json!({})) {
+            Err(e) => Err(e.to_string()),
+            Ok(r) => {
+                let text = r.to_string();
+                if text.contains("SMLib") { Err(text) } else { Ok(()) }
+            }
+        }
+    };
+    for p in [
+        json!({"type": "bevel"}),
+        json!({"type": "spiral_bevel"}),
+        json!({"type": "bevel", "face_width2": 8, "face_offset2": 1.5}),
+        json!({"type": "bevel", "shaft_angle": 60, "teeth": 16, "teeth2": 40}),
+    ] {
+        check(p.clone()).unwrap_or_else(|e| panic!("{p}: {e}"));
+    }
+    for p in [json!({"type": "bevel", "module": 2.5, "teeth": 17, "teeth2": 34, "shaft_angle": 100, "only": 2})] {
+        if let Err(e) = check(p.clone()) {
+            assert!(e.lines().filter(|l| l.contains("Test #")).all(|l| l.contains("CurveCusp")), "{p}: {e}");
+        }
+    }
+}

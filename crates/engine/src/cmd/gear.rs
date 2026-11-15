@@ -69,7 +69,7 @@ pub static COMMANDS: &[CommandSpec] = &[
              strength rating: torque? (N·m) | power? (kW), speed? (rpm) on the driver, \
              material?, material2?, material3?: steel_normalized|steel_through_hardened|steel_case_hardened|steel_nitrided|cast_iron|bronze|pom|pa66|pla|petg, \
              application_factor?, life_hours?, accuracy_grade? (5..12); tooth tuning: tip_round? (modules), xy_compensation?, elephant_foot?, elephant_foot_height?, nozzle? (mm), \
-             clearance? (c*), tip_shortening?, tip_diameter?, tip_diameter2?, tip_relief?, tip_relief_height?, crowning?, backlash2?, face_width2?, face_offset2? (pair); \
+             clearance? (c*), tip_shortening?, tip_diameter?, tip_diameter2?, tip_relief?, tip_relief_height?, crowning?, backlash2?, face_width2?, face_offset2? (pair; hypoid: the pinion's face width and its offset towards the heel, face_width being the ring gear's); \
              tooth_chamfer_front?, tooth_chamfer_back?: {size, angle?}; bore_chamfer?, hub_chamfer?; shaft_front?, shaft_back?, shaft2_front?, shaft2_back?: \
              {diameter, length, step_diameter?, step_length?, end?: plain|d_flat|keyway|hex|cross|centre_hole, end_length?, end_size?, chamfer?}; \
              hardware?, hardware2?: {set_screw?, set_screws?, nut_width?, nut_thickness?, insert_diameter?, insert_depth?, clamp_slit?, clamp_screw?, bearing?: name (608, 625, 6001, MR105, ...), \

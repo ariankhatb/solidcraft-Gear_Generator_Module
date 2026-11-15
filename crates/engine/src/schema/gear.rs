@@ -771,10 +771,12 @@ pub struct GearParams {
     /// Gear 2's own backlash in mm (mate, planets, the worm's thread; default: `backlash`).
     #[serde(default)]
     pub backlash2: Option<f64>,
-    /// Pair: gear 2's face width in mm (default: `face_width`).
+    /// Pair: gear 2's face width in mm (default: `face_width`). Hypoid: the pinion's face width
+    /// along its pitch cone (default: covering the ring gear's face, `face_width`).
     #[serde(default)]
     pub face_width2: Option<f64>,
-    /// Pair: how far gear 2's mid plane sits from gear 1's along the axis, in mm.
+    /// Pair: how far gear 2's mid plane sits from gear 1's along the axis, in mm. Hypoid: how
+    /// far the pinion's face sits towards its heel from where it covers the ring gear's.
     #[serde(default)]
     pub face_offset2: Option<f64>,
     /// Tooth edge chamfer on the front face (the hub's side).

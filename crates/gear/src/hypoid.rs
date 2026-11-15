@@ -38,7 +38,8 @@
 //! teeth in the normal section at the mean point, every other slice of a tooth being that one
 //! scaled about the gear's pitch apex and turned along a logarithmic spiral (constant spiral
 //! angle β2; a face-milled gear's circular arc is not followed). Root and face cones share the
-//! pitch apex (standard depth taper). The outside is a cylinder, the back and the top are flat.
+//! pitch apex (standard depth taper). The teeth start and end on the front (toe) and back (heel)
+//! cones, square to the pitch cone at the inner and outer cone distances, at every depth.
 //!
 //! **The pinion** is generated from the ring gear, as a real hypoid pinion is cut to run with its
 //! gear: it is what is left of its blank after the ring gear (its teeth carried on past both
@@ -48,9 +49,19 @@
 //! therefore exactly conjugate to the gear's, its root fillets are the paths of the gear's tip
 //! corners and its tip is the gear's root cone seen from the pinion, a clearance away.
 //!
-//! Both members are lofts through planar sections square to their own axes (11 for the ring
-//! gear, 9 for the pinion: with the kernel's cubic loft through them the flanks stay within a
-//! few microns of the true ones at module 5; the tests check the pair as the lofts describe it).
+//! Both members are lofts through planar sections square to their own axes (19 or more for the
+//! ring gear; 9 exact pinion sections, lofted through as many between as the kernel needs: with
+//! the kernel's cubic loft through them the flanks stay within a few microns of the true ones at
+//! module 5; the tests check the pair as the lofts describe it).
+//!
+//! **Toe and heel.** A plane square to the axis can't end a tooth: on the ring gear's flat cone
+//! (70–80° at 90° shafts) it meets the tips and the roots tens of millimetres apart, and a ring
+//! gear ended on such planes kept long thin blades of root inside its toe. Each member's loft
+//! therefore runs on past both ends with whole teeth in every section, and is intersected with
+//! its blank, a solid of revolution bounded by the front and back cones (`Step::Revolve`,
+//! `Op::Intersect`). Each member has its own face width: the ring gear's is `face_width`
+//! (ISO 23509's b2, which sizes the set); the pinion's covers the ring gear's face with a tenth
+//! of b2 more at each end, or is `face_width2`, moved along its cone by `face_offset2`.
 
 use std::f64::consts::{PI, TAU};
 
@@ -287,7 +298,14 @@ pub fn design(s: &Spec) -> Result<Design, String> {
         let mid = 0.5 * (lo + hi);
         if fits(mid) { lo = mid } else { hi = mid }
     }
-    let most = (lo * 100.0).floor() / 100.0;
+    // (Near the edge the pinion's teeth may give out unevenly: the offset named is one that works.)
+    let mut most = (lo * 100.0).floor() / 100.0;
+    for _ in 0..30 {
+        if most <= 0.0 || fits(most) {
+            break;
+        }
+        most = ((most - 0.01 * s.offset.max(1.0)) * 100.0).floor() / 100.0;
+    }
     Err(if most > 0.0 {
         format!(
             "offset too large: use at most {} mm with these sizes ({} mm asked): the ring gear's spiral angle would be {}°, under the {}° it needs (a larger pinion spiral angle allows more)",
@@ -539,11 +557,6 @@ fn spread(x: f64) -> f64 {
     0.2 * x + 0.8 * 0.5 * (1.0 - (PI * x).cos())
 }
 
-/// The smaller of two numbers, rounded where they cross (always a little under both).
-fn soft_min(a: f64, b: f64, soft: f64) -> f64 {
-    0.5 * (a + b - ((a - b) * (a - b) + soft * soft).sqrt())
-}
-
 /// The ring gear's teeth, in the design frame (axis z, mean pitch circle on z = 0).
 ///
 /// A point of the gear is named by the cone through the pitch apex it lies on and how far down
@@ -573,11 +586,16 @@ pub(crate) struct Form {
     tan_hi: f64,
     /// cos β2 · r_m2: normal lengths at the mean point per radian round the axis.
     lat: f64,
-    /// The outside cylinder, the flat back and top of the toothed part.
+    /// The toe and the heel: the front and back cones, square to the pitch cone, at these
+    /// `mu` (the teeth run from one to the other at every depth).
+    mu_i: f64,
+    mu_e: f64,
+    /// The outside diameter's radius (the tips at the heel), and the planes the toothed loft
+    /// runs between: a little past the root at the heel and the tips at the toe, so every
+    /// section is whole teeth and the cones trim them ([`Form::blank`]).
     r_out: f64,
     z_lo: f64,
     z_hi: f64,
-    soft: f64,
     /// Fit points up each side of a tooth section.
     side: usize,
 }
@@ -786,22 +804,19 @@ impl Form {
             tan_lo,
             tan_hi,
             lat: d.beta2.cos() * d.rm2,
+            mu_i,
+            mu_e,
             r_out: mu_e * (d.rm2 + ha * cd),
             z_lo: 0.0,
             z_hi: 0.0,
-            soft: 0.2 * (ha + hf),
             side: GEAR_SIDE,
         };
-        f.z_hi = f.height(ha, mu_i);
-        // The back: where the outside cylinder leaves a little of the teeth's depth.
-        let want = -hf + 0.08 * (ha + hf);
-        let (mut lo, mut hi) = (hap - 60.0 * f.r_out, f.z_hi);
-        for _ in 0..70 {
-            let mid = 0.5 * (lo + hi);
-            if f.tip(mid) < want { lo = mid } else { hi = mid }
-        }
-        f.z_lo = hi;
-        if !(f.z_hi - f.z_lo > 1e-6 * d.rm2) {
+        // The loft runs a little past both cones (half a module along the pitch cone), so the
+        // cones cut through whole teeth and never meet the loft's own ends.
+        let past = 0.5 * d.mmn / d.cone_m2;
+        f.z_hi = f.height(ha, (mu_i - past).max(0.05));
+        f.z_lo = f.height(-hf, mu_e + past);
+        if !(mu_e > mu_i && f.z_hi - f.z_lo > 1e-6 * d.rm2) {
             return Err("the face width leaves no ring gear tooth".into());
         }
         Ok(f)
@@ -836,10 +851,54 @@ impl Form {
     fn widths(&self, t: f64) -> (f64, f64) {
         ((self.half - t * self.tan_lo) / self.lat, (self.half - t * self.tan_hi) / self.lat)
     }
-    /// The teeth's top on the plane `z`: the face cone, or the outside cylinder where that comes
-    /// first (rounded where they meet, so that sections change smoothly along the axis).
-    fn tip(&self, z: f64) -> f64 {
-        soft_min(self.ha, self.cone(self.r_out, z), self.soft)
+    /// The teeth's top on the plane `z`: the face cone (the back cone trims them at the heel).
+    fn tip(&self, _z: f64) -> f64 {
+        self.ha
+    }
+    /// The point at height `t` over the pitch cone and `mu` along it, as (radius, z).
+    fn point(&self, t: f64, mu: f64) -> V2 {
+        V2::new(mu * (self.rm + t * self.cd), self.height(t, mu))
+    }
+    /// The height `t` at which the cone square to the pitch cone at `mu` (a back or front cone)
+    /// crosses the plane `z`.
+    fn across(&self, mu: f64, z: f64) -> f64 {
+        (z - self.hap + mu * self.hap) / (mu * self.sd)
+    }
+    /// The gear's blank in its body frame (radius, height above the back face at `back`): the
+    /// front cone at the toe from above the tips to under the roots, then flat to the axis;
+    /// down the axis past the back face; the back cone at the heel up to above the tips; a cone
+    /// over the tips between. The toothed loft is intersected with it, so its teeth end on the
+    /// toe and heel cones at every depth.
+    fn blank(&self, back: f64) -> Vec<V2> {
+        let depth = self.ha + self.hf;
+        let above = self.ha + 0.5 * depth;
+        let under = -self.hf - 0.25 * depth;
+        let low = back - 1.0;
+        let at = |q: V2| V2::new(q.x, q.y - back);
+        // (On a steep cone the front and back cones near the axis fast: they stop a little in
+        // from the roots and the blank goes on square to the axis.)
+        let t_at = |mu: f64, r: f64| (r / mu - self.rm) / self.cd;
+        let toe_least = 0.3 * self.point(-self.hf, self.mu_i).x;
+        let f1 = self.point(under.max(t_at(self.mu_i, toe_least)), self.mu_i);
+        let heel_least = 0.3 * self.point(-self.hf, self.mu_e).x;
+        let t_low = self.across(self.mu_e, low);
+        let mut out = vec![at(V2::new(0.0, f1.y)), at(f1), at(self.point(above, self.mu_i)), at(self.point(above, self.mu_e))];
+        if self.point(t_low, self.mu_e).x >= heel_least {
+            out.push(at(self.point(t_low, self.mu_e)));
+        } else {
+            let q = self.point(t_at(self.mu_e, heel_least), self.mu_e);
+            out.push(at(q));
+            out.push(at(V2::new(q.x, low)));
+        }
+        out.push(at(V2::new(0.0, low)));
+        out
+    }
+    /// The plane up to which the back web runs (between the root at the heel and the loft's
+    /// first section) and its radius (between the back cone and the roots there).
+    fn web(&self) -> (f64, f64) {
+        let z = 0.5 * (self.z_lo + self.height(-self.hf, self.mu_e));
+        let bc = self.point(self.across(self.mu_e, z), self.mu_e).x;
+        (z, 0.5 * (bc + self.radius(-self.hf, z)))
     }
     /// The section on the plane `z`: radii up a tooth's sides and the two sides' angles.
     fn sides(&self, z: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
@@ -1236,15 +1295,112 @@ fn pinion_x(a1: V3) -> V3 {
     if len(x) > 1e-6 { unit(x) } else { [1.0, 0.0, 0.0] }
 }
 
+/// The pinion's toe and heel: the cones square to its pitch cone at the cone distances `toe`
+/// and `heel` from its pitch apex. Points are (radius, s) in its axial half plane, `s` along its
+/// axis from the crossing point towards its apex.
+///
+/// The face it covers by default: the ring gear's face (its toe and heel pitch points taken
+/// across to the pinion's pitch cone through the mean point) and a tenth of the ring gear's face
+/// width more at each end, as ISO 23509 sizes the pinion's face to cover the wheel's with an
+/// increment. `face_width2` sets its own width (about the same middle), `face_offset2` moves it
+/// along the cone (towards the heel).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PinionFace {
+    pub toe: f64,
+    pub heel: f64,
+    s_apex: f64,
+    sd: f64,
+    cd: f64,
+    /// Heights over the pitch cone: above every tip, about the tips at the toe, and under the
+    /// roots at the toe and at the heel.
+    above: f64,
+    toe_tip: f64,
+    under: f64,
+    heel_under: f64,
+    margin: f64,
+}
+
+impl PinionFace {
+    pub(crate) fn new(s: &Spec, d: &Design) -> Result<PinionFace, String> {
+        let (g1, g2) = (d.g1(), d.g2());
+        let cone = |x: V3| dot(sub(d.apex1, x), g1);
+        let a = cone(sub(d.apex2, mul(g2, d.cone_e2)));
+        let b = cone(sub(d.apex2, mul(g2, d.cone_m2 - d.b2 / 2.0)));
+        let (toe0, heel0) = (a.min(b), a.max(b));
+        if !(s.face_width2 >= 0.0 && s.face_width2.is_finite() && s.face_offset2.is_finite()) {
+            return Err("the pinion's face width must not be negative".into());
+        }
+        let mid = 0.5 * (toe0 + heel0) + s.face_offset2;
+        let half = if s.face_width2 > 0.0 { 0.5 * s.face_width2 } else { 0.5 * (heel0 - toe0) + 0.1 * d.b2 };
+        let (toe, heel) = (mid - half, mid + half);
+        if toe < 0.25 * d.cone_m1 {
+            return Err(format!(
+                "the pinion's face reaches too near its pitch apex: at most {} mm wide here (its toe {} mm from the apex)",
+                mm(2.0 * (mid - 0.25 * d.cone_m1).max(0.0)),
+                mm(toe)
+            ));
+        }
+        if toe >= heel0 || heel <= toe0 || heel - toe < 0.1 * (heel0 - toe0) {
+            return Err("the pinion's face misses the ring gear's: use a smaller face offset or a wider pinion face".into());
+        }
+        let (sd, cd) = d.delta1.sin_cos();
+        let scale = heel / d.cone_m1;
+        let depth = d.ha1 + d.hf1;
+        let under = -(d.hf1 * toe / d.cone_m1 + 0.5 * d.mmn);
+        let heel_under = -(d.hf1 * heel / d.cone_m1 + 0.5 * d.mmn);
+        Ok(PinionFace {
+            toe,
+            heel,
+            s_apex: dot(sub(d.apex1, d.o1), d.a1),
+            sd,
+            cd,
+            above: 2.0 * depth * scale + d.mmn,
+            toe_tip: 1.3 * (d.ha1 + d.clearance) * toe / d.cone_m1,
+            under: under.max(-0.8 * toe * sd / cd),
+            heel_under: heel_under.max(-0.8 * heel * sd / cd),
+            margin: 0.25 * d.mmn,
+        })
+    }
+    /// The point `h` over the pitch cone at cone distance `cone`.
+    pub(crate) fn at(&self, cone: f64, h: f64) -> V2 {
+        V2::new(cone * self.sd + h * self.cd, self.s_apex - cone * self.cd + h * self.sd)
+    }
+    /// Where the cone square to the pitch cone at `cone` is at radius `r`.
+    pub(crate) fn s_on(&self, cone: f64, r: f64) -> f64 {
+        self.at(cone, (r - cone * self.sd) / self.cd).y
+    }
+    /// The heel's flat back (square to the axis, under the roots, where the shank starts).
+    pub(crate) fn back(&self) -> V2 {
+        self.at(self.heel, self.heel_under)
+    }
+    /// The stretch of the axis the toothed loft takes (heel side first): from behind the heel's
+    /// flat back to past the toe cone at the tips, so the cones cut through whole teeth.
+    fn span(&self) -> (f64, f64) {
+        (self.back().y - self.margin, self.at(self.toe, self.toe_tip).y + self.margin)
+    }
+    /// The pinion's blank (radius, s): flat from the axis to under the roots at the heel, the
+    /// heel cone to above the tips, a line over the tips, the toe cone down to under the roots,
+    /// then flat to the axis.
+    fn blank(&self) -> Vec<V2> {
+        let (high, low) = (self.back(), self.at(self.toe, self.under));
+        vec![V2::new(0.0, high.y), high, self.at(self.heel, self.above), self.at(self.toe, self.above), low, V2::new(0.0, low.y)]
+    }
+}
+
 /// The set, worked out: the ring gear's form, the pinion's frame and both members' sections.
 pub(crate) struct Set {
     pub d: Design,
     form: Form,
-    /// The pinion's frame (design frame) and whether its heel is at its z = 0.
+    /// The pinion's frame (design frame) and whether its heel is at its z = 0; its toe and heel
+    /// cones; its frame z is `s − s_min` (forward) or `s_max − s`.
     op: V3,
     xp: V3,
     zp: V3,
     heel_first: bool,
+    face: PinionFace,
+    forward: bool,
+    s_min: f64,
+    s_max: f64,
     /// Heights of the pinion's sections along its axis, and its teeth there.
     zeta: Vec<f64>,
     teeth: Vec<Teeth>,
@@ -1253,6 +1409,34 @@ pub(crate) struct Set {
     loft: Vec<Teeth>,
     /// How many sections the ring gear is lofted through.
     gear_n: usize,
+}
+
+impl Set {
+    /// The pinion frame's z of the axial position `s`, and back.
+    fn z_of(&self, s: f64) -> f64 {
+        if self.forward { s - self.s_min } else { self.s_max - s }
+    }
+    fn s_of(&self, z: f64) -> f64 {
+        if self.forward { self.s_min + z } else { self.s_max - z }
+    }
+    /// A pinion radius along the axis (the tips' or the roots', `pick`), straight between the
+    /// exact sections.
+    fn pinion_radius(&self, s: f64, pick: &dyn Fn(&Teeth) -> f64) -> f64 {
+        let n = self.zeta.len();
+        let z = self.z_of(s).clamp(self.zeta[0], self.zeta[n - 1]);
+        let k = (0..n - 1).rfind(|k| self.zeta[*k] <= z).unwrap_or(0);
+        let u = (z - self.zeta[k]) / (self.zeta[k + 1] - self.zeta[k]);
+        pick(&self.teeth[k]) * (1.0 - u) + pick(&self.teeth[k + 1]) * u
+    }
+    /// Where the pinion's tips (or roots) meet the cone square to its pitch cone at `cone`: the
+    /// radius there.
+    fn pinion_on_cone(&self, cone: f64, pick: &dyn Fn(&Teeth) -> f64) -> f64 {
+        let mut r = self.face.at(cone, 0.0).x;
+        for _ in 0..12 {
+            r = self.pinion_radius(self.face.s_on(cone, r), pick);
+        }
+        r
+    }
 }
 
 /// Works the set out in the design frame; when its teeth twist too fast for the kernel to loft
@@ -1284,13 +1468,9 @@ fn work_out_design(s: &Spec, d: Design) -> Result<Set, String> {
     // The pinion is cut by the ring gear without its backlash, so the backlash stays between
     // the two (cut by the thinned gear, the pinion would grow into it).
     let cutter = if s.backlash > 0.0 { Form::new(&Spec { backlash: 0.0, ..s.clone() }, &d)? } else { form.clone() };
-    let g2 = d.g2();
-    // The pinion's toothed length: across the ring gear's face and a little past both ends.
-    let along = |x: V3| dot(sub(x, d.o1), d.a1);
-    let past = 0.12 * d.b2;
-    let inner = (d.cone_m2 - d.b2 / 2.0 - past).max(0.15 * d.cone_m2);
-    let s_heel = along(sub(d.apex2, mul(g2, d.cone_e2 + past)));
-    let s_toe = along(sub(d.apex2, mul(g2, inner)));
+    // The pinion's toothed loft: through its face and past its toe and heel cones, which trim it.
+    let face = PinionFace::new(s, &d)?;
+    let (s_heel, s_toe) = face.span();
     let length = (s_toe - s_heel).abs();
     if !(length > 1e-6 * d.rm2) {
         return Err("the pinion's axis runs square to the ring gear's face: no pinion fits".into());
@@ -1407,7 +1587,7 @@ fn work_out_design(s: &Spec, d: Design) -> Result<Set, String> {
     let Some((loft_z, loft)) = lofted else {
         return Err("pinion teeth twist too fast to loft: use a smaller spiral angle, offset or face width".into());
     };
-    Ok(Set { d, form, op, xp, zp, heel_first, zeta, teeth, loft_z, loft, gear_n })
+    Ok(Set { d, form, op, xp, zp, heel_first, face, forward, s_min, s_max, zeta, teeth, loft_z, loft, gear_n })
 }
 
 /// A hypoid set's axes and pitch cones without its teeth, for a fast preview
@@ -1428,17 +1608,16 @@ pub(crate) struct Layout {
     pub z_hi: f64,
     pub r_out: f64,
     pub length: f64,
+    /// The pinion's pitch cone at its heel and toe: (radius, frame z) each.
+    pub pinion_heel: [f64; 2],
+    pub pinion_toe: [f64; 2],
 }
 
 pub(crate) fn layout(s: &Spec) -> Result<Layout, String> {
     let d = design(s)?;
     let form = Form::new(s, &d)?;
-    let g2 = d.g2();
-    let along = |x: V3| dot(sub(x, d.o1), d.a1);
-    let past = 0.12 * d.b2;
-    let inner = (d.cone_m2 - d.b2 / 2.0 - past).max(0.15 * d.cone_m2);
-    let s_heel = along(sub(d.apex2, mul(g2, d.cone_e2 + past)));
-    let s_toe = along(sub(d.apex2, mul(g2, inner)));
+    let face = PinionFace::new(s, &d)?;
+    let (s_heel, s_toe) = face.span();
     let length = (s_toe - s_heel).abs();
     let ratio = d.z1 / d.z2;
     let across = cross(d.n2, d.tooth);
@@ -1454,7 +1633,9 @@ pub(crate) fn layout(s: &Spec) -> Result<Layout, String> {
     let web = if s.rim > 0.0 { s.rim } else { 0.06 * 2.0 * d.re2 };
     let back = form.z_lo - web;
     let world = |q: V3| -> V3 { [q[0] + s.origin[0], q[1] + s.origin[1], q[2] - back + s.origin[2]] };
-    Ok(Layout { pinion_origin: world(op), pinion_x: pinion_x(zp), pinion_z: zp, gear_origin: world([0.0, 0.0, back]), back, z_hi: form.z_hi, r_out: form.r_out, length, d })
+    let z_of = |q: V2| [q.x, if forward { q.y - s_min } else { s_max - q.y }];
+    let (pinion_heel, pinion_toe) = (z_of(face.at(face.heel, 0.0)), z_of(face.at(face.toe, 0.0)));
+    Ok(Layout { pinion_origin: world(op), pinion_x: pinion_x(zp), pinion_z: zp, gear_origin: world([0.0, 0.0, back]), back, z_hi: form.z_hi, r_out: form.r_out, length, pinion_heel, pinion_toe, d })
 }
 
 /// Builds the hypoid set into `p`.
@@ -1467,9 +1648,10 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
     let hand = if s.left_hand { "left" } else { "right" };
     let other = if s.left_hand { "right" } else { "left" };
     let n = set.zeta.len();
-    let (heel, toe) = if set.heel_first { (0, n - 1) } else { (n - 1, 0) };
-    let tip = |j: usize| *set.teeth[j].r.last().unwrap();
     let length = set.zeta[n - 1];
+    let tip = |t: &Teeth| *t.r.last().unwrap();
+    let root = |t: &Teeth| t.r[0];
+    let face = set.face;
     // The gear's back face goes to the origin.
     let web = if s.rim > 0.0 { s.rim } else { 0.06 * 2.0 * d.re2 };
     let back = form.z_lo - web;
@@ -1489,15 +1671,22 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
     p.fact("gear mean pitch diameter", 2.0 * d.rm2, Unit::Mm);
     p.fact("gear outer pitch diameter", 2.0 * d.re2, Unit::Mm);
     p.fact("gear outside diameter", 2.0 * form.r_out, Unit::Mm);
-    p.fact("pinion heel tip diameter", 2.0 * tip(heel), Unit::Mm);
-    p.fact("pinion heel root diameter", 2.0 * set.teeth[heel].r[0], Unit::Mm);
-    p.fact("pinion toe tip diameter", 2.0 * tip(toe), Unit::Mm);
-    p.fact("pinion toe root diameter", 2.0 * set.teeth[toe].r[0], Unit::Mm);
+    let gear_inner = form.point(form.ha, form.mu_i).x;
+    p.fact("gear inner tip diameter", 2.0 * gear_inner, Unit::Mm);
+    let heel_root = set.pinion_on_cone(face.heel, &root);
+    let toe_root = set.pinion_on_cone(face.toe, &root);
+    p.fact("pinion heel tip diameter", 2.0 * set.pinion_on_cone(face.heel, &tip), Unit::Mm);
+    p.fact("pinion heel root diameter", 2.0 * heel_root, Unit::Mm);
+    p.fact("pinion toe tip diameter", 2.0 * set.pinion_on_cone(face.toe, &tip), Unit::Mm);
+    p.fact("pinion toe root diameter", 2.0 * toe_root, Unit::Mm);
     p.fact("pinion mean cone distance", d.cone_m1, Unit::Mm);
     p.fact("gear mean cone distance", d.cone_m2, Unit::Mm);
     p.fact("gear outer cone distance", d.cone_e2, Unit::Mm);
     p.fact("gear face width", d.b2, Unit::Mm);
-    p.fact("pinion toothed length", length, Unit::Mm);
+    p.fact("pinion face width", face.heel - face.toe, Unit::Mm);
+    p.fact("pinion heel cone distance", face.heel, Unit::Mm);
+    p.fact("pinion toe cone distance", face.toe, Unit::Mm);
+    p.fact("pinion toothed length", (face.at(face.heel, 0.0).y - face.at(face.toe, 0.0).y).abs(), Unit::Mm);
     p.fact("pinion loft sections", set.loft_z.len() as f64, Unit::None);
     p.fact("mean normal module", d.mmn, Unit::None);
     p.fact("pinion mean addendum", d.ha1, Unit::Mm);
@@ -1534,32 +1723,40 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
     let gear_z: Vec<f64> = (0..set.gear_n).map(|j| form.z_lo + (form.z_hi - form.z_lo) * j as f64 / (set.gear_n - 1) as f64).collect();
     let gear_sections: Vec<(Outline, f64)> = gear_z.iter().map(|z| (form.section(*z), z - back)).collect();
     if wanted(s, 1) {
-        // A shank out of the heel, a little into the teeth so the two overlap.
-        let lap = 0.5 * (set.zeta[1] - set.zeta[0]);
-        let root = set.teeth[heel].r[0].min(set.teeth[if set.heel_first { 1 } else { n - 2 }].r[0]) * 0.97;
-        let shank_r = if s.hub_diameter > 0.0 { (s.hub_diameter / 2.0).min(root) } else { 0.6 * root };
-        let shank_l = if s.hub_length > 0.0 { s.hub_length } else { 0.8 * length };
-        let z0 = if set.heel_first { -shank_l } else { length - lap };
+        // The teeth trimmed to the toe and heel cones, then a shank out of the heel cone, a
+        // little into the body so the two overlap.
+        let blank: Vec<V2> = face.blank().into_iter().map(|q| V2::new(q.x, set.z_of(q.y))).collect();
+        let heel_r = heel_root.min(face.back().x) * 0.97;
+        let shank_r = if s.hub_diameter > 0.0 { (s.hub_diameter / 2.0).min(heel_r) } else { 0.6 * heel_r };
+        let toothed = (face.at(face.heel, 0.0).y - face.at(face.toe, 0.0).y).abs();
+        let shank_l = if s.hub_length > 0.0 { s.hub_length } else { 0.8 * toothed };
+        let lap = 0.5 * d.mmn;
+        let z_sh = set.z_of(face.back().y);
+        let z0 = if set.heel_first { z_sh - shank_l } else { z_sh - lap };
         let mut steps = vec![Step::Loft { sections: pinion_sections.clone(), op: Op::New }];
+        steps.push(Step::Revolve { profile: blank, op: Op::Intersect });
         steps.push(Step::Prism { region: circle(shank_r), z0, height: shank_l + lap, twist: 0.0, op: Op::Join });
         if let Some(b) = s.bore.outline() {
-            let most = 0.8 * shank_r.min(set.teeth[toe].r[0]);
+            let nose = face.at(face.toe, face.under).x;
+            let most = 0.8 * shank_r.min(toe_root).min(nose);
             if s.bore.reach() > most {
                 p.refuse(format!("pinion: the bore (reaching Ø{}) leaves no wall in the shank; at most Ø{}", mm(2.0 * s.bore.reach()), mm(2.0 * most)));
             }
-            steps.push(Step::Prism { region: Region { outer: vec![b], holes: vec![] }, z0: -shank_l - 1.0, height: 2.0 * shank_l + length + 2.0, twist: 0.0, op: Op::Cut });
+            let (lo, hi) = (z0.min(0.0) - 1.0, (z0 + shank_l + lap).max(length) + 1.0);
+            steps.push(Step::Prism { region: Region { outer: vec![b], holes: vec![] }, z0: lo, height: hi - lo, twist: 0.0, op: Op::Cut });
         }
         bodies.push(Body { name: name(s, &format!("Hypoid pinion z{}", s.teeth)), frame: Frame { origin: world(set.op), x: set.xp, z: set.zp }, steps });
     }
     if wanted(s, 2) {
         let mut steps = vec![Step::Loft { sections: gear_sections.clone(), op: Op::New }];
-        // The back: a disc under the roots, a little into the teeth.
-        let lap = 0.1 * (form.z_hi - form.z_lo);
-        let web_r = form.radius(-form.hf, form.z_lo + lap) * 0.985;
-        steps.push(Step::Prism { region: circle(web_r), z0: 0.0, height: web + lap, twist: 0.0, op: Op::Join });
+        // The back: a disc under the roots, into the loft; then the blank trims the teeth to
+        // the toe and heel cones and the disc to the back cone.
+        let (web_z, web_r) = form.web();
+        steps.push(Step::Prism { region: circle(web_r), z0: 0.0, height: web_z - back, twist: 0.0, op: Op::Join });
+        steps.push(Step::Revolve { profile: form.blank(back), op: Op::Intersect });
         if let Some(b) = s.bore2.outline() {
-            // Through the flat faces only (inside the roots on the top face).
-            let most = form.radius(-form.hf, form.z_hi) * 0.95;
+            // Through the flat faces only (inside the front face under the toe).
+            let most = form.blank(back)[1].x * 0.95;
             if s.bore2.reach() > most {
                 p.refuse(format!("gear: the bore (reaching Ø{}) cuts into the tooth roots; at most Ø{}", mm(2.0 * s.bore2.reach()), mm(2.0 * most)));
             }
@@ -1569,15 +1766,17 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
     }
     // The 2D preview: both members' middle sections side by side, turning at the set's ratio (the
     // axes are skew, so no one plane shows the mesh itself).
-    let mid_p = n / 2;
-    let mid_g = set.gear_n / 2;
+    // (The sections through the mean point: the ring gear's plane z = 0, the pinion's exact
+    // section nearest it.)
+    let z_mean = set.z_of(dot(sub(d.p, d.o1), d.a1));
+    let mid_p = (0..n).min_by(|a, b| (set.zeta[*a] - z_mean).abs().total_cmp(&(set.zeta[*b] - z_mean).abs())).unwrap_or(n / 2);
     let mut pinion_view = {
         let t = &set.teeth[mid_p];
         teeth_outline(&t.r, &t.lo, &t.hi, s.teeth)
     };
-    let mut gear_view = gear_sections[mid_g].0.clone();
-    let gear_reach = form.radius(form.tip(gear_z[mid_g]), gear_z[mid_g]);
-    let centre = V2::new(gear_reach + tip(mid_p) + 0.5 * d.mmn, 0.0);
+    let mut gear_view = form.section(0.0);
+    let gear_reach = form.radius(form.ha, 0.0);
+    let centre = V2::new(gear_reach + tip(&set.teeth[mid_p]) + 0.5 * d.mmn, 0.0);
     if !s.left_hand {
         // A right-hand pinion: the whole set mirrored in y (offset to the other side).
         for b in &mut bodies {
@@ -1604,7 +1803,7 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
         center: V2::ZERO,
         speed: -d.z1 / d.z2,
         slide: 0.0,
-        pitch_radius: form.radius(0.0, gear_z[mid_g]),
+        pitch_radius: form.radius(0.0, 0.0),
         period: 0.0,
         orbit: 0.0,
     });
@@ -2024,14 +2223,39 @@ mod tests {
     struct Solid {
         frame: Frame,
         parts: Vec<Stack>,
+        /// The blanks the body is intersected with ((radius, z) polygons), and for each part
+        /// the first of them that trims it (those made after it).
+        trims: Vec<Vec<V2>>,
+        trimmed_from: Vec<usize>,
+    }
+
+    /// How deep (radius, z) is inside a polygon (negative: outside).
+    fn polygon_depth(poly: &[V2], q: V2) -> f64 {
+        let n = poly.len();
+        let mut inside = false;
+        let mut best = f64::INFINITY;
+        for i in 0..n {
+            let (a, b) = (poly[i], poly[(i + 1) % n]);
+            if (a.y > q.y) != (b.y > q.y) && q.x < a.x + (b.x - a.x) * (q.y - a.y) / (b.y - a.y) {
+                inside = !inside;
+            }
+            let e = b - a;
+            let u = ((q - a).dot(e) / e.dot(e).max(1e-300)).clamp(0.0, 1.0);
+            best = best.min(q.dist(a + e * u));
+        }
+        if inside { best } else { -best }
     }
 
     impl Solid {
         /// The body's added material (its lofts, tapers and prisms that aren't cuts).
         fn of(b: &Body, teeth: usize) -> Solid {
             let mut parts = Vec::new();
+            let mut trims = Vec::new();
+            let mut trimmed_from = Vec::new();
             for st in &b.steps {
+                trimmed_from.resize(parts.len(), trims.len());
                 match st {
+                    Step::Revolve { profile, op: Op::Intersect } => trims.push(profile.clone()),
                     // Point i of one section goes to point i of the next, as the kernel pairs them
                     // when it lines them up tooth to tooth (which a test checks).
                     Step::Loft { sections, op } if *op != Op::Cut => parts.push(Stack::new(sections.iter().map(|s| s.1).collect(), sections.iter().map(|s| ring(&s.0)).collect(), teeth)),
@@ -2051,7 +2275,12 @@ mod tests {
                     _ => {}
                 }
             }
-            Solid { frame: b.frame, parts }
+            trimmed_from.resize(parts.len(), trims.len());
+            Solid { frame: b.frame, parts, trims, trimmed_from }
+        }
+        /// How deep a point is inside the blanks made after part `k` (infinite: none).
+        fn trim(&self, k: usize, q: V2, z: f64) -> f64 {
+            self.trims[self.trimmed_from[k]..].iter().map(|t| polygon_depth(t, V2::new(q.len(), z))).fold(f64::INFINITY, f64::min)
         }
         /// A world point in the body's own coordinates when the body has turned by `turn`.
         fn local(&self, x: V3, turn: f64) -> (V2, f64) {
@@ -2067,13 +2296,13 @@ mod tests {
         /// outside); `None` when it is off the ends or well clear.
         fn flat(&self, q: V2, z: f64, how: Between) -> Option<f64> {
             let mut best: Option<f64> = None;
-            for p in &self.parts {
+            for (k, p) in self.parts.iter().enumerate() {
                 if q.len() > p.reach + 1.0 {
                     continue;
                 }
                 if let Some(d) = p.depth(q, z, how) {
-                    // Not deeper than the nearer flat end.
-                    let d = d.min(z - p.z[0]).min(p.z[p.z.len() - 1] - z);
+                    // Not deeper than the nearer flat end, nor than the blanks trimming it.
+                    let d = d.min(z - p.z[0]).min(p.z[p.z.len() - 1] - z).min(self.trim(k, q, z));
                     best = Some(best.map_or(d, |b: f64| b.max(d)));
                 }
             }
@@ -2100,7 +2329,8 @@ mod tests {
             for k in 0..=levels {
                 let z = z0 + (z1 - z0) * k as f64 / levels as f64;
                 let w = p.weights(z, how).unwrap();
-                out.extend((0..p.rings[0].len()).map(|i| (p.point(&w, i), z)));
+                // (Where the blank leaves the loft's surface.)
+                out.extend((0..p.rings[0].len()).map(|i| (p.point(&w, i), z)).filter(|(q, z)| self.trim(0, *q, *z) >= -1e-9));
             }
             out
         }
@@ -2357,6 +2587,14 @@ mod tests {
                     Step::Prism { region, z0, height, twist, op: Op::Join } if *twist == 0.0 && region.holes.is_empty() => {
                         let id = sk(&mut cmds, f.world([0.0, 0.0, *z0]), x, y, &region.outer[0]);
                         features.push(format!(r#"{{"command":"solid.extrude","params":{{"sketch":{id},"distance":{height},"operation":"join","targets":["{}"]}}}}"#, b.name));
+                    }
+                    // A trim, as `gear.create` makes it: the profile on the plane through the
+                    // axis and x, turned about the sketch's y (the body's z).
+                    Step::Revolve { profile, op: Op::Intersect } => {
+                        let n = profile.len();
+                        let o = Outline { segs: (0..n).map(|k| Seg::Line(profile[k], profile[(k + 1) % n])).collect() };
+                        let id = sk(&mut cmds, f.origin, x, f.z, &o);
+                        features.push(format!(r#"{{"command":"solid.revolve","params":{{"sketch":{id},"axis":"y","operation":"intersect","targets":["{}"]}}}}"#, b.name));
                     }
                     _ => {}
                 }
@@ -2627,6 +2865,44 @@ mod tests {
         }
     }
 
+    /// The window's 3D check on the default set, and where its deepest overlap is (run with
+    /// `--ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn mesh3d_dump() {
+        let s = spec();
+        let p = crate::plan(&s).unwrap();
+        let set = work_out(&s).unwrap();
+        let back = set.form.z_lo - 0.06 * 2.0 * set.d.re2;
+        let m = &p.meshes3d[0];
+        for (h, hz) in [(s.module / 10.0, s.module / 3.0), (s.module / 20.0, s.module / 8.0)] {
+            let mut pair = crate::mesh3d::Pair::for_run(&p.bodies[0], &p.bodies[1], h, hz, m.ratio, -0.5 * m.period, 0.5 * m.period);
+            let r = pair.run(m.ratio, 0.0, -0.5 * m.period, 0.5 * m.period, crate::mesh3d::CHECK_STEPS);
+            let q = r.place;
+            let (rho, z) = (q[0].hypot(q[1]), q[2] + back);
+            eprintln!("h {h:.3}: {r:?}
+  deepest at ring (t, mu) {:?}", set.form.coords(rho, z));
+        }
+    }
+
+    /// Where a big set's planning time goes (run with `--ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn timing_dump() {
+        let mut s = spec();
+        (s.teeth, s.teeth2, s.face_width) = (25, 100, 20.0);
+        for _ in 0..3 {
+            let t = std::time::Instant::now();
+            let d = design(&s).unwrap();
+            let t1 = t.elapsed().as_secs_f64() * 1e3;
+            let set = work_out_design(&s, d).unwrap();
+            let t2 = t.elapsed().as_secs_f64() * 1e3;
+            let _ = crate::plan(&s).unwrap();
+            let t3 = t.elapsed().as_secs_f64() * 1e3;
+            eprintln!("design {t1:.1} ms, work_out {:.1} ms, plan {:.1} ms; pinion loft {}, gear loft {}", t2 - t1, t3 - t2, set.loft_z.len(), set.gear_n);
+        }
+    }
+
     #[test]
     #[ignore]
     fn print_defaults_dump() {
@@ -2824,6 +3100,116 @@ mod tests {
             let e = crate::plan(&s).unwrap_err();
             assert!(e.starts_with("shaft angle too large: use at most") && e.len() < 120, "{e}");
         }
+    }
+
+    /// The fraction of a circle about a body's axis (radius `r`, body height `z`) that is inside
+    /// it, over `pitches` tooth pitches.
+    fn fill(b: &Solid, teeth: usize, r: f64, z: f64, pitches: f64) -> f64 {
+        let n = 720;
+        let inside = (0..n).filter(|k| b.flat(V2::polar(r, TAU / teeth as f64 * pitches * (*k as f64 + 0.5) / n as f64), z, Between::Spline).is_some_and(|d| d > 0.0)).count();
+        inside as f64 / n as f64
+    }
+
+    /// Ring gear and pinion teeth as thick as their spaces are wide, give or take (the ring
+    /// gear's teeth are thinner at the pitch cone, the long addendum pinion's thicker), at mid
+    /// face and towards both ends: a ring gear cut on planes square to its flat cone once ended
+    /// in long thin blades inside its toe.
+    #[test]
+    fn teeth_and_spaces_are_in_proportion_across_the_face() {
+        let s = spec();
+        let set = work_out(&s).unwrap();
+        let p = crate::plan(&s).unwrap();
+        let (pinion, gear) = (Solid::of(&p.bodies[0], s.teeth as usize), Solid::of(&p.bodies[1], s.teeth2 as usize));
+        let f = &set.form;
+        let back = f.z_lo - 0.06 * 2.0 * set.d.re2;
+        for mu in [f.mu_i + 0.03, 1.0, f.mu_e - 0.03] {
+            let q = f.point(0.0, mu);
+            let k = fill(&gear, s.teeth2 as usize, q.x, q.y - back, 3.0);
+            eprintln!("ring gear at mu {mu:.3}: teeth fill {k:.3} of the pitch circle");
+            assert!((0.3..0.6).contains(&k), "ring gear at mu {mu}: {k}");
+        }
+        let face = set.face;
+        for cone in [face.toe + 0.15 * (face.heel - face.toe), 0.5 * (face.toe + face.heel), face.heel - 0.15 * (face.heel - face.toe)] {
+            let q = face.at(cone, 0.0);
+            let k = fill(&pinion, s.teeth as usize, q.x, set.z_of(q.y), 2.0);
+            eprintln!("pinion at cone distance {cone:.2}: teeth fill {k:.3} of the pitch circle");
+            assert!((0.4..0.7).contains(&k), "pinion at {cone}: {k}");
+        }
+    }
+
+    /// No tooth beyond the toe and heel cones of either member, teeth all the way between them.
+    #[test]
+    fn teeth_end_on_their_toe_and_heel_cones() {
+        for s in [spec(), Spec { face_width2: 24.0, face_offset2: 3.0, ..spec() }, Spec { shaft_angle: 70.0, ..spec() }] {
+            let set = work_out(&s).unwrap();
+            let p = crate::plan(&s).unwrap();
+            let (pinion, gear) = (Solid::of(&p.bodies[0], s.teeth as usize), Solid::of(&p.bodies[1], s.teeth2 as usize));
+            let f = &set.form;
+            let back = f.z_lo - 0.06 * 2.0 * set.d.re2;
+            // The ring gear: along its cone, from under the toe to past the heel, between the
+            // roots and the tips.
+            let depth = f.ha + f.hf;
+            for j in 0..=40 {
+                let mu = 0.5 + 0.03 * f64::from(j);
+                let any = [0.3, 0.6, 0.9].iter().any(|h| {
+                    let q = f.point(-f.hf + h * depth, mu);
+                    fill(&gear, s.teeth2 as usize, q.x, q.y - back, 1.0) > 0.0
+                });
+                let within = (f.mu_i + 0.005..=f.mu_e - 0.005).contains(&mu);
+                if (f.mu_i - 0.005..=f.mu_e + 0.005).contains(&mu) && !within {
+                    continue;
+                }
+                assert_eq!(any, within, "ring gear at mu {mu} ({} to {})", f.mu_i, f.mu_e);
+            }
+            // The pinion: along its pitch cone, the same.
+            let face = set.face;
+            let d = &set.d;
+            for j in 0..=40 {
+                let cone = face.toe - 8.0 + (face.heel - face.toe + 16.0) * f64::from(j) / 40.0;
+                let any = [-0.6 * d.hf1, 0.0, 0.6 * d.ha1].iter().any(|h| {
+                    let q = face.at(cone, *h * cone / d.cone_m1);
+                    fill(&pinion, s.teeth as usize, q.x, set.z_of(q.y), 1.0) > 0.0
+                });
+                if (cone - face.toe).abs() < 0.3 || (cone - face.heel).abs() < 0.3 {
+                    continue;
+                }
+                assert_eq!(any, (face.toe..=face.heel).contains(&cone), "pinion at cone distance {cone} ({} to {})", face.toe, face.heel);
+            }
+            let fact = |l: &str| p.facts.iter().find(|x| x.label == l).unwrap().value;
+            assert!((fact("pinion face width") - (face.heel - face.toe)).abs() < 1e-9);
+            if s.face_width2 > 0.0 {
+                assert!((fact("pinion face width") - s.face_width2).abs() < 1e-9);
+            }
+        }
+    }
+
+    /// The ring gear's outside diameter is ISO 23509's d_ae2 = d_e2 + 2·h_ae2·cos δ2 (standard
+    /// depth taper: h_ae2 = h_am2·R_e2/R_m2), measured on the body.
+    #[test]
+    fn the_ring_gear_outside_diameter_is_the_iso_one() {
+        let s = spec();
+        let set = work_out(&s).unwrap();
+        let p = crate::plan(&s).unwrap();
+        let gear = Solid::of(&p.bodies[1], s.teeth2 as usize);
+        let d = &set.d;
+        let f = &set.form;
+        let iso = 2.0 * d.re2 + 2.0 * d.ha2 * d.cone_e2 / d.cone_m2 * d.delta2.cos();
+        let fact = p.facts.iter().find(|x| x.label == "gear outside diameter").unwrap().value;
+        assert!((fact - iso).abs() < 1e-9, "{fact} against {iso}");
+        let back = f.z_lo - 0.06 * 2.0 * d.re2;
+        let corner = f.point(f.ha, f.mu_e);
+        let mut most = 0.0f64;
+        for kz in -20..=20 {
+            let z = corner.y - back + 0.05 * f64::from(kz);
+            for k in 0..48 {
+                let a = TAU / f64::from(s.teeth2) * f64::from(k) / 48.0;
+                if let Some(r) = (0..80).map(|i| corner.x + 0.4 - 0.01 * f64::from(i)).find(|r| gear.flat(V2::polar(*r, a), z, Between::Spline).is_some_and(|x| x > 0.0)) {
+                    most = most.max(r);
+                }
+            }
+        }
+        eprintln!("ring gear outside diameter {:.3} (ISO {iso:.3})", 2.0 * most);
+        assert!((2.0 * most - iso).abs() < 0.1, "{} against {iso}", 2.0 * most);
     }
 
     /// The backlash stays between the members: the pinion is cut by the gear without it.

@@ -3152,7 +3152,9 @@ fn hypoid_parts(s: &Spec) -> Result<HypoidParts, String> {
         let pz = l.pinion_z;
         let apex1 = v_dot(sub(world(d.apex1), l.pinion_origin), pz);
         let t1 = d.delta1.tan();
-        let profile: Vec<[f64; 2]> = (0..=8).map(|k| l.length * f64::from(k) / 8.0).map(|z| [((apex1 - z).abs() * t1).max(0.0), z]).collect();
+        // (Between its heel and toe cones.)
+        let (z_heel, z_toe) = (l.pinion_heel[1], l.pinion_toe[1]);
+        let profile: Vec<[f64; 2]> = (0..=8).map(|k| z_heel + (z_toe - z_heel) * f64::from(k) / 8.0).map(|z| [((apex1 - z).abs() * t1).max(0.0), z]).collect();
         let pinion_parts = vec![
             Part { role: Role::Pitch, shape: Shape::Revolved { profile } },
             Part { role: Role::Shaft, shape: Shape::Cylinder { r: 0.6 * ((apex1 - l.length).abs().min(apex1.abs()) * t1 - d.hf1).max(0.3 * d.rm1), z0: -0.8 * l.length, z1: 0.0 } },

@@ -196,7 +196,7 @@ sketch = [
   "rect_rounded", "sketch", "sketch_chamfer", "sketch_chamfer_angle", "sketch_chamfer_two_distances",
   "sketch_fillet", "sketch_mirror", "slot", "slot_center", "slot_overall",
   "snap", "spline", "spline_cv", "spun", "svg",
-  "trim",
+  "trim", "gear_view_drawing",
 ]
 constraint = [
   "auto_constrain", "c_coincident", "c_collinear", "c_concentric", "c_equal",

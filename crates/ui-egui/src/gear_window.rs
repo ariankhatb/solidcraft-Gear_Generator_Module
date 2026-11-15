@@ -49,27 +49,27 @@ const EDIT_GLOW_MS: f64 = 1200.0;
 
 /// A picked or entered shaft axis, and where it came from.
 #[derive(Clone, Debug, PartialEq)]
-struct Slot {
-    axis: Axis,
-    label: String,
+pub(crate) struct Slot {
+    pub(crate) axis: Axis,
+    pub(crate) label: String,
 }
 
 /// The Axes step: the two shafts and what drives the solve on them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AxesStep {
-    slots: [Option<Slot>; 2],
+    pub(crate) slots: [Option<Slot>; 2],
     /// Choose the tooth counts to give `ratio` (gear 2 ÷ gear 1), instead of the counts typed.
-    use_ratio: bool,
-    ratio: f64,
+    pub(crate) use_ratio: bool,
+    pub(crate) ratio: f64,
     /// Choose a standard module to suit the axes, instead of the one typed.
-    auto_module: bool,
+    pub(crate) auto_module: bool,
     /// Bevels: size by the outer cone distance instead of the module.
-    use_cone: bool,
-    cone: f64,
-    flip1: bool,
-    flip2: bool,
-    swap: bool,
-    along: f64,
+    pub(crate) use_cone: bool,
+    pub(crate) cone: f64,
+    pub(crate) flip1: bool,
+    pub(crate) flip2: bool,
+    pub(crate) swap: bool,
+    pub(crate) along: f64,
 }
 
 impl Default for AxesStep {
@@ -90,6 +90,13 @@ impl Default for AxesStep {
 }
 
 impl AxesStep {
+    /// The shafts a Simple-mode drawing gives: the set sized by the solver is placed on them
+    /// as it is (no ratio, module or flips chosen here).
+    pub(crate) fn sketched(a1: Axis, a2: Option<Axis>) -> AxesStep {
+        let slot = |axis: Axis| Slot { axis, label: "drawn".into() };
+        AxesStep { slots: [Some(slot(a1)), a2.map(slot)], use_ratio: false, auto_module: false, use_cone: false, ..AxesStep::default() }
+    }
+
     /// Axis 1, or axis 2 once axis 1 is set.
     fn axis(&self, i: usize) -> Option<Axis> {
         self.slots[0].as_ref()?;
@@ -197,61 +204,89 @@ pub struct GearWindow {
     /// The Axes step.
     pub axes: AxesStep,
     /// What is built: `spec`, or with an axis set, the set solved on the axes.
-    built: Spec,
+    pub(crate) built: Spec,
     /// The solve on the axes, when there is one.
-    solved: Option<Solved>,
+    pub(crate) solved: Option<Solved>,
     /// The slot a "Use selection" click asked to fill; taken up after the window is drawn, where
     /// the design is at hand.
-    capture: Option<usize>,
+    pub(crate) capture: Option<usize>,
     /// Each slot's typed origin and direction, and whether its entry rows are open.
-    manual: [bool; 2],
-    entered: [([f64; 3], [f64; 3]); 2],
+    pub(crate) manual: [bool; 2],
+    pub(crate) entered: [([f64; 3], [f64; 3]); 2],
     /// Why the last "Use selection" took nothing.
-    axes_note: Option<String>,
+    pub(crate) axes_note: Option<String>,
     /// How the axes lay last frame, to notice a change.
-    last_relation: Option<&'static str>,
+    pub(crate) last_relation: Option<&'static str>,
     /// The plan for what is built, or why there is none; recomputed when an input changes.
-    plan: Result<Plan, String>,
-    planned: Option<(Spec, AxesStep)>,
+    pub(crate) plan: Result<Plan, String>,
+    pub(crate) planned: Option<(Spec, AxesStep)>,
     /// When the inputs last changed (ms): the view's preview waits for them to settle.
-    changed_ms: f64,
+    pub(crate) changed_ms: f64,
     /// Filled triangles of each preview gear, in its own coordinates.
-    meshes: Vec<GearMesh>,
+    pub(crate) meshes: Vec<GearMesh>,
     /// Whether the set turns in the 2D preview, whether that is paused, and how far it has
     /// turned (driver radians; 0 is the pose the bodies are built in).
     pub animate: bool,
-    paused: bool,
-    turned: f64,
-    speed: f64,
-    /// Show the result in the view as the numbers change.
-    pub preview_3d: bool,
-    opts: Opts,
+    pub(crate) paused: bool,
+    pub(crate) turned: f64,
+    pub(crate) speed: f64,
+    pub(crate) opts: Opts,
     /// The member whose settings section the pointer is over, the member under the pointer in
     /// the 2D preview, and the member whose numbers last changed (with when, ms).
-    hover_section: Option<usize>,
-    hover_preview: Option<usize>,
-    edited: Option<(usize, f64)>,
+    pub(crate) hover_section: Option<usize>,
+    pub(crate) hover_preview: Option<usize>,
+    pub(crate) edited: Option<(usize, f64)>,
     /// The set this window regenerates, when it was opened on one.
-    editing: Option<Editing>,
+    pub(crate) editing: Option<Editing>,
     /// The last create's or update's error.
-    error: Option<String>,
+    pub(crate) error: Option<String>,
     /// Bumped whenever the plan is recomputed: what was worked out from a plan (the mesh check)
     /// carries the generation it was worked out for.
-    plan_gen: u64,
+    pub(crate) plan_gen: u64,
     /// The 2D mesh check of the plan of that generation (computed once the numbers settle).
-    mesh: Option<(u64, Vec<MeshResult>)>,
+    pub(crate) mesh: Option<(u64, Vec<MeshResult>)>,
     /// The mesh result the pointer is on in the badge's list: both its members are lit.
-    hover_mesh: Option<usize>,
+    pub(crate) hover_mesh: Option<usize>,
     /// Design by goal: the goal as typed, whether its panel is open, and the last suggestions
     /// (for the goal they were made for), or why there are none.
-    goal: Goal,
-    suggest_open: bool,
-    suggestions: Option<(Goal, Result<Vec<Suggestion>, String>)>,
+    pub(crate) goal: Goal,
+    pub(crate) suggest_open: bool,
+    pub(crate) suggestions: Option<(Goal, Result<Vec<Suggestion>, String>)>,
     /// A profile DXF asked for: the 2D preview member (index into `plan.preview`) to export;
     /// taken up after the window is drawn, where the app's save dialog is at hand.
-    export: Option<usize>,
+    pub(crate) export: Option<usize>,
     /// What the last sheet copy or export did.
-    output_note: Option<String>,
+    pub(crate) output_note: Option<String>,
+    /// Simple (drawn in one sketch, a short form) or Advanced (every setting).
+    pub(crate) mode: Mode,
+    pub(crate) simple: crate::gear_simple::SimpleState,
+    /// The instant 3D view and the schematic it (and the drawing) is drawn from, for the plan
+    /// of `plan_gen`.
+    pub(crate) view3d: crate::gear_view3d::View3d,
+    pub(crate) schematic: Option<crate::gear_view3d::Schematic>,
+    /// The right column's view.
+    pub(crate) right: RightView,
+    /// The set shown in the model as a kernel preview: asked for once by "Show in model" for
+    /// the plan of this generation; any edit lets it lapse.
+    pub(crate) model_preview: Option<u64>,
+}
+
+/// The window's two modes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Mode {
+    Simple,
+    Advanced,
+}
+
+/// What the right column shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RightView {
+    /// The drawing and the 3D view (side by side where there is room).
+    Both,
+    Drawing,
+    View3d,
+    /// The animated 2D mesh preview.
+    Profile,
 }
 
 struct GearMesh {
@@ -272,7 +307,7 @@ const PALETTE: [Color32; 6] = [
     Color32::from_rgb(120, 170, 190),
 ];
 
-fn member_color(m: usize) -> Color32 {
+pub(crate) fn member_color(m: usize) -> Color32 {
     PALETTE[m % PALETTE.len()]
 }
 
@@ -299,7 +334,7 @@ fn members(k: Kind) -> &'static [&'static str] {
 
 /// The member a 2D preview outline belongs to (the `i`-th of the plan's, called `name`); none
 /// for what is drawn but not built (a chain, a belt).
-fn member_of_outline(k: Kind, i: usize, name: &str) -> Option<usize> {
+pub(crate) fn member_of_outline(k: Kind, i: usize, name: &str) -> Option<usize> {
     let last = members(k).len() - 1;
     Some(match k {
         Kind::Planetary if name.starts_with("planet") => 1,
@@ -315,7 +350,7 @@ fn member_of_outline(k: Kind, i: usize, name: &str) -> Option<usize> {
 
 /// The member a built body belongs to (the `i`-th of the plan's, called `name`; `only` as in
 /// the spec: one member built alone).
-fn member_of_body(k: Kind, only: u8, i: usize, name: &str) -> usize {
+pub(crate) fn member_of_body(k: Kind, only: u8, i: usize, name: &str) -> usize {
     let last = members(k).len() - 1;
     match k {
         Kind::Planetary if name.contains("Planet ") => 1,
@@ -393,7 +428,6 @@ impl GearWindow {
             paused: false,
             turned: 0.0,
             speed: 0.4,
-            preview_3d: true,
             opts: Opts { inch: false, advanced: false, printing: false, nozzle: 0.4, layer: 0.2, dual: [false; 2], load_open: false, equations: false, parametric: false },
             hover_section: None,
             hover_preview: None,
@@ -408,7 +442,14 @@ impl GearWindow {
             suggestions: None,
             export: None,
             output_note: None,
+            mode: Mode::Simple,
+            simple: crate::gear_simple::SimpleState::new(&Spec::defaults_for(Kind::Spur)),
+            view3d: crate::gear_view3d::View3d::default(),
+            schematic: None,
+            right: RightView::Both,
+            model_preview: None,
         };
+        crate::gear_simple::apply(&mut w);
         w.replan();
         w.changed_ms = 0.0;
         w
@@ -451,6 +492,8 @@ impl GearWindow {
         w.opts.equations = request.get("tooth_curves").and_then(Value::as_str) == Some("equations");
         w.opts.parametric = w.opts.equations && request.get("parametric").and_then(Value::as_bool) == Some(true);
         w.editing = Some(Editing { group, name: name.to_string(), bodies: bodies.to_vec() });
+        // A set made elsewhere is regenerated from its numbers: Advanced shows them all.
+        w.mode = Mode::Advanced;
         w.planned = None;
         w.replan();
         w.changed_ms = 0.0;
@@ -472,8 +515,13 @@ impl GearWindow {
         })
     }
 
-    fn replan(&mut self) {
-        self.settle_kind();
+    pub(crate) fn replan(&mut self) {
+        if self.mode == Mode::Simple {
+            // The mode is the user's pick there; the axes follow the drawing.
+            self.last_relation = self.axes.relation().as_ref().map(Relation::name);
+        } else {
+            self.settle_kind();
+        }
         let key = (self.spec.clone(), self.axes.clone());
         if self.planned.as_ref() == Some(&key) {
             return;
@@ -505,6 +553,10 @@ impl GearWindow {
             Ok(p) => p.preview.iter().map(|g| mesh_of(&g.region)).collect(),
             Err(_) => Vec::new(),
         };
+        // The shafts and pitch surfaces of the 3D view and the drawing: µs to ms, no teeth.
+        if let Ok(p) = &self.plan {
+            self.schematic = Some(crate::gear_view3d::schematic_of(&self.built, p));
+        }
     }
 
     /// Whether the numbers have stood still long enough for the view's preview to follow.
@@ -565,14 +617,15 @@ impl GearWindow {
         Value::Object(tints)
     }
 
-    /// The command the view previews while the window is open: none while the numbers are
-    /// still changing, so the view never shows a set other than the one in the window.
+    /// The kernel preview in the model: only once asked for with "Show in model", for the plan
+    /// it was asked for. Designing never builds solids: an edit lets the request lapse (the
+    /// preview is taken down), and Create stays the only thing that builds.
     pub fn preview_commands(&self) -> Option<Vec<(String, Value)>> {
-        (self.preview_3d && self.plan.is_ok() && self.settled()).then(|| vec![self.command(json!({"preview_tints": self.tints()}))])
+        (self.model_preview == Some(self.plan_gen) && self.plan.is_ok()).then(|| vec![self.command(json!({"preview_tints": self.tints()}))])
     }
 
     /// A new type starts from its own defaults, keeping the tooth form and hub choices.
-    fn switch_kind(&mut self, k: Kind) {
+    pub(crate) fn switch_kind(&mut self, k: Kind) {
         if self.spec.kind == k {
             return;
         }
@@ -610,7 +663,7 @@ impl GearWindow {
 
     /// The member to light up: the one whose section the pointer is over, else the one under
     /// the pointer in the 2D preview, else the one whose numbers just changed.
-    fn lit(&self) -> Option<usize> {
+    pub(crate) fn lit(&self) -> Option<usize> {
         let recent = self.edited.filter(|(_, at)| (crate::now_ms() - at).abs() < EDIT_GLOW_MS).map(|(m, _)| m);
         self.hover_section.or(self.hover_preview).or(recent)
     }
@@ -635,7 +688,13 @@ pub fn open(app: &mut SolveApp) {
     }
     app.gear_window = Some(match solidcraft_engine::gear_selected_set(&app.session) {
         Some(set) => GearWindow::on_set(set.group, &set.name, &set.bodies, &set.request, &set.params),
-        None => GearWindow::new(),
+        None => {
+            // Sketch geometry selected: the window starts from that sketch.
+            let mut w = GearWindow::new();
+            crate::gear_simple::open_on_selection(app, &mut w);
+            crate::gear_simple::apply(&mut w);
+            w
+        }
     });
 }
 
@@ -683,7 +742,7 @@ fn simplify(mut p: Vec<V2>) -> Vec<V2> {
 }
 
 /// Ear clipping of a simple polygon (either orientation).
-fn triangulate(poly: &[V2]) -> Vec<[V2; 3]> {
+pub(crate) fn triangulate(poly: &[V2]) -> Vec<[V2; 3]> {
     let n = poly.len();
     if n < 3 {
         return Vec::new();
@@ -734,6 +793,9 @@ enum ViewState {
 
 pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let Some(mut w) = app.gear_window.take() else { return };
+    if w.mode == Mode::Simple {
+        crate::gear_simple::apply(&mut w);
+    }
     w.replan();
     w.check_mesh();
     let title = solidcraft_ui_text::tr_label("Gear Generator");
@@ -742,14 +804,14 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let primary: &str = if w.editing.is_some() { "Update" } else { &create };
     let valid = w.plan.is_ok();
     let preview_error = app.preview.error.clone();
-    let view = if !(w.preview_3d && valid) {
+    let view = if !(w.model_preview == Some(w.plan_gen) && valid) {
         ViewState::Off
-    } else if !w.settled() || app.preview.busy || !app.preview.current {
+    } else if app.preview.busy || !app.preview.current {
         ViewState::Updating
     } else {
         ViewState::Current
     };
-    let (closed, action) = ui_kit::Window::new(egui::Id::unique("sc_gear_window"), "gear", title).fields().cards(3.0).actions(primary, &close, None).show(ctx, valid, |ui| {
+    let (closed, action) = ui_kit::Window::new(egui::Id::unique("sc_gear_window"), "gear", title).fields().cards(3.3).actions(primary, &close, None).show(ctx, valid, |ui| {
         body(ui, &mut w, view, preview_error.as_deref());
     });
     if w.animate && !w.paused {
@@ -769,6 +831,9 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     }
     if let Some(slot) = w.capture.take() {
         capture(app, &mut w, slot);
+    }
+    if let Some(req) = w.simple.request.take() {
+        crate::gear_simple::use_selected(app, &mut w, req);
     }
     if let Some(i) = w.export.take() {
         export_dxf(app, &mut w, i);
@@ -812,6 +877,15 @@ fn capture(app: &SolveApp, w: &mut GearWindow, slot: usize) {
         .selection
         .iter()
         .filter_map(|sel| {
+            if let Sel::SketchPoint { id } = sel {
+                // A sketch point: the shaft through it, normal to its sketch.
+                let st = crate::open_meshing::session_world(&app.session);
+                let ss = st.sketches.iter().rev().find(|ss| ss.sketch.point_index(id).is_some())?;
+                let p = ss.plane.to_world(ss.sketch.point(ss.sketch.point_index(id)?)?);
+                let n = ss.plane.normal();
+                let axis = Axis::new([p.x, p.y, p.z], [n.x, n.y, n.z])?;
+                return Some(Slot { axis, label: format!("sketch point {id}") });
+            }
             let (o, d) = crate::dialogs::axis_of(app, sel)?;
             let axis = Axis::new([o.x, o.y, o.z], [d.x, d.y, d.z])?;
             let label = match sel {
@@ -882,11 +956,11 @@ fn axes_step(ui: &mut Ui, w: &mut GearWindow) {
             });
         }
     }
-    if let Some(note) = &w.axes_note {
-        ui.colored_label(ui.visuals().warn_fg_color, note);
+    if let Some(why) = &w.axes_note {
+        ui.note(why, ui.visuals().warn_fg_color);
     }
     if w.axes.slots[0].is_none() && w.axes.slots[1].is_some() {
-        ui.colored_label(ui.visuals().warn_fg_color, "Set Axis 1 too: gear 1 turns about it");
+        ui.note("Set Axis 1 too: gear 1 turns about it", ui.visuals().warn_fg_color);
     }
     if w.axes.axis(0).is_none() {
         return;
@@ -948,7 +1022,176 @@ fn axes_step(ui: &mut Ui, w: &mut GearWindow) {
     }
 }
 
+/// Messages that wrap (warnings, errors, refusals, notes): never cut to one line.
+pub(crate) trait Note {
+    fn note(&mut self, text: impl AsRef<str>, color: Color32);
+}
+
+impl Note for Ui {
+    fn note(&mut self, text: impl AsRef<str>, color: Color32) {
+        self.add(egui::Label::new(egui::RichText::new(text.as_ref()).color(color)).wrap_mode(egui::TextWrapMode::Wrap));
+    }
+}
+
 fn body(ui: &mut Ui, w: &mut GearWindow, view: ViewState, view_error: Option<&str>) {
+    ui.horizontal(|ui| {
+        let was = w.mode;
+        ui.selectable_value(&mut w.mode, Mode::Simple, egui::RichText::new("Simple").strong())
+            .on_hover_text("Draw the set in one sketch (circles are pitch circles, lines are shafts) and give a few sizes; the solver picks module, teeth and shifts");
+        ui.selectable_value(&mut w.mode, Mode::Advanced, egui::RichText::new("Advanced").strong()).on_hover_text("Every setting: tooth form, 3D printing, chamfers, shafts, hardware, load, axes picked in the model");
+        if was == Mode::Advanced && w.mode == Mode::Simple && w.right == RightView::Profile {
+            w.right = RightView::Both;
+        }
+        if w.mode == Mode::Simple {
+            ui.label(egui::RichText::new("Advanced keeps everything set there; editing the drawing sizes the set again").small().weak());
+        }
+    });
+    ui.add_space(4.0);
+    match w.mode {
+        Mode::Simple => simple_body(ui, w, view, view_error),
+        Mode::Advanced => advanced_body(ui, w, view, view_error),
+    }
+}
+
+/// Simple mode: the mode, its picks and a short form on the left; the drawing and the 3D view
+/// on the right, then the mesh badge, the key numbers and Show in model.
+fn simple_body(ui: &mut Ui, w: &mut GearWindow, view: ViewState, view_error: Option<&str>) {
+    let full = ui.available_width();
+    let left = (full * 0.36).clamp(260.0, 340.0);
+    ui.horizontal_top(|ui| {
+        ui.vertical(|ui| {
+            ui.set_width(left);
+            egui::ScrollArea::vertical().id_salt("gear_simple_left").max_height(560.0).auto_shrink([false, true]).show(ui, |ui| {
+                crate::gear_simple::panel(ui, w);
+            });
+        });
+        ui.add_space(8.0);
+        ui.vertical(|ui| {
+            let width = (full - left - 8.0).max(260.0);
+            ui.set_width(width);
+            right_views(ui, w, width);
+            motion_row(ui, w);
+            mesh_badge(ui, w);
+            view_row(ui, w, view, view_error);
+            if let Some(e) = &w.error {
+                ui.note(e, ui.visuals().error_fg_color);
+            }
+            simple_facts(ui, w);
+        });
+    });
+}
+
+/// The drawing, the 3D view and the 2D mesh preview, as the toggle above them says.
+fn right_views(ui: &mut Ui, w: &mut GearWindow, width: f32) {
+    let simple = w.mode == Mode::Simple;
+    ui.horizontal(|ui| {
+        let views: &[(RightView, &str, &str)] = if simple {
+            &[(RightView::Both, "Drawing + 3D", "The sketch and the set in 3D"), (RightView::Drawing, "Drawing", "The sketch, larger"), (RightView::View3d, "3D", "The set in 3D, larger"), (RightView::Profile, "2D mesh", "The teeth meshing, turning")]
+        } else {
+            &[(RightView::Both, "3D + 2D", "The set in 3D and the teeth meshing in 2D"), (RightView::View3d, "3D", "The set in 3D"), (RightView::Profile, "2D mesh", "The teeth meshing, turning")]
+        };
+        for (v, name, tip) in views {
+            ui.selectable_value(&mut w.right, *v, *name).on_hover_text(*tip);
+        }
+    });
+    if !simple && w.right == RightView::Drawing {
+        w.right = RightView::View3d;
+    }
+    let side = width >= 640.0;
+    let half = if side { (width - 8.0) / 2.0 } else { width };
+    let tall = |w: f32| (w * 0.78).clamp(220.0, 420.0);
+    match (w.right, simple) {
+        (RightView::Both, true) => {
+            let size = vec2(half, tall(half));
+            if side {
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| crate::gear_simple::drawing(ui, w, size));
+                    ui.vertical(|ui| view3d_ui(ui, w, size));
+                });
+            } else {
+                crate::gear_simple::drawing(ui, w, size);
+                view3d_ui(ui, w, size);
+            }
+        }
+        (RightView::Both, false) => {
+            let size = vec2(half, tall(half));
+            if side {
+                ui.horizontal_top(|ui| {
+                    ui.vertical(|ui| view3d_ui(ui, w, size));
+                    ui.vertical(|ui| {
+                        ui.set_width(half);
+                        w.hover_preview = w.hover_preview.or(preview(ui, w));
+                    });
+                });
+            } else {
+                view3d_ui(ui, w, size);
+                w.hover_preview = w.hover_preview.or(preview(ui, w));
+            }
+        }
+        (RightView::Drawing, _) => crate::gear_simple::drawing(ui, w, vec2(width, tall(width))),
+        (RightView::View3d, _) => view3d_ui(ui, w, vec2(width, tall(width))),
+        (RightView::Profile, _) => w.hover_preview = preview(ui, w),
+    }
+}
+
+/// The instant 3D view, its Teeth toggle and what it costs.
+fn view3d_ui(ui: &mut Ui, w: &mut GearWindow, size: Vec2) {
+    let (Ok(plan), Some(sch)) = (&w.plan, &w.schematic) else {
+        let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+        ui.painter().rect_filled(rect, 6.0, ui.visuals().extreme_bg_color);
+        return;
+    };
+    let lit: Vec<usize> = w.lit().into_iter().collect();
+    let inputs = crate::gear_view3d::Inputs { key: w.plan_gen, sch, plan, turned: w.pose(), lit: &lit, size };
+    let hovered = w.view3d.show(ui, inputs);
+    w.hover_preview = hovered;
+    ui.horizontal_wrapped(|ui| {
+        ui.checkbox(&mut w.view3d.teeth, "Teeth").on_hover_text("The teeth from the build steps (off: the pitch surfaces, which show how the gears roll on each other)");
+        if ui.small_button("Iso").on_hover_text("Back to the iso view, fitted (or double-click the view)").clicked() {
+            w.view3d.reset();
+        }
+        if let Some((tris, ms, dropped)) = w.view3d.cost() {
+            let more = if dropped > 0 { format!(", {dropped} without teeth (too many)") } else { String::new() };
+            ui.label(egui::RichText::new(format!("{}k triangles, meshed in {ms:.0} ms{more}", tris / 1000)).small().weak())
+                .on_hover_text("Drag to orbit, right-drag to pan, wheel to zoom, double-click to fit");
+        }
+    });
+}
+
+/// Simple mode's numbers: what the solver chose, then the warnings; everything else under
+/// "All numbers".
+fn simple_facts(ui: &mut Ui, w: &GearWindow) {
+    if let Err(e) = &w.plan {
+        ui.note(e, ui.visuals().error_fg_color);
+        return;
+    }
+    if let Ok(p) = &w.plan {
+        for warn in &p.warnings {
+            ui.note(format!("⚠ {warn}"), ui.visuals().warn_fg_color);
+        }
+    }
+    if !w.simple.chosen.is_empty() {
+        egui::Grid::new("gear_simple_chosen").num_columns(2).striped(true).spacing([12.0, 2.0]).show(ui, |ui| {
+            for f in w.simple.chosen.iter().take(10) {
+                ui.label(egui::RichText::new(&f.label).small());
+                ui.label(egui::RichText::new(fact_value(f)).small().monospace());
+                ui.end_row();
+            }
+        });
+    }
+    egui::CollapsingHeader::new(egui::RichText::new("All numbers").small()).id_salt("gear_simple_all").show(ui, |ui| facts(ui, w));
+}
+
+fn fact_value(f: &solidcraft_gear::Fact) -> String {
+    match f.unit {
+        Unit::Mm => format!("{:.3} mm", f.value),
+        Unit::Deg => format!("{:.3}°", f.value),
+        Unit::None => format!("{:.4}", f.value),
+    }
+}
+
+/// Advanced mode: the axes step, the type picker, every section, and the views.
+fn advanced_body(ui: &mut Ui, w: &mut GearWindow, view: ViewState, view_error: Option<&str>) {
     if let Some(e) = w.editing.clone() {
         ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new(format!("Editing {}", e.name)).strong());
@@ -972,14 +1215,16 @@ fn body(ui: &mut Ui, w: &mut GearWindow, view: ViewState, view_error: Option<&st
         });
         ui.add_space(8.0);
         ui.vertical(|ui| {
-            ui.set_width((full - left - 8.0).max(200.0));
-            w.hover_preview = preview(ui, w);
+            let width = (full - left - 8.0).max(200.0);
+            ui.set_width(width);
+            w.hover_preview = None;
+            right_views(ui, w, width);
             motion_row(ui, w);
             mesh_badge(ui, w);
             output_row(ui, w);
             view_row(ui, w, view, view_error);
             if let Some(e) = &w.error {
-                ui.colored_label(ui.visuals().error_fg_color, e);
+                ui.note(e, ui.visuals().error_fg_color);
             }
             facts(ui, w);
         });
@@ -1098,22 +1343,36 @@ fn export_dxf(app: &mut SolveApp, w: &mut GearWindow, i: usize) {
 
 /// The view's preview: on or off, and whether it shows the numbers in the window yet.
 fn view_row(ui: &mut Ui, w: &mut GearWindow, view: ViewState, view_error: Option<&str>) {
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut w.preview_3d, "Preview in view");
+    ui.horizontal_wrapped(|ui| {
         match view {
-            ViewState::Off => {}
+            ViewState::Off => {
+                let ok = w.plan.is_ok();
+                if ui.add_enabled(ok, egui::Button::new("Show in model")).on_hover_text("Build this set once as a preview in the model's view (the full kernel build: can take a while). Any edit takes it down; Create builds it for good").clicked() {
+                    w.model_preview = Some(w.plan_gen);
+                }
+                if w.model_preview.is_some() {
+                    ui.label(egui::RichText::new("changed since it was shown: press again to see these numbers").small().weak());
+                }
+            }
             ViewState::Updating => {
                 ui.spinner();
-                ui.label(egui::RichText::new("updating…").small()).on_hover_text("The view's preview is being built for these numbers; nothing older is shown meanwhile");
+                ui.label(egui::RichText::new("building in the model…").small()).on_hover_text("The kernel is building this set for the model's view; the window stays live meanwhile");
+                if ui.small_button("Cancel").clicked() {
+                    w.model_preview = None;
+                }
             }
-            ViewState::Current if view_error.is_none() => {
-                ui.label(egui::RichText::new("✓ the view shows these numbers").small().weak());
+            ViewState::Current => {
+                if view_error.is_none() {
+                    ui.label(egui::RichText::new("✓ the model shows this set").small().weak());
+                }
+                if ui.small_button("Hide").clicked() {
+                    w.model_preview = None;
+                }
             }
-            ViewState::Current => {}
         }
     });
     if let Some(e) = view_error.filter(|_| view == ViewState::Current) {
-        ui.colored_label(ui.visuals().error_fg_color, format!("View preview: {e}"));
+        ui.note(format!("View preview: {e}"), ui.visuals().error_fg_color);
     }
 }
 
@@ -1528,10 +1787,10 @@ fn section_suggest(ui: &mut Ui, cx: &mut Cx<'_>) {
     match cx.suggestions.as_ref() {
         None => {}
         Some((_, Err(e))) => {
-            ui.colored_label(ui.visuals().error_fg_color, e);
+            ui.note(e, ui.visuals().error_fg_color);
         }
         Some((_, Ok(list))) if list.is_empty() => {
-            ui.colored_label(ui.visuals().warn_fg_color, "No pair meets this goal: widen the modules, the teeth or the ratio tolerance");
+            ui.note("No pair meets this goal: widen the modules, the teeth or the ratio tolerance", ui.visuals().warn_fg_color);
         }
         Some((asked, Ok(list))) => {
             if asked != &*g {
@@ -2250,11 +2509,11 @@ fn bore(ui: &mut Ui, label: &str, id: &str, b: &mut Bore) {
 fn facts(ui: &mut Ui, w: &GearWindow) {
     match &w.plan {
         Err(e) => {
-            ui.colored_label(ui.visuals().error_fg_color, e);
+            ui.note(e, ui.visuals().error_fg_color);
         }
         Ok(p) => {
             for warn in &p.warnings {
-                ui.colored_label(ui.visuals().warn_fg_color, format!("⚠ {warn}"));
+                ui.note(format!("⚠ {warn}"), ui.visuals().warn_fg_color);
             }
             egui::ScrollArea::vertical().id_salt("gear_facts").max_height(170.0).auto_shrink([false, true]).show(ui, |ui| {
                 egui::Grid::new("gear_facts_grid").num_columns(2).striped(true).spacing([12.0, 2.0]).min_col_width(200.0).show(ui, |ui| {

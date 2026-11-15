@@ -716,6 +716,63 @@ pub fn spec_for(m: &Measured, base: &Spec) -> Result<(Spec, Vec<String>), String
     Ok((s, notes))
 }
 
+/// The Simple-mode request the measured drawing makes: `settings` (the form's own fields: face
+/// width, helix, the shaft angle a single sketch can't show, a bevel's sizes, …) with what the
+/// drawing gives laid over them, as one size driver and a ratio where the drawing has two sizes
+/// (giving every drawn size would over-constrain [`crate::simple::solve`]).
+pub fn simple_of(m: &Measured, settings: &crate::simple::Simple) -> crate::simple::Simple {
+    let mut s = settings.clone();
+    s.kind = Some(m.kind);
+    let d = |v: f64| (v > 0.0).then_some(v);
+    match m.kind {
+        Kind::Pair => {
+            (s.pitch_diameter, s.ratio, s.center_distance, s.pitch_diameter2) = (d(m.d1), Some(m.d2 / m.d1), None, None);
+        }
+        Kind::Cycloidal => {
+            (s.pitch_diameter, s.ratio, s.center_distance) = (d(m.d1), Some(m.d1 / m.d2), None);
+        }
+        Kind::Sprocket | Kind::Pulley => {
+            s.pitch_diameter = d(m.d1);
+            s.ratio = (m.d2 > 0.0).then(|| m.d2 / m.d1);
+            s.center_distance = d(m.center_distance);
+        }
+        Kind::Internal => {
+            s.ring_diameter = d(m.d1);
+            s.pitch_diameter = d(m.d2);
+        }
+        Kind::Planetary => {
+            // Sun and ring drawn: the ratio with the ring fixed is 1 + ring ÷ sun.
+            (s.pitch_diameter, s.ratio, s.ring_diameter, s.pitch_diameter2) = (d(m.d1), Some(1.0 + m.d3 / m.d1), None, None);
+        }
+        Kind::Rack => {
+            s.pitch_diameter = d(m.d1);
+            s.length = m.line.map(|l| l.len()).filter(|l| *l > 0.0);
+        }
+        Kind::Worm => {
+            s.pitch_diameter2 = d(m.d1);
+            if m.worm_diameter > 0.0 {
+                s.pitch_diameter = Some(m.worm_diameter);
+            }
+            s.shaft_angle = Some(90.0);
+        }
+        Kind::Bevel | Kind::SpiralBevel => {
+            s.shaft_angle = m.shaft_angle.or(s.shaft_angle);
+        }
+        Kind::FaceGear => {
+            s.pitch_diameter2 = d(m.d1);
+            s.shaft_angle = Some(90.0);
+        }
+        Kind::Hypoid => {
+            (s.pitch_diameter2, s.pitch_diameter, s.offset) = (d(m.d1), None, Some(m.offset));
+        }
+        Kind::CrossedHelical => {
+            (s.pitch_diameter, s.center_distance, s.ratio) = (d(m.d1), Some(m.offset), None);
+        }
+        _ => s.pitch_diameter = d(m.d1),
+    }
+    s
+}
+
 fn add3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
@@ -979,6 +1036,38 @@ mod tests {
         assert!(e.starts_with("Gear 2 pitch circle"), "{e}");
         let e = measured(Kind::Hypoid, &d).unwrap_err();
         assert!(e.contains("Pinion shaft"), "{e}");
+    }
+
+    /// Through the Simple-mode solver, as the window and the engine size a drawn set.
+    fn through_simple(k: Kind, d: &Drawn, settings: crate::simple::Simple) -> axes::Solved {
+        let m = measured(k, d).unwrap();
+        let sol = crate::simple::solve(&simple_of(&m, &settings), &Spec::defaults_for(k));
+        assert!(sol.error.is_none(), "{k:?}: {:?}", sol.error);
+        let (a1, a2) = axes_for(&m, &sol.spec, &Frame::at([0.0; 3]), [0.0; 3]);
+        let s = axes::solve(&a1, a2.as_ref(), Some(k), &sol.spec, &Drive::default()).unwrap_or_else(|e| panic!("{k:?}: {e}"));
+        crate::plan(&s.spec).unwrap_or_else(|e| panic!("{k:?}: {e}"));
+        s
+    }
+
+    #[test]
+    fn every_row_sizes_through_the_simple_solver() {
+        use crate::simple::Simple;
+        let none = Simple::default;
+        let s = through_simple(Kind::Pair, &drawn(vec![circle(0.0, 0.0, 20.0), circle(50.0, 0.0, 30.0)], vec![]), none());
+        assert!(matches!(s.relation, Some(Relation::Parallel { distance, .. }) if (distance - 50.0).abs() < 1e-9));
+        through_simple(Kind::Spur, &drawn(vec![circle(0.0, 0.0, 20.0)], vec![]), none());
+        through_simple(Kind::Planetary, &drawn(vec![circle(0.0, 0.0, 18.0), circle(36.0, 0.0, 18.0), circle(0.0, 0.0, 54.0)], vec![]), none());
+        through_simple(Kind::Worm, &drawn(vec![circle(0.0, 0.0, 30.0)], vec![line(-40.0, 30.0, 40.0, 30.0)]), none());
+        let h = through_simple(Kind::Hypoid, &drawn(vec![circle(0.0, 0.0, 100.0)], vec![line(-120.0, -25.0, 120.0, -25.0)]), Simple { shaft_angle: Some(90.0), ..none() });
+        assert!((h.spec.offset - 25.0).abs() < 1e-6);
+        through_simple(Kind::CrossedHelical, &drawn(vec![circle(0.0, 0.0, 20.0)], vec![line(-60.0, 45.0, 60.0, 45.0)]), Simple { shaft_angle: Some(90.0), ..none() });
+    }
+
+    #[test]
+    fn bevel_at_80_degrees_through_the_simple_solver() {
+        let s = through_simple(Kind::Bevel, &side_view(80.0), crate::simple::Simple { ratio: Some(1.5), pitch_diameter: Some(40.0), ..Default::default() });
+        assert!((s.spec.shaft_angle - 80.0).abs() < 1e-6, "{}", s.spec.shaft_angle);
+        assert!((s.spec.module * f64::from(s.spec.teeth) - 40.0).abs() < 0.5, "{} × {}", s.spec.module, s.spec.teeth);
     }
 
     #[test]

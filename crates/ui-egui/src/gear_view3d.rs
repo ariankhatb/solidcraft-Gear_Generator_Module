@@ -227,6 +227,19 @@ pub(crate) fn schematic_of(spec: &Spec, plan: &Plan) -> Schematic {
     let set_frame = spec.placement.unwrap_or(Frame::at([0.0; 3]));
     let (outline_member, body_member) = members_of(kind, spec.only, plan);
     let corr = (spec.rack.dedendum - spec.rack.addendum) / 2.0 * spec.module;
+    // The solver's own schematic (µs): its pitch and tip surfaces where it has them.
+    let simple = solidcraft_gear::simple::schematic(spec);
+    let profile_of = |i: usize, role: solidcraft_gear::simple::Role| -> Option<Vec<[f64; 2]>> {
+        use solidcraft_gear::simple::Shape;
+        let m = simple.members.iter().find(|m| m.body == Some(i))?;
+        m.parts.iter().filter(|p| p.role == role).find_map(|p| match &p.shape {
+            Shape::Cylinder { r, z0, z1 } => Some(vec![[*z0, *r], [*z1, *r]]),
+            Shape::Tube { r_out, z0, z1, .. } => Some(vec![[*z0, *r_out], [*z1, *r_out]]),
+            Shape::Cone { r0, z0, r1, z1, .. } => Some(vec![[*z0, *r0], [*z1, *r1]]),
+            Shape::Revolved { profile } if profile.len() >= 2 => Some(profile.iter().map(|q| [q[1], q[0]]).collect()),
+            _ => None,
+        })
+    };
     let mut bodies = Vec::new();
     for (i, b) in plan.bodies.iter().enumerate() {
         let member = body_member[i];
@@ -244,6 +257,8 @@ pub(crate) fn schematic_of(spec: &Spec, plan: &Plan) -> Schematic {
             }
             None => (Vec::new(), Vec::new(), false, 0.0),
         };
+        let pitch = profile_of(i, solidcraft_gear::simple::Role::Pitch).unwrap_or(pitch);
+        let tip = profile_of(i, solidcraft_gear::simple::Role::Tip).unwrap_or(tip);
         bodies.push(SchemBody { body: i, member, name: b.name.clone(), frame: b.frame, pitch, tip, internal, helix, z, motion: Motion::default() });
     }
     // Motion: non-parallel pairs as the 3D mesh check turns them; the rest as the 2D preview.

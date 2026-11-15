@@ -531,7 +531,7 @@ pub(crate) fn sketch(ui: &mut Ui, cv: &mut Canvas, d: &mut Drawn, cx: Ctx<'_>, s
             }
             Grab::SideAngle => {}
         }
-        if let Some((i, snapped)) = preview {
+        if let Some((_, snapped)) = preview {
             painter.line_segment([to_screen(snapped.a), to_screen(snapped.b)], Stroke::new(1.0, ink.gamma_multiply(0.5)));
         }
         if !matches!(g, Grab::NewCircle(_) | Grab::NewLine(_)) {
@@ -857,7 +857,8 @@ pub(crate) fn side_view(ui: &mut Ui, cv: &mut Canvas, spec: &mut Spec, size: egu
             let mut out = Changed::default();
             if let Some(v) = parse(text) {
                 let dim = *dim;
-                apply_dim(&mut Drawn::default(), spec, spec.kind, &Vec::new(), dim, v, &mut out);
+                let kind = spec.kind;
+                apply_dim(&mut Drawn::default(), spec, kind, &Vec::new(), dim, v, &mut out);
             }
             changed = out.spec;
             cv.edit = None;

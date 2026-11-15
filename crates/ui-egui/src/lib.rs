@@ -303,6 +303,9 @@ mod sketch_moving_click_tests;
 pub mod sketch_palette;
 mod sketch_pattern_tree;
 pub mod sketch_report;
+mod gear_drawing;
+mod gear_simple;
+mod gear_view3d;
 pub mod gear_window;
 #[cfg(test)]
 mod sketch_side_ui_tests;

@@ -970,7 +970,14 @@ fn from_sketch(s: &Session, cmd: &str, p: &GearParams) -> Result<Solved> {
     };
     let m = sketch_rules::measure(kind, &drawn, &picks).map_err(|e| bad(cmd, e))?;
     let base = spec_of(&GearParams { kind: Some(gear_type(kind)), ..p.clone() }).map_err(|e| bad(cmd, e))?;
-    let (spec, notes) = sketch_rules::spec_for(&m, &base).map_err(|e| bad(cmd, e))?;
+    // Sized as the window's Simple mode sizes it: what the drawing gives, and what the
+    // parameters say besides (the shaft angle a single sketch can't show, a ratio).
+    let settings = solidcraft_gear::simple::Simple { shaft_angle: p.shaft_angle, ratio: p.ratio, ..Default::default() };
+    let sized = solidcraft_gear::simple::solve(&sketch_rules::simple_of(&m, &settings), &base);
+    if let Some(e) = sized.error {
+        return Err(bad(cmd, e));
+    }
+    let (spec, notes) = (sized.spec, sized.notes);
     let turn = p.sketch_turn.unwrap_or([0.0; 3]);
     if turn.iter().any(|t| !t.is_finite()) {
         return Err(bad(cmd, "`sketch_turn` must be three finite angles"));

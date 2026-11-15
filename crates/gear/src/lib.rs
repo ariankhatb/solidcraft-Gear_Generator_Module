@@ -67,6 +67,8 @@ pub use mesh2d::{MeshPair, MeshResult, Verdict, check_mesh};
 pub use plan::{Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit, plan};
 
 #[cfg(test)]
+mod bevel_planet_tests;
+#[cfg(test)]
 mod axes_tests;
 #[cfg(test)]
 mod accuracy_tests;

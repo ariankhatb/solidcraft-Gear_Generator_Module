@@ -243,6 +243,11 @@ fn candidate(kind: Kind, rel: Option<&Relation>) -> Candidate {
             Relation::Intersecting { .. } => no("the axes meet at under 5°: too flat for bevels".into()),
             _ => no(format!("{}: bevels need intersecting axes", lie(rel))),
         },
+        Kind::BevelPlanetary => match rel {
+            Relation::Intersecting { angle, .. } if (5.0..=175.0).contains(angle) => yes(false, "the first planet's shaft meets the sun's at the apex; the other planets are patterned round the sun"),
+            Relation::Intersecting { .. } => no("the axes meet at under 5°: too flat for bevels".into()),
+            _ => no(format!("{}: a bevel planetary set needs the planet's shaft to meet the sun's", lie(rel))),
+        },
         Kind::Hypoid | Kind::CrossedHelical | Kind::Worm => match rel {
             Relation::Skew { angle, .. } => {
                 let square = (angle - 90.0).abs() <= SQUARE;

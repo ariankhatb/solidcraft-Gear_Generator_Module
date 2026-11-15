@@ -59,6 +59,22 @@ fn inputs(s: &Spec) -> Vec<(String, String)> {
                 row("Ring teeth", if s.teeth3 > 0 { s.teeth3.to_string() } else { format!("{} (sun + 2 × planet)", s.teeth + 2 * s.teeth2) });
                 row("Planets", s.planets.to_string());
             }
+            Kind::BevelPlanetary => {
+                use crate::plan::BevelPlanetMode;
+                row("Arrangement", s.bevel_planet_mode.label().to_string());
+                row("Sun teeth", s.teeth.to_string());
+                row("Planet teeth", s.teeth2.to_string());
+                let far = if s.bevel_planet_mode == BevelPlanetMode::Ring { "Ring teeth" } else { "Second sun teeth" };
+                if s.bevel_planet_mode != BevelPlanetMode::Single {
+                    row(far, if s.teeth3 > 0 { s.teeth3.to_string() } else { "sun + 2 × planet × cos Σ, rounded".to_string() });
+                }
+                row("Planets", s.planets.to_string());
+                row("Cone angle (asked for)", format!("{}°", num(s.shaft_angle)));
+                row("First planet azimuth", format!("{}°", num(s.first_azimuth)));
+                if s.spiral_angle != 0.0 {
+                    row("Spiral angle", format!("{}°", num(s.spiral_angle)));
+                }
+            }
             Kind::Worm => {
                 row("Wheel teeth", s.teeth.to_string());
                 row("Worm starts", s.starts.to_string());

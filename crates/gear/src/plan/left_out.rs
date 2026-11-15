@@ -218,7 +218,7 @@ pub fn why_left_out(s: &Spec, o: Opt) -> Option<Why> {
         },
         Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary => match o {
             Bore | Bore2 | HubDiameter | HubLength | FrontShaft | BackShaft | FrontShaft2 | BackShaft2 => None,
-            ToothChamfers | BoreChamfer | HubChamfer => body("a bevel gear's ends are cones"),
+            ToothChamfers | BoreChamfer | HubChamfer => body("chamfers are not built on bevel gears: their ends are cones"),
             Face2 => body("both gears share one face width"),
             _ if o.tooth_form() => teeth("bevel teeth are cut by their own crown gear"),
             _ => body("bevel gears take a hub, bores and shafts only"),

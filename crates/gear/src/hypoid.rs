@@ -312,6 +312,13 @@ pub fn design(s: &Spec) -> Result<Design, String> {
     })
 }
 
+/// The pitch cones work out and leave the ring gear's spiral angle at
+/// [`LEAST_RING_SPIRAL`] or more: [`design`] takes the spec (quick to ask: no search for the
+/// largest offset).
+pub(crate) fn ring_spirals(s: &Spec) -> bool {
+    design_iso(s).is_ok_and(|d| s.offset < 1e-3 || d.beta2 >= LEAST_RING_SPIRAL.to_radians())
+}
+
 /// [`design`] without the ring gear spiral angle's limit.
 fn design_iso(s: &Spec) -> Result<Design, String> {
     let first = design_with(s, None)?;

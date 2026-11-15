@@ -37,8 +37,9 @@ fn mm(v: f64) -> String {
 impl Kind {
     /// Its teeth take this module's tooth tuning (tip rounding, horizontal-expansion
     /// compensation, elephant-foot relief, tip relief, crowning, tip diameters, the nozzle
-    /// check). Sprockets, pulleys, splines, face gears and elliptical pairs don't: their teeth
-    /// come from their own generators (`plan::extras::left_out` says so when it is set).
+    /// check), as far as each type's teeth take it (`plan::left_out` says which, and warns about
+    /// the rest). Sprockets, pulleys, splines, face gears and elliptical pairs take none: their
+    /// teeth come from their own generators.
     pub fn tuned_teeth(self) -> bool {
         !matches!(self, Kind::Sprocket | Kind::Pulley | Kind::Spline | Kind::FaceGear | Kind::Elliptical)
     }
@@ -107,25 +108,32 @@ impl Spec {
         let nozzle = if nozzle.is_finite() && nozzle > 0.0 { nozzle } else { 0.4 };
         let layer = if layer_height.is_finite() && layer_height > 0.0 { layer_height } else { 0.2 };
         let m = self.module.max(1e-9);
-        // Sprockets, pulleys, splines, face gears and elliptical pairs make their teeth with their
-        // own generators, which take none of the tooth tuning: only the backlash (a spline's
-        // flank clearance), the bore chamfer and the bearing fit are set for them.
-        if self.kind.tuned_teeth() {
-            if self.kind.involute() {
-                self.rack = BasicRack::standard("print_fdm").unwrap_or(self.rack);
-                self.pressure_angle = self.pressure_angle.max(25.0);
-            }
+        // Only what the type uses is set (`plan::left_out`): sprockets, pulleys, splines, face
+        // gears and elliptical pairs make their teeth with their own generators and get only the
+        // backlash (a spline's flank clearance), the bore chamfer and the bearing fit; a rack or
+        // a ring gear gets the compensation but no tip rounding, and so on.
+        use crate::plan::left_out::{Opt, uses};
+        if self.kind.tuned_teeth() && self.kind.involute() {
+            self.rack = BasicRack::standard("print_fdm").unwrap_or(self.rack);
+            self.pressure_angle = self.pressure_angle.max(25.0);
+        }
+        if uses(self, Opt::Nozzle) {
             self.nozzle = nozzle;
+        }
+        if uses(self, Opt::TipRound) {
             // A quarter nozzle of radius at the least, but no more than a quarter module.
             self.tip_round = (0.5 * nozzle / m).clamp(0.05, 0.25);
-            // (Small modules can't give up as much: these stay well inside what `check` allows.)
+        }
+        // (Small modules can't give up as much: these stay well inside what `check` allows.)
+        if uses(self, Opt::XyCompensation) {
             self.xy_compensation = (0.125 * nozzle).min(0.05 * m);
+        }
+        if uses(self, Opt::ElephantFoot) {
             self.elephant_foot = (0.5 * layer).min(0.05 * m);
             self.elephant_foot_height = layer;
         }
         self.backlash = self.backlash.max((0.25 * nozzle + 0.05).min(0.3 * m));
-        // (A spline has no bore chamfer: its shaft and hub are the spline itself.)
-        if self.kind != Kind::Spline {
+        if uses(self, Opt::BoreChamfer) {
             self.bore_chamfer = self.bore_chamfer.max(layer);
         }
         self.hardware.bearing_fit = self.hardware.bearing_fit.max(0.25 * nozzle);

@@ -955,3 +955,134 @@ fn extras_kinds_take_what_fits_and_say_what_they_leave_out() {
     assert_eq!(p.bodies.iter().map(|b| b.steps.len()).collect::<Vec<_>>(), plain.bodies.iter().map(|b| b.steps.len()).collect::<Vec<_>>());
     assert!(warned(&p, "front shaft, hub hardware and bearing pocket, bore chamfer left out (the shaft and the hub are the spline itself)"), "{:?}", p.warnings);
 }
+
+/// Every type, every option of `plan::left_out`: one said to be left out builds the same bodies
+/// and is named in exactly one new warning; one said to be used changes a body, adds a warning
+/// of the planner's own or is refused.
+#[test]
+fn every_type_uses_or_names_every_option() {
+    use crate::plan::left_out::{Opt, uses, why_left_out};
+    let clear = |k: Kind| Spec {
+        bore: Bore::default(),
+        bore2: Bore::default(),
+        hub_diameter: 0.0,
+        hub_length: 0.0,
+        holes: 0,
+        hole_diameter: 0.0,
+        ..Spec::defaults_for(k)
+    };
+    let bore = Bore { kind: BoreKind::Round, diameter: 2.0, ..Bore::default() };
+    let shaft = Shaft { diameter: 3.0, length: 5.0, ..Shaft::default() };
+    let screw = Hardware { set_screw: 2.0, ..Hardware::default() };
+    let set = |o: Opt, s: &mut Spec| match o {
+        Opt::TipRound => s.tip_round = 0.2,
+        Opt::XyCompensation => s.xy_compensation = 0.05,
+        Opt::ElephantFoot => s.elephant_foot = 0.05,
+        Opt::Nozzle => s.nozzle = 2.0,
+        Opt::Clearance => s.clearance = 0.3,
+        Opt::TipShortening => s.tip_shortening = 0.1,
+        Opt::TipDiameter => s.tip_diameter = 1.0,
+        Opt::TipDiameter2 => s.tip_diameter2 = 1.0,
+        Opt::TipRelief => s.tip_relief = 0.05,
+        Opt::Crowning => s.crowning = 0.05,
+        Opt::Backlash2 => s.backlash2 = Some(0.05),
+        Opt::Face2 => s.face_width2 = 0.8 * s.face_width,
+        Opt::Bore => s.bore = bore,
+        Opt::HubDiameter => s.hub_diameter = 0.5 * s.module * f64::from(s.teeth.max(8)),
+        Opt::HubLength => s.hub_length = 4.0,
+        Opt::Holes => s.holes = 3,
+        Opt::FrontShaft => s.shaft_front = shaft,
+        Opt::BackShaft => s.shaft_back = shaft,
+        Opt::Hardware => s.hardware = screw,
+        Opt::Bore2 => s.bore2 = bore,
+        Opt::FrontShaft2 => s.shaft2_front = shaft,
+        Opt::BackShaft2 => s.shaft2_back = shaft,
+        Opt::Hardware2 => s.hardware2 = screw,
+        Opt::ToothChamfers => s.tooth_chamfer_front = Chamfer { size: 0.3, angle: 45.0 },
+        Opt::BoreChamfer => s.bore_chamfer = 0.3,
+        Opt::HubChamfer => s.hub_chamfer = 0.3,
+    };
+    for k in Kind::ALL {
+        for o in Opt::ALL {
+            // What the option needs to show: a hub for the hub's fields and hardware, a bore for
+            // its chamfer (where the type takes them).
+            let mut base = clear(k);
+            let hub = uses(&base, Opt::HubDiameter) && uses(&base, Opt::HubLength);
+            match o {
+                Opt::HubDiameter if hub => set(Opt::HubLength, &mut base),
+                Opt::HubLength if hub => set(Opt::HubDiameter, &mut base),
+                Opt::Hardware | Opt::Hardware2 | Opt::HubChamfer if hub => {
+                    set(Opt::HubDiameter, &mut base);
+                    set(Opt::HubLength, &mut base);
+                }
+                Opt::BoreChamfer => {
+                    // (Both bores: a face gear's is chamfered on the pinion only.)
+                    if uses(&base, Opt::Bore) {
+                        set(Opt::Bore, &mut base);
+                    }
+                    if uses(&base, Opt::Bore2) {
+                        set(Opt::Bore2, &mut base);
+                    }
+                }
+                _ => {}
+            }
+            let mut with = base.clone();
+            set(o, &mut with);
+            assert!(o.is_set(&with), "{k:?} {o:?}");
+            let p0 = plan(&base).unwrap_or_else(|e| panic!("{k:?} {o:?} base: {e}"));
+            let fresh = |p: &Plan| p.warnings.iter().filter(|w| !p0.warnings.contains(w)).cloned().collect::<Vec<_>>();
+            match why_left_out(&with, o) {
+                Some(_) => {
+                    let p = plan(&with).unwrap_or_else(|e| panic!("{k:?} {o:?}: {e}"));
+                    assert_eq!(format!("{:?}", p.bodies), format!("{:?}", p0.bodies), "{k:?} {o:?} is said to be left out but changes the bodies");
+                    let new = fresh(&p);
+                    assert!(new.len() == 1 && new[0].contains(o.label()) && new[0].contains("left out"), "{k:?} {o:?}: {new:?}");
+                }
+                None => match plan(&with) {
+                    Err(_) => {}
+                    Ok(p) => assert!(
+                        format!("{:?}", p.bodies) != format!("{:?}", p0.bodies) || !fresh(&p).is_empty(),
+                        "{k:?} {o:?} is said to be used but changes nothing and says nothing"
+                    ),
+                },
+            }
+        }
+    }
+}
+
+/// The user's rack: everything a rack can't take is named, in two warnings.
+#[test]
+fn a_rack_names_what_it_leaves_out() {
+    let mut s = Spec {
+        bore: Bore { kind: BoreKind::Round, diameter: 6.0, ..Bore::default() },
+        hub_diameter: 14.0,
+        hub_length: 5.0,
+        holes: 3,
+        tooth_chamfer_front: Chamfer { size: 0.5, angle: 45.0 },
+        tip_round: 0.2,
+        crowning: 0.05,
+        ..Spec::defaults_for(Kind::Rack)
+    };
+    s.hardware.set_bearing("608");
+    let plain = planned(&Spec::defaults_for(Kind::Rack));
+    let p = planned(&s);
+    assert_eq!(format!("{:?}", p.bodies), format!("{:?}", plain.bodies));
+    assert!(warned(&p, "rack: tip rounding, crowning don't apply to its teeth"), "{:?}", p.warnings);
+    assert!(warned(&p, "rack: bore, hub diameter, hub length, lightening holes, hub hardware and bearing pocket, tooth chamfers left out (a rack is a plain toothed bar)"), "{:?}", p.warnings);
+    assert_eq!(p.warnings.len(), 2, "{:?}", p.warnings);
+    // What a rack does take still reaches it.
+    let p = planned(&Spec { xy_compensation: 0.05, ..Spec::defaults_for(Kind::Rack) });
+    assert_ne!(format!("{:?}", p.bodies), format!("{:?}", plain.bodies));
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+}
+
+/// The print preset sets only what each type uses: it never brings a "left out" warning.
+#[test]
+fn the_print_preset_sets_nothing_a_type_leaves_out() {
+    for k in Kind::ALL {
+        let mut s = Spec::defaults_for(k);
+        s.apply_print_defaults(0.4, 0.2);
+        let Ok(p) = plan(&s) else { continue };
+        assert!(!p.warnings.iter().any(|w| w.contains("left out (") || w.contains("don't apply")), "{k:?}: {:?}", p.warnings);
+    }
+}

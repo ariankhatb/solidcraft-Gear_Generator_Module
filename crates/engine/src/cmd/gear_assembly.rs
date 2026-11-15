@@ -232,8 +232,8 @@ pub(super) fn sync(
             claim[k] = Some(i);
         }
     }
-    for i in (0..n).filter(|i| kept[*i].is_none() && !claim.contains(&Some(*i))) {
-        if i < left.len() && claim[i].is_none() && left[i].as_ref().is_some_and(|m| !bodies.contains(&m.body)) {
+    for i in 0..n {
+        if kept[i].is_none() && !claim.contains(&Some(i)) && i < left.len() && claim[i].is_none() && left[i].as_ref().is_some_and(|m| !bodies.contains(&m.body)) {
             claim[i] = Some(i);
         }
     }

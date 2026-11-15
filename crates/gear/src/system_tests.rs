@@ -244,3 +244,65 @@ fn a_3d_sketch_system_of_bevels_compounds_and_a_ring_turns_by_its_graph() {
     round.sort_unstable();
     assert_eq!(round, vec![1, 2, 3], "{:?}", issues[0]);
 }
+
+/// The user's gearbox: a Ø30 input drives two Ø15 countershaft gears (twin countershafts); each
+/// countershaft carries a Ø25 beside its Ø15 (a compound), and both Ø25s drive one Ø15 output.
+/// A closed loop of meshes with equal branches (a power split): it agrees, so it is no issue;
+/// the joints are one revolute per shaft (input, countershaft A, countershaft B, output), the
+/// clusters rigid, and the mesh that closes the loop is left out of the links (the joints'
+/// motion links take each driven joint once) and holds by the ratios.
+fn gearbox(b25_teeth: u32) -> Plan {
+    let z = [0.0, 0.0, 1.0];
+    let frames = [
+        frame([0.0, 0.0, 0.0], z),
+        frame([22.5, 0.0, 0.0], z),
+        frame([22.5, 0.0, 15.0], z),
+        frame([-22.5, 0.0, 0.0], z),
+        frame([-22.5, 0.0, 15.0], z),
+        frame([0.0, 15.0, 15.0], z),
+    ];
+    // Module 1: the diameters are the teeth.
+    let teeth = [30, 15, 25, 15, b25_teeth, 15];
+    read_set(&frames, &teeth, &[], &[(0, 1), (0, 3), (2, 5), (4, 5)], vec![vec![1, 2], vec![3, 4]])
+}
+
+#[test]
+fn a_twin_countershaft_gearbox_splits_power_round_a_loop_that_agrees() {
+    let p = gearbox(25);
+    let (a, issues) = crate::plan::assembly::from_members(&p).expect("a graph");
+    assert!(issues.is_empty(), "a power split is no over-constraint: {issues:?}");
+    // Four shafts: the members no rigid link drives.
+    let rigid_driven: Vec<usize> = a.links.iter().filter(|l| matches!(l, AssemblyLink::Rigid { .. })).map(|l| l.members().1).collect();
+    assert_eq!(rigid_driven.len(), 2);
+    assert_eq!(6 - rigid_driven.len(), 4, "input, two countershafts, output");
+    let gear_links = a.links.iter().filter(|l| matches!(l, AssemblyLink::Gear { .. })).count();
+    assert_eq!(gear_links, 3, "three of the four meshes linked, the fourth closes the loop");
+    // The input by θ: each countershaft −2θ, the output +(2·25/15)θ, by both branches.
+    let theta = 0.3;
+    for (i, want) in [(1, -2.0), (2, -2.0), (3, -2.0), (4, -2.0), (5, 2.0 * 25.0 / 15.0)] {
+        let got = a.ratio(0, i).unwrap() * theta;
+        assert!(close(got, want * theta), "member {}: {got} vs {}", i + 1, want * theta);
+    }
+    // The mesh left out holds: across it the output turns what the other branch gives it.
+    let both: Vec<f64> = [(2usize, 25.0), (4usize, 25.0)].iter().map(|(k, zk)| -a.ratio(0, *k).unwrap() * zk / 15.0).collect();
+    assert!(close(both[0], both[1]) && close(both[0], a.ratio(0, 5).unwrap()), "{both:?}");
+    // Driven from the output instead: the same, the output's turn as the unit.
+    let back = a.rooted(5);
+    assert!(close(back.ratio(5, 0).unwrap(), 15.0 / (2.0 * 25.0)));
+}
+
+#[test]
+fn a_gearbox_whose_branches_disagree_is_reported() {
+    // Countershaft B's big gear has 24 teeth: the output can't turn at both branches' speeds.
+    let p = gearbox(24);
+    let (a, issues) = crate::plan::assembly::from_members(&p).unwrap();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    let mut round = issues[0].members.clone();
+    round.sort_unstable();
+    assert_eq!(round, vec![0, 1, 2, 3, 4, 5], "the whole loop: input, both countershafts, output: {:?}", issues[0]);
+    assert!(issues[0].message.contains("member 6"), "{}", issues[0].message);
+    // What is linked still turns: the input drives everything along the tree.
+    for i in 1..6 {
+        assert!(a.ratio(0, i).is_some(), "member {}", i + 1);
+    }
+}

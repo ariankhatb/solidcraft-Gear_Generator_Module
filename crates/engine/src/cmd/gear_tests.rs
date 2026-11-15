@@ -732,6 +732,7 @@ fn clearance_parameters_round_trip_and_bad_ones_are_refused() {
         bearing_fit: 0.15,
         seats: vec![Seat::Along { member: 2, along: -30.0 }, Seat::Point([1.0, 2.0, 3.0])],
         travel: 0.0,
+        ..Clearance::default()
     });
     let p = crate::gear_params_of(&spec);
     let back: crate::schema::gear::GearParams = serde_json::from_value(p.clone()).unwrap_or_else(|e| panic!("{p}: {e}"));

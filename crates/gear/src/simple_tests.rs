@@ -529,3 +529,36 @@ fn fast_enough() {
     println!("hypoid first solve {:.3} ms, then its schematic {:.3} ms", 1e3 * first, 1e3 * t.elapsed().as_secs_f64());
     assert!(pair < 5e-3 && planet < 5e-3);
 }
+
+#[test]
+fn bevel_planetary_sets_by_their_outputs() {
+    use crate::plan::BevelPlanetMode::{Differential, Ring, Single};
+    let base = Spec::defaults_for(Kind::BevelPlanetary);
+    // Meeting shafts with planets asked for: a bevel planetary set first.
+    let meet = relation_of(90.0, 0.0);
+    assert_eq!(auto_kind(&meet, &Simple { planets: Some(4), ..Simple::default() })[0].0, Kind::BevelPlanetary);
+    assert_ne!(auto_kind(&meet, &Simple::default())[0].0, Kind::BevelPlanetary);
+    // A differential at 90°: equal side gears, sized by the sun.
+    let d = solved(&Simple { bevel_planet_mode: Some(Differential), shaft_angle: Some(90.0), ratio: Some(0.625), planets: Some(4), pitch_diameter: Some(48.0), ..of(Kind::BevelPlanetary) }, &base);
+    assert_eq!(d.spec.teeth3, d.spec.teeth, "{:?}", d.chosen);
+    assert!((d.spec.module * f64::from(d.spec.teeth) - 48.0).abs() < 0.05 * 48.0);
+    assert_eq!((d.spec.teeth + d.spec.teeth3) % 4, 0);
+    plan(&d.spec).unwrap();
+    // A bevel epicyclic at 45°: the counts keep the cone angle near the one asked.
+    let r = solved(&Simple { bevel_planet_mode: Some(Ring), shaft_angle: Some(45.0), ratio: Some(0.5), planets: Some(3), cone_distance: Some(40.0), ..of(Kind::BevelPlanetary) }, &base);
+    assert!((row(&r, "cone angle") - 45.0).abs() < 2.0, "{:?}", r.chosen);
+    assert!(r.spec.teeth3 > r.spec.teeth + r.spec.teeth2, "{:?}", r.spec);
+    plan(&r.spec).unwrap();
+    // A single sun, by the planet's size.
+    let s = solved(&Simple { bevel_planet_mode: Some(Single), shaft_angle: Some(70.0), ratio: Some(0.6), planets: Some(3), pitch_diameter2: Some(24.0), ..of(Kind::BevelPlanetary) }, &base);
+    assert_eq!(s.spec.teeth3, 0);
+    plan(&s.spec).unwrap();
+    // Switched to Simple, each solves to itself.
+    for x in [&d.spec, &r.spec, &s.spec] {
+        let again = solved(&outputs_of(x), x).spec;
+        assert_eq!((again.module, again.teeth, again.teeth2, again.teeth3, again.shaft_angle.round(), again.planets, again.bevel_planet_mode), (x.module, x.teeth, x.teeth2, x.teeth3, x.shaft_angle.round(), x.planets, x.bevel_planet_mode));
+    }
+    // A ring is refused where the far side faces the sun's way, with why.
+    let bad = solve(&Simple { bevel_planet_mode: Some(Ring), shaft_angle: Some(120.0), ratio: Some(0.6), ..of(Kind::BevelPlanetary) }, &base);
+    assert!(bad.error.is_some());
+}

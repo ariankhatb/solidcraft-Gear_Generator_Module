@@ -1568,7 +1568,9 @@ fn bevel_planetary(c: &mut Ctx) -> Result<(), String> {
     };
     (c.spec.teeth, c.spec.teeth2, c.spec.teeth3) = (z1, z2, 0);
     let g = bevel_planet::geometry(&c.spec)?;
+    // Built at the angle the whole teeth give (the notes say how far it moved).
     c.spec.teeth3 = g.z_far;
+    c.spec.shaft_angle = g.sigma.to_degrees();
     (c.spec.shift, c.spec.shift2) = (0.0, 0.0);
     let m = c.spec.module;
     c.face(0.3 * g.re);

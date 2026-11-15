@@ -75,11 +75,31 @@ pub struct Clearance {
     /// A rack's travel: how far it slides in all (mm; 0: its own length), its slot that much
     /// longer than the rack.
     pub travel: f64,
+    /// Make the keep-out body itself (`Plan::clearance`); false places the bearing seats only
+    /// (for `bearing_bodies`).
+    pub keep_out: bool,
+    /// Also build each seat's bearing as two bodies, its outer and inner ring (see
+    /// [`add_bearing_bodies`]).
+    pub bearing_bodies: bool,
+}
+
+/// A bearing placed at a seat ([`Plan::bearings`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacedBearing {
+    /// The seat (1-based, as the warnings count them).
+    pub seat: usize,
+    /// The member (an index into the plan's bodies) whose shaft it carries.
+    pub member: usize,
+    /// Where it is (world): its middle on the member's axis, z along the axis.
+    pub frame: Frame,
+    /// The bearing's name ("608"; "custom" for a size given) and size.
+    pub name: String,
+    pub size: BearingSize,
 }
 
 impl Default for Clearance {
     fn default() -> Self {
-        Self { radial: 0.5, axial: 0.5, shaft_extension: 0.0, ring_as_housing: true, bearing: None, bearing_size: None, bearing_fit: 0.0, seats: Vec::new(), travel: 0.0 }
+        Self { radial: 0.5, axial: 0.5, shaft_extension: 0.0, ring_as_housing: true, bearing: None, bearing_size: None, bearing_fit: 0.0, seats: Vec::new(), travel: 0.0, keep_out: true, bearing_bodies: false }
     }
 }
 
@@ -362,8 +382,10 @@ pub fn clearance_body(s: &Spec, p: &mut Plan) -> Result<Body, String> {
     let mut warnings = Vec::new();
     // (Following the formulas: only for the whole set, whose plan holds the bodies' own teeth.)
     let follows = if s.only == 0 { member_follows(s, p, bodies) } else { vec![None; bodies.len()] };
-    let (body, follow) = build(s, &c, bodies, preview, &follows, &mut facts, &mut warnings)?;
+    let mut placed = Vec::new();
+    let (body, follow) = build(s, &c, bodies, preview, &follows, &mut facts, &mut warnings, &mut placed)?;
     p.clearance_follow = follow;
+    p.bearings = placed;
     for (label, value, unit) in facts {
         p.fact(label, value, unit);
     }
@@ -402,6 +424,7 @@ fn build(
     follows: &[Option<MemberFollow>],
     facts: &mut Vec<(String, f64, Unit)>,
     warn: &mut Vec<String>,
+    placed: &mut Vec<PlacedBearing>,
 ) -> Result<(Body, Vec<Vec<VertexFollow>>), String> {
     if bodies.is_empty() {
         return Err("clearance: the set has no bodies".into());
@@ -637,6 +660,7 @@ fn build(
                 rule.anchors.extend([(z0, 0.5), (z1, 0.5)]);
             }
             g.bands.push((z0, z1, r));
+            placed.push(PlacedBearing { seat: n, member: mi, frame: Frame { origin: f.world([0.0, 0.0, m.mid + along]), x: f.x, z: f.z }, name: name.clone(), size: *b });
             facts.push((format!("clearance: bearing seat {n} on {} at", m.who), along, Unit::Mm));
             match m.shaft {
                 Some((lo, hi, _)) if z0 >= lo - 1e-9 && z1 <= hi + 1e-9 => {}
@@ -914,4 +938,38 @@ fn close(v: Vec<V2>) -> Vec<V2> {
     }
     out.dedup_by(|a, b| (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6);
     out
+}
+
+/// Builds each placed bearing ([`Plan::bearings`]) as two bodies, its outer ring and its inner
+/// ring (plain rectangular sections, each a third of the bearing's wall; no balls), and adds
+/// them to the assembly: the outer ring held (it sits in the housing), the inner ring joined
+/// rigidly to the member whose shaft it carries. Only for the whole set (`Spec::only` 0).
+pub(crate) fn add_bearing_bodies(s: &Spec, p: &mut Plan) {
+    if p.bearings.is_empty() {
+        p.warn("bearing bodies: no bearing seats placed, so no bearings are built");
+        return;
+    }
+    if s.only != 0 {
+        p.warn("bearing bodies are built with the whole set only");
+        return;
+    }
+    let pre = if s.name.trim().is_empty() { String::new() } else { format!("{} ", s.name.trim()) };
+    for b in p.bearings.clone() {
+        let (ri, ro, w) = (b.size.bore.max(0.0) / 2.0, b.size.od / 2.0, b.size.width);
+        // A bore not known: an inner ring at 0.4 of the outside radius.
+        let ri = if ri > 0.0 { ri } else { 0.4 * ro };
+        let t = (ro - ri) / 3.0;
+        let ring = |r0: f64, r1: f64| Step::Revolve { profile: vec![V2::new(r0, -w / 2.0), V2::new(r1, -w / 2.0), V2::new(r1, w / 2.0), V2::new(r0, w / 2.0)], op: Op::New };
+        let axis = crate::axes::Axis { origin: b.frame.origin, dir: b.frame.z };
+        for (part, r0, r1) in [("outer", ro - t, ro), ("inner", ri, ri + t)] {
+            let index = p.bodies.len();
+            p.bodies.push(Body { name: format!("{pre}Bearing {} {} {part} ring", b.seat, b.name), frame: b.frame, steps: vec![ring(r0, r1)] });
+            let grounded = part == "outer";
+            p.assembly.members.push(crate::plan::AssemblyMember { body: index, axis, grounded, carrier: None });
+            if !grounded && b.member < p.assembly.members.len() {
+                let m = p.assembly.members.len() - 1;
+                p.assembly.links.push(crate::plan::AssemblyLink::Rigid { a: b.member, b: m });
+            }
+        }
+    }
 }

@@ -624,6 +624,27 @@ fn sketch_picks_must_be_in_the_sketch() {
     assert!(e.contains("one sketch"), "{e}");
 }
 
+/// Three circles touching in a chain, typed only by their teeth: a three-gear train on the
+/// drawn centres, its ratio from gear 1, and an assembly linked along it.
+#[test]
+fn sketch_three_touching_circles_are_a_gear_train() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 20.0, "g1"), circle(50.0, 0.0, 30.0, "g2"), circle(50.0, 45.0, 15.0, "g3")]);
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "spur"}));
+    assert!((fact_opt(&r, "train ratio gear 1 → gear 3").unwrap() - 0.75).abs() < 1e-9, "{r}");
+    let r = run(&mut s, "gear.create", json!({"sketch": sk, "type": "helical", "assembly": true}));
+    assert_eq!(r["bodies"].as_array().unwrap().len(), 3, "{r}");
+    assert_eq!(r["assembly"]["links"].as_array().map(Vec::len), Some(2), "{r}");
+    // Picked: only gears 1 and 2 (a pair).
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "spur", "picks": ["g1", "g2"]}));
+    assert!((fact_opt(&r, "axis distance").unwrap() - 50.0).abs() < 1e-6, "{r}");
+    // A ring and the gear inside it, with a tooth style: both built.
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 60.0, "ring"), circle(40.0, 0.0, 20.0, "pinion")]);
+    let r = run(&mut s, "gear.create", json!({"sketch": sk, "type": "spur"}));
+    assert_eq!(r["bodies"].as_array().unwrap().len(), 2, "{r}");
+}
+
 /// A sketch point stands for the shaft through it, normal to its sketch.
 #[test]
 fn a_sketch_point_is_a_shaft_normal_to_its_sketch() {
@@ -1318,4 +1339,30 @@ fn a_users_body_name_stays_through_an_update() {
     let u = run(&mut s, "gear.update", json!({"group": group, "teeth": 24}));
     assert_eq!(u["bodies"], json!(["Gear z24", "Gear z20 (2)"]), "{u}");
     assert!(!u["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap_or_default().contains("keeps its name")), "{u}");
+}
+
+/// Selected shafts (sketch points, a circle, an axis) and a bearing on one: a train on the
+/// shafts, the bearing a keep-out seat and, with assembly, two ring bodies.
+#[test]
+fn selected_shafts_and_a_bearing_make_a_train_with_a_bearing() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[("sketch.point", json!({"point": [0, 0], "id": "p1"})), ("sketch.point", json!({"point": [50, 0], "id": "p2"})), circle(50.0, 45.0, 15.0, "c3")]);
+    let sel = json!([
+        {"sketch": sk, "point": "p1", "pitch_diameter": 40},
+        {"sketch": sk, "point": "p2"},
+        {"sketch": sk, "curve": "c3"},
+        {"axis": {"origin": [0, 0, 0], "dir": [0, 0, 1]}, "bearing": "608", "along": -15}
+    ]);
+    let r = run(&mut s, "gear.calculate", json!({"selection": sel, "type": "spur"}));
+    assert!(fact_opt(&r, "train ratio gear 1 → gear 3").is_some(), "{r}");
+    let r = run(&mut s, "gear.create", json!({"selection": sel, "type": "spur", "assembly": true}));
+    // Three gears, the bearing's outer and inner ring, and the keep-out body.
+    assert!(r["bodies"].as_array().unwrap().len() >= 5, "{r}");
+    // One shaft: a gear on it.
+    run(&mut s, "gear.calculate", json!({"selection": [{"axis": "Z", "pitch_diameter": 40}]}));
+    // Clear errors.
+    let e = s.execute("gear.calculate", &json!({"selection": [{"axis": "Z", "face": [0, 0, 0]}]})).unwrap_err().to_string();
+    assert!(e.contains("exactly one of"), "{e}");
+    let e = s.execute("gear.calculate", &json!({"selection": [{"axis": "Z"}, {"axis": "X", "bearing": "nope"}]})).unwrap_err().to_string();
+    assert!(e.contains("no standard bearing"), "{e}");
 }

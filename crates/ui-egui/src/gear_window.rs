@@ -749,6 +749,26 @@ pub fn open(app: &mut SolveApp) {
     });
 }
 
+/// Whether Gears opens this window rather than the Gears dialog: on a selected set that is not
+/// drawn in a sketch the dialog takes (the window holds every other family until the dialog
+/// does).
+pub fn opens_window(app: &SolveApp) -> bool {
+    solidcraft_engine::gear_selected_set(&app.session).is_some_and(|set| crate::dialogs_gear::for_set(&set).is_none())
+}
+
+/// The Gears dialog on a set drawn in a sketch, when it is one the dialog takes.
+fn open_dialog(app: &mut SolveApp, set: &solidcraft_engine::schema::gear::GearSet) -> bool {
+    let Some(g) = crate::dialogs_gear::for_set(set) else { return false };
+    app.start("gear.create");
+    match app.dialog.as_mut().map(|d| &mut d.kind) {
+        Some(crate::dialogs::Kind::Gear(k)) => {
+            *k = g;
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Whether a history folder is a gear set the window can be opened on.
 pub fn is_set(app: &SolveApp, group: u64) -> bool {
     solidcraft_engine::gear_sets(&app.session).iter().any(|set| set.group == group)
@@ -758,6 +778,9 @@ pub fn is_set(app: &SolveApp, group: u64) -> bool {
 pub fn open_group(app: &mut SolveApp, group: u64) -> Result<(), String> {
     let sets = solidcraft_engine::gear_sets(&app.session);
     let set = sets.iter().find(|set| set.group == group).ok_or_else(|| "That folder is not a gear set the Gear Generator made".to_string())?;
+    if open_dialog(app, set) {
+        return Ok(());
+    }
     app.gear_window = Some(GearWindow::on_set(set.group, &set.name, &set.bodies, &set.request, &set.params));
     Ok(())
 }

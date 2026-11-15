@@ -53,6 +53,7 @@ pub mod dialogs_move;
 pub mod dialogs_part_size;
 pub mod dialogs_parts;
 pub mod dialogs_plastic;
+pub mod dialogs_gear;
 pub mod dialogs_save_mesh;
 pub mod dialogs_sheet;
 pub mod dialogs_surface;
@@ -670,6 +671,8 @@ pub struct SolveApp {
     pub sketch_report: Option<sketch_report::SketchReport>,
     /// The Gear Generator window, while open.
     pub gear_window: Option<gear_window::GearWindow>,
+    /// A sketch opened from the Gears dialog: the dialog comes back on it once it is finished.
+    pub gear_after_sketch: Option<dialogs_gear::AfterSketch>,
     /// The KiCad import options window, when a board is chosen to open.
     pub kicad_import: Option<kicad_import_dialog::Dialog>,
     /// The Bill of Materials window, when open.
@@ -989,6 +992,7 @@ impl SolveApp {
             design_properties: None,
             sketch_report: None,
             gear_window: None,
+            gear_after_sketch: None,
             kicad_import: None,
             bom: None,
             material_card_review: None,
@@ -2334,7 +2338,7 @@ impl SolveApp {
             sketch_report::open(self);
             return;
         }
-        if id == "gear.create" {
+        if id == "gear.create" && gear_window::opens_window(self) {
             gear_window::open(self);
             return;
         }
@@ -3901,6 +3905,7 @@ impl SolveApp {
         params_dialog::show(self, ui.ctx());
         design_properties::show(self, ui.ctx());
         sketch_report::show(self, ui.ctx());
+        dialogs_gear::tick(self);
         gear_window::show(self, ui.ctx());
         material_card_review::show(self, ui.ctx());
         recovery_ui::show(self, ui.ctx());

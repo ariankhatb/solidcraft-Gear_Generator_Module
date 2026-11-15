@@ -18,9 +18,11 @@ use crate::spline::SplineStandard;
 pub(crate) mod extras;
 pub mod left_out;
 pub mod bevel_planet;
+pub mod train;
 mod assembly;
 
 pub use bevel_planet::BevelPlanetMode;
+pub use train::{LinkKind, Train, TrainGear, TrainLink};
 
 /// Gear set types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
@@ -350,6 +352,11 @@ pub struct Spec {
     pub clearance_body: Option<crate::clearance::Clearance>,
     /// A differential's own settings (`Kind::Differential`; see [`crate::diff::Diff`]).
     pub diff: crate::diff::Diff,
+    /// A gear train (any number of parallel-axis gears meshing outside, inside rings or on
+    /// shared shafts; see [`train`]): when set, the set is this train and `kind` is its tooth
+    /// style (spur, helical, herringbone). `module`, `teeth` and `teeth2` are gear 1's and
+    /// gear 2's; gear 1 takes `bore` and the shaft and hardware settings, the others gear 2's.
+    pub train: Option<Train>,
 }
 
 impl Default for Spec {
@@ -441,6 +448,7 @@ impl Default for Spec {
             bevel_planet_mode: BevelPlanetMode::Single,
             clearance_body: None,
             diff: crate::diff::Diff::default(),
+            train: None,
         }
     }
 }
@@ -776,6 +784,9 @@ pub struct Plan {
     /// held, and how their motions are tied ([`Assembly`]). Filled by every kind's planner; the
     /// engine makes components and joints of it (`gear.create` with `assembly: true`).
     pub assembly: Assembly,
+    /// The bearings placed at the clearance body's seats (`Spec::clearance_body`), where they
+    /// are; built as bodies too when it asks for `bearing_bodies`.
+    pub bearings: Vec<crate::clearance::PlacedBearing>,
     /// Why the set can't be built, found while planning it ([`plan`] returns it as the error).
     refused: Option<String>,
 }
@@ -919,6 +930,12 @@ impl Plan {
 pub fn check(s: &Spec) -> Result<(), String> {
     if s.kind == Kind::Differential {
         return crate::diff::check(s);
+    }
+    if let Some(t) = &s.train {
+        if !matches!(s.kind, Kind::Spur | Kind::Helical | Kind::Herringbone) {
+            return Err(format!("a gear train's teeth are spur, helical or herringbone, not {}", s.kind.label().to_lowercase()));
+        }
+        train::check(t)?;
     }
     let pos = |v: f64, what: &str| if v.is_finite() && v > 0.0 { Ok(()) } else { Err(format!("{what} must be greater than 0")) };
     pos(s.module, "module")?;
@@ -1067,6 +1084,7 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
     }
     let mut p = Plan::default();
     match s.kind {
+        Kind::Spur | Kind::Helical | Kind::Herringbone if s.train.is_some() => train::build(s, s.train.as_ref().unwrap(), &mut p),
         Kind::Spur | Kind::Helical | Kind::Herringbone => single(s, &mut p),
         Kind::Internal => internal(s, &mut p),
         Kind::Rack => rack(s, &mut p),
@@ -1095,7 +1113,9 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
     if let Some(why) = p.refused.take() {
         return Err(why);
     }
-    if s.load.rated() {
+    if s.load.rated() && s.train.is_some() {
+        p.warn("load rating is not made for gear trains yet: rate each mesh as a pair");
+    } else if s.load.rated() {
         crate::strength::rate(s, &mut p);
     }
     p.meshes = crate::mesh2d::topology(s, &p.preview);
@@ -1123,8 +1143,14 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
     // How the bodies go together, where they are (a differential's is planned with it).
     assembly::fill(s, &mut p);
     // The clearance body, from the bodies where they are.
-    if s.clearance_body.is_some() && s.kind != Kind::Differential {
-        p.clearance = Some(crate::clearance::clearance_body(s, &mut p)?);
+    if let Some(c) = s.clearance_body.as_ref().filter(|_| s.kind != Kind::Differential) {
+        let body = crate::clearance::clearance_body(s, &mut p)?;
+        if c.keep_out {
+            p.clearance = Some(body);
+        }
+        if c.bearing_bodies {
+            crate::clearance::add_bearing_bodies(s, &mut p);
+        }
     }
     Ok(p)
 }
@@ -1480,14 +1506,40 @@ fn mesh_facts(p: &mut Plan, m: &crate::involute::Mesh) {
         p.fact("overlap ratio", m.overlap_ratio, Unit::None);
         p.fact("total contact ratio", m.total_contact_ratio, Unit::None);
     }
+    mesh_warnings(p, "", m);
+}
+
+/// The warnings about one mesh (`who`: which, for a set of several; empty for the only one).
+pub(crate) fn mesh_warnings(p: &mut Plan, who: &str, m: &crate::involute::Mesh) {
+    let pre = if who.is_empty() { String::new() } else { format!("{who}: ") };
     if m.contact_ratio < 1.0 {
-        p.warn(format!("contact ratio {:.2} is below 1: the teeth lose contact", m.contact_ratio));
+        p.warn(format!("{pre}contact ratio {:.2} is below 1: the teeth lose contact", m.contact_ratio));
     } else if m.contact_ratio < 1.2 {
-        p.warn(format!("contact ratio {:.2} is low (1.2 or more is usual)", m.contact_ratio));
+        p.warn(format!("{pre}contact ratio {:.2} is low (1.2 or more is usual)", m.contact_ratio));
     }
     if m.clearance_1 < 0.0 || m.clearance_2 < 0.0 {
-        p.warn("tips hit the mating roots (negative tip clearance): shorten the tips or change the shifts");
+        p.warn(format!("{pre}tips hit the mating roots (negative tip clearance): shorten the tips or change the shifts"));
     }
+}
+
+/// The profile shift of ring gear `ring` (its teeth, module and helix; its own shift unused) that
+/// meshes it with `pinion` (shifted as it is) at centre distance `a`; `None` when no shift
+/// reaches it.
+pub(crate) fn ring_shift_for_center(pinion: &Involute, ring: &Involute, a: f64) -> Option<f64> {
+    let reach = (ring.r() - pinion.r()) * pinion.alpha_t().cos() / a;
+    (ring.teeth > pinion.teeth && reach > 0.0 && reach <= 1.0)
+        .then(|| pinion.shift + (inv(reach.acos()) - inv(pinion.alpha_t())) * f64::from(ring.teeth - pinion.teeth) / (2.0 * pinion.pressure_angle.tan()))
+}
+
+/// Shortens a ring's tips so they stay on the involute of `pinion` (an undercut or shifted
+/// pinion has less of it than the ring's standard tip allows for); the pinion's flank.
+pub(crate) fn clear_ring_tips(ring: &mut Internal, pinion: &Involute, face: f64) -> ToothFlank {
+    let flank = external_flank(pinion);
+    let clear = ring.r_tip_clear(pinion, flank.flank.first().map_or(flank.rf, |q| q.0), &mesh_internal(pinion, ring, face));
+    if clear > ring.r_tip() {
+        ring.gear.tip_shortening += clear - ring.r_tip();
+    }
+    flank
 }
 
 fn planetary(s: &Spec, p: &mut Plan) {
@@ -1512,9 +1564,7 @@ fn planetary(s: &Spec, p: &mut Plan) {
     // the planet's own shift when the tooth counts close (ring = sun + 2 × planet), more or
     // less when they don't.
     let mut ring_gear = Internal { gear: s.involute(zr, 0.0, -s.helix) };
-    let reach = (ring_gear.gear.r() - planet.r()) * planet.alpha_t().cos() / m_sp.center_distance;
-    if zr > zp && reach > 0.0 && reach <= 1.0 {
-        let x = s.shift2 + (inv(reach.acos()) - inv(planet.alpha_t())) * f64::from(zr - zp) / (2.0 * planet.pressure_angle.tan());
+    if let Some(x) = ring_shift_for_center(&planet, &ring_gear.gear, m_sp.center_distance) {
         if x.abs() > 1e-9 {
             ring_gear.gear.shift = x;
             p.fact("ring profile shift", x, Unit::None);
@@ -1525,11 +1575,7 @@ fn planetary(s: &Spec, p: &mut Plan) {
     }
     // The ring's tips stay on the planets' involute: an undercut or shifted planet has less of
     // it than the ring's standard tip allows for.
-    let planet_flank = external_flank(&planet);
-    let clear = ring_gear.r_tip_clear(&planet, planet_flank.flank.first().map_or(planet_flank.rf, |q| q.0), &mesh_internal(&planet, &ring_gear, s.face_width));
-    if clear > ring_gear.r_tip() {
-        ring_gear.gear.tip_shortening += clear - ring_gear.r_tip();
-    }
+    let planet_flank = clear_ring_tips(&mut ring_gear, &planet, s.face_width);
     let m_pr = mesh_internal(&planet, &ring_gear, s.face_width);
     if internal_tip_interference(&planet, planet_flank.ra, &ring_gear, &m_pr) {
         p.warn(format!("the planets' tips hit the ring's tips going in and out of mesh (ring − planet = {} teeth is too few)", i64::from(zr) - i64::from(zp)));

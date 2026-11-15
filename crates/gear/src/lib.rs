@@ -63,6 +63,7 @@ pub mod pulley;
 pub mod spline;
 pub mod sprocket;
 pub mod sheet;
+pub mod select;
 pub mod simple;
 pub mod sketch_rules;
 pub mod strength;
@@ -108,3 +109,7 @@ mod tools_tests;
 mod loft_slip_tests;
 #[cfg(test)]
 mod flat_bevel_tests;
+#[cfg(test)]
+mod train_tests;
+#[cfg(test)]
+mod select_tests;

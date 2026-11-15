@@ -862,7 +862,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     } else {
         ViewState::Current
     };
-    let (closed, action) = ui_kit::Window::new(egui::Id::unique("sc_gear_window"), crate::gear_icons::GENERATOR, title).fields().cards(window_cards(ctx)).actions(primary, &close, None).show(ctx, valid, |ui| {
+    let (closed, action) = ui_kit::Window::new(egui::Id::unique("sc_gear_window"), crate::gear_icons::GENERATOR, title).fields().cards(window_cards(ctx)).placed(egui::Align2::CENTER_TOP, window_top(ctx)).actions(primary, &close, None).show(ctx, valid, |ui| {
         body(ui, &mut w, view, preview_error.as_deref());
     });
     if w.animate && !w.paused {
@@ -911,6 +911,14 @@ fn window_cards(ctx: &egui::Context) -> f32 {
     let card = solidcraft_theme::Tokens::get().form_card_width.max(1.0);
     let screen = ctx.content_rect().width();
     (3.3 + (screen - 1600.0).max(0.0) * 0.5 / card).min(4.8)
+}
+
+/// Where the window's top edge starts: it is pinned by its top, not its centre, so it stays put
+/// when its content gets taller or shorter (centred, it jumped with every gear type). Near the
+/// screen's top, so the tallest body the kit allows still fits under it.
+fn window_top(ctx: &egui::Context) -> Pos2 {
+    let screen = ctx.content_rect();
+    pos2(screen.center().x, screen.top() + 8.0)
 }
 
 /// Below this width the two columns stack: the form on top, the views under it at the whole

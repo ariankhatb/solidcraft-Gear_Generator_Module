@@ -374,92 +374,116 @@ fn settings_ui(ui: &mut Ui, w: &mut GearWindow) {
     ui.add_space(4.0);
     ui.label(RichText::new("Settings").strong());
     let mut changed = false;
-    egui::Grid::new("gear_simple_settings").num_columns(3).spacing([8.0, 3.0]).show(ui, |ui| {
-        for f in rows {
-            ui.label(f.label);
-            let st = &mut s.settings;
-            match f.field {
-                Field::LeftHand => {
-                    let mut v = st.left_hand.unwrap_or(outputs.left_hand.unwrap_or(false));
-                    if ui.checkbox(&mut v, "").changed() {
-                        st.left_hand = Some(v);
-                        changed = true;
-                    }
-                    ui.label("");
+    // The field (and its "auto") for one row: a grid's second and third cells, or the row under
+    // its label.
+    let mut cells = |ui: &mut Ui, f: &simple::FieldInfo| {
+        let st = &mut s.settings;
+        match f.field {
+            Field::LeftHand => {
+                let mut v = st.left_hand.unwrap_or(outputs.left_hand.unwrap_or(false));
+                if ui.checkbox(&mut v, "").changed() {
+                    st.left_hand = Some(v);
+                    changed = true;
                 }
-                Field::Herringbone | Field::Exact | Field::Printable => {
-                    let v = match f.field {
-                        Field::Herringbone => &mut st.herringbone,
-                        Field::Exact => &mut st.exact,
-                        _ => &mut st.printable,
-                    };
-                    changed |= ui.checkbox(v, "").changed();
-                    ui.label("");
-                }
-                Field::Chain => {
-                    let current = st.chain.or(outputs.chain).and_then(solidcraft_gear::sprocket::chain_by_id).map(|c| c.label).unwrap_or("?");
-                    egui::ComboBox::from_id_salt("gear_simple_chain").selected_text(current).show_ui(ui, |ui| {
-                        for c in solidcraft_gear::sprocket::CHAINS {
-                            if ui.selectable_label(st.chain == Some(c.id), c.label).clicked() {
-                                st.chain = Some(c.id);
-                                changed = true;
-                            }
-                        }
-                    });
-                    ui.label("");
-                }
-                Field::PlanetMode => {
-                    use solidcraft_gear::plan::BevelPlanetMode;
-                    let now = st.bevel_planet_mode.or(outputs.bevel_planet_mode).unwrap_or_default();
-                    egui::ComboBox::from_id_salt("gear_simple_planet_mode").selected_text(now.label()).show_ui(ui, |ui| {
-                        for m in BevelPlanetMode::ALL {
-                            if ui.selectable_label(now == m, m.label()).clicked() {
-                                st.bevel_planet_mode = Some(m);
-                                changed = true;
-                            }
-                        }
-                    });
-                    ui.label("");
-                }
-                Field::Belt => {
-                    let current = st.belt.or(outputs.belt).and_then(solidcraft_gear::pulley::belt_by_id).map(|b| b.label).unwrap_or("?");
-                    egui::ComboBox::from_id_salt("gear_simple_belt").selected_text(current).show_ui(ui, |ui| {
-                        for b in solidcraft_gear::pulley::BELTS {
-                            if ui.selectable_label(st.belt == Some(b.id), b.label).clicked() {
-                                st.belt = Some(b.id);
-                                changed = true;
-                            }
-                        }
-                    });
-                    ui.label("");
-                }
-                field => {
-                    let given = st.get(field);
-                    let mut v = given.or(outputs.get(field)).unwrap_or(0.0);
-                    let whole = matches!(field, Field::Teeth | Field::Planets | Field::Starts);
-                    let dv = egui::DragValue::new(&mut v).speed(if whole { 0.2 } else { 0.1 }).max_decimals(if whole { 0 } else { 3 }).suffix(unit_suffix(f.unit));
-                    let r = ui.add(dv);
-                    if r.changed() {
-                        st.set(field, Some(if whole { v.round().max(1.0) } else { v }));
-                        changed = true;
-                    }
-                    if given.is_some() {
-                        if ui.small_button("auto").on_hover_text("Let the solver choose it again").clicked() {
-                            st.set(field, None);
+                ui.label("");
+            }
+            Field::Herringbone | Field::Exact | Field::Printable => {
+                let v = match f.field {
+                    Field::Herringbone => &mut st.herringbone,
+                    Field::Exact => &mut st.exact,
+                    _ => &mut st.printable,
+                };
+                changed |= ui.checkbox(v, "").changed();
+                ui.label("");
+            }
+            Field::Chain => {
+                let current = st.chain.or(outputs.chain).and_then(solidcraft_gear::sprocket::chain_by_id).map(|c| c.label).unwrap_or("?");
+                egui::ComboBox::from_id_salt("gear_simple_chain").selected_text(current).show_ui(ui, |ui| {
+                    for c in solidcraft_gear::sprocket::CHAINS {
+                        if ui.selectable_label(st.chain == Some(c.id), c.label).clicked() {
+                            st.chain = Some(c.id);
                             changed = true;
                         }
-                    } else {
-                        ui.label(RichText::new("auto").small().weak());
                     }
+                });
+                ui.label("");
+            }
+            Field::PlanetMode => {
+                use solidcraft_gear::plan::BevelPlanetMode;
+                let now = st.bevel_planet_mode.or(outputs.bevel_planet_mode).unwrap_or_default();
+                egui::ComboBox::from_id_salt("gear_simple_planet_mode").selected_text(now.label()).show_ui(ui, |ui| {
+                    for m in BevelPlanetMode::ALL {
+                        if ui.selectable_label(now == m, m.label()).clicked() {
+                            st.bevel_planet_mode = Some(m);
+                            changed = true;
+                        }
+                    }
+                });
+                ui.label("");
+            }
+            Field::Belt => {
+                let current = st.belt.or(outputs.belt).and_then(solidcraft_gear::pulley::belt_by_id).map(|b| b.label).unwrap_or("?");
+                egui::ComboBox::from_id_salt("gear_simple_belt").selected_text(current).show_ui(ui, |ui| {
+                    for b in solidcraft_gear::pulley::BELTS {
+                        if ui.selectable_label(st.belt == Some(b.id), b.label).clicked() {
+                            st.belt = Some(b.id);
+                            changed = true;
+                        }
+                    }
+                });
+                ui.label("");
+            }
+            field => {
+                let given = st.get(field);
+                let mut v = given.or(outputs.get(field)).unwrap_or(0.0);
+                let whole = matches!(field, Field::Teeth | Field::Planets | Field::Starts);
+                let dv = egui::DragValue::new(&mut v).speed(if whole { 0.2 } else { 0.1 }).max_decimals(if whole { 0 } else { 3 }).suffix(unit_suffix(f.unit));
+                let r = ui.add(dv);
+                if r.changed() {
+                    st.set(field, Some(if whole { v.round().max(1.0) } else { v }));
+                    changed = true;
+                }
+                if given.is_some() {
+                    if ui.small_button("auto").on_hover_text("Let the solver choose it again").clicked() {
+                        st.set(field, None);
+                        changed = true;
+                    }
+                } else {
+                    ui.label(RichText::new("auto").small().weak());
                 }
             }
-            ui.end_row();
         }
-    });
+    };
+    // Labels are shown whole (a narrow grid column cut them to "Helix…"): beside their fields
+    // where the column has room for the longest, otherwise each above its field.
+    let label_w = rows
+        .iter()
+        .map(|f| egui::WidgetText::from(f.label).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body).size().x)
+        .fold(0.0, f32::max);
+    if label_w + SETTINGS_FIELDS_W > ui.available_width() {
+        for f in &rows {
+            ui.add(egui::Label::new(f.label).wrap_mode(egui::TextWrapMode::Wrap)).on_hover_text(f.label);
+            ui.horizontal_wrapped(|ui| {
+                ui.add_space(12.0);
+                cells(ui, f);
+            });
+        }
+    } else {
+        egui::Grid::new("gear_simple_settings").num_columns(3).spacing([8.0, 3.0]).show(ui, |ui| {
+            for f in &rows {
+                ui.add(egui::Label::new(f.label).wrap_mode(egui::TextWrapMode::Extend)).on_hover_text(f.label);
+                cells(ui, f);
+                ui.end_row();
+            }
+        });
+    }
     if changed {
         s.dirty = true;
     }
 }
+
+/// About the width of a settings row's field and its "auto" (a combo box is the widest).
+const SETTINGS_FIELDS_W: f32 = 200.0;
 
 /// Turning the set about the origin dot, to stand it in the plane wanted.
 fn turn_ui(ui: &mut Ui, w: &mut GearWindow) {
@@ -467,7 +491,8 @@ fn turn_ui(ui: &mut Ui, w: &mut GearWindow) {
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("Turn about the origin").small()).on_hover_text("The set as drawn, turned about the origin dot: in 90° steps about the sketch's X, Y or normal, or by any angle about the normal");
         for (i, name) in [(0, "X"), (1, "Y"), (2, "normal")] {
-            if ui.small_button(format!("⟲ {name} 90°")).clicked() {
+            // Plain text: the font has no rotate glyph (it drew a box).
+            if ui.small_button(format!("{name} +90°")).on_hover_text(format!("Turn the set 90° about the sketch's {name}")).clicked() {
                 s.turn[i] = (s.turn[i] + 90.0).rem_euclid(360.0);
                 s.dirty = true;
             }

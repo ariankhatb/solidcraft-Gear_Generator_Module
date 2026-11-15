@@ -302,7 +302,9 @@ pub struct Spec {
     /// `backlash`. The mesh's backlash is the two together.
     pub backlash2: Option<f64>,
     /// Pair: gear 2's face width (0: the same as gear 1's) and how far its mid plane sits from
-    /// gear 1's along the axis.
+    /// gear 1's along the axis. Hypoid (where `face_width` is the ring gear's): the pinion's face
+    /// width along its pitch cone (0: covering the ring gear's face, a tenth of it more at each
+    /// end) and how far its face sits towards its heel from there.
     pub face_width2: f64,
     pub face_offset2: f64,
 

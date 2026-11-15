@@ -1745,7 +1745,9 @@ fn hypoid_size(ui: &mut Ui, s: &mut Spec, b: &Spec, d: Derived) {
         num(ui, "Shaft angle", "Angle between the axes; 90° in car axles", &mut s.shaft_angle, 5.0..=175.0, 0.5, "°");
     }
     num(ui, "Pressure angle", "Normal pressure angle; 20° is usual", &mut s.pressure_angle, 5.0..=45.0, 0.1, "°");
-    num(ui, "Ring gear face width", "Along the ring gear's teeth; over a third of the cone distance is warned about", &mut s.face_width, 0.1..=5000.0, 0.5, " mm");
+    num(ui, "Ring gear face width", "Along the ring gear's teeth, between its toe and heel cones; over a third of the cone distance is warned about", &mut s.face_width, 0.1..=5000.0, 0.5, " mm");
+    num(ui, "Pinion face width", "Along the pinion's pitch cone, between its toe and heel cones; 0: covers the ring gear's face with a tenth of its width more at each end", &mut s.face_width2, 0.0..=5000.0, 0.5, " mm");
+    num(ui, "Pinion face offset", "Moves the pinion's teeth along its cone, towards the heel (positive) or the toe", &mut s.face_offset2, -5000.0..=5000.0, 0.1, " mm");
     num(ui, "Backlash", "Taken off each tooth at the pitch circle", &mut s.backlash, 0.0..=5.0, 0.005, " mm");
 }
 

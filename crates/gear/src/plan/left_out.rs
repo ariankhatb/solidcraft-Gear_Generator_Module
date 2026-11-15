@@ -225,7 +225,8 @@ pub fn why_left_out(s: &Spec, o: Opt) -> Option<Why> {
         },
         Kind::Hypoid => match o {
             Bore | Bore2 | HubDiameter | HubLength => None,
-            Face2 => body("the face width is the ring gear's"),
+            // `face_width` is the ring gear's, `face_width2` and `face_offset2` the pinion's.
+            Face2 => None,
             _ if o.tooth_form() => teeth("hypoid teeth are generated from the ring gear's form"),
             _ => body("a hypoid set takes bores and the pinion's shank (hub diameter and length) only"),
         },

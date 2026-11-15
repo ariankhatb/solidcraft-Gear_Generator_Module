@@ -103,8 +103,9 @@ fn nothing_is_added_by_default() {
     for k in Kind::ALL {
         let p = planned(&Spec::defaults_for(k));
         for b in &p.bodies {
-            // (A sprocket's own ISO 606 side chamfer is a revolve; it is on by default.)
-            let revolve_ok = k == Kind::Sprocket;
+            // (A sprocket's own ISO 606 side chamfer is a revolve, and a hypoid's teeth are trimmed
+            // to their toe and heel cones by one: on by default.)
+            let revolve_ok = matches!(k, Kind::Sprocket | Kind::Hypoid);
             // (Nor a bevel's back and front cones, which trim its teeth.)
             let trim_ok = matches!(k, Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary);
             assert!(

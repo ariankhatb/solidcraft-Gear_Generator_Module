@@ -772,12 +772,14 @@ pub struct GearParams {
     #[serde(default)]
     pub backlash2: Option<f64>,
     /// Pair: gear 2's face width in mm (default: `face_width`). Bevel and spiral bevel: gear 2's
-    /// face width along the cone; bevel planetary: the planets'.
+    /// face width along the cone; bevel planetary: the planets'. Hypoid: the pinion's face width
+    /// along its pitch cone (default: covering the ring gear's face, `face_width`).
     #[serde(default)]
     pub face_width2: Option<f64>,
     /// Pair: how far gear 2's mid plane sits from gear 1's along the axis, in mm. Bevel and
     /// spiral bevel (gear 2) and bevel planetary (the planets): how far the heel (the teeth's
-    /// outer end) sits in from the cone distance towards the apex, in mm.
+    /// outer end) sits in from the cone distance towards the apex, in mm. Hypoid: how far the
+    /// pinion's face sits towards its heel from where it covers the ring gear's.
     #[serde(default)]
     pub face_offset2: Option<f64>,
     /// Tooth edge chamfer on the front face (the hub's side).

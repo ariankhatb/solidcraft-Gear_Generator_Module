@@ -394,7 +394,8 @@ pub struct DifferentialGoalParams {
     pub bias: Option<f64>,
 }
 
-/// A gear material for the strength rating (representative allowable stresses).#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+/// A gear material for the strength rating (representative allowable stresses).
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GearMaterial {
     SteelNormalized,

@@ -10,6 +10,33 @@ you lay out the shafts, see the set mesh in 2D and 3D as you type, and build sol
 parametric timeline. It covers parallel, intersecting and crossed shafts, from a spur gear to a
 hypoid final drive, a multi-start worm or a bevel differential.
 
+<p align="center"><img src="crates/look/icons/design/svg/model/gear_generator.svg" width="72" height="72" alt="Gear Generator"/></p>
+
+<table align="center">
+<tr><td align="center"><img src="crates/look/icons/design/svg/model/gear_spur.svg" width="44" height="44" alt="Spur"/><br/><sub>Spur</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_helical.svg" width="44" height="44" alt="Helical"/><br/><sub>Helical</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_herringbone.svg" width="44" height="44" alt="Herringbone"/><br/><sub>Herringbone</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_internal.svg" width="44" height="44" alt="Internal"/><br/><sub>Internal</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_rack.svg" width="44" height="44" alt="Rack"/><br/><sub>Rack</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_pair.svg" width="44" height="44" alt="Pair"/><br/><sub>Pair</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_planetary.svg" width="44" height="44" alt="Planetary"/><br/><sub>Planetary</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_bevel.svg" width="44" height="44" alt="Bevel"/><br/><sub>Bevel</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_spiral_bevel.svg" width="44" height="44" alt="Spiral bevel"/><br/><sub>Spiral bevel</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_face.svg" width="44" height="44" alt="Face"/><br/><sub>Face</sub></td></tr>
+<tr><td align="center"><img src="crates/look/icons/design/svg/model/gear_bevel_planetary.svg" width="44" height="44" alt="Bevel planetary"/><br/><sub>Bevel planetary</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_hypoid.svg" width="44" height="44" alt="Hypoid"/><br/><sub>Hypoid</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_crossed_helical.svg" width="44" height="44" alt="Crossed helical"/><br/><sub>Crossed helical</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_worm.svg" width="44" height="44" alt="Worm"/><br/><sub>Worm</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_cycloidal.svg" width="44" height="44" alt="Cycloidal"/><br/><sub>Cycloidal</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_cycloidal_drive.svg" width="44" height="44" alt="Cycloidal drive"/><br/><sub>Cycloidal drive</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_sprocket.svg" width="44" height="44" alt="Sprocket"/><br/><sub>Sprocket</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_pulley.svg" width="44" height="44" alt="Pulley"/><br/><sub>Pulley</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_spline.svg" width="44" height="44" alt="Spline"/><br/><sub>Spline</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_elliptical.svg" width="44" height="44" alt="Elliptical"/><br/><sub>Elliptical</sub></td></tr>
+</table>
+
+### It runs live while you design
+
+Every set turns in the window's preview as you edit it, drawn from the gear math in milliseconds
+(these are screen captures of that preview, not kernel renders):
+
+<table align="center">
+<tr><td align="center"><img src="docs/gear-generator/pair.gif" width="230" alt="Gear pair turning in the live preview"/><br/><sub>Gear pair</sub></td><td align="center"><img src="docs/gear-generator/helical.gif" width="230" alt="Helical turning in the live preview"/><br/><sub>Helical</sub></td><td align="center"><img src="docs/gear-generator/herringbone.gif" width="230" alt="Herringbone turning in the live preview"/><br/><sub>Herringbone</sub></td><td align="center"><img src="docs/gear-generator/internal.gif" width="230" alt="Internal ring turning in the live preview"/><br/><sub>Internal ring</sub></td></tr>
+<tr><td align="center"><img src="docs/gear-generator/planetary.gif" width="230" alt="Planetary turning in the live preview"/><br/><sub>Planetary</sub></td><td align="center"><img src="docs/gear-generator/bevel.gif" width="230" alt="Straight bevel turning in the live preview"/><br/><sub>Straight bevel</sub></td><td align="center"><img src="docs/gear-generator/spiral_bevel.gif" width="230" alt="Spiral bevel turning in the live preview"/><br/><sub>Spiral bevel</sub></td><td align="center"><img src="docs/gear-generator/hypoid.gif" width="230" alt="Hypoid turning in the live preview"/><br/><sub>Hypoid</sub></td></tr>
+<tr><td align="center"><img src="docs/gear-generator/crossed_helical.gif" width="230" alt="Crossed helical turning in the live preview"/><br/><sub>Crossed helical</sub></td><td align="center"><img src="docs/gear-generator/worm.gif" width="230" alt="Worm and wheel turning in the live preview"/><br/><sub>Worm and wheel</sub></td><td align="center"><img src="docs/gear-generator/cycloidal.gif" width="230" alt="Cycloidal turning in the live preview"/><br/><sub>Cycloidal</sub></td></tr>
+</table>
+
+### Designed from one small drawing
+
+Simple mode: circles are pitch circles, lines are shafts, a dot is the origin (a bevel's apex); the
+type picker, the editable drawing, the turning 3D preview and the numbers the solver chose:
+
+<table align="center">
+<tr><td align="center"><img src="docs/gear-generator/window_pair.png" width="210" alt="Gear pair: two pitch circles"/><br/><sub>Gear pair: two pitch circles</sub></td><td align="center"><img src="docs/gear-generator/window_spiral_bevel.png" width="210" alt="Spiral bevel: side view, apex dot and 90° meeting angle"/><br/><sub>Spiral bevel: side view, apex dot and 90° meeting angle</sub></td><td align="center"><img src="docs/gear-generator/window_hypoid.png" width="210" alt="Hypoid: ring circle, pinion shaft offset"/><br/><sub>Hypoid: ring circle, pinion shaft offset</sub></td><td align="center"><img src="docs/gear-generator/window_worm.png" width="210" alt="Worm: wheel circle and tangent worm line"/><br/><sub>Worm: wheel circle and tangent worm line</sub></td></tr>
+</table>
+
 | Shafts | Types |
 |---|---|
 | Parallel | spur, helical, herringbone, internal ring, rack, pair, planetary |

@@ -28,12 +28,19 @@ fn warned(p: &Plan, word: &str) -> bool {
     p.warnings.iter().any(|w| w.contains(word))
 }
 
-/// The heights a body's solid steps (new and joined prisms and lofts) run between.
+/// The heights a body's solid steps (new and joined prisms and lofts) run between. A bevel's
+/// taper trimmed by its back and front cones runs from its back face to its front face (the
+/// last corner of the trimming blank, on the axis).
 fn extent(b: &Body) -> (f64, f64) {
     let mut z = (f64::INFINITY, f64::NEG_INFINITY);
+    let front = b.steps.iter().find_map(|st| match st {
+        Step::Revolve { profile, op: Op::Intersect } => profile.last().map(|q| q.y),
+        _ => None,
+    });
     for st in &b.steps {
         match st {
-            Step::Prism { z0, height, op: Op::New | Op::Join, .. } | Step::Taper { z0, height, .. } => z = (z.0.min(*z0), z.1.max(z0 + height)),
+            Step::Taper { z0, height, .. } => z = (z.0.min(*z0), z.1.max(front.unwrap_or(z0 + height))),
+            Step::Prism { z0, height, op: Op::New | Op::Join, .. } => z = (z.0.min(*z0), z.1.max(z0 + height)),
             Step::Loft { sections, .. } => {
                 for (_, h) in sections {
                     z = (z.0.min(*h), z.1.max(*h));
@@ -98,7 +105,12 @@ fn nothing_is_added_by_default() {
         for b in &p.bodies {
             // (A sprocket's own ISO 606 side chamfer is a revolve; it is on by default.)
             let revolve_ok = k == Kind::Sprocket;
-            assert!(!b.steps.iter().any(|st| matches!(st, Step::Placed { .. }) || (!revolve_ok && matches!(st, Step::Revolve { .. }))), "{k:?}");
+            // (Nor a bevel's back and front cones, which trim its teeth.)
+            let trim_ok = matches!(k, Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary);
+            assert!(
+                !b.steps.iter().any(|st| matches!(st, Step::Placed { .. }) || (!revolve_ok && matches!(st, Step::Revolve { .. }) && !(trim_ok && matches!(st, Step::Revolve { op: Op::Intersect, .. })))),
+                "{k:?}"
+            );
         }
     }
 }

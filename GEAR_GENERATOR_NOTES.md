@@ -363,3 +363,28 @@ rings overlap the housing by design when `ring_as_housing`). Scripts come from t
   engine draws those profiles as expression-placed points. Shaft, bore, seat sizes stay numbers.
 - `gear.update` back to fitted / non-parametric deletes the `<prefix>_*` parameters the set made
   that nothing else uses.
+
+## Bevel ends on the back and front cones; flat cones; own face per member (`gear-flatbevel`, 2026-11-15)
+
+- Every bevel member (bevel, spiral bevel, bevel planetary sun / planets / second sun / ring)
+  is now one long `Step::Taper` (from just under the roots at the heel to just past the tips at
+  the toe: the plane chart scaled about the apex is exact) intersected with a revolved blank
+  (`Step::Revolve { op: Intersect }`) bounded by the back cone at the heel and the front cone at
+  the toe (`plan::cone_teeth`; the ring: the same with a `RingTaper`, flat rim faces beyond the
+  roots). Nothing in the blank lies on a taper face, so no grazing of the root fillets. If the
+  kernel still refuses the trim the engine's nudges/fallback keep the taper (teeth run a little
+  past the cones; on a flat cone more than a little).
+- Fixes the nearly flat cones (δ > ~70°, e.g. 17:34 at Σ 100–110°): their teeth were long thin
+  blades (the plane square to the axis meets the tip cone far outside the back cone). The "over
+  80°" warning is gone; the 85° refusal stays.
+- Own face per member: `face_width2` (gear 2 / the planets; 0 = same) and `face_offset2` (heel
+  in from the cone distance towards the apex, mm; negative = out past it). Refused when the faces
+  don't overlap or the toe is under a quarter of the cone distance. The spiral's mean point is
+  gear 1's mid face for both members (they stay in phase). Window rows added in `gear2_rows`
+  (uncompiled); engine fields already existed (doc strings updated, uncompiled).
+- mesh3d: taper rows are spaced along the taper's lines (flat cones' straight teeth were
+  sampled 2 mm apart and read as 0.27 m deep); trim faces are not sampled (like taper caps);
+  `material_points` keeps only what the trim keeps (clearance body).
+- Tests: `flat_bevel_tests.rs` (flat sets at Σ 100–150°, own faces, bevel planetary flat
+  planets/ring, end-on-cones geometry, refusals); loft-slip variants. Engine test
+  `bevel_teeth_are_trimmed_by_their_cones` (ignored, uncompiled) checks the kernel takes the trim.

@@ -433,8 +433,38 @@ fn body_mesh(body: &Body, tol: f64, cap_pts: usize) -> Vec<Tri> {
     let mut b = Builder::default();
     let bores = cuts(body, tol);
     let (zlo, zhi) = body.steps.iter().filter_map(reach).fold((f64::MAX, f64::MIN), |(a, c), (lo, hi)| (a.min(lo), c.max(hi)));
-    for st in &body.steps {
-        step_mesh(&mut b, st, tol, cap_pts, &bores, None);
+    if body.steps.iter().any(|st| matches!(st, Step::Revolve { op: Op::Intersect, .. })) {
+        // Trimmed by a revolved blank (a bevel's teeth ending on its back and front cones): the
+        // steps' surfaces and the blank's, each triangle kept only where it is on the finished
+        // body's surface.
+        let solid = solidcraft_gear::mesh3d::Solid::new(body, tol.max(1e-3));
+        let eps = (0.25 * tol).max(1e-4);
+        let mut raw = Builder::default();
+        for st in &body.steps {
+            match st {
+                Step::Revolve { profile, op: Op::Intersect } => revolve_profile(&mut raw, profile, 360),
+                _ => step_mesh(&mut raw, st, tol, cap_pts, &bores, None),
+            }
+        }
+        for t in raw.tris {
+            let p = |k: usize| [f64::from(t[k][0]), f64::from(t[k][1]), f64::from(t[k][2])];
+            let (a, bb, c) = (p(0), p(1), p(2));
+            let (u, v) = ([bb[0] - a[0], bb[1] - a[1], bb[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+            let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            if len < 1e-18 {
+                continue;
+            }
+            let mid = [0, 1, 2].map(|i| (a[i] + bb[i] + c[i]) / 3.0);
+            let at = |sign: f64| solid.contains(body.frame.world([0, 1, 2].map(|i| mid[i] + sign * eps * n[i] / len)));
+            if at(1.0) != at(-1.0) {
+                b.tris.push(t);
+            }
+        }
+    } else {
+        for st in &body.steps {
+            step_mesh(&mut b, st, tol, cap_pts, &bores, None);
+        }
     }
     // The bores' walls, where the body is.
     for (p, lo, hi) in &bores {
@@ -470,7 +500,9 @@ fn step_mesh(b: &mut Builder, st: &Step, tol: f64, cap_pts: usize, bores: &[(Vec
             }
         }
         Step::Taper { outline, z0, height, twist, scale, op: Op::New | Op::Join } => {
-            let k = ((twist.abs() / 0.035).ceil().max(((scale - 1.0).abs() / 0.06).ceil()) as usize).clamp(2, 24);
+            // (Fine along the taper: a bevel's is trimmed by its back and front cones, triangle
+            // by triangle.)
+            let k = ((twist.abs() / 0.035).ceil().max(((scale - 1.0).abs() / 0.015).ceil()) as usize).clamp(2, 64);
             let r = ring(outline, tol, cap_pts);
             let place = |q: V2, t: f64| {
                 let s = 1.0 + (scale - 1.0) * t;
@@ -572,6 +604,19 @@ fn step_mesh(b: &mut Builder, st: &Step, tol: f64, cap_pts: usize, bores: &[(Vec
                 };
                 b.tris.push([w(t[0]), w(t[1]), w(t[2])]);
             }
+        }
+    }
+}
+
+/// A closed (radius, z) polygon turned about the axis in `n` steps.
+fn revolve_profile(b: &mut Builder, profile: &[V2], n: usize) {
+    let m = profile.len();
+    let at = |v: V2, a: f64| [v.x * a.cos(), v.x * a.sin(), v.y];
+    for i in 0..m {
+        let (p, q) = (profile[i], profile[(i + 1) % m]);
+        for j in 0..n {
+            let (a0, a1) = (j as f64 / n as f64 * std::f64::consts::TAU, (j + 1) as f64 / n as f64 * std::f64::consts::TAU);
+            b.quad(at(p, a0), at(q, a0), at(q, a1), at(p, a1));
         }
     }
 }

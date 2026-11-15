@@ -1501,17 +1501,75 @@ fn planetary(s: &Spec, p: &mut Plan) {
     p.preview.push(PreviewGear { name: "ring".into(), region: ring_region, center: V2::ZERO, speed: -f64::from(zs) / f64::from(zr), slide: 0.0, pitch_radius: ring_gear.gear.r() , orbit: 0.0, period: 0.0});
 }
 
-/// A straight or spiral bevel gear's teeth, in a frame with the large end's pitch circle on
-/// z = 0 and the cone's apex on +z: cut by a crown gear ([`Crown`]), so the two members of a
-/// pair (cut by the two sides of the same one) are conjugate along the whole face.
-fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, p: &mut Plan, who: &str) -> (Vec<Step>, ToothFlank) {
+/// Where a bevel member's teeth run along its pitch cone: from the toe (`heel − width` from the
+/// apex) to the heel, and the distance `mid` at which a spiral bevel's spiral is at its mean
+/// angle (the same for every member of a set, so their spirals stay in phase).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ConeFace {
+    pub heel: f64,
+    pub width: f64,
+    pub mid: f64,
+}
+
+impl ConeFace {
+    pub fn toe(&self) -> f64 {
+        self.heel - self.width
+    }
+}
+
+/// The faces of a bevel set's two members (gear 1, gear 2; or sun, planets) at cone distance
+/// `re`: gear 1's face width from its heel at `re`; gear 2's own face width (`face_width2`, 0:
+/// the same) with its heel `face_offset2` in from `re` towards the apex. Refused when gear 2's
+/// face misses gear 1's or reaches too near the apex.
+pub(crate) fn cone_faces(s: &Spec, re: f64, p: &mut Plan, names: [&str; 2]) -> Option<[ConeFace; 2]> {
+    let faces = faces_of(s, re);
+    let (b1, heel2, b2) = (faces[0].width, faces[1].heel, faces[1].width);
+    for (f, who) in faces.iter().zip(names) {
+        if f.width > f.heel / 3.0 {
+            p.warn(format!("{who}: face width over a third of the cone distance ({}) makes weak small ends", mm(f.heel / 3.0)));
+        }
+    }
+    if !(heel2.is_finite() && b2 > 0.0) || heel2 - b2 < 0.25 * re || heel2 > 1.5 * re {
+        p.refuse(format!(
+            "{}: a heel {} mm in from the cone distance ({}) puts the teeth too near the apex or too far out; lower the heel offset or the face width",
+            names[1],
+            mm(s.face_offset2),
+            mm(re)
+        ));
+        return None;
+    }
+    if heel2 <= re - b1 + 0.05 * s.module || heel2 - b2 >= re - 0.05 * s.module {
+        p.refuse(format!("{}'s face (heel offset {} mm) doesn't overlap {}'s: lower the heel offset", names[1], mm(s.face_offset2), names[0]));
+        return None;
+    }
+    Some(faces)
+}
+
+/// The two faces [`cone_faces`] gives, unchecked.
+pub(crate) fn faces_of(s: &Spec, re: f64) -> [ConeFace; 2] {
+    let b1 = s.face_width.min(re * 0.45);
+    let mid = re - b1 / 2.0;
+    let heel2 = re - s.face_offset2;
+    let b2 = s.face_width_of2().min(heel2 * 0.45);
+    [ConeFace { heel: re, width: b1, mid }, ConeFace { heel: heel2, width: b2, mid }]
+}
+
+/// Where the two members' faces overlap along the pitch cone (from the apex: the least and the
+/// most distance both have teeth at), for the flank gap a backlash makes.
+pub(crate) fn faces_overlap(s: &Spec, re: f64) -> (f64, f64) {
+    let [a, b] = faces_of(s, re);
+    (a.toe().max(b.toe()), a.heel.min(b.heel))
+}
+
+/// A straight or spiral bevel gear's teeth, in a frame with the large end's pitch circle (at
+/// cone distance `re`) on z = 0 and the cone's apex on +z: cut by a crown gear ([`Crown`]), so
+/// the two members of a pair (cut by the two sides of the same one) are conjugate along the
+/// whole face; the teeth run along `face` and end on the back and front cones.
+#[allow(clippy::too_many_arguments)]
+fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, face: ConeFace, p: &mut Plan, who: &str) -> (ConeTeeth, ToothFlank) {
     let m = s.module;
     let r = m * f64::from(z) / 2.0;
     let re = r / delta.sin();
-    let b = s.face_width.min(re * 0.45);
-    if s.face_width > re / 3.0 {
-        p.warn(format!("{who}: face width over a third of the cone distance ({}) makes weak small ends", mm(re / 3.0)));
-    }
     let h = re * delta.cos();
     // Tredgold's virtual spur gear on the back cone, for the checks and notes that go by tooth
     // count. The module is the transverse one at the large end: the normal module is m·cos β.
@@ -1545,30 +1603,161 @@ fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, p: &mut P
     let ha = crown.addendum.max(0.0);
     if ha * ds >= 0.5 * h || crown.dedendum >= 0.9 * re * delta.tan() {
         p.refuse(format!("{who}: the teeth are too tall for a cone this flat or this slim (pitch cone angle {}°): use a smaller module, more teeth or a different shaft angle", mm(delta.to_degrees())));
-        return (Vec::new(), ToothFlank { rf: 0.0, ra: 0.0, root_half: 0.0, tip_half: 0.0, fillet: Vec::new(), flank: Vec::new(), undercut: false, pointed: false });
+        let none = ConeTeeth { steps: Vec::new(), ends: ConeEnds { back: 0.0, front: 0.0, small_root: 0.0 }, tip_radius: 0.0 };
+        return (none, ToothFlank { rf: 0.0, ra: 0.0, root_half: 0.0, tip_half: 0.0, fillet: Vec::new(), flank: Vec::new(), undercut: false, pointed: false });
     }
     // A spiral bevel's teeth are the straight bevel's with every point turned about the axis by
     // the logarithm of its distance from the apex (a logarithmic spiral of constant spiral angle
     // on the pitch cone, none at the middle of the face). A tooth's tip and root on one flat
     // section are at different distances from the apex, so the section's teeth lean.
-    let rm = re - b / 2.0;
+    let rm = face.mid;
     let wind = if spiral.abs() > 1e-6 { spiral.tan() / ds } else { 0.0 };
     let skew = |rr: f64| if wind == 0.0 { 0.0 } else { wind * (rr.hypot(h) / rm).ln() };
-    let (sides, mut flank) = crown.tooth(z, mn, &skew);
+    let (teeth, mut flank) = lined_up_cone_teeth(&crown, z, mn, &skew, phase, delta, re, face, wind, m);
     flank.undercut = v.undercut();
-    // One taper from the large end's plane to the small end's: every section is the large end's
-    // shrunk about the axis towards the apex and turned by the logarithm of the scale. The ends
-    // are flat (square to the axis) rather than trimmed to the back and front cones: the kernel
-    // refuses that intersection where the cones graze the root fillets.
-    let scale = (re - b) / re;
-    let steps = vec![Step::Taper { outline: sided_outline(&sides, z, phase), z0: 0.0, height: h * (1.0 - scale), twist: wind * scale.ln(), scale, op: Op::New }];
+    // At the heel (the teeth's depth goes with the distance from the apex).
+    let k = face.heel / re;
     p.fact(format!("{who} pitch cone angle"), delta.to_degrees(), Unit::Deg);
     p.fact(format!("{who} outer pitch diameter"), 2.0 * r, Unit::Mm);
-    p.fact(format!("{who} outer tip diameter"), 2.0 * (r + ha * dc), Unit::Mm);
+    p.fact(format!("{who} outer tip diameter"), 2.0 * k * (r + ha * dc), Unit::Mm);
     p.fact(format!("{who} cone distance"), re, Unit::Mm);
+    if (face.heel - re).abs() > 1e-9 {
+        p.fact(format!("{who} heel cone distance"), face.heel, Unit::Mm);
+    }
+    p.fact(format!("{who} face width"), face.width, Unit::Mm);
     p.fact(format!("{who} virtual teeth"), zv, Unit::None);
     tooth_warnings(p, who, &v, &flank);
-    (steps, flank)
+    (teeth, flank)
+}
+
+/// Whether the engine's loft of a spiral [`Step::Taper`] (through [`taper_sections`] sections)
+/// would have the kernel pair a section's segments with others than their own.
+pub(crate) fn taper_slips(step: &Step) -> bool {
+    let Step::Taper { outline, twist, scale, .. } = step else { return false };
+    if twist.abs() <= 1e-12 {
+        return false;
+    }
+    let n = taper_sections(outline, *twist, *scale);
+    let sections: Vec<Outline> = (0..n)
+        .map(|i| {
+            let k = 1.0 + (scale - 1.0) * i as f64 / (n - 1) as f64;
+            outline.scaled(k).rotated(taper_turn(*twist, *scale, k))
+        })
+        .collect();
+    crate::hypoid::slips(&sections, 0)
+}
+
+/// A bevel member's teeth ([`Crown::tooth`], [`cone_teeth`]): with fewer fit points when a long
+/// spiral taper's loft would otherwise slip within the kernel's curve limit (as a big worm
+/// wheel's do).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lined_up_cone_teeth(crown: &Crown, z: u32, mn: f64, skew: &dyn Fn(f64) -> f64, phase: f64, delta: f64, re: f64, face: ConeFace, wind: f64, m: f64) -> (ConeTeeth, ToothFlank) {
+    let mut out = None;
+    for coarse in [1.0, 1.5, 2.0, 3.0] {
+        let (sides, flank) = crown.tooth_with(z, mn, skew, coarse);
+        let teeth = cone_teeth(&sides, z, phase, delta, re, face, wind, m);
+        let slips = wind != 0.0 && teeth.steps.first().is_some_and(taper_slips);
+        out = Some((teeth, flank));
+        if !slips {
+            break;
+        }
+    }
+    out.expect("at least one try")
+}
+
+/// Where a bevel member's body ends along its axis, in its frame (the large end's pitch circle on
+/// z = 0, the apex on +z): its back face, its front (small end's) face, and the root radius at
+/// the small end (the most a bore may reach).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ConeEnds {
+    pub back: f64,
+    pub front: f64,
+    pub small_root: f64,
+}
+
+/// A bevel member's teeth as built: the steps, where the body ends, and the outer tip radius
+/// the steps make (at the heel).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ConeTeeth {
+    pub steps: Vec<Step>,
+    pub ends: ConeEnds,
+    pub tip_radius: f64,
+}
+
+/// How deep a bevel's body runs under its roots (× module, along the back cone at the heel and
+/// along the front cone at the toe; less on a slim pinion, to stay clear of the axis). Kept
+/// small: the taper has to reach that far, and the further it reaches the more a spiral
+/// turns over it and the more sections its loft needs.
+const HEEL_RIM: f64 = 0.5;
+const TOE_RIM: f64 = 0.5;
+
+/// The solid of a bevel member's teeth from their outline on the plane square to the axis
+/// through the pitch circle at cone distance `re` (`sides`, as [`Crown::tooth`] gives them, at
+/// h = re·cos δ from the apex): `z` teeth turned by `phase`, running along `face`, spiral `wind`
+/// (turn per unit of the logarithm of the distance from the apex; 0 for straight teeth).
+///
+/// Every tooth surface is a cone through the apex (turned by the logarithmic spiral), so the
+/// plane section scaled about the apex and turned is exact on any plane square to the axis: one
+/// [`Step::Taper`]. A taper ends on planes square to the axis, but on such a plane a bevel's
+/// teeth run from the root cone, inside the back cone, to the tip cone, outside it (by far on a
+/// flat cone: a crown's tips never meet that plane, and a taper ending there makes long thin
+/// blades). So the taper is made long enough to hold the whole face (its roots past the back
+/// cone at its start, its tips inside the front cone at its end) and is intersected with a
+/// revolved blank bounded by the back and front cones, square to the pitch cone's elements at
+/// the heel and the toe. The body's back is a disc [`HEEL_RIM`] modules (along the back cone)
+/// under the roots at the heel; its front, inside the front cone, a flat face [`TOE_RIM`]
+/// modules under the roots at the toe. No face of the blank lies on or along one of the
+/// taper's (the old trouble: the kernel refused cones that graze the root fillets where a
+/// taper's flat end meets them), so the cones cut the teeth square across. Should the kernel
+/// still refuse the trim, the engine leaves the taper as it is: the teeth run on a little past
+/// the cones.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cone_teeth(sides: &ToothSides, z: u32, phase: f64, delta: f64, re: f64, face: ConeFace, wind: f64, m: f64) -> ConeTeeth {
+    let h = re * delta.cos();
+    let outline = sided_outline(sides, z, phase);
+    let (heel, toe) = (face.heel, face.toe());
+    let (sd, cd) = delta.sin_cos();
+    // The root and tip cones' angles from the axis (seen from the apex).
+    let (phi_r, phi_t) = (sides.rf.atan2(h), sides.ra.atan2(h));
+    // Along a direction at φ from the axis, the point at distance ρ from the apex is at
+    // ρ·cos(φ − δ) along the pitch element: `heel` on the back cone, `toe` on the front one.
+    let on = |phi: f64, along: f64| -> (f64, f64) {
+        let rho = along / (phi - delta).cos();
+        (rho * phi.sin(), h - rho * phi.cos())
+    };
+    let (r_root_toe, z_root_toe) = on(phi_r, toe);
+    let (_, z_root_heel) = on(phi_r, heel);
+    let (r_tip_heel, _) = on(phi_t, heel);
+    let (_, z_tip_toe) = on(phi_t, toe);
+    // The back and front cones as radius against height.
+    let cone_r = |along: f64, z: f64| (along + (z - h) * cd) / sd;
+    // Down the back cone from the roots, and down the front cone (inwards: along −(cos δ,
+    // sin δ) in the radius-height plane), at most half way to the axis.
+    let (r_root_heel, _) = on(phi_r, heel);
+    let t_heel = (HEEL_RIM * m).min(0.5 * r_root_heel / cd);
+    let t_toe = (TOE_RIM * m).min(0.5 * r_root_toe / cd);
+    let z_lo = z_root_heel - t_heel * sd;
+    let z_face = z_root_toe - t_toe * sd;
+    let z_hi = z_tip_toe + (0.1 * m).min(0.5 * (h - z_tip_toe));
+    let (k0, k1) = ((h - z_lo) / h, (h - z_hi) / h);
+    let base = outline.scaled(k0).rotated(wind * k0.ln());
+    let scale = k1 / k0;
+    let e = m;
+    // Below the back face and above the tips the blank only has to hold the taper.
+    let blank = vec![
+        V2::new(0.0, z_lo - e),
+        V2::new(cone_r(heel, z_lo), z_lo - e),
+        V2::new(cone_r(heel, z_lo), z_lo),
+        V2::new(cone_r(heel, z_hi + e), z_hi + e),
+        V2::new(cone_r(toe, z_hi + e), z_hi + e),
+        V2::new(cone_r(toe, z_face), z_face),
+        V2::new(0.0, z_face),
+    ];
+    let steps = vec![
+        Step::Taper { outline: base, z0: z_lo, height: z_hi - z_lo, twist: wind * scale.ln(), scale, op: Op::New },
+        Step::Revolve { profile: blank, op: Op::Intersect },
+    ];
+    ConeTeeth { steps, ends: ConeEnds { back: z_lo, front: z_face, small_root: r_root_toe }, tip_radius: r_tip_heel }
 }
 
 fn bevel(s: &Spec, p: &mut Plan) {
@@ -1585,9 +1774,6 @@ fn bevel(s: &Spec, p: &mut Plan) {
         ));
         return;
     }
-    if d1.to_degrees() > 80.0 || d2.to_degrees() > 80.0 {
-        p.warn("a pitch cone angle over 80° (a crown gear) is outside what this bevel builder does well");
-    }
     p.fact("ratio", z2 / z1, Unit::None);
     p.fact("shaft angle", s.shaft_angle, Unit::Deg);
     if spiral != 0.0 {
@@ -1602,10 +1788,10 @@ fn bevel(s: &Spec, p: &mut Plan) {
     // angle, in the xz plane.
     // Gear 1 has a tooth on the pitch line the two cones share (towards +x) at the middle of
     // the face; gear 2, which sees that line at its own angle π, a space.
-    let (st1, _) = bevel_member(s, s.teeth, d1, spiral, 0.0, p, "gear 1");
+    let Some([f1, f2]) = cone_faces(s, re, p, ["gear 1", "gear 2"]) else { return };
+    let (t1, _) = bevel_member(s, s.teeth, d1, spiral, 0.0, f1, p, "gear 1");
     let ph2 = PI / z2 + PI;
-    let (st2, _) = bevel_member(s, s.teeth2, d2, -spiral, ph2, p, "gear 2");
-    let (back1, back2) = (0.0, 0.0);
+    let (t2, _) = bevel_member(s, s.teeth2, d2, -spiral, ph2, f2, p, "gear 2");
     let apex = [s.origin[0], s.origin[1], s.origin[2] + h1];
     // Gear 2's axis points from its large end towards the apex: from the apex, back along the
     // direction at the shaft angle from gear 1's axis.
@@ -1613,13 +1799,13 @@ fn bevel(s: &Spec, p: &mut Plan) {
     let origin2 = [apex[0] - ax2[0] * h2, apex[1] - ax2[1] * h2, apex[2] - ax2[2] * h2];
     let frame2 = Frame { origin: origin2, x: [sigma.cos(), 0.0, sigma.sin()], z: ax2 };
     if wanted(s, 1) {
-        let mut steps = st1;
-        bevel_hub(s, &s.bore, r1 * 0.6, back1, &mut steps, p, "gear 1");
+        let mut steps = t1.steps;
+        bevel_hub(s, &s.bore, r1 * 0.6, &t1.ends, &mut steps, p, "gear 1");
         p.bodies.push(Body { name: name(s, &format!("Bevel z{}", s.teeth)), frame: Frame::at(s.origin), steps });
     }
     if wanted(s, 2) {
-        let mut steps = st2;
-        bevel_hub(s, &s.bore2, r2 * 0.6, back2, &mut steps, p, "gear 2");
+        let mut steps = t2.steps;
+        bevel_hub(s, &s.bore2, r2 * 0.6, &t2.ends, &mut steps, p, "gear 2");
         p.bodies.push(Body { name: name(s, &format!("Bevel z{}", s.teeth2)), frame: frame2, steps });
     }
     // The preview: the two virtual (back-cone) spur gears in mesh. A virtual gear's tooth count
@@ -1653,12 +1839,11 @@ fn bevel(s: &Spec, p: &mut Plan) {
 }
 
 /// A bevel's hub on its back face and its bore.
-fn bevel_hub(s: &Spec, bore: &Bore, max_r: f64, back: f64, steps: &mut Vec<Step>, p: &mut Plan, who: &str) {
+fn bevel_hub(s: &Spec, bore: &Bore, max_r: f64, ends: &ConeEnds, steps: &mut Vec<Step>, p: &mut Plan, who: &str) {
+    let back = ends.back;
+    let built_teeth = !steps.is_empty();
     // The bore runs through to the small end, where the roots are closest to the axis.
-    let small_root = steps.iter().find_map(|st| match st {
-        Step::Taper { outline, scale, .. } => Some(scale * outline.polyline(1e-3).iter().map(|q| q.len()).fold(f64::INFINITY, f64::min)),
-        _ => None,
-    });
+    let small_root = built_teeth.then_some(ends.small_root);
     if let (Some(root), Some(_)) = (small_root, bore.outline())
         && bore.reach() >= root - 0.05 * s.module
     {
@@ -1672,10 +1857,7 @@ fn bevel_hub(s: &Spec, bore: &Bore, max_r: f64, back: f64, steps: &mut Vec<Step>
     }
     // Shafts: the back one from the large end's face (through the hub), the front one from the
     // small end, where the roots are the limit.
-    let front = steps.iter().find_map(|st| match st {
-        Step::Taper { z0, height, .. } => Some(z0 + height),
-        _ => None,
-    });
+    let front = built_teeth.then_some(ends.front);
     let second = std::ptr::eq(bore, &s.bore2);
     let built = front.map(|z| crate::body::shafts(s, second, bore, back, max_r / 0.6, z, small_root.unwrap_or(max_r), steps, p, who));
     if let Some(o) = bore.outline() {

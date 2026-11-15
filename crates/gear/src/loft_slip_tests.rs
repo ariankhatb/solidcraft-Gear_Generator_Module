@@ -75,6 +75,10 @@ fn no_kernel_loft_slips_in_any_kind() {
     for (angle, spiral) in [(90.0, 45.0), (60.0, 35.0), (120.0, 35.0), (90.0, 20.0)] {
         variants.push((format!("spiral bevel {angle}°/{spiral}°"), Spec { shaft_angle: angle, spiral_angle: spiral, ..Spec::defaults_for(Kind::SpiralBevel) }));
     }
+    // Nearly flat cones (built through their back and front cones): 100° to 150° shafts.
+    for (label, s) in crate::flat_bevel_tests::flat_sets().into_iter().chain(crate::flat_bevel_tests::own_face_sets()).chain(crate::flat_bevel_tests::planetary_sets()) {
+        variants.push((format!("flat {label}"), s));
+    }
     for (starts, teeth) in [(1, 30), (2, 41), (4, 40), (4, 48), (1, 80)] {
         variants.push((format!("worm {starts}-start z{teeth}"), Spec { starts, teeth, ..Spec::defaults_for(Kind::Worm) }));
     }

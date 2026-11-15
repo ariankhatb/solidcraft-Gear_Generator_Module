@@ -1006,3 +1006,142 @@ fn an_update_back_to_fitted_teeth_removes_the_sets_parameters() {
     run(&mut s, "edit.undo", json!({}));
     assert!(s.doc.param("P_teeth").is_some(), "undo brings them back");
 }
+
+// ---------------------------------------------------------------------------------------------
+// assembly: true: components, joints and motion links
+// ---------------------------------------------------------------------------------------------
+
+/// A joint's first value as `joint.list` gives it (degrees or mm), by id.
+fn joint_value(s: &mut Session, id: u64) -> f64 {
+    let l = run(s, "joint.list", json!({"quiet": true}));
+    let j = l["joints"].as_array().into_iter().flatten().find(|j| j["id"].as_u64() == Some(id)).cloned().unwrap_or_default();
+    j["values"][0]["value"].as_f64().unwrap_or(f64::NAN)
+}
+
+/// The members' joints of an assembled set, in body order (None for a grounded member).
+fn member_joints(r: &Value) -> Vec<Option<u64>> {
+    r["assembly"]["members"].as_array().map(|ms| ms.iter().map(|m| m["joint"].as_u64()).collect()).unwrap_or_default()
+}
+
+/// Drives joint `a` to `deg` and gives where joint `b` went.
+fn drive_and_read(s: &mut Session, a: u64, deg: f64, b: u64) -> f64 {
+    let d = run(s, "joint.drive", json!({"joint": a, "value": deg}));
+    assert_eq!(d["conflicts"].as_array().map(Vec::len).unwrap_or(0), 0, "{d}");
+    joint_value(s, b)
+}
+
+fn assembled(s: &mut Session, p: Value) -> Value {
+    let undo = s.undo.len();
+    let r = run(s, "gear.create", p);
+    assert_eq!(s.undo.len(), undo + 1, "one undo step");
+    no_errors(s);
+    let a = &r["assembly"];
+    let members = a["members"].as_array().cloned().unwrap_or_default();
+    assert_eq!(members.len(), r["bodies"].as_array().map_or(0, |b| b.len()) - usize::from(r["clearance"].is_string()), "{r}");
+    // Every member is a component of its own, holding its body.
+    for m in &members {
+        let c = m["component"].as_u64().unwrap();
+        assert!(s.doc.components.iter().any(|k| k.id == c), "{m}");
+    }
+    // The joints and links are there (joint.list) and in the set's folder.
+    let l = run(s, "joint.list", json!({}));
+    let listed: Vec<u64> = l["joints"].as_array().into_iter().flatten().filter_map(|j| j["id"].as_u64()).collect();
+    for j in a["joints"].as_array().into_iter().flatten() {
+        assert!(listed.contains(&j.as_u64().unwrap()), "{l}");
+    }
+    let group = r["group"].as_u64().unwrap();
+    let folder = s.doc.timeline_groups.iter().find(|g| g.id == group).unwrap();
+    for j in a["joints"].as_array().into_iter().flatten() {
+        assert!(folder.joints.contains(&j.as_u64().unwrap()), "joint {j} is in the set's folder");
+    }
+    r
+}
+
+#[test]
+fn an_assembled_pair_turns_gear_2_by_the_ratio_and_undoes_in_one_step() {
+    let mut s = Session::default();
+    let r = assembled(&mut s, json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 32, "face_width": 8, "assembly": true}));
+    let j = member_joints(&r);
+    let (g1, g2) = (j[0].unwrap(), j[1].unwrap());
+    assert_eq!(r["assembly"]["links"].as_array().map(Vec::len), Some(1), "{r}");
+    // Gear 1 at 32° turns gear 2 the other way by 20/32.
+    let got = drive_and_read(&mut s, g1, 32.0, g2);
+    assert!((got + 20.0).abs() < 1e-6, "{got}");
+    // In the world too: a point on gear 2's pitch circle has gone round its axis by -20°.
+    let occ = r["assembly"]["members"][1]["occurrence"].as_u64().unwrap();
+    let p = solidcraft_doc::apply_point(&solidcraft_doc::joints::occurrence_world(&s.doc, occ), solidcore_record::Vec3::new(52.0 + 32.0, 0.0, 4.0));
+    let t = (-20f64).to_radians();
+    assert!((p.x - (52.0 + 32.0 * t.cos())).abs() < 1e-6 && (p.y - 32.0 * t.sin()).abs() < 1e-6, "{p:?}");
+    // One undo takes the gears, their components and joints away.
+    let made: Vec<u64> = r["assembly"]["members"].as_array().unwrap().iter().filter_map(|m| m["component"].as_u64()).collect();
+    run(&mut s, "edit.undo", json!({}));
+    assert!(!s.doc.components.iter().any(|c| made.contains(&c.id)));
+    assert!(s.doc.assembly.joints.is_empty() && s.doc.assembly.links.is_empty());
+}
+
+#[test]
+fn an_assembled_planetary_turns_its_planets_and_ring() {
+    let mut s = Session::default();
+    let r = assembled(&mut s, json!({"type": "planetary", "module": 2, "teeth": 18, "teeth2": 18, "planets": 3, "face_width": 8, "assembly": true}));
+    let j = member_joints(&r);
+    assert_eq!(j.len(), 5, "sun, three planets, ring: {r}");
+    let (sun, planet, ring) = (j[0].unwrap(), j[1].unwrap(), j[4].unwrap());
+    // The carrier is held: the sun at 36° turns each planet -36° and the ring -12°.
+    let p = drive_and_read(&mut s, sun, 36.0, planet);
+    assert!((p + 36.0).abs() < 1e-6, "{p}");
+    for k in [j[2].unwrap(), j[3].unwrap()] {
+        assert!((joint_value(&mut s, k) + 36.0).abs() < 1e-6);
+    }
+    assert!((joint_value(&mut s, ring) + 12.0).abs() < 1e-6, "{}", joint_value(&mut s, ring));
+}
+
+#[test]
+fn an_assembled_bevel_set_and_its_keep_out() {
+    let mut s = Session::default();
+    let r = assembled(&mut s, json!({"type": "bevel", "module": 2, "teeth": 20, "teeth2": 30, "face_width": 10, "assembly": true, "clearance_body": {}}));
+    let j = member_joints(&r);
+    let got = drive_and_read(&mut s, j[0].unwrap(), 30.0, j[1].unwrap());
+    assert!((got + 20.0).abs() < 1e-6, "{got}");
+    // The keep-out body is a grounded component of its own, named after the set.
+    let k = r["assembly"]["keep_out"].as_u64().expect("a keep-out component");
+    let c = s.doc.components.iter().find(|c| c.id == k).unwrap();
+    assert!(c.name.ends_with("keep-out"), "{}", c.name);
+    let o = s.doc.occurrence_of(k).unwrap();
+    assert!(o.grounded);
+    assert!(r["assembly"]["members"].as_array().unwrap().iter().all(|m| m["grounded"] == json!(false)));
+}
+
+#[test]
+fn an_assembled_worm_drives_its_wheel_by_starts_over_teeth() {
+    let mut s = Session::default();
+    let r = assembled(&mut s, json!({"type": "worm", "module": 2, "teeth": 30, "starts": 1, "face_width": 12, "assembly": true}));
+    let j = member_joints(&r);
+    // The wheel is body 1, the worm body 2: a right-hand worm turned 90° carries the wheel back 3°.
+    let (wheel, worm) = (j[0].unwrap(), j[1].unwrap());
+    let got = drive_and_read(&mut s, worm, 90.0, wheel);
+    assert!((got + 3.0).abs() < 1e-6, "{got}");
+}
+
+#[test]
+fn an_update_keeps_one_set_of_components_and_joints() {
+    let mut s = Session::default();
+    let counts = |s: &Session| (s.doc.components.len(), s.doc.assembly.joints.len(), s.doc.assembly.links.len());
+    let empty = counts(&s);
+    let r = assembled(&mut s, json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 32, "face_width": 8, "assembly": true, "clearance_body": {}}));
+    let group = r["group"].as_u64().unwrap();
+    let before = counts(&s);
+    assert_eq!(before, (empty.0 + 3, empty.1 + 2, empty.2 + 1), "two gears and the keep-out; two joints; one link");
+    // In place (the same steps) and rebuilt (another tooth count's steps): one set each time.
+    for (p, teeth2) in [(json!({"group": group, "face_width": 10}), 32.0), (json!({"group": group, "teeth2": 40}), 40.0)] {
+        let u = run(&mut s, "gear.update", p);
+        no_errors(&s);
+        assert_eq!(counts(&s), before, "{u}");
+        let j = member_joints(&u);
+        let got = drive_and_read(&mut s, j[0].unwrap(), 40.0, j[1].unwrap());
+        assert!((got + 40.0 * 20.0 / teeth2).abs() < 1e-6, "{got} for {teeth2} teeth: {u}");
+    }
+    // Taking the assembly away leaves the gears as bodies again.
+    run(&mut s, "gear.update", json!({"group": group, "assembly": null}));
+    assert_eq!(counts(&s), empty);
+    no_errors(&s);
+}

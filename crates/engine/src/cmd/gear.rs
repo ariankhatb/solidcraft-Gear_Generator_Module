@@ -84,7 +84,7 @@ pub static COMMANDS: &[CommandSpec] = &[
              ring_as_housing? (default true: an internal ring or pin ring is part of the housing and left out), bearing?: name (608, 6001, 6902, MR105, ...) | {od, width, bore?}, \
              bearing_fit? (on the diameter), seats?: [{member: 1|2|..., along: mm from the middle of its teeth} | {point: [x,y,z]} (onto the nearest member's axis)], \
              travel? (rack: its slide, default its length)} (one more body, \"<name> clearance\": every member's swept tooth envelope, shafts and bearing seats \
-             in one solid, to cut a housing with; facts: envelope sizes, the bearing; warnings: seats past a shaft or on the teeth, bearing bore ≠ shaft). Returns bodies (and clearance: the clearance body's name), group, facts (diameters, ratio, centre distance, contact ratio, span and over-pins \
+             in one solid, to cut a housing with; facts: envelope sizes, the bearing; warnings: seats past a shaft or on the teeth, bearing bore ≠ shaft);              assembly?: bool (a complete assembly package: each gear a component of its own, a revolute joint per gear on its shaft (a slider for a rack,              held members such as a cycloidal drive's pin ring grounded), a joint.gear / joint.rack_pinion motion link per mesh with the set's ratio and              direction (a chain or belt turns both wheels the same way, a worm drives its wheel by starts/teeth, a spline's hub is rigid on its shaft), so              joint.drive on one gear turns the others; with clearance_body the keep-out body too, as a grounded see-through component \"<name> keep-out\";              all in the set's undo step and folder; gear.update makes them again, one set at a time). Returns bodies (and clearance: the clearance body's name;              assembly: {members: [{body, component, occurrence, joint?, grounded}], keep_out?, joints, links}), group, facts (diameters, ratio, centre distance, contact ratio, span and over-pins \
              measurements; with a load: forces, stresses, safety factors SF and SH) and warnings (undercut, pointed teeth, low contact ratio, interference, SF < 1.4, SH < 1)",
         ),
     CommandSpec::new("gear.calculate", "Gear Calculator", crate::checked!("gear.calculate", calculate))
@@ -1306,10 +1306,17 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let made = bodies.iter().map(|b| b.name.clone()).collect();
     let clearance = clearance_name(&plan, &bodies);
-    if let Some(group) = group {
-        keep(s, &Record { version: RECORD_VERSION, group, name: group_name, request, params: params_of(spec), bodies }, &mut warnings);
+    // Components, joints and motion links, when asked for: in this undo step and the set's folder.
+    let mut built = None;
+    if assembly::wanted(&request) && group.is_some() {
+        let names: Vec<String> = bodies.iter().take(plan.bodies.len()).map(|b| b.name.clone()).collect();
+        built = Some(assembly::make(s, &plan, spec.kind, &group_name, &names, clearance.as_deref(), group, &mut warnings)?);
     }
-    reply(cmd, GearResult { bodies: made, group, clearance, facts: facts(&asked, &plan), warnings, notes: notes(&asked), ..GearResult::default() })
+    let (assembly_record, assembly_made) = built.map_or((None, None), |(r, m)| (Some(r), Some(m)));
+    if let Some(group) = group {
+        keep(s, &Record { version: RECORD_VERSION, group, name: group_name, request, params: params_of(spec), bodies, assembly: assembly_record }, &mut warnings);
+    }
+    reply(cmd, GearResult { bodies: made, group, clearance, assembly: assembly_made, facts: facts(&asked, &plan), warnings, notes: notes(&asked), ..GearResult::default() })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1370,6 +1377,9 @@ struct Record {
     /// The set they came to, as explicit `gear.create` parameters.
     params: Value,
     bodies: Vec<BodyRecord>,
+    /// The components and joints made of the set (`assembly: true`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    assembly: Option<assembly::AssemblyRecord>,
 }
 
 impl Record {
@@ -1709,6 +1719,11 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     let mut warnings = plan.warnings.clone();
     let (mode, notes_eq) = equations::Mode::of(s, cmd, &request, &asked.spec, &plan, &rec.name, false)?;
     warnings.extend(notes_eq);
+    // The set's components and joints come down first, its bodies back where its features make
+    // them; they are made again for the new set below.
+    if let Some(old) = rec.assembly.take() {
+        assembly::remove(s, &old, &mut warnings)?;
+    }
     let own: std::collections::BTreeSet<u64> = rec.features().into_iter().collect();
     let worked: std::collections::BTreeSet<u64> = s.model.results.iter().filter(|r| r.error.is_none() && !r.skipped && !own.contains(&r.id)).map(|r| r.id).collect();
     let names = current_names(s, &rec);
@@ -1740,6 +1755,14 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     {
         equations::prune(s, old);
     }
+    let mut assembly_made = None;
+    if assembly::wanted(&request) && group.is_some() {
+        let names: Vec<String> = rec.bodies.iter().take(plan.bodies.len()).map(|b| b.name.clone()).collect();
+        let clearance = clearance_name(&plan, &rec.bodies);
+        let (made, out) = assembly::make(s, &plan, asked.spec.kind, &rec.name, &names, clearance.as_deref(), group, &mut warnings)?;
+        rec.assembly = Some(made);
+        assembly_made = Some(out);
+    }
     let old_key = record_key(rec.group);
     rec.request = request;
     rec.params = params_of(&asked.spec);
@@ -1770,6 +1793,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
             bodies: rec.bodies.iter().map(|b| b.name.clone()).collect(),
             group,
             clearance,
+            assembly: assembly_made,
             facts: facts(&asked, &plan),
             warnings,
             notes: notes(&asked),
@@ -2475,6 +2499,9 @@ fn first_curve(s: &Session, sketch: u64) -> Result<String> {
 
 #[path = "gear_equations.rs"]
 mod equations;
+
+#[path = "gear_assembly.rs"]
+mod assembly;
 
 #[cfg(test)]
 #[path = "gear_tests.rs"]

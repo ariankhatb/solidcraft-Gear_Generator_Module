@@ -104,7 +104,7 @@ const fn slot(label: &'static str, role: Role, optional: bool, hint: &'static st
 
 /// The modes the sketch input covers (the rest are set up in the window's Advanced mode).
 pub fn sketched(k: Kind) -> bool {
-    !matches!(k, Kind::CycloidalDrive | Kind::Spline | Kind::Elliptical)
+    !matches!(k, Kind::CycloidalDrive | Kind::Spline | Kind::Elliptical | Kind::Differential)
 }
 
 /// What mode `k` needs from the sketch, in order. The first is always the origin dot: the

@@ -18,6 +18,7 @@ is a work in progress shared for testing and feedback. It tracks SolidCraft `mai
 | Crossed | **hypoid** (offset spiral bevel, ISO 23509 pitch cones), crossed helical, worm and wheel (throated wheel hobbed by the worm, 1 to 12 starts) |
 | Chain and belt | ISO 606 / ANSI chain sprockets, timing-belt pulleys (GT2, HTD, T2.5/T5/T10, MXL, XL), the chain or belt between two |
 | Special | cycloidal (clock) gears, cycloidal drive, DIN 5480 / ANSI B92.1 involute splines, elliptical pairs |
+| Differentials | **complete differentials**: open bevel, torque-biasing bevel (uneven side gears), Torsen Type B (helical planetary), Torsen Type A (worm); with the case (bearing journals, thrust faces, pin holes or element pockets, windows, flange), its drive gear (spiral or straight bevel, hypoid, helical; bolted or integral), the assembly links and the housing keep-out body |
 
 The tooth math is generated, not drawn from tables: involute teeth cut by a rack (true trochoid root,
 undercut, profile shift), octoid bevel teeth cut by a crown gear, hypoid pinions generated from the

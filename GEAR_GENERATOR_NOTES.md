@@ -417,3 +417,22 @@ rings overlap the housing by design when `ring_as_housing`). Scripts come from t
   Reopening: the Gears button with a set's body/face/component selected, or double-clicking the
   set's folder (history list or timeline chip), opens it in edit mode; the window keeps and
   restores its mode and the Simple-mode drawing and form (`gear_simple_state.rs`).
+
+## Differential designer (`gear-diff`, 2026-11-15)
+
+A complete differential as one gear set: `Kind::Differential`, settings in `Spec::diff`
+(`crates/gear/src/diff.rs`, tests `diff_tests.rs`). Styles: open bevel, torque-biasing bevel
+(uneven side gears on tilted pinions, the bevel planetary planner's differential mode with
+`teeth3`), Torsen Type B (helical side gears, element pairs in case pockets), Torsen Type A
+(worm side gears and crossed helical element wheels with spur ends, two pairs, journals in the case). Every style plans the case (one revolve: journals,
+bearing shoulders, cones, flange, axle bores, hub journals, thrust faces, a sphere round the bevel
+apex, pin holes, assembly windows or element pockets) and the drive (spiral/straight bevel,
+hypoid, helical; bolted or integral), the assembly (`Plan::assembly`, a tree: drive pinion → ring
+→ case → pins; side A free, pinions and side B follow it), and on request (`diff.keep_out` or
+`clearance_body`) the keep-out body for the axle housing. Simple mode: `diff::solve(Goal)` (axle,
+ratio, ring Ø, torque, pinions, bias). Engine: `type: differential` with `differential: {...}` or
+`differential_goal: {...}`; window: `gear_diff.rs` (style picker, Simple goal + Design, Advanced
+sections, cross-section drawing). Engine and UI code not compiled yet.
+Known: the straight bevel planner's own 41:11 pinion interferes (1 mm) on its own (tests use 13);
+hypoid drives want a 45–50° pinion spiral; `requested_icons.txt` needs regenerating for
+`gear_differential`.

@@ -94,6 +94,9 @@ pub enum GearType {
     FaceGear,
     Elliptical,
     BevelPlanetary,
+    /// A complete differential: side gears, pinions or element gears, the case and its drive
+    /// gear (settings in `differential`, or designed from `differential_goal`).
+    Differential,
 }
 
 /// What meshes a bevel planetary set's planets besides the sun.
@@ -224,8 +227,174 @@ pub enum BoreType {
     Square,
 }
 
-/// A gear material for the strength rating (representative allowable stresses).
+/// A differential's style.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffStyle {
+    /// Two equal bevel side gears and spider pinions on a cross shaft.
+    Open,
+    /// Two bevel side gears of different tooth counts on tilted pinions: a fixed torque split.
+    Biased,
+    /// Torsen Type B (T-2): helical side gears and paired helical element gears in case pockets.
+    TorsenB,
+    /// Torsen Type A (T-1, worm): worm side gears, crossed helical element wheels with spur ends.
+    TorsenA,
+}
+
+/// The gear that drives a differential's case.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffDrive {
+    None,
+    SpiralBevel,
+    Bevel,
+    Hypoid,
+    /// Helical ring and pinion on parallel shafts (transaxle).
+    Helical,
+}
+
+/// How a differential's ring gear is held on its case.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffMount {
+    Bolted,
+    Integral,
+}
+
+/// A differential's settings (`type: differential`); every one optional, defaults from the
+/// style. Lengths in mm, angles in degrees; 0 means "work it out" where it says so.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct DifferentialParams {
+    /// The style (default open).
+    #[serde(default)]
+    pub style: Option<DiffStyle>,
+    /// Module of the side gears and pinions (bevel: large end; Torsen: normal).
+    #[serde(default)]
+    pub module: Option<f64>,
+    /// Side gear A's teeth.
+    #[serde(default)]
+    pub side_teeth: Option<u32>,
+    /// Side gear B's teeth (0: as A; the biased style needs a different count).
+    #[serde(default)]
+    pub side_teeth2: Option<u32>,
+    /// Spider pinions' or element gears' teeth.
+    #[serde(default)]
+    pub pinion_teeth: Option<u32>,
+    /// Spider pinions (bevel) or element pairs (Torsen).
+    #[serde(default)]
+    pub pinions: Option<u32>,
+    /// Side gears' face width (0: from the size).
+    #[serde(default)]
+    pub face_width: Option<f64>,
+    /// Spiral angle of the bevel side gears and pinions (0: straight).
+    #[serde(default)]
+    pub spiral_angle: Option<f64>,
+    /// Torsen helix angle.
+    #[serde(default)]
+    pub helix_angle: Option<f64>,
+    /// Pressure angle of the differential gears (0: 20°).
+    #[serde(default)]
+    pub pressure_angle: Option<f64>,
+    #[serde(default)]
+    pub backlash: Option<f64>,
+    /// Friction coefficient the Torsen torque bias estimate assumes (default 0.1).
+    #[serde(default)]
+    pub friction: Option<f64>,
+    /// Axle shaft diameter.
+    #[serde(default)]
+    pub axle_diameter: Option<f64>,
+    /// Pinion pin diameter (0: from the pinions).
+    #[serde(default)]
+    pub pin_diameter: Option<f64>,
+    /// Case wall (0: from the size).
+    #[serde(default)]
+    pub wall: Option<f64>,
+    /// Thrust washer allowance behind the side gears (0: from the size).
+    #[serde(default)]
+    pub washer: Option<f64>,
+    /// Running clearance round the gears inside the case (default 0.5).
+    #[serde(default)]
+    pub clearance: Option<f64>,
+    /// Case bearings by name ("30207", "6006"...; "" or absent: the smallest that fits).
+    #[serde(default)]
+    pub bearing: Option<String>,
+    /// Assembly windows in the case between the pinions (default true).
+    #[serde(default)]
+    pub windows: Option<bool>,
+    /// The drive gear (default spiral_bevel).
+    #[serde(default)]
+    pub drive: Option<DiffDrive>,
+    /// How the ring gear is held (default bolted).
+    #[serde(default)]
+    pub mount: Option<DiffMount>,
+    #[serde(default)]
+    pub ring_teeth: Option<u32>,
+    #[serde(default)]
+    pub drive_pinion_teeth: Option<u32>,
+    /// Ring gear module (bevel: large end; hypoid: ring pitch diameter / teeth; helical: normal).
+    #[serde(default)]
+    pub drive_module: Option<f64>,
+    /// Ring face width (0: from the size).
+    #[serde(default)]
+    pub drive_face_width: Option<f64>,
+    /// Drive pinion's mean spiral angle (spiral bevel, hypoid).
+    #[serde(default)]
+    pub drive_spiral_angle: Option<f64>,
+    /// Helical drive's helix angle.
+    #[serde(default)]
+    pub drive_helix_angle: Option<f64>,
+    /// Hypoid offset (0: 12 % of the ring's pitch diameter).
+    #[serde(default)]
+    pub drive_offset: Option<f64>,
+    /// Along the axle from the set's middle: where the drive pinion's axis crosses it (bevel,
+    /// hypoid) or the ring's middle plane (helical).
+    #[serde(default)]
+    pub drive_position: Option<f64>,
+    /// Ring bolts (0: from the bolt circle) and their size (0: the largest that fits).
+    #[serde(default)]
+    pub bolts: Option<u32>,
+    #[serde(default)]
+    pub bolt_diameter: Option<f64>,
+    /// Also make the keep-out body for the axle housing (default true).
+    #[serde(default)]
+    pub keep_out: Option<bool>,
+}
+
+/// A differential designed by what it must do (Simple mode): the solver picks teeth, modules
+/// and angles; `differential` settings given too are laid over its answer.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct DifferentialGoalParams {
+    #[serde(default)]
+    pub style: Option<DiffStyle>,
+    #[serde(default)]
+    pub drive: Option<DiffDrive>,
+    #[serde(default)]
+    pub mount: Option<DiffMount>,
+    /// Axle shaft diameter in mm (default 16).
+    #[serde(default)]
+    pub axle_diameter: Option<f64>,
+    /// Ring gear pitch diameter in mm (default: the smallest that fits and carries the torque).
+    #[serde(default)]
+    pub ring_diameter: Option<f64>,
+    /// Final drive ratio, ring ÷ pinion (default 3.9).
+    #[serde(default)]
+    pub ratio: Option<f64>,
+    /// Input torque at the drive pinion in N·m (default: not rated).
+    #[serde(default)]
+    pub torque: Option<f64>,
+    /// Spider pinions or element pairs (default from the style).
+    #[serde(default)]
+    pub pinions: Option<u32>,
+    /// Wanted torque split T_B / T_A (biased) or torque bias ratio (Torsen).
+    #[serde(default)]
+    pub bias: Option<f64>,
+}
+
+/// A gear material for the strength rating (representative allowable stresses).#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GearMaterial {
     SteelNormalized,
@@ -851,6 +1020,12 @@ pub struct GearParams {
     /// only members that appear or go are added or taken away. Default false.
     #[serde(default)]
     pub assembly: Option<bool>,
+    /// Differential (`type: differential`): its settings.
+    #[serde(default)]
+    pub differential: Option<DifferentialParams>,
+    /// Differential: design it from what it must do (Simple mode) instead.
+    #[serde(default)]
+    pub differential_goal: Option<DifferentialGoalParams>,
     /// `gear.update` and `gear.inspect` only: the set, by the timeline folder `gear.create`
     /// made for it.
     #[serde(default)]

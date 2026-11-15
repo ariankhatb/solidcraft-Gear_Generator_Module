@@ -429,7 +429,7 @@ pub fn topology(s: &Spec, preview: &[PreviewGear]) -> Vec<MeshPair> {
         // Sun first, ring last, the planets between.
         Kind::Planetary if n >= 3 => (1..n - 1).flat_map(|k| [pair(0, k, false, s.teeth), pair(k, n - 1, true, s.teeth)]).collect(),
         Kind::CycloidalDrive if n == 2 => vec![MeshPair { a: 0, b: 1, internal: true, period: TAU / f64::from(s.pins.max(1)), slack: s.backlash / 2.0, scale: s.pin_diameter / 2.0 }],
-        Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical | Kind::Worm | Kind::BevelPlanetary => Vec::new(),
+        Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical | Kind::Worm | Kind::BevelPlanetary | Kind::Differential => Vec::new(),
         // A rack with a pinion on it, should a set come to have both: the first sliding member
         // against the first turning one.
         _ => {

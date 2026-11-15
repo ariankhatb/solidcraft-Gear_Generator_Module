@@ -299,6 +299,8 @@ pub fn fields(kind: Option<Kind>) -> Vec<FieldInfo> {
         Kind::Spline => vec![fi(F::PitchDiameter, "Reference diameter", Mm), fi(F::Teeth, "Teeth", N), fi(F::Module, "Module", N), fi(F::FaceWidth, "Length", Mm)],
         Kind::FaceGear => vec![fi(F::Ratio, "Ratio", N), fi(F::PitchDiameter, "Pinion pitch diameter", Mm), fi(F::PitchDiameter2, "Face gear pitch diameter", Mm), fi(F::Teeth, "Pinion teeth", N), face],
         Kind::Elliptical => vec![fi(F::CenterDistance, "Centre distance", Mm), fi(F::Teeth, "Teeth", N), fi(F::Eccentricity, "Eccentricity", N), face],
+        // Designed by its own goal (crate::diff::Goal): the window shows those fields.
+        Kind::Differential => Vec::new(),
         Kind::BevelPlanetary => vec![
             fi(F::PlanetMode, "Mode", N),
             fi(F::ShaftAngle, "Cone angle (sun shaft to planet shaft)", Deg),
@@ -791,6 +793,7 @@ pub fn solve(simple: &Simple, base: &Spec) -> Solved {
         Kind::FaceGear => face_gear(&mut c),
         Kind::Elliptical => elliptical(&mut c),
         Kind::BevelPlanetary => bevel_planetary(&mut c),
+        Kind::Differential => differential(&mut c),
     };
     if simple.printable {
         // Again, now that the module is known (the tip rounding and compensation follow it).
@@ -813,6 +816,21 @@ pub fn solve(simple: &Simple, base: &Spec) -> Solved {
         error = Some(e);
     }
     Solved { kind, spec: c.spec, chosen: c.chosen, notes: c.notes, error, alternatives, companion: c.companion }
+}
+
+/// A differential is designed from its own goal ([`crate::diff::solve`]: axle, ratio, torque,
+/// style) in its own panel: here its settings stay as they are, and the rows say what they are.
+fn differential(c: &mut Ctx) -> Result<(), String> {
+    let d = c.spec.diff.clone();
+    c.row("differential module", d.module, Unit::None);
+    c.row("side gear teeth", f64::from(d.side_teeth), Unit::None);
+    c.row("pinion or element teeth", f64::from(d.pinion_teeth), Unit::None);
+    c.row("axle diameter", d.axle_diameter, Unit::Mm);
+    if d.drive != crate::diff::DriveKind::None {
+        c.row("final drive ratio", f64::from(d.ring_teeth) / f64::from(d.drive_pinion_teeth.max(1)), Unit::None);
+    }
+    c.note("a differential is designed from its goal (axle, ratio, torque, style) in its own panel");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2365,6 +2383,7 @@ pub fn measures(spec: &Spec) -> Simple {
             o.eccentricity = Some(s.ellipse_eccentricity);
             o.module = Some(s.module);
         }
+        Kind::Differential => {}
         Kind::BevelPlanetary => {
             let g = bevel_planet::geometry(s).ok();
             o.shaft_angle = Some(g.as_ref().map_or(s.shaft_angle, |g| g.sigma.to_degrees()));
@@ -2481,6 +2500,7 @@ pub fn outputs_of(spec: &Spec) -> Simple {
             o.teeth = all.teeth;
             o.eccentricity = all.eccentricity;
         }
+        Kind::Differential => {}
         Kind::BevelPlanetary => {
             o.shaft_angle = all.shaft_angle;
             o.ratio = all.ratio;
@@ -2731,6 +2751,9 @@ impl Build<'_> {
 /// hypoid's first call (its pitch cone design, cached after). Frames agree with `plan()`'s
 /// bodies, names and colour indices with its preview members, diameters with its facts.
 pub fn schematic(spec: &Spec) -> Schematic {
+    if spec.kind == Kind::Differential {
+        return crate::diff::schematic(spec);
+    }
     let mut b = Build { s: spec, out: Schematic::default(), next_body: 0 };
     let s = spec;
     let o = s.origin;
@@ -2821,6 +2844,7 @@ pub fn schematic(spec: &Spec) -> Schematic {
         }
         Kind::Bevel | Kind::SpiralBevel => bevel_schematic(&mut b),
         Kind::BevelPlanetary => bevel_planet_schematic(&mut b),
+        Kind::Differential => {}
         Kind::Hypoid => hypoid_schematic(&mut b),
         Kind::CrossedHelical => {
             let sigma = s.shaft_angle.to_radians();

@@ -265,6 +265,8 @@ pub fn why_left_out(s: &Spec, o: Opt) -> Option<Why> {
             FrontShaft | BackShaft | Hardware => body("the face gear itself takes none; the pinion takes gear 2's"),
             _ => None,
         },
+        // Its members come from its own settings (Spec::diff).
+        Kind::Differential => body("a differential's gears, case and drive are set by its own settings"),
         Kind::Elliptical => match o {
             _ if o.tooth_form() || o == Face2 => OWN_FORM,
             ToothChamfers => body("the tips are no circle"),

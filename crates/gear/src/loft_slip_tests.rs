@@ -46,7 +46,10 @@ fn teeth_of(s: &Spec, sections: &[Outline], body: &str) -> usize {
     }
     // A bevel planetary set's second sun or ring has the count its cone angle gives (teeth3 0).
     let far = if s.kind == Kind::BevelPlanetary { crate::plan::bevel_planet::geometry(s).map_or(0, |g| g.z_far) } else { 0 };
-    [far, s.teeth3, s.teeth, s.teeth2].into_iter().map(|z| z as usize).find(|z| *z > 1 && corners % z == 0).unwrap_or(0)
+    // A differential's members: its side gears, pinions, ring and drive pinion.
+    let d = &s.diff;
+    let diff: Vec<u32> = if s.kind == Kind::Differential { vec![d.side_teeth2, d.side_teeth, d.pinion_teeth, d.ring_teeth, d.drive_pinion_teeth] } else { Vec::new() };
+    diff.into_iter().chain([far, s.teeth3, s.teeth, s.teeth2]).map(|z| z as usize).find(|z| *z > 1 && corners % z == 0).unwrap_or(0)
 }
 
 fn check(s: &Spec, label: &str, bad: &mut Vec<String>) {
@@ -109,6 +112,22 @@ fn no_kernel_loft_slips_in_any_kind() {
             assert!(plan(&s).is_ok(), "{label}: {:?}", plan(&s).err());
             variants.push((label.to_string(), s));
         }
+    }
+    // Differentials: every style with every drive, the rings moved onto their cases.
+    {
+        use crate::diff::{Diff, DriveKind, Mount, Style};
+        for style in [Style::Open, Style::Biased, Style::TorsenB] {
+            for drive in DriveKind::ALL {
+                for mount in Mount::ALL {
+                    let zp = if drive == DriveKind::Bevel { 13 } else { 11 };
+                    let s = Spec { diff: Diff { drive, mount, drive_pinion_teeth: zp, drive_spiral: if drive == DriveKind::Hypoid { 50.0 } else { 35.0 }, ..Diff::defaults_for(style) }, ..Spec::defaults_for(Kind::Differential) };
+                    assert!(plan(&s).is_ok(), "{style:?} {drive:?} {mount:?}: {:?}", plan(&s).err());
+                    variants.push((format!("differential {style:?} {drive:?} {mount:?}"), s));
+                }
+            }
+        }
+        let s = Spec { diff: Diff { spiral: 25.0, pinions: 4, ..Diff::defaults_for(Style::Open) }, ..Spec::defaults_for(Kind::Differential) };
+        variants.push(("differential open spiral 25 x4".into(), s));
     }
     for (label, s) in &variants {
         check(s, label, &mut bad);

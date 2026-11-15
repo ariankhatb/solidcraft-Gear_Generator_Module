@@ -35,7 +35,7 @@ use super::sketch_import::add_geometry;
 use crate::params::bad;
 use crate::schema::gear::{
     BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, SeatAlongParams, SeatPointParams, GearAxesResult, GearAxis, GearAxisLine, GearBevelPlanetMode, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult,
-    GearMaterial, GearParams, GearRelation, GearResult, GearSet, GearType, HardwareParams, PlacementParams, RackStandard, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
+    DiffDrive, DiffMount, DiffStyle, DifferentialGoalParams, DifferentialParams, GearMaterial, GearParams, GearRelation, GearResult, GearSet, GearType, HardwareParams, PlacementParams, RackStandard, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
 };
 use solidcraft_gear::spline::SplineStandard;
 use solidcraft_gear::strength::Material;
@@ -52,7 +52,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .contract(&GEAR_CONTRACT)
         .output(output_schema_for::<GearResult>)
         .params(
-            "type?: spur|helical|herringbone|internal|rack|pair|planetary|bevel|spiral_bevel|hypoid|crossed_helical|worm|cycloidal|cycloidal_drive|sprocket|pulley|spline|face_gear|elliptical; \
+            "type?: spur|helical|herringbone|internal|rack|pair|planetary|bevel|spiral_bevel|hypoid|crossed_helical|worm|cycloidal|cycloidal_drive|sprocket|pulley|spline|face_gear|elliptical|bevel_planetary|differential; \
              module? (mm) | diametral_pitch?; teeth?, teeth2? (mate or planet), ring_teeth?, planets?; pressure_angle?, helix_angle? (deg, sign = hand); \
              profile_shift?, profile_shift2?; rack?: iso53_a|iso53_b|iso53_c|iso53_d|agma_full_depth|stub|print_fdm, addendum?, dedendum?, root_radius? (coefficients); \
              backlash? (mm); face_width?; center_distance? (pair: gear 2's shift reaches it); shaft_angle?, spiral_angle? (deg); offset?, ring_diameter? (hypoid, mm), hand?: left|right (hypoid pinion); \
@@ -62,7 +62,11 @@ pub static COMMANDS: &[CommandSpec] = &[
              strands? (1…4), side_chamfer?; teeth2 > 0 and center_distance? for a pair (even links); pulley: belt?: gt2_2|gt2_3|gt2_5|htd_3m|htd_5m|htd_8m|t2_5|t5|t10|mxl|xl, \
              flanges?, face_width = belt width; spline: spline_standard?: din5480|ansi_b92, spline_diameter? (DIN reference Ø; default module × (teeth + 1.1)), fillet_root?, backlash = flank clearance, face_width = length; \
              face_gear: teeth (pinion), teeth2 (face gear), inner_diameter? (default: the undercut limit), face_width = tooth length; elliptical: ellipse_eccentricity? (0…0.7), teeth on each gear; \
-             only?: 1|2|3 (one member); origin?: [x,y,z]; coupon?: bool, coupon_teeth? (pair, planetary: a print test coupon instead of the set); name?. Axis-first: axis1?, axis2?: X|Y|Z | construction axis name | {origin?, dir} | {edge|face: [x,y,z]} | \
+             differential: differential?: {style?: open|biased|torsen_b|torsen_a, module?, side_teeth?, side_teeth2?, pinion_teeth?, pinions?, face_width?, spiral_angle?, helix_angle?, pressure_angle?, backlash?, friction?, \
+             axle_diameter?, pin_diameter?, wall?, washer?, clearance?, bearing? (30207, 32008, 6006...), windows?, drive?: none|spiral_bevel|bevel|hypoid|helical, mount?: bolted|integral, ring_teeth?, drive_pinion_teeth?, \
+             drive_module?, drive_face_width?, drive_spiral_angle?, drive_helix_angle?, drive_offset?, drive_position?, bolts?, bolt_diameter?, keep_out? (default true: the housing's keep-out body)} \
+             or differential_goal?: {style?, drive?, mount?, axle_diameter?, ring_diameter?, ratio?, torque?, pinions?, bias?} (Simple mode: the solver picks teeth and modules); \
+             only?: 1|2|3 (one member; differential: 1 the gears, 2 the case, 3 the drive); origin?: [x,y,z]; coupon?: bool, coupon_teeth? (pair, planetary: a print test coupon instead of the set); name?. Axis-first: axis1?, axis2?: X|Y|Z | construction axis name | {origin?, dir} | {edge|face: [x,y,z]} | \
              {sketch, curve} | {sketch, point} (a sketch point: the shaft through it normal to the sketch) (the shafts: the set is sized and placed on them, type? defaults to what fits, module/teeth/teeth2/starts not given are chosen), \
              Drawn in one sketch: sketch?: id|name (circles = pitch circles, lines = shafts; type = the mode or what the drawing looks like), picks?: [point/curve ids per slot, origin point first], sketch_turn?: [x°, y°, normal°] about the origin point, \
              ratio? (teeth2 ÷ teeth), cone_distance? (bevels, mm), flip1?, flip2?, swap_axes?, along? (mm along axis1); placement?: {origin, x, z}; \
@@ -128,7 +132,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         ),
 ];
 
-const KINDS: [(GearType, Kind); 20] = [
+const KINDS: [(GearType, Kind); 21] = [
     (GearType::Spur, Kind::Spur),
     (GearType::Helical, Kind::Helical),
     (GearType::Herringbone, Kind::Herringbone),
@@ -149,6 +153,7 @@ const KINDS: [(GearType, Kind); 20] = [
     (GearType::FaceGear, Kind::FaceGear),
     (GearType::Elliptical, Kind::Elliptical),
     (GearType::BevelPlanetary, Kind::BevelPlanetary),
+    (GearType::Differential, Kind::Differential),
 ];
 
 const CHAINS: [(ChainSize, &str); 18] = [
@@ -594,6 +599,20 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     if let Some(v) = p.accuracy_grade {
         load.quality = v;
     }
+    if kind == Kind::Differential {
+        // Designed from what it must do, then any settings given laid over the answer.
+        if let Some(g) = &p.differential_goal {
+            let goal = diff_goal_of(g, &s);
+            s = solidcraft_gear::diff::solve(&goal, &s)?.spec;
+        }
+        if let Some(d) = &p.differential {
+            diff_apply(&mut s.diff, d);
+        }
+        // The spec's own sizes mirror the differential's (for the size checks below).
+        s.module = s.diff.module;
+        s.teeth = s.diff.side_teeth;
+        s.teeth2 = s.diff.pinion_teeth;
+    }
     let finite = [
         s.module,
         s.pressure_angle,
@@ -812,6 +831,7 @@ fn with_extras(s: &Spec, mut p: GearParams) -> GearParams {
         }
         Kind::FaceGear => p.inner_diameter = (s.inner_diameter > 0.0).then_some(s.inner_diameter),
         Kind::Elliptical => p.ellipse_eccentricity = Some(s.ellipse_eccentricity),
+        Kind::Differential => p.differential = Some(diff_params(&s.diff)),
         Kind::BevelPlanetary => {
             p.first_azimuth = Some(s.first_azimuth);
             p.bevel_planet_mode = Some(match s.bevel_planet_mode {
@@ -825,6 +845,169 @@ fn with_extras(s: &Spec, mut p: GearParams) -> GearParams {
     p
 }
 
+fn diff_style(s: DiffStyle) -> solidcraft_gear::diff::Style {
+    use solidcraft_gear::diff::Style;
+    match s {
+        DiffStyle::Open => Style::Open,
+        DiffStyle::Biased => Style::Biased,
+        DiffStyle::TorsenB => Style::TorsenB,
+        DiffStyle::TorsenA => Style::TorsenA,
+    }
+}
+
+fn diff_style_param(s: solidcraft_gear::diff::Style) -> DiffStyle {
+    use solidcraft_gear::diff::Style;
+    match s {
+        Style::Open => DiffStyle::Open,
+        Style::Biased => DiffStyle::Biased,
+        Style::TorsenB => DiffStyle::TorsenB,
+        Style::TorsenA => DiffStyle::TorsenA,
+    }
+}
+
+fn diff_drive(d: DiffDrive) -> solidcraft_gear::diff::DriveKind {
+    use solidcraft_gear::diff::DriveKind;
+    match d {
+        DiffDrive::None => DriveKind::None,
+        DiffDrive::SpiralBevel => DriveKind::SpiralBevel,
+        DiffDrive::Bevel => DriveKind::Bevel,
+        DiffDrive::Hypoid => DriveKind::Hypoid,
+        DiffDrive::Helical => DriveKind::Helical,
+    }
+}
+
+fn diff_drive_param(d: solidcraft_gear::diff::DriveKind) -> DiffDrive {
+    use solidcraft_gear::diff::DriveKind;
+    match d {
+        DriveKind::None => DiffDrive::None,
+        DriveKind::SpiralBevel => DiffDrive::SpiralBevel,
+        DriveKind::Bevel => DiffDrive::Bevel,
+        DriveKind::Hypoid => DiffDrive::Hypoid,
+        DriveKind::Helical => DiffDrive::Helical,
+    }
+}
+
+fn diff_mount(m: DiffMount) -> solidcraft_gear::diff::Mount {
+    match m {
+        DiffMount::Bolted => solidcraft_gear::diff::Mount::Bolted,
+        DiffMount::Integral => solidcraft_gear::diff::Mount::Integral,
+    }
+}
+
+fn diff_mount_param(m: solidcraft_gear::diff::Mount) -> DiffMount {
+    match m {
+        solidcraft_gear::diff::Mount::Bolted => DiffMount::Bolted,
+        solidcraft_gear::diff::Mount::Integral => DiffMount::Integral,
+    }
+}
+
+/// A differential's settings laid over `d`: a new style starts from that style's defaults.
+fn diff_apply(d: &mut solidcraft_gear::diff::Diff, p: &DifferentialParams) {
+    if let Some(st) = p.style {
+        let st = diff_style(st);
+        if st != d.style {
+            *d = solidcraft_gear::diff::Diff::defaults_for(st);
+        }
+    }
+    macro_rules! put {
+        ($field:ident, $src:expr) => {
+            if let Some(v) = $src.clone() {
+                d.$field = v;
+            }
+        };
+    }
+    put!(module, p.module);
+    put!(side_teeth, p.side_teeth);
+    put!(side_teeth2, p.side_teeth2);
+    put!(pinion_teeth, p.pinion_teeth);
+    put!(pinions, p.pinions);
+    put!(face_width, p.face_width);
+    put!(spiral, p.spiral_angle);
+    put!(helix, p.helix_angle);
+    put!(pressure_angle, p.pressure_angle);
+    put!(backlash, p.backlash);
+    put!(friction, p.friction);
+    put!(axle_diameter, p.axle_diameter);
+    put!(pin_diameter, p.pin_diameter);
+    put!(wall, p.wall);
+    put!(washer, p.washer);
+    put!(clearance, p.clearance);
+    put!(bearing, p.bearing);
+    put!(windows, p.windows);
+    if let Some(v) = p.drive {
+        d.drive = diff_drive(v);
+    }
+    if let Some(v) = p.mount {
+        d.mount = diff_mount(v);
+    }
+    put!(ring_teeth, p.ring_teeth);
+    put!(drive_pinion_teeth, p.drive_pinion_teeth);
+    put!(drive_module, p.drive_module);
+    put!(drive_face, p.drive_face_width);
+    put!(drive_spiral, p.drive_spiral_angle);
+    put!(drive_helix, p.drive_helix_angle);
+    put!(drive_offset, p.drive_offset);
+    put!(drive_position, p.drive_position);
+    put!(bolts, p.bolts);
+    put!(bolt_diameter, p.bolt_diameter);
+    put!(keep_out, p.keep_out);
+}
+
+/// Every differential setting, explicit.
+fn diff_params(d: &solidcraft_gear::diff::Diff) -> DifferentialParams {
+    DifferentialParams {
+        style: Some(diff_style_param(d.style)),
+        module: Some(d.module),
+        side_teeth: Some(d.side_teeth),
+        side_teeth2: Some(d.side_teeth2),
+        pinion_teeth: Some(d.pinion_teeth),
+        pinions: Some(d.pinions),
+        face_width: Some(d.face_width),
+        spiral_angle: Some(d.spiral),
+        helix_angle: Some(d.helix),
+        pressure_angle: Some(d.pressure_angle),
+        backlash: Some(d.backlash),
+        friction: Some(d.friction),
+        axle_diameter: Some(d.axle_diameter),
+        pin_diameter: Some(d.pin_diameter),
+        wall: Some(d.wall),
+        washer: Some(d.washer),
+        clearance: Some(d.clearance),
+        bearing: Some(d.bearing.clone()),
+        windows: Some(d.windows),
+        drive: Some(diff_drive_param(d.drive)),
+        mount: Some(diff_mount_param(d.mount)),
+        ring_teeth: Some(d.ring_teeth),
+        drive_pinion_teeth: Some(d.drive_pinion_teeth),
+        drive_module: Some(d.drive_module),
+        drive_face_width: Some(d.drive_face),
+        drive_spiral_angle: Some(d.drive_spiral),
+        drive_helix_angle: Some(d.drive_helix),
+        drive_offset: Some(d.drive_offset),
+        drive_position: Some(d.drive_position),
+        bolts: Some(d.bolts),
+        bolt_diameter: Some(d.bolt_diameter),
+        keep_out: Some(d.keep_out),
+    }
+}
+
+/// A Simple-mode differential goal from its parameters (the set's torque and material when the
+/// goal doesn't say).
+fn diff_goal_of(g: &DifferentialGoalParams, s: &Spec) -> solidcraft_gear::diff::Goal {
+    let base = solidcraft_gear::diff::Goal::default();
+    solidcraft_gear::diff::Goal {
+        style: g.style.map(diff_style).unwrap_or(s.diff.style),
+        drive: g.drive.map(diff_drive).unwrap_or(base.drive),
+        mount: g.mount.map(diff_mount).unwrap_or(base.mount),
+        axle_diameter: g.axle_diameter.unwrap_or(base.axle_diameter),
+        ring_diameter: g.ring_diameter.unwrap_or(0.0),
+        ratio: g.ratio.unwrap_or(base.ratio),
+        torque: g.torque.unwrap_or(s.load.torque),
+        pinions: g.pinions.unwrap_or(0),
+        bias: g.bias.unwrap_or(0.0),
+        material: s.load.material,
+    }
+}
 fn strip_nulls(v: Value) -> Value {
     match v {
         Value::Object(o) => Value::Object(o.into_iter().filter(|(_, v)| !v.is_null()).map(|(k, v)| (k, strip_nulls(v))).collect()),

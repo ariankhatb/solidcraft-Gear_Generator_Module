@@ -62,7 +62,9 @@ fn every_set_is_an_assembly_of_its_bodies() {
             }
         }
         // A set of two or more meshing members is linked into one train.
-        if s.kind.is_set() && s.kind != Kind::CycloidalDrive && p.bodies.len() >= 2 {
+        // (A differential has two degrees of freedom: its case is driven and side gear A is free,
+        // the pinions and side gear B following it relative to the case.)
+        if s.kind.is_set() && s.kind != Kind::CycloidalDrive && s.kind != Kind::Differential && p.bodies.len() >= 2 {
             for i in 1..a.members.len() {
                 assert!(a.ratio(0, i).is_some(), "{label}: member {i} is not linked to member 1");
             }

@@ -41,6 +41,11 @@ fn coaxial(a: &Frame, b: &Frame) -> bool {
 
 /// The assembly of the planned set `p` (its bodies placed where they go).
 pub(crate) fn fill(s: &Spec, p: &mut Plan) {
+    if s.kind == Kind::Differential {
+        // Planned with the set (crate::diff): its members follow the placed bodies.
+        crate::diff::place_assembly(p);
+        return;
+    }
     let bodies = &p.bodies;
     let n = bodies.len();
     let mut members: Vec<AssemblyMember> = bodies.iter().enumerate().map(|(i, b)| AssemblyMember { body: i, axis: turning(&b.frame), grounded: false, carrier: None }).collect();

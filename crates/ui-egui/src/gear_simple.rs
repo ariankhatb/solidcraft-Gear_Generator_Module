@@ -196,6 +196,12 @@ pub(crate) fn apply(w: &mut GearWindow) {
     w.simple.dirty = false;
     let k = w.spec.kind;
     let s = &mut w.simple;
+    // A differential is designed from its goal in its own panel (crate::gear_diff), not drawn.
+    if k == Kind::Differential {
+        s.error = None;
+        s.measured = None;
+        return;
+    }
     if !sketch_rules::sketched(k) {
         s.error = Some(format!("A {} isn't drawn: set it up in Advanced", k.label()));
         s.measured = None;
@@ -256,7 +262,7 @@ fn mode_picker(ui: &mut Ui, w: &mut GearWindow) {
         ui.add_space(2.0);
         ui.label(RichText::new(label).small().weak());
         ui.horizontal_wrapped(|ui| {
-            for k in Kind::ALL.iter().copied().filter(|k| k.axes() == group && sketch_rules::sketched(*k)) {
+            for k in Kind::ALL.iter().copied().filter(|k| k.axes() == group && (sketch_rules::sketched(*k) || *k == Kind::Differential)) {
                 if crate::gear_icons::choice(ui, w.spec.kind == k, crate::gear_icons::kind_icon(k), k.label()).clicked() {
                     pick = Some(k);
                 }
@@ -480,6 +486,12 @@ fn turn_ui(ui: &mut Ui, w: &mut GearWindow) {
 pub(crate) fn panel(ui: &mut Ui, w: &mut GearWindow) {
     mode_picker(ui, w);
     ui.add_space(4.0);
+    if w.spec.kind == Kind::Differential {
+        crate::gear_diff::simple_panel(ui, w);
+        let (names, warnings, facts) = w.clearance_inputs();
+        crate::gear_clearance_ui::section(ui, &mut w.spec, false, &names, &warnings, &facts);
+        return;
+    }
     if let Some(h) = w.simple.hint {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(format!("These picks look like a {}.", h.label())).small());
@@ -505,6 +517,10 @@ pub(crate) fn panel(ui: &mut Ui, w: &mut GearWindow) {
 /// The drawing (and the side view of an angle out of its plane), in the right column.
 pub(crate) fn drawing(ui: &mut Ui, w: &mut GearWindow, size: egui::Vec2) {
     let k = w.spec.kind;
+    if k == Kind::Differential {
+        crate::gear_diff::drawing(ui, &w.spec, size);
+        return;
+    }
     let side = matches!(k, Kind::Hypoid | Kind::CrossedHelical);
     let lit = w.lit();
     let (bodies, _, _) = w.clearance_inputs();

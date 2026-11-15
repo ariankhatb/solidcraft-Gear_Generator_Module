@@ -49,6 +49,7 @@ pub fn kind_icon(kind: Kind) -> &'static str {
         Kind::FaceGear => "gear_face",
         Kind::Elliptical => "gear_elliptical",
         Kind::BevelPlanetary => "gear_bevel_planetary",
+        Kind::Differential => "gear_differential",
     }
 }
 

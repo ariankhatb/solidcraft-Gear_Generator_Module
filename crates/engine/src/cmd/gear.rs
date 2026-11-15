@@ -1765,7 +1765,7 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let mut built = None;
     if assembly::wanted(&request) && group.is_some() {
         let names: Vec<String> = bodies.iter().take(plan.bodies.len()).map(|b| b.name.clone()).collect();
-        built = Some(assembly::sync(s, &plan, spec.kind, &group_name, &names, clearance.as_deref(), group, None, &mut warnings)?);
+        built = Some(assembly::sync(s, &plan, spec.kind, &group_name, &names, clearance.as_deref(), group, None, assembly::driver(&request), &mut warnings)?);
     }
     let (assembly_record, assembly_made) = built.map_or((None, None), |(r, m)| (Some(r), Some(m)));
     if let Some(group) = group {
@@ -2249,7 +2249,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     if assembly::wanted(&request) && group.is_some() {
         let names: Vec<String> = rec.bodies.iter().take(plan.bodies.len()).map(|b| b.name.clone()).collect();
         let clearance = clearance_name(&plan, &rec.bodies);
-        let (made, out) = assembly::sync(s, &plan, asked.spec.kind, &rec.name, &names, clearance.as_deref(), group, old_assembly, &mut warnings)?;
+        let (made, out) = assembly::sync(s, &plan, asked.spec.kind, &rec.name, &names, clearance.as_deref(), group, old_assembly, assembly::driver(&request), &mut warnings)?;
         rec.assembly = Some(made);
         assembly_made = Some(out);
     } else if let Some(old) = old_assembly {

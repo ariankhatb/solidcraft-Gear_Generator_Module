@@ -1,0 +1,189 @@
+//! A whole gear system as one assembly: a train of ten gears with two compound clusters drawn
+//! as circles, driven from any member; its mesh graph's loops; one keep-out for everything.
+
+use crate::clearance::Clearance;
+use crate::mesh2d::{Verdict, check_mesh};
+use crate::plan::{Assembly, AssemblyLink, AssemblyMember, Kind, Plan, Spec};
+use crate::simple::Simple;
+use crate::sketch_rules::{Circle, Drawn, Reading, read, train_spec};
+use crate::{V2, axes::Axis};
+
+fn circle(x: f64, y: f64, r: f64) -> Circle {
+    Circle { c: V2::new(x, y), r }
+}
+
+/// Ten gears, module 2 (radius = teeth): 1 drives 2; 2 and 3 share a shaft; 3 → 4 → 5; 5 and 6
+/// share a shaft; 6 → 7 → 8 → 9 → 10. Gears off each other's layers may cross circles.
+fn ten() -> Vec<Circle> {
+    vec![
+        circle(0.0, 0.0, 20.0),
+        circle(50.0, 0.0, 30.0),
+        circle(50.0, 0.0, 15.0),
+        circle(50.0, 35.0, 20.0),
+        circle(50.0, 80.0, 25.0),
+        circle(50.0, 80.0, 12.0),
+        circle(80.0, 80.0, 18.0),
+        circle(118.0, 80.0, 20.0),
+        circle(118.0, 110.0, 10.0),
+        circle(118.0, 136.0, 16.0),
+    ]
+}
+
+/// Each gear's turn per turn of gear 1, worked out by hand from the teeth: the other way across
+/// every outside mesh by the teeth's ratio, the same on a shared shaft.
+fn by_hand() -> Vec<f64> {
+    let z = [20.0, 30.0, 15.0, 20.0, 25.0, 12.0, 18.0, 20.0, 10.0, 16.0];
+    let mut w = vec![1.0; 10];
+    w[1] = -w[0] * z[0] / z[1];
+    w[2] = w[1];
+    w[3] = -w[2] * z[2] / z[3];
+    w[4] = -w[3] * z[3] / z[4];
+    w[5] = w[4];
+    w[6] = -w[5] * z[5] / z[6];
+    w[7] = -w[6] * z[6] / z[7];
+    w[8] = -w[7] * z[7] / z[8];
+    w[9] = -w[8] * z[8] / z[9];
+    w
+}
+
+fn system(clearance: bool) -> (Spec, Plan) {
+    let d = Drawn { points: vec![], circles: ten(), lines: vec![] };
+    let Reading::Train { circles: picked } = read(Some(Kind::Spur), &d).unwrap_or_else(|e| panic!("{e}")) else { panic!("not read as a train") };
+    let cs: Vec<Circle> = picked.iter().map(|i| d.circles[*i]).collect();
+    let settings = Simple { module: Some(2.0), ..Simple::default() };
+    let (mut spec, _) = train_spec(&cs, Kind::Spur, &settings, &Spec::defaults_for(Kind::Spur)).unwrap_or_else(|e| panic!("{e}"));
+    if clearance {
+        spec.clearance_body = Some(Clearance::default());
+    }
+    let p = crate::plan(&spec).unwrap_or_else(|e| panic!("{e}"));
+    (spec, p)
+}
+
+/// The member that is gear `k` of the drawing (bodies come in the drawing's order, but say so).
+fn gear_teeth(spec: &Spec) -> Vec<u32> {
+    spec.train.as_ref().unwrap().gears.iter().map(|g| g.teeth).collect()
+}
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
+}
+
+#[test]
+fn a_ten_gear_train_with_two_compound_clusters_turns_every_gear_by_its_ratio() {
+    let (spec, p) = system(false);
+    assert_eq!(gear_teeth(&spec), vec![20, 30, 15, 20, 25, 12, 18, 20, 10, 16], "the drawing's gears, in order");
+    let a = &p.assembly;
+    assert_eq!(a.members.len(), 10);
+    assert!(p.assembly_issues.is_empty(), "{:?}", p.assembly_issues);
+    // One shaft per cluster: the second gear of each is rigid on the first.
+    let rigid: Vec<(usize, usize)> = a.links.iter().filter_map(|l| matches!(l, AssemblyLink::Rigid { .. }).then(|| l.members())).collect();
+    assert_eq!(rigid, vec![(1, 2), (4, 5)]);
+    assert_eq!(a.links.len(), 9, "a tree over ten members");
+    // Gear 1 turned by 30°: every gear where the teeth say.
+    let want = by_hand();
+    let theta = 30f64.to_radians();
+    for (i, w) in want.iter().enumerate() {
+        let got = a.ratio(0, i).unwrap_or_else(|| panic!("gear {} is not linked", i + 1)) * theta;
+        assert!(close(got, w * theta), "gear {}: {got} rad, by hand {}", i + 1, w * theta);
+    }
+    // Driven from gear 7 instead: the same motion, gear 7's turn as the unit.
+    let from7 = a.rooted(6);
+    assert_eq!(from7.links.len(), 9);
+    for i in 0..10 {
+        let got = from7.ratio(6, i).unwrap();
+        assert!(close(got, want[i] / want[6]), "gear {} from gear 7: {got} vs {}", i + 1, want[i] / want[6]);
+    }
+    // Rooted from gear 7, every link points away from it: each member is driven once, and not
+    // gear 7.
+    let mut driven = vec![false; 10];
+    for l in &from7.links {
+        let (_, b) = l.members();
+        assert!(!driven[b] && b != 6, "{l:?}");
+        driven[b] = true;
+    }
+}
+
+#[test]
+fn the_ten_gear_train_stays_in_mesh_as_the_assembly_turns_it() {
+    let (_, mut p) = system(false);
+    // The 2D checker turns each gear by its preview speed: give it the assembly's ratios, and it
+    // probes every mesh through a tooth pitch of its driver for overlap and lost contact.
+    for i in 0..p.preview.len() {
+        let r = p.assembly.ratio(0, i).unwrap();
+        assert!(close(r, p.preview[i].speed), "gear {}: assembly {r}, preview {}", i + 1, p.preview[i].speed);
+        p.preview[i].speed = r;
+    }
+    let results = check_mesh(&p);
+    assert_eq!(results.len(), 7, "seven meshes (the two shared shafts aren't meshes)");
+    for m in &results {
+        assert_eq!(m.verdict, Verdict::Ok, "{}", m.message);
+    }
+    // Turned the wrong way, a gear jams: the checker sees it.
+    p.preview[3].speed = -p.preview[3].speed;
+    assert!(check_mesh(&p).iter().any(|m| m.verdict != Verdict::Ok), "a gear turned against its mate must interfere");
+}
+
+fn member(i: usize) -> AssemblyMember {
+    AssemblyMember { body: i, axis: Axis { origin: [40.0 * i as f64, 0.0, 0.0], dir: [0.0, 0.0, 1.0] }, grounded: false, carrier: None }
+}
+
+fn ext(a: usize, b: usize, ra: f64, rb: f64) -> AssemblyLink {
+    AssemblyLink::Gear { a, b, ra, rb, internal: false, reverse: false }
+}
+
+#[test]
+fn a_loop_whose_ratios_dont_agree_is_reported_per_member() {
+    // Three gears meshing in a ring: an odd number of outside meshes locks.
+    let members: Vec<AssemblyMember> = (0..3).map(member).collect();
+    let edges = vec![ext(0, 1, 10.0, 20.0), ext(1, 2, 20.0, 15.0), ext(2, 0, 15.0, 10.0)];
+    let (a, issues) = Assembly::from_graph(members.clone(), &edges, 0);
+    assert_eq!(a.links.len(), 2, "the closing mesh is left out");
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    let issue = &issues[0];
+    let mut round = issue.members.clone();
+    round.sort_unstable();
+    assert_eq!(round, vec![0, 1, 2], "{issue:?}");
+    for i in 1..=3 {
+        assert!(issue.message.contains(&format!("member {i}")), "{}", issue.message);
+    }
+    assert!(!close(issue.given, issue.asked));
+    // The same ring with the third mesh inside a ring gear agrees: no issue.
+    let edges = vec![ext(0, 1, 10.0, 20.0), ext(1, 2, 20.0, 30.0), AssemblyLink::Gear { a: 0, b: 2, ra: 10.0, rb: 30.0, internal: true, reverse: false }];
+    let (a, issues) = Assembly::from_graph(members.clone(), &edges, 0);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert!(close(a.ratio(0, 2).unwrap(), 10.0 / 30.0));
+    // A chain of four with ratios that don't multiply to 1 round the loop.
+    let members: Vec<AssemblyMember> = (0..4).map(member).collect();
+    let edges = vec![ext(0, 1, 10.0, 20.0), ext(1, 2, 20.0, 10.0), ext(2, 3, 10.0, 20.0), ext(3, 0, 25.0, 10.0)];
+    let (_, issues) = Assembly::from_graph(members, &edges, 0);
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0].members.len(), 4, "{:?}", issues[0]);
+}
+
+#[test]
+fn reversed_links_turn_back_by_the_inverse_ratio() {
+    let worm = AssemblyLink::Worm { worm: 1, wheel: 0, starts: 2, wheel_teeth: 30 };
+    let gear = ext(0, 1, 10.0, 25.0);
+    let ring = AssemblyLink::Gear { a: 0, b: 1, ra: 10.0, rb: 40.0, internal: true, reverse: false };
+    for l in [worm, gear, ring, AssemblyLink::Rigid { a: 0, b: 1 }] {
+        let back = l.reversed();
+        assert_eq!(back.members(), (l.members().1, l.members().0), "{l:?}");
+        assert!(close(back.ratio() * l.ratio(), 1.0), "{l:?}");
+    }
+}
+
+/// One keep-out for the whole system, built once over every member: each gear's material,
+/// turned through its motion, lies inside it with the clearances, wherever gears meet.
+#[test]
+fn one_keep_out_holds_the_whole_ten_gear_system() {
+    let (spec, p) = system(true);
+    let keep = p.clearance.as_ref().expect("a keep-out body");
+    assert!(keep.name.ends_with(" clearance"), "{}", keep.name);
+    assert_eq!(p.assembly.members.len(), p.bodies.len(), "the keep-out is not a member");
+    let tried = crate::clearance_tests::contains_every_member(&spec, &p, 0.01);
+    assert!(tried > 10 * 1000, "only {tried} points tried");
+    // A shared shaft is one revolve: the members on one axis share one profile, so the keep-out
+    // has fewer revolves than gears.
+    let revolves = keep.steps.len();
+    assert!(revolves < p.bodies.len(), "{revolves} steps for {} gears", p.bodies.len());
+}

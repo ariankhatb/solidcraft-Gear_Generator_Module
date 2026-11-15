@@ -1116,6 +1116,11 @@ pub struct GearParams {
     /// only members that appear or go are added or taken away. Default false.
     #[serde(default)]
     pub assembly: Option<bool>,
+    /// With `assembly`: the member that drives the rest (1-based, in the order of the set's
+    /// bodies; default 1). Its joint is the one to drive (`joint.drive`); every other follows it
+    /// through the motion links, each link driven from the end nearer it.
+    #[serde(default)]
+    pub assembly_driver: Option<u32>,
     /// Differential (`type: differential`): its settings.
     #[serde(default)]
     pub differential: Option<DifferentialParams>,
@@ -1284,6 +1289,12 @@ pub struct GearAssembly {
     pub joints: Vec<u64>,
     /// The motion links made (gears, rack and pinion), by their index in `joint.list`'s `links`.
     pub links: Vec<usize>,
+    /// The member that drives the others (1-based; `assembly_driver`).
+    pub driver: usize,
+    /// Loops of meshes whose ratios don't agree (the system would lock), each naming the members
+    /// round it; the mesh closing each is left out of the joints.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<String>,
 }
 
 /// What `gear.create` or `gear.update` made, or what `gear.calculate` worked out.

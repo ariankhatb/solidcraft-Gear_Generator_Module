@@ -54,11 +54,16 @@ pub(crate) fn fill(s: &Spec, p: &mut Plan) {
     // One member of a set built alone: it turns, linked to nothing.
     let whole = s.only == 0;
     if let Some(t) = &s.train {
-        // One member per gear, linked along the train's spanning tree (gear 1 drives).
+        // One member per gear; every mesh and shared shaft of the train is an edge of its graph,
+        // made a tree driven by gear 1 (a compound cluster rigid on its first gear's shaft), and
+        // a loop whose ratios don't agree is reported per member.
         if whole && n == t.gears.len() {
-            links = super::train::assembly_links(t);
+            let (a, issues) = Assembly::from_graph(members, &super::train::assembly_edges(t), 0);
+            p.assembly = a;
+            p.assembly_issues = issues;
+        } else {
+            p.assembly = Assembly { members, links };
         }
-        p.assembly = Assembly { members, links };
         return;
     }
     match s.kind {

@@ -784,6 +784,10 @@ pub struct Plan {
     /// held, and how their motions are tied ([`Assembly`]). Filled by every kind's planner; the
     /// engine makes components and joints of it (`gear.create` with `assembly: true`).
     pub assembly: Assembly,
+    /// Loops of the set's mesh graph whose ratios don't agree (an over-constrained train: it
+    /// would lock), one per closing mesh, naming the members round the loop
+    /// ([`Assembly::from_graph`]). The assembly leaves the closing mesh out.
+    pub assembly_issues: Vec<AssemblyIssue>,
     /// The bearings placed at the clearance body's seats (`Spec::clearance_body`), where they
     /// are; built as bodies too when it asks for `bearing_bodies`.
     pub bearings: Vec<crate::clearance::PlacedBearing>,
@@ -870,7 +874,125 @@ impl AssemblyLink {
     }
 }
 
+/// A loop of a mesh graph whose ratios don't agree: the meshes round it give a member another
+/// turn than the closing mesh asks for ([`Assembly::from_graph`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AssemblyIssue {
+    /// The members round the loop, in order (the closing mesh joins the last to the first).
+    pub members: Vec<usize>,
+    /// The closing mesh (an index into the graph's edges).
+    pub link: usize,
+    /// The turn the loop gives the closing mesh's far member, and the one the mesh asks for
+    /// (per radian of the root; mm for a rack).
+    pub given: f64,
+    pub asked: f64,
+    /// For people: which members, and why.
+    pub message: String,
+}
+
+impl AssemblyLink {
+    /// The same tie driven from its other end. A rigid link swaps its ends; a rack and pinion
+    /// names its ends by role, so it stays as it is ([`Assembly::from_graph`] puts the driving
+    /// end's link first).
+    pub fn reversed(&self) -> AssemblyLink {
+        match self.clone() {
+            AssemblyLink::Gear { a, b, ra, rb, internal, reverse } => AssemblyLink::Gear { a: b, b: a, ra: rb, rb: ra, internal, reverse },
+            // The wheel driving the worm: a gear of `wheel_teeth` against one of `starts`.
+            AssemblyLink::Worm { worm, wheel, starts, wheel_teeth } => {
+                AssemblyLink::Gear { a: wheel, b: worm, ra: f64::from(wheel_teeth.max(1)), rb: f64::from(starts.max(1)), internal: false, reverse: false }
+            }
+            AssemblyLink::Rigid { a, b } => AssemblyLink::Rigid { a: b, b: a },
+            l => l,
+        }
+    }
+}
+
 impl Assembly {
+    /// The assembly of a mesh graph: `members`, and `edges` between them in any direction and
+    /// number, loops included (every mesh of a sketch-driven system; a compound cluster's shared
+    /// shaft as an [`AssemblyLink::Rigid`] link). The links become a tree driven from `root`,
+    /// breadth first, each pointing away from it (`members().0` drives; a rack and pinion keeps
+    /// its roles, and its driving end is the one reached first: the links come in the order they
+    /// are reached). A mesh that closes a loop is left out; where the turn it asks for isn't the
+    /// one the loop gives, that is an issue naming the members round the loop. Members no edge
+    /// reaches from `root` start trees of their own, in order.
+    pub fn from_graph(members: Vec<AssemblyMember>, edges: &[AssemblyLink], root: usize) -> (Assembly, Vec<AssemblyIssue>) {
+        let n = members.len();
+        let mut speed: Vec<Option<f64>> = vec![None; n];
+        let mut parent: Vec<Option<usize>> = vec![None; n];
+        let mut used = vec![false; edges.len()];
+        let mut links = Vec::new();
+        let mut issues = Vec::new();
+        let path = |parent: &[Option<usize>], mut x: usize| {
+            let mut v = vec![x];
+            while let Some(p) = parent[x] {
+                v.push(p);
+                x = p;
+            }
+            v
+        };
+        for start in std::iter::once(root).chain(0..n).filter(|r| *r < n) {
+            if speed[start].is_some() {
+                continue;
+            }
+            speed[start] = Some(1.0);
+            let mut queue = std::collections::VecDeque::from([start]);
+            while let Some(m) = queue.pop_front() {
+                let here = speed[m].unwrap_or(1.0);
+                for (k, e) in edges.iter().enumerate() {
+                    let (a, b) = e.members();
+                    if used[k] || a >= n || b >= n || a == b || (a != m && b != m) {
+                        continue;
+                    }
+                    let forward = a == m;
+                    let other = if forward { b } else { a };
+                    let r = e.ratio();
+                    if !forward && r == 0.0 {
+                        continue;
+                    }
+                    // The turn the other end gets across this edge.
+                    let across = if forward { here * r } else { here / r };
+                    used[k] = true;
+                    match speed[other] {
+                        None => {
+                            speed[other] = Some(across);
+                            parent[other] = Some(m);
+                            links.push(if forward { e.clone() } else { e.reversed() });
+                            queue.push_back(other);
+                        }
+                        Some(have) if (have - across).abs() > 1e-9 * have.abs().max(across.abs()).max(1.0) => {
+                            // Round the loop: from `other` up to where its path to the root meets
+                            // `m`'s, then down to `m` (the closing mesh joins `m` back to `other`).
+                            let (po, pm) = (path(&parent, other), path(&parent, m));
+                            let meet = po.iter().position(|x| pm.contains(x)).unwrap_or(po.len() - 1);
+                            let top = po[meet];
+                            let mut round: Vec<usize> = po[..=meet].to_vec();
+                            let below: Vec<usize> = pm.iter().take_while(|x| **x != top).copied().collect();
+                            round.extend(below.into_iter().rev());
+                            let names: Vec<String> = round.iter().map(|i| format!("member {}", i + 1)).collect();
+                            let message = format!(
+                                "the loop {} doesn't turn: the meshes round it turn member {} {:.6} times, the mesh closing it from member {} asks {:.6} (an odd number of outside meshes round a loop, or ratios that don't multiply to 1); that mesh is left out of the assembly",
+                                names.join(" → "),
+                                other + 1,
+                                have,
+                                m + 1,
+                                across
+                            );
+                            issues.push(AssemblyIssue { members: round, link: k, given: have, asked: across, message });
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+        }
+        (Assembly { members, links }, issues)
+    }
+
+    /// The same assembly driven from member `root` (its links turned to point away from it).
+    pub fn rooted(&self, root: usize) -> Assembly {
+        Assembly::from_graph(self.members.clone(), &self.links, root).0
+    }
+
     /// Member `to`'s turn per radian of member `from`'s through the links between them (each
     /// about its own axis; the carrier held), or `None` when no chain of links joins them.
     pub fn ratio(&self, from: usize, to: usize) -> Option<f64> {

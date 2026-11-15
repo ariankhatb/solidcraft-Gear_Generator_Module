@@ -527,20 +527,16 @@ pub(crate) fn mesh_pairs(s: &Spec, t: &Train, preview: &[crate::plan::PreviewGea
         .collect()
 }
 
-/// The train's assembly links: a gear link along each tree mesh, a rigid link per shared shaft
-/// (members are the bodies, one per gear).
-pub(crate) fn assembly_links(t: &Train) -> Vec<crate::plan::AssemblyLink> {
-    let motion = t.motion();
+/// Every tie of the train as an assembly edge (members are the bodies, one per gear): a gear
+/// link per mesh and a rigid link per shared shaft, loops and all, for
+/// [`crate::plan::Assembly::from_graph`].
+pub(crate) fn assembly_edges(t: &Train) -> Vec<crate::plan::AssemblyLink> {
     let radius = |g: &TrainGear| g.module * f64::from(g.teeth) / (2.0 * g.helix.to_radians().cos());
-    let mut out = Vec::new();
-    for &i in &motion.order {
-        let Some(k) = motion.driver[i] else { continue };
-        let l = t.links[k];
-        let from = if l.a == i { l.b } else { l.a };
-        out.push(match l.kind {
-            LinkKind::Compound => crate::plan::AssemblyLink::Rigid { a: from, b: i },
-            kind => crate::plan::AssemblyLink::Gear { a: from, b: i, ra: radius(&t.gears[from]), rb: radius(&t.gears[i]), internal: kind == LinkKind::Internal, reverse: false },
-        });
-    }
-    out
+    t.links
+        .iter()
+        .map(|l| match l.kind {
+            LinkKind::Compound => crate::plan::AssemblyLink::Rigid { a: l.a, b: l.b },
+            kind => crate::plan::AssemblyLink::Gear { a: l.a, b: l.b, ra: radius(&t.gears[l.a]), rb: radius(&t.gears[l.b]), internal: kind == LinkKind::Internal, reverse: false },
+        })
+        .collect()
 }

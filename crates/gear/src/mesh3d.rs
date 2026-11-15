@@ -398,7 +398,8 @@ fn make_part(st: &Step, h: f64) -> (Part, Op, (f64, f64, f64)) {
             // quadratic), so the solid between two sections is that curve's, here followed by
             // short straight slabs.
             let zs: Vec<f64> = sections.iter().map(|s| s.1).collect();
-            let (polys, zs) = across(&polys, &zs, 4);
+            // (Many close sections, as a hypoid pinion's, need fewer slabs between.)
+            let (polys, zs) = across(&polys, &zs, if zs.len() >= 16 { 2 } else { 4 });
             let slabs: Vec<Slab> = (0..zs.len() - 1).map(|j| Slab::new(polys[j].clone(), polys[j + 1].clone(), zs[j], zs[j + 1])).collect();
             let r = slabs.iter().fold(0.0f64, |a, s| a.max(s.rmax));
             (Part::Loft { slabs }, *op, (r, sections[0].1, sections[sections.len() - 1].1))
@@ -453,7 +454,15 @@ impl Part {
                 let s = 1.0 + (scale - 1.0) * t;
                 poly.contains(q.rot(-taper_turn(*twist, *scale, s)) * (1.0 / s))
             }
-            Part::Loft { slabs } => slabs.iter().find(|s| p[2] >= s.z0 && p[2] <= s.z1).is_some_and(|s| s.contains(q, p[2])),
+            Part::Loft { slabs } => {
+                // Slabs that run up z in order: the first whose top is at or above the point.
+                if slabs.first().zip(slabs.last()).is_some_and(|(a, b)| a.z0 <= b.z1) {
+                    let k = slabs.partition_point(|s| s.z1 < p[2]);
+                    slabs.get(k).is_some_and(|s| p[2] >= s.z0 && s.contains(q, p[2]))
+                } else {
+                    slabs.iter().find(|s| p[2] >= s.z0 && p[2] <= s.z1).is_some_and(|s| s.contains(q, p[2]))
+                }
+            }
             Part::Revolve { profile } => in_polygon(profile, V2::new(q.len(), p[2])),
             Part::Coil { section, pitch, turns, left, zlo, zhi } => {
                 let r = q.len();

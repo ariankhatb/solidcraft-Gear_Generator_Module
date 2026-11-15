@@ -99,3 +99,5 @@ mod mesh_tests;
 mod tests_extras;
 #[cfg(test)]
 mod tools_tests;
+#[cfg(test)]
+mod loft_slip_tests;

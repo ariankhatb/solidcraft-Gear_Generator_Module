@@ -231,6 +231,8 @@ pub struct Spec {
     pub hole_diameter: f64,
     /// Which members to build: 0 all, 1 the first, 2 the second, 3 the third.
     pub only: u8,
+    /// A gear pair's teeth as herringbone (two opposite helical halves; needs a helix angle).
+    pub herringbone: bool,
     /// Where the set goes (gear 1's centre).
     pub origin: [f64; 3],
     /// Body name prefix.
@@ -376,6 +378,7 @@ impl Default for Spec {
             holes: 0,
             hole_diameter: 0.0,
             only: 0,
+            herringbone: false,
             origin: [0.0; 3],
             name: String::new(),
             placement: None,
@@ -619,6 +622,34 @@ pub enum Step {
     /// A step in a frame of its own, given in the body's frame ([`Frame::then`]): a radial hole
     /// is a prism along a frame whose z points out from the axis. Not nested.
     Placed { frame: Frame, step: Box<Step> },
+}
+
+/// The most curves the kernel takes in one loft (all sections together).
+pub const LOFT_CURVE_LIMIT: usize = 16_384;
+/// The most sections a worm wheel is lofted through to keep the kernel's alignment.
+const WHEEL_SECTIONS_SLIP_MAX: usize = 41;
+
+/// How many sections a spiral (twisted) [`Step::Taper`] is lofted through: the fewest from 7
+/// with which the kernel lines every section up with the one before (it restarts each at the
+/// segment that best matches, so a section turned too far from its neighbour slips by a few
+/// segments and the loft's walls cut across the teeth), within the kernel's loft curve limit.
+pub fn taper_sections(outline: &Outline, twist: f64, scale: f64) -> usize {
+    let per = outline.segs.len().max(1);
+    let most = (LOFT_CURVE_LIMIT / per).clamp(2, 61);
+    let mut n = 7usize.min(most);
+    loop {
+        let sections: Vec<Outline> = (0..n)
+            .map(|i| {
+                let t = i as f64 / (n - 1) as f64;
+                let k = 1.0 + (scale - 1.0) * t;
+                outline.scaled(k).rotated(taper_turn(twist, scale, k))
+            })
+            .collect();
+        if !crate::hypoid::slips(&sections, 0) || n + 2 > most {
+            return n;
+        }
+        n += 2;
+    }
 }
 
 /// How far a [`Step::Taper`]'s section has turned where its scale is `s` (1 at the start).
@@ -1226,7 +1257,10 @@ fn pair(s: &Spec, p: &mut Plan) {
     involute_facts(p, "gear 1", &g1, &f1);
     involute_facts(p, "gear 2", &g2, &f2);
     let a = m.center_distance;
-    let herring = s.kind == Kind::Herringbone;
+    let herring = s.kind == Kind::Herringbone || (s.herringbone && s.helix != 0.0);
+    if s.herringbone && s.helix == 0.0 {
+        p.warn("herringbone needs a helix angle: built as a spur pair");
+    }
     if wanted(s, 1) {
         let mut steps = crate::body::tooth_body(s, &g1, &f1, 0.0, s.face_width, herring, p, "gear 1");
         hub_steps(s, &s.bore, f1.rf - s.elephant_foot, s.face_width, &mut steps, p, "gear 1");
@@ -1833,7 +1867,18 @@ fn worm(s: &Spec, p: &mut Plan) {
             }
         }
         let err = skin_error(&hob, &sections, zw);
-        if count >= WHEEL_SECTIONS_MAX || err <= WHEEL_SKIN_TOLERANCE * m {
+        // The kernel restarts each loft section where it best lines up with the one before; a
+        // steep multi-start wheel turns enough between sections to be matched a few segments off
+        // (its walls would cut across the teeth), so sections are added until it lines up.
+        let lined_up = || {
+            let outlines: Vec<Outline> = sections.iter().map(|(_, t)| sided_outline(t, zw, PI / f64::from(zw))).collect();
+            !crate::hypoid::slips(&outlines, zw as usize)
+        };
+        let curves = sided_outline(&sections[0].1, zw, PI / f64::from(zw)).segs.len() * count;
+        if curves * (count + 2) / count > LOFT_CURVE_LIMIT || (count >= WHEEL_SECTIONS_MAX || err <= WHEEL_SKIN_TOLERANCE * m) && lined_up() || count >= WHEEL_SECTIONS_SLIP_MAX {
+            if !lined_up() {
+                p.warn("wheel: the kernel may mis-align this wheel's loft sections (a steep multi-start worm): check the teeth after building, or use fewer starts or a narrower face");
+            }
             break;
         }
         count += 2;

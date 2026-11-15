@@ -737,6 +737,8 @@ fn big_gears_plan_quickly() {
             Kind::Sprocket => (s.teeth, s.teeth2) = (250, 250),
             Kind::FaceGear => (s.teeth, s.teeth2) = (100, 400),
             Kind::Elliptical => s.teeth = 200,
+            // The kernel's loft takes so many curves: a ring gear of about 100 teeth lofts.
+            Kind::Hypoid => (s.teeth, s.teeth2) = (25, 100),
             _ => {}
         }
         let mut best = f64::INFINITY;

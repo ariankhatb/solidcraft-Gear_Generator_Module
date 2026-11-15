@@ -937,8 +937,9 @@ fn pair(c: &mut Ctx) -> Result<(), String> {
     let s = c.s;
     let helix = c.signed_helix(Kind::Pair);
     c.spec.helix = helix;
-    if s.herringbone {
-        c.note("herringbone pairs are not built yet: planned as a helical pair (each gear can be made as a herringbone gear on its own)");
+    c.spec.herringbone = s.herringbone;
+    if s.herringbone && helix == 0.0 {
+        c.note("herringbone needs a helix angle: give one, or the pair is built spur");
     }
     let cb = helix.to_radians().cos();
     let (d1, d2) = (s.pitch_diameter.filter(|d| *d > 0.0), s.pitch_diameter2.filter(|d| *d > 0.0));
@@ -2178,6 +2179,7 @@ pub fn measures(spec: &Spec) -> Simple {
             o.teeth = Some(s.teeth);
             o.module = Some(s.module);
             o.helix = Some(s.helix.abs());
+            o.herringbone = s.herringbone;
             o.left_hand = Some(s.helix < 0.0);
             o.face_width2 = (s.face_width2 > 0.0).then_some(s.face_width2);
         }
@@ -2382,6 +2384,7 @@ pub fn outputs_of(spec: &Spec) -> Simple {
             o.helix = all.helix;
             o.left_hand = all.left_hand;
             o.face_width2 = all.face_width2;
+            o.herringbone = all.herringbone;
         }
         Kind::Internal => o.outer_diameter = all.outer_diameter,
         Kind::Planetary => {

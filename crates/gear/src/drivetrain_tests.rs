@@ -165,7 +165,7 @@ fn per_member_errors_name_the_member() {
     items[6] = circle([85.0, 5.0, 20.0], Z, 20.0);
     items[8].ask.role = Some(Role::Bearing);
     let o = read(&items, None, &Simple::default(), &Spec::default());
-    assert!(o.members[6].error.as_deref().unwrap_or_default().contains("member 7 meshes with nothing"), "{:?}", o.members[6]);
+    assert!(o.members[6].error.as_deref().unwrap_or_default().contains("member 7 touches no other gear"), "{:?}", o.members[6]);
     assert_eq!(o.members[6].shaft, None);
     assert!(o.members[8].error.as_deref().unwrap_or_default().contains("member 9: a bearing must lie on a shaft line"), "{:?}", o.members[8]);
     assert!(o.members[3].error.is_none() && o.solved.is_none());
@@ -204,7 +204,7 @@ fn build_6_sketch_names_the_circle_that_meshes_with_nothing() {
     let d = Drawn { points: vec![V2::new(-6.787170416928201, 13.376633274281524), V2::new(0.0, 21.214432234647948)], circles: circles.clone(), lines: vec![] };
     let Ok(Reading::Train { .. }) = crate::sketch_rules::read(Some(Kind::Spur), &d) else { panic!("not a train") };
     let e = crate::sketch_rules::train_spec(&circles, Kind::Spur, &Simple::default(), &Spec::default()).unwrap_err();
-    assert!(e.starts_with("gear 3 meshes with nothing") && !e.contains("gear 1:") && !e.contains("gear 2:"), "{e}");
+    assert!(e.starts_with("gear 3 touches no other gear") && !e.contains("gear 1:") && !e.contains("gear 2:"), "{e}");
     // Touching, the three make a train.
     let fixed = vec![circles[0], circles[1], Circle { c: V2::new(0.0, 22.5).rot(-0.5), r: 7.5 }];
     let (spec, _) = crate::sketch_rules::train_spec(&fixed, Kind::Spur, &Simple::default(), &Spec::default()).unwrap();
@@ -293,6 +293,14 @@ fn the_rc_gearbox_power_split_with_clusters() {
     let ratio = p.facts.iter().find(|f| f.label == "train ratio gear 1 → gear 6").unwrap().value;
     assert!((ratio - 0.3).abs() < 1e-12, "{ratio}");
     assert_eq!(p.clusters.len(), 2);
+    // Auto: spur on every gear, worked out; four shafts (input, two countershafts, output), each
+    // one body with its gears; a contact line per mesh.
+    assert!(m[..6].iter().all(|m| m.role == "spur" && m.inferred), "{:?}", m.iter().map(|m| m.role).collect::<Vec<_>>());
+    assert_eq!(p.shafts.len(), 4);
+    assert_eq!(p.bodies.len(), 4);
+    assert_eq!(p.contacts.len(), 4);
+    // The countershafts run exactly along their drawn lines (15 mm).
+    assert!(p.shafts.iter().filter(|s| s.gears.len() == 2).all(|s| (s.length - 15.0).abs() < 1e-9), "{:?}", p.shafts);
     // Picked as gears, a Ø36 round the output (one axis, one plane) and the output are named.
     let mut both = gearbox();
     let h = 200f64.sqrt();

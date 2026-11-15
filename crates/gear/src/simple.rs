@@ -2755,6 +2755,10 @@ pub fn schematic(spec: &Spec) -> Schematic {
         return crate::diff::schematic(spec);
     }
     let mut b = Build { s: spec, out: Schematic::default(), next_body: 0 };
+    if let Some(t) = &spec.train {
+        train_schematic(&mut b, t);
+        return b.out;
+    }
     let s = spec;
     let o = s.origin;
     let at = |d: [f64; 3]| Frame::at([o[0] + d[0], o[1] + d[1], o[2] + d[2]]);
@@ -3376,6 +3380,24 @@ pub fn schematic_of(simple: &Simple, base: &Spec) -> (Solved, Schematic) {
     let solved = solve(simple, base);
     let sch = if solved.error.is_none() { schematic(&solved.spec) } else { shafts_only(simple, solved.error.clone()) };
     (solved, sch)
+}
+
+/// A gear train: each gear's pitch cylinder (a ring's rim round it) on its own shaft, at its
+/// centre and layer, in the order of the train's gears (its bodies').
+fn train_schematic(b: &mut Build, t: &crate::plan::Train) {
+    let s = b.s;
+    let o = s.origin;
+    for (i, g) in t.gears.iter().enumerate() {
+        let r = g.module * f64::from(g.teeth) / 2.0 / g.helix.to_radians().cos().max(1e-6);
+        let (z0, z1) = (g.z, g.z + s.face_width);
+        let mut parts = vec![cyl(Role::Pitch, r, z0, z1)];
+        if g.ring {
+            let rim = if s.rim > 0.0 { s.rim } else { 3.0 * g.module };
+            parts.push(Part { role: Role::Body, shape: Shape::Tube { r_in: r, r_out: r + 1.25 * g.module + rim, z0, z1 } });
+        }
+        let member = u8::try_from(i + 1).unwrap_or(u8::MAX);
+        b.add(&format!("gear {}", i + 1), member, Frame::at([o[0] + g.center.x, o[1] + g.center.y, o[2]]), 2.0 * r, parts);
+    }
 }
 
 /// Two shafts and their relation, without gears.

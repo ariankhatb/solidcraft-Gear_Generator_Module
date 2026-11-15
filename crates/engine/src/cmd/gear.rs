@@ -35,7 +35,7 @@ use super::sketch::{Left, edit_solved};
 use super::sketch_import::add_geometry;
 use crate::params::bad;
 use crate::schema::gear::{
-    BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, DiffDrive, DifferentialGoalParams, DifferentialParams, DiffMount, DiffPartsParams, DiffStyle, GearAxesResult, GearAxis, GearAxisLine, GearBevelPlanetMode, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult, GearMember, GearMaterial, GearParams, GearRelation, GearResult, GearSelection, GearSet, GearSketchParams, GearSketchResult, GearType, HardwareParams, PlacementParams, RackStandard, SeatAlongParams, SeatPointParams, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
+    BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, DiffDrive, DifferentialGoalParams, DifferentialParams, DiffMount, DiffPartsParams, DiffStyle, GearAxesResult, GearAxis, GearAxisLine, GearBevelPlanetMode, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult, GearMember, GearShaftInfo, GearContact, GearMaterial, GearParams, GearRelation, GearResult, GearSelection, GearSet, GearSketchParams, GearSketchResult, GearType, HardwareParams, PlacementParams, RackStandard, SeatAlongParams, SeatPointParams, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
 };
 use solidcraft_gear::spline::SplineStandard;
 use solidcraft_gear::strength::Material;
@@ -1128,8 +1128,10 @@ fn axis_of(s: &Session, v: &GearAxis, cmd: &str, what: &str) -> Result<Axis> {
 struct Asked {
     spec: Spec,
     solved: Option<Solved>,
-    /// Read from a sketch or a selection: what each member became.
+    /// Read from a sketch or a selection: what each member became, and each of the set's
+    /// gears' member (its row).
     members: Vec<GearMember>,
+    rows: Vec<usize>,
 }
 
 /// The axes of an axis-first request, where they are now.
@@ -1195,9 +1197,11 @@ fn read(cmd: &str, p: &Value) -> Result<GearParams> {
 }
 
 /// A sketch's standalone points (not a curve's ends or centre), circles and lines, in its plane:
-/// what a gear set drawn in one sketch is read from (`gear.create {sketch}` and the Gear
-/// Generator window's picks). `frame` is the sketch's plane in the world (its z the normal), in
-/// which the 2D coordinates are given.
+/// what a gear set drawn in one sketch is read from (`gear.create {sketch}` and the Gears
+/// dialog). Construction curves are helpers, never gears or shafts: they are left out. A line
+/// from one circle's centre to another's is a centre line saying the two mesh, not a shaft
+/// (`centre_lines`). `frame` is the sketch's plane in the world (its z the normal), in which the
+/// 2D coordinates are given.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GearSketch {
     pub sketch: u64,
@@ -1205,6 +1209,8 @@ pub struct GearSketch {
     pub points: Vec<(String, solidcraft_gear::V2)>,
     pub circles: Vec<(String, sketch_rules::Circle)>,
     pub lines: Vec<(String, sketch_rules::Line)>,
+    /// Lines joining two circles' centres (their id, and the two circles' indices).
+    pub centre_lines: Vec<(String, usize, usize)>,
     /// The last point is the sketch's own origin (not one the user drew).
     pub has_origin: bool,
     /// A 3D sketch's curves and points off its plane (drawn or included), in world coordinates:
@@ -1229,6 +1235,40 @@ impl GearSketch {
             d.points.pop();
         }
         d
+    }
+    /// Circles drawn as gears of a train that mesh with nothing (no circle touching them), and
+    /// centre lines between circles that don't touch: what the reading refuses, in plain words
+    /// naming the circles, and which circles (indices into `circles`) to point at.
+    pub fn mesh_problem(&self) -> Option<(String, Vec<usize>)> {
+        let n = self.circles.len();
+        if n < 2 || !self.lines.is_empty() {
+            return None;
+        }
+        if let Some(found) = self.centre_line_problem() {
+            return Some(found);
+        }
+        // The same rule the sizing names each gear by (sketch_rules::size_train).
+        let circles: Vec<sketch_rules::Circle> = self.circles.iter().map(|(_, c)| *c).collect();
+        let lone = sketch_rules::meshes_nothing(&circles);
+        let first = *lone.first()?;
+        let why = format!("circle {} touches no other gear: make it tangent to the gear it meshes with (Tangent constraint)", self.circles[first].0);
+        Some((why, lone))
+    }
+    /// Two circles joined by a centre line (saying they mesh) that don't touch, named, and
+    /// which (indices into `circles`).
+    pub fn centre_line_problem(&self) -> Option<(String, Vec<usize>)> {
+        use sketch_rules::Touch;
+        for (id, a, b) in &self.centre_lines {
+            let t = sketch_rules::touch(&self.circles[*a].1, &self.circles[*b].1);
+            if !matches!(t, Touch::External | Touch::Internal) {
+                let why = format!(
+                    "circles {} and {} are joined by the centre line {id} but don't touch: make them tangent (Tangent constraint), or make the line construction",
+                    self.circles[*a].0, self.circles[*b].0
+                );
+                return Some((why, vec![*a, *b]));
+            }
+        }
+        None
     }
     /// Where the entity `id` is among the slots' role (points, circles or lines).
     pub fn index(&self, role: sketch_rules::Role, id: &str) -> Option<usize> {
@@ -1260,23 +1300,43 @@ pub fn sketch_entities(s: &Session, sketch: u64) -> std::result::Result<GearSket
     let at = |i: usize| sk.point(i).map(|p| solidcraft_gear::V2::new(p.x, p.y));
     let mut used = vec![false; sk.points.len()];
     let (mut circles, mut lines) = (Vec::new(), Vec::new());
+    // (Circles first: a line is a centre line when its ends are two of their centres.)
+    let mut centres: Vec<(usize, solidcraft_gear::V2)> = Vec::new();
+    for c in sk.curves.iter().filter(|c| !c.construction) {
+        if let crate::sketch::CurveKind::Circle { c: ci, .. } = c.kind
+            && let Some(pc) = at(ci)
+        {
+            centres.push((ci, pc));
+        }
+    }
+    let centre_of = |i: usize, p: Option<solidcraft_gear::V2>| {
+        centres.iter().position(|(ci, pc)| *ci == i || p.is_some_and(|p| p.dist(*pc) < 1e-6))
+    };
+    let mut centre_lines = Vec::new();
     for c in &sk.curves {
-        match c.kind {
-            // Construction geometry is never a gear, a shaft or a bearing (its ends are no dots).
-            crate::sketch::CurveKind::Line { a, b } if c.construction => {
-                for i in [a, b] {
-                    if let Some(u) = used.get_mut(i) {
+        // Construction geometry is a helper: never a gear or a shaft (its points stay out of
+        // the dots too).
+        if c.construction {
+            match c.kind {
+                crate::sketch::CurveKind::Line { a, b } => used.iter_mut().enumerate().filter(|(i, _)| *i == a || *i == b).for_each(|(_, u)| *u = true),
+                crate::sketch::CurveKind::Circle { c: ci, .. } => {
+                    if let Some(u) = used.get_mut(ci) {
                         *u = true;
                     }
                 }
+                crate::sketch::CurveKind::Arc { c: ci, a, b } => used.iter_mut().enumerate().filter(|(i, _)| [ci, a, b].contains(i)).for_each(|(_, u)| *u = true),
+                _ => {}
             }
-            crate::sketch::CurveKind::Circle { c: ci, .. } if c.construction => {
-                if let Some(u) = used.get_mut(ci) {
-                    *u = true;
-                }
-            }
+            continue;
+        }
+        match c.kind {
             crate::sketch::CurveKind::Line { a, b } => {
-                if let (Some(pa), Some(pb)) = (at(a), at(b)) {
+                let (ca, cb) = (centre_of(a, at(a)), centre_of(b, at(b)));
+                if let (Some(ca), Some(cb)) = (ca, cb)
+                    && ca != cb
+                {
+                    centre_lines.push((c.id.clone(), ca, cb));
+                } else if let (Some(pa), Some(pb)) = (at(a), at(b)) {
                     lines.push((c.id.clone(), sketch_rules::Line { a: pa, b: pb }));
                 }
                 for i in [a, b] {
@@ -1314,7 +1374,7 @@ pub fn sketch_entities(s: &Session, sketch: u64) -> std::result::Result<GearSket
     let has_origin = origin.is_some();
     points.extend(origin);
     let things = sk.wires.iter().filter_map(|w| Some((w.id.clone(), wire_thing(w)?))).collect();
-    Ok(GearSketch { sketch, frame, points, circles, lines, has_origin, things })
+    Ok(GearSketch { sketch, frame, points, circles, lines, centre_lines, has_origin, things })
 }
 
 /// The bevel planetary mode asked for, as the gear crate names it.
@@ -1329,7 +1389,8 @@ fn base_mode(p: &GearParams) -> Option<solidcraft_gear::plan::BevelPlanetMode> {
 /// What a sketch or a selection was read as: the set (and what each member became), or why it
 /// can't be made with what each member became and what is wrong with it.
 enum Got {
-    Set(Solved, Vec<GearMember>),
+    /// The set, each member, and each of the set's gears' member (its row).
+    Set(Solved, Vec<GearMember>, Vec<usize>),
     Wrong { error: String, members: Vec<GearMember>, notes: Vec<String> },
 }
 
@@ -1346,6 +1407,9 @@ fn member_of(m: &drivetrain::Member) -> GearMember {
         shaft: m.shaft,
         cluster: m.cluster,
         error: m.error.clone(),
+        inferred: m.inferred,
+        hand: m.hand.map(str::to_string),
+        shaft_angle: m.shaft_angle,
     }
 }
 
@@ -1367,6 +1431,9 @@ fn train_members(sized: &sketch_rules::Sized, style: Kind) -> Vec<GearMember> {
             shaft: None,
             cluster: m.cluster,
             error: e.clone(),
+            inferred: true,
+            hand: None,
+            shaft_angle: None,
         })
         .collect()
 }
@@ -1402,7 +1469,8 @@ fn read_drivetrain(cmd: &str, p: &GearParams, items: &[drivetrain::Item], bearin
         })
         .collect();
     let base = spec_of(&GearParams { kind: Some(gear_type(style.unwrap_or(Kind::Spur))), ..p.clone() }).map_err(|e| bad(cmd, e))?;
-    let read = drivetrain::read(&items, style, &read_settings(p), &base);
+    let shafts = p.shafts.as_ref().and_then(|s| s.generate) != Some(false);
+    let read = drivetrain::read_with(&items, style, &read_settings(p), &base, shafts);
     let members: Vec<GearMember> = read.members.iter().map(member_of).collect();
     let (Some(mut solved), None) = (read.solved, read.error.clone()) else {
         return Ok(Got::Wrong { error: read.error.unwrap_or_else(|| "the geometry makes no set".into()), members, notes: read.notes });
@@ -1425,7 +1493,7 @@ fn read_drivetrain(cmd: &str, p: &GearParams, items: &[drivetrain::Item], bearin
         solved.spec.clearance_body = Some(c);
     }
     solved.notes.splice(0..0, read.notes);
-    Ok(Got::Set(solved, members))
+    Ok(Got::Set(solved, members, read.gears))
 }
 
 /// A sketch's geometry as a drivetrain's items (world coordinates; circles, then lines, then
@@ -1558,21 +1626,38 @@ fn from_sketch(s: &Session, cmd: &str, p: &GearParams, assembly: bool) -> Result
         }
         let picks = slot_picks(cmd, &sk, kind, p.picks.as_deref())?;
         let m = sketch_rules::measure(kind, &sk.drawn(), &picks).map_err(|e| bad(cmd, e))?;
-        return Ok(Got::Set(solve_measured(cmd, p, &sk, m, None, turn)?, Vec::new()));
+        return Ok(Got::Set(solve_measured(cmd, p, &sk, m, None, turn)?, Vec::new(), Vec::new()));
     }
     // A tooth style: the whole drawing (or what is picked) read as one set.
     let view = match &p.picks {
-        None => sk.user_drawn(),
+        None => {
+            if let Some((why, _)) = sk.centre_line_problem() {
+                return Err(bad(cmd, why));
+            }
+            sk.user_drawn()
+        }
         Some(ids) => picked(cmd, &sk, ids)?,
     };
+    // The circles read, by their ids in the sketch (as members and errors name them).
+    let circle_ids: Vec<String> = match &p.picks {
+        None => sk.circles.iter().map(|(k, _)| k.clone()).collect(),
+        Some(ids) => ids.iter().flatten().filter(|w| sk.index(sketch_rules::Role::Circle, w).is_some()).cloned().collect(),
+    };
     match sketch_rules::read(style, &view).map_err(|e| bad(cmd, e))? {
-        sketch_rules::Reading::Mode { measured, .. } => Ok(Got::Set(solve_measured(cmd, p, &sk, measured, style, turn)?, Vec::new())),
+        sketch_rules::Reading::Mode { measured, .. } => Ok(Got::Set(solve_measured(cmd, p, &sk, measured, style, turn)?, Vec::new(), Vec::new())),
         sketch_rules::Reading::Train { circles } => {
             let style = style.unwrap_or(Kind::Spur);
             let cs: Vec<sketch_rules::Circle> = circles.iter().map(|i| view.circles[*i]).collect();
             let base = spec_of(&GearParams { kind: Some(gear_type(style)), ..p.clone() }).map_err(|e| bad(cmd, e))?;
             let train: Vec<sketch_rules::TrainCircle> = cs.iter().map(|c| sketch_rules::TrainCircle::of(*c)).collect();
-            let sized = sketch_rules::size_train(&train, style, &read_settings(p), &base);
+            let mut sized = sketch_rules::size_train(&train, style, &read_settings(p), &base);
+            // Gears named by their circles' ids ("circle c3"), not their place in the train.
+            let named = |k: usize| circles.get(k).and_then(|i| circle_ids.get(*i)).map_or_else(|| format!("gear {}", k + 1), |id| format!("circle {id}"));
+            for e in sized.errors.iter_mut().flatten() {
+                *e = sketch_rules::rename_gears(e, &named);
+            }
+            sized.error = sized.error.map(|e| sketch_rules::rename_gears(&e, &named));
+            sized.notes = sized.notes.iter().map(|n| sketch_rules::rename_gears(n, &named)).collect();
             let members = train_members(&sized, style);
             let Some(mut spec) = sized.spec else {
                 return Ok(Got::Wrong { error: sized.error.unwrap_or_else(|| "the circles make no gear train".into()), members, notes: sized.notes });
@@ -1583,7 +1668,7 @@ fn from_sketch(s: &Session, cmd: &str, p: &GearParams, assembly: bool) -> Result
             spec.placement = Some(place);
             // Gear 1's shaft, twice (the train's other shafts are its bodies' frames).
             let gear1 = place.compose(&Frame::at([cs[0].c.x, cs[0].c.y, 0.0]));
-            Ok(Got::Set(Solved { spec, relation: None, frames: [gear1; 2], facts: Vec::new(), notes: sized.notes, derived: Default::default() }, members))
+            Ok(Got::Set(Solved { spec, relation: None, frames: [gear1; 2], facts: Vec::new(), notes: sized.notes, derived: Default::default() }, members, (0..circles.len()).collect()))
         }
     }
 }
@@ -1761,15 +1846,36 @@ fn from_selection(s: &Session, cmd: &str, p: &GearParams, items: &[GearSelection
         if matches!(thing, drivetrain::Thing::Point(_) | drivetrain::Thing::Circle(_)) && it.along.is_some() {
             return Err(bad(cmd, format!("`{what}.along`: `along` is for a gear or bearing on a shaft line; a point or circle sits where it is")));
         }
+        // This row's own shaft setting.
+        let own = p.shafts.as_ref().and_then(|s| s.overrides.as_ref()).and_then(|o| o.iter().find(|o| o.index == it.index.unwrap_or(i)));
         read.push(drivetrain::Item {
             thing,
-            ask: drivetrain::Ask { role, module: it.module, teeth: it.teeth, face_width: it.face_width, pitch_diameter: it.pitch_diameter, along: it.along },
+            ask: drivetrain::Ask {
+                role,
+                module: it.module,
+                teeth: it.teeth,
+                face_width: it.face_width,
+                pitch_diameter: it.pitch_diameter,
+                along: it.along,
+                helix: it.helix_angle,
+                herringbone: it.herringbone,
+                shaft_body: own.and_then(|o| o.enabled),
+                shaft_diameter: own.and_then(|o| o.diameter),
+            },
         });
     }
     // Circles, or gears asked by role: a drivetrain.
     let drivetrain = read.iter().any(|it| matches!(it.thing, drivetrain::Thing::Circle(_)) || it.ask.role.is_some_and(|r| !matches!(r, drivetrain::Role::Shaft | drivetrain::Role::Bearing)));
     if drivetrain {
-        return read_drivetrain(cmd, p, &read, bearing, assembly);
+        // A spiral angle asked of a bevel member is the set's.
+        let spiral = items.iter().find_map(|it| it.spiral_angle);
+        let p = GearParams { spiral_angle: p.spiral_angle.or(spiral), ..p.clone() };
+        // Members by their rows.
+        let row = |pos: usize| items.get(pos).and_then(|it| it.index).unwrap_or(pos);
+        return Ok(match read_drivetrain(cmd, &p, &read, bearing, assembly)? {
+            Got::Set(solved, members, rows) => Got::Set(solved, members.into_iter().map(|m| by_row(m, &row)).collect(), rows.into_iter().map(row).collect()),
+            Got::Wrong { error, members, notes } => Got::Wrong { error, members: members.into_iter().map(|m| by_row(m, &row)).collect(), notes },
+        });
     }
     // Shafts with sizes (and bearings on them or at points): the set the shafts make.
     let mut shafts: Vec<Shaft> = Vec::new();
@@ -1834,7 +1940,32 @@ fn from_selection(s: &Session, cmd: &str, p: &GearParams, items: &[GearSelection
         helix: p.helix_angle,
         left_hand: p.hand == Some(SpiralHand::Left) || p.helix_angle.is_some_and(|h| h < 0.0),
     };
-    Ok(Got::Set(set_on_shafts(&shafts, &ask, &base).map_err(|e| bad(cmd, e))?, Vec::new()))
+    Ok(Got::Set(set_on_shafts(&shafts, &ask, &base).map_err(|e| bad(cmd, e))?, Vec::new(), Vec::new()))
+}
+
+/// A member reported by its row (`index`) instead of its place in the selection.
+fn by_row(mut m: GearMember, row: &dyn Fn(usize) -> usize) -> GearMember {
+    m.index = row(m.index);
+    m.meshes_with = m.meshes_with.into_iter().map(row).collect();
+    m.shaft = m.shaft.map(row);
+    m
+}
+
+/// The shafts built with the set, and where its gears touch, for the reply (members by row).
+fn shafts_and_contacts(asked: &Asked, plan: &Plan) -> (Vec<GearShaftInfo>, Vec<GearContact>) {
+    let row = |g: usize| asked.rows.get(g).copied().unwrap_or(g);
+    let shafts = plan
+        .shafts
+        .iter()
+        .enumerate()
+        .map(|(k, sh)| {
+            let gears: Vec<usize> = sh.gears.iter().map(|g| row(*g)).collect();
+            let line = gears.iter().find_map(|g| asked.members.iter().find(|m| m.index == *g).and_then(|m| m.shaft));
+            GearShaftInfo { index: k, name: plan.bodies.get(sh.body).map(|b| b.name.clone()), diameter: Some(sh.diameter), length: Some(sh.length), gears, line }
+        })
+        .collect();
+    let contacts = plan.contacts.iter().map(|c| GearContact { a: c.from, b: (c.from != c.to).then_some(c.to) }).collect();
+    (shafts, contacts)
 }
 
 /// What a request asks for: the set and its plan, or (read from a sketch or a selection) why
@@ -1854,8 +1985,8 @@ fn ask_read(s: &Session, cmd: &str, p: &Value) -> Result<Read> {
         None
     };
     match got {
-        Some(Got::Set(solved, members)) => {
-            let asked = Asked { spec: solved.spec.clone(), solved: Some(solved), members };
+        Some(Got::Set(solved, members, rows)) => {
+            let asked = Asked { spec: solved.spec.clone(), solved: Some(solved), members, rows };
             let plan = solidcraft_gear::plan(&asked.spec).map_err(|e| bad(cmd, e))?;
             return Ok(Read::Set(asked, plan));
         }
@@ -1863,10 +1994,10 @@ fn ask_read(s: &Session, cmd: &str, p: &Value) -> Result<Read> {
         None => {}
     }
     let asked = match axes_of(s, cmd, &params)? {
-        None => Asked { spec: spec_of(&params).map_err(|e| bad(cmd, e))?, solved: None, members: Vec::new() },
+        None => Asked { spec: spec_of(&params).map_err(|e| bad(cmd, e))?, solved: None, members: Vec::new(), rows: Vec::new() },
         Some((a1, a2)) => {
             let solved = solve_on(&params, &a1, a2.as_ref()).map_err(|e| bad(cmd, e))?;
-            Asked { spec: solved.spec.clone(), solved: Some(solved), members: Vec::new() }
+            Asked { spec: solved.spec.clone(), solved: Some(solved), members: Vec::new(), rows: Vec::new() }
         }
     };
     let plan = solidcraft_gear::plan(&asked.spec).map_err(|e| bad(cmd, e))?;
@@ -1909,10 +2040,13 @@ fn reply<T: serde::Serialize>(cmd: &str, r: T) -> Result<Value> {
 fn calculate(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "gear.calculate";
     match ask_read(s, cmd, p)? {
-        Read::Set(asked, plan) => reply(
-            cmd,
-            GearResult { facts: facts(&asked, &plan), warnings: plan.warnings.clone(), notes: notes(&asked), params: Some(params_of(&asked.spec)), members: asked.members.clone(), ..GearResult::default() },
-        ),
+        Read::Set(asked, plan) => {
+            let (shafts, contacts) = shafts_and_contacts(&asked, &plan);
+            reply(
+                cmd,
+                GearResult { facts: facts(&asked, &plan), warnings: plan.warnings.clone(), notes: notes(&asked), params: Some(params_of(&asked.spec)), members: asked.members.clone(), shafts, contacts, ..GearResult::default() },
+            )
+        }
         // What each member became and what is wrong with it, for a front end to show.
         Read::Wrong { error, members, notes } => reply(cmd, GearResult { warnings: vec![error], notes, members, ..GearResult::default() }),
     }
@@ -1989,7 +2123,7 @@ fn from_axes(s: &mut Session, p: &Value) -> Result<Value> {
             out.derived = derived_names(&solved.derived);
             out.frames = solved.frames.iter().map(|f| GearFrame { origin: f.origin, x: f.x, z: f.z }).collect();
             out.warnings = plan.warnings.clone();
-            let asked = Asked { spec: solved.spec.clone(), solved: Some(solved), members: Vec::new() };
+            let asked = Asked { spec: solved.spec.clone(), solved: Some(solved), members: Vec::new(), rows: Vec::new() };
             out.facts = facts(&asked, &plan);
             out.notes = notes(&asked);
         }
@@ -2047,7 +2181,8 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(group) = group {
         keep(s, &Record { version: RECORD_VERSION, group, name: group_name, request, params: params_of(spec), bodies, assembly: assembly_record, sketch_print }, &mut warnings);
     }
-    reply(cmd, GearResult { bodies: made, group, clearance, assembly: assembly_made, facts: facts(&asked, &plan), warnings, notes: notes(&asked), members: asked.members.clone(), ..GearResult::default() })
+    let (shafts, contacts) = shafts_and_contacts(&asked, &plan);
+    reply(cmd, GearResult { bodies: made, group, clearance, assembly: assembly_made, facts: facts(&asked, &plan), warnings, notes: notes(&asked), members: asked.members.clone(), shafts, contacts, ..GearResult::default() })
 }
 
 // ---------------------------------------------------------------------------------------------

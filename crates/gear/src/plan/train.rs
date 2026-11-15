@@ -626,6 +626,23 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
             p.fact(format!("shaft {} length", k + 1), sh.to - sh.from, Unit::Mm);
         }
     }
+    // Each mesh's pitch line across the faces its gears share (the set's frame; placed later).
+    for l in t.links.iter().filter(|l| l.kind != LinkKind::Compound) {
+        let (ga, gb) = (&t.gears[l.a], &t.gears[l.b]);
+        let ra = gs[l.a].r();
+        let d = gb.center - ga.center;
+        let len = d.len();
+        if len <= 1e-12 {
+            continue;
+        }
+        // Outside: r_a from a towards b; inside a ring (a inside b): r_a from a, away from b.
+        let u = d * (1.0 / len);
+        let q = if l.kind == LinkKind::Internal { ga.center - u * ra } else { ga.center + u * ra };
+        let lo = ga.z.max(gb.z);
+        let hi = (ga.z + faces[l.a]).min(gb.z + faces[l.b]).max(lo);
+        let at = |z: f64| Frame::at(s.origin).world([q.x, q.y, z]);
+        p.contacts.push(crate::plan::Contact { a: l.a, b: l.b, from: at(lo), to: at(hi) });
+    }
     let (members, clusters) = set_members(t, &faces, &body);
     p.members = members;
     p.clusters = clusters;

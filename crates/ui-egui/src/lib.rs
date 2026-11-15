@@ -307,15 +307,6 @@ mod sketch_moving_click_tests;
 pub mod sketch_palette;
 mod sketch_pattern_tree;
 pub mod sketch_report;
-mod gear_clearance_ui;
-mod gear_diff;
-pub mod gear_icons;
-mod gear_drawing;
-mod gear_simple;
-mod gear_simple_state;
-mod gear_view3d;
-mod gear_view3d_gpu;
-pub mod gear_window;
 #[cfg(test)]
 mod sketch_side_ui_tests;
 mod sketch_state;
@@ -670,7 +661,6 @@ pub struct SolveApp {
     /// The Sketch report window (`sketch.inspect` from the ribbon), when open.
     pub sketch_report: Option<sketch_report::SketchReport>,
     /// The Gear Generator window, while open.
-    pub gear_window: Option<gear_window::GearWindow>,
     /// A sketch opened from the Gears dialog: the dialog comes back on it once it is finished.
     pub gear_after_sketch: Option<dialogs_gear::AfterSketch>,
     /// The KiCad import options window, when a board is chosen to open.
@@ -991,7 +981,6 @@ impl SolveApp {
             params: None,
             design_properties: None,
             sketch_report: None,
-            gear_window: None,
             gear_after_sketch: None,
             kicad_import: None,
             bom: None,
@@ -1209,8 +1198,6 @@ impl SolveApp {
     /// Draw the viewport with pipelines [`Self::build_wgpu_split`] made, perhaps on another thread.
     pub fn adopt_wgpu(&mut self, rs: &egui_wgpu::RenderState, built: WgpuBuilt) {
         self.blur.install(rs, built.blur);
-        // The Gear Generator's 3D view draws on the same device.
-        crate::gear_view3d_gpu::install(rs);
         if built.msaa_fallback {
             self.msaa_compatibility = true;
         }
@@ -2336,10 +2323,6 @@ impl SolveApp {
         }
         if id == "sketch.inspect" {
             sketch_report::open(self);
-            return;
-        }
-        if id == "gear.create" && gear_window::opens_window(self) {
-            gear_window::open(self);
             return;
         }
         if id == "assembly.bom" {
@@ -3906,7 +3889,6 @@ impl SolveApp {
         design_properties::show(self, ui.ctx());
         sketch_report::show(self, ui.ctx());
         dialogs_gear::tick(self);
-        gear_window::show(self, ui.ctx());
         material_card_review::show(self, ui.ctx());
         recovery_ui::show(self, ui.ctx());
         mesh_units::show(self, ui.ctx());

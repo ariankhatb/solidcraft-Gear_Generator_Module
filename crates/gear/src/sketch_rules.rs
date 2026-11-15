@@ -1008,6 +1008,53 @@ pub fn train_placement(origin: V2, frame: &Frame, turn: [f64; 3]) -> Frame {
     frame.compose(&Frame { origin: sub3(o, r(o)), x: r([1.0, 0.0, 0.0]), z: r([0.0, 0.0, 1.0]) })
 }
 
+/// The circles of a flat drawing that touch no other (neither tangent outside or inside nor
+/// concentric): gears that would mesh with nothing. One circle alone is a single gear, none.
+pub fn meshes_nothing(circles: &[Circle]) -> Vec<usize> {
+    let n = circles.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    (0..n).filter(|i| (0..n).all(|j| j == *i || matches!(touch(&circles[*i], &circles[j]), Touch::Apart | Touch::Inside | Touch::Crossing))).collect()
+}
+
+/// `text` with the gears it names by number ("gear 3", "gears 2 and 3") named by `name` (from
+/// the gear's index: "circle c3", "member 5").
+pub fn rename_gears(text: &str, name: &dyn Fn(usize) -> String) -> String {
+    let words: Vec<&str> = text.split(' ').collect();
+    let digits = |w: &str| -> Option<(usize, String)> {
+        let d: String = w.chars().take_while(char::is_ascii_digit).collect();
+        let v: usize = d.parse().ok()?;
+        Some((v.checked_sub(1)?, w[d.len()..].to_string()))
+    };
+    let mut out: Vec<String> = Vec::with_capacity(words.len());
+    let mut k = 0;
+    while k < words.len() {
+        let w = words[k];
+        match (w, words.get(k + 1).and_then(|n| digits(n))) {
+            ("gear", Some((g, rest))) => {
+                out.push(format!("{}{rest}", name(g)));
+                k += 2;
+            }
+            ("gears", Some((g, rest))) if rest.is_empty() && words.get(k + 2) == Some(&"and") => match words.get(k + 3).and_then(|n| digits(n)) {
+                Some((h, rest2)) => {
+                    out.push(format!("{} and {}{rest2}", name(g), name(h)));
+                    k += 4;
+                }
+                None => {
+                    out.push(w.to_string());
+                    k += 1;
+                }
+            },
+            _ => {
+                out.push(w.to_string());
+                k += 1;
+            }
+        }
+    }
+    out.join(" ")
+}
+
 /// One circle of a train to size ([`size_train`]), with what is asked of its gear.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrainCircle {
@@ -1242,7 +1289,7 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             fail(&mut err, j, e);
         }
     }
-    // A gear touching nothing meshes with nothing.
+    // A gear touching nothing touches no other gear.
     if n > 1 {
         for i in 0..n {
             if err[i].is_some() || links.iter().any(|l| l.a == i || l.b == i) {
@@ -1250,8 +1297,8 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             }
             let gap = |j: usize| (c[i].c.dist(c[j].c) - c[i].r - c[j].r).abs();
             let e = match (0..n).filter(|j| *j != i).min_by(|a, b| gap(*a).total_cmp(&gap(*b))) {
-                Some(j) => format!("gear {} meshes with nothing: its circle touches no other circle (it is {} mm from gear {}'s); make it touch the gear it should mesh with", i + 1, num(gap(j)), j + 1),
-                None => format!("gear {} meshes with nothing", i + 1),
+                Some(j) => format!("gear {} touches no other gear: make it tangent to the gear it meshes with (Tangent constraint); it is {} mm from gear {}'s circle", i + 1, num(gap(j)), j + 1),
+                None => format!("gear {} touches no other gear", i + 1),
             };
             fail(&mut err, i, e);
         }

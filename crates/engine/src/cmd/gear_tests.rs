@@ -1394,9 +1394,9 @@ fn build_6_construction_lines_are_left_out_and_the_loose_circle_named() {
     assert_eq!(members.len(), 3, "{r}");
     assert!(members[0]["error"].is_null() && members[1]["error"].is_null(), "{r}");
     assert_eq!(members[0]["meshes_with"], json!([1]), "{r}");
-    assert!(members[2]["error"].as_str().unwrap_or_default().contains("gear 3 meshes with nothing"), "{r}");
+    assert!(members[2]["error"].as_str().unwrap_or_default().contains("circle c3 touches no other gear"), "{r}");
     let e = s.execute("gear.create", &json!({"sketch": sk, "type": "spur"})).unwrap_err().to_string();
-    assert!(e.contains("gear 3 meshes with nothing") && !e.contains("rack"), "{e}");
+    assert!(e.contains("circle c3 touches no other gear") && !e.contains("rack"), "{e}");
 }
 
 /// A 3D sketch of a drivetrain: three shaft lines, gear 1 on the first meshing gear 2 on the

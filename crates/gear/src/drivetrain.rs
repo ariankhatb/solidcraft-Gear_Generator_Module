@@ -193,6 +193,10 @@ pub struct Member {
     pub error: Option<String>,
     /// Its role was worked out from the geometry (none, or `auto`, was asked).
     pub inferred: bool,
+    /// A helical gear's hand ("RH", "LH"), and a gear's shaft angle to its mate's (deg) when
+    /// they are at an angle.
+    pub hand: Option<&'static str>,
+    pub shaft_angle: Option<f64>,
 }
 
 /// What [`read`] made of the items.
@@ -470,8 +474,11 @@ fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], styl
         // Each gear's resolved type: helical where its helix isn't 0, V teeth herringbone.
         if let Some(t) = &spec.train {
             for (k, (i, _)) in gears.iter().enumerate() {
-                if let Some(g) = t.gears.get(k).filter(|g| g.helix != 0.0 && !g.ring) {
-                    out.members[*i].role = if g.herringbone { "herringbone" } else { "helical" };
+                if let Some(g) = t.gears.get(k).filter(|g| g.helix != 0.0) {
+                    if !g.ring {
+                        out.members[*i].role = if g.herringbone { "herringbone" } else { "helical" };
+                    }
+                    out.members[*i].hand = Some(if g.helix > 0.0 { "RH" } else { "LH" });
                 }
             }
         }
@@ -481,31 +488,10 @@ fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], styl
     }
 }
 
-/// The sizing's words name gears by their place among the gears ("gear 3", "gears 2 and 3"):
-/// named as the members they are ("member 5", "members 4 and 5").
-fn renamed(text: &str, _items: &[Item], gears: &[(usize, Circle3)]) -> String {
-    let words: Vec<&str> = text.split(' ').collect();
-    let starts_digit = |w: &str| w.chars().next().is_some_and(|c| c.is_ascii_digit());
-    let map = |w: &str| -> Option<String> {
-        let digits: String = w.chars().take_while(char::is_ascii_digit).collect();
-        let v: usize = digits.parse().ok()?;
-        let to = gears.get(v.checked_sub(1)?)?.0 + 1;
-        Some(format!("{to}{}", &w[digits.len()..]))
-    };
-    let mut out: Vec<String> = Vec::with_capacity(words.len());
-    for (k, w) in words.iter().enumerate() {
-        let prev = if k > 0 { words[k - 1] } else { "" };
-        let prev2 = if k > 1 { words[k - 2] } else { "" };
-        let next_digit = words.get(k + 1).is_some_and(|n| starts_digit(n));
-        let word = match *w {
-            "gear" if next_digit => "member".to_string(),
-            "gears" if next_digit => "members".to_string(),
-            w if starts_digit(w) && (prev == "gear" || prev == "gears" || (prev == "and" && prev2.len() > 0 && words.get(k.wrapping_sub(3)).is_some_and(|g| *g == "gears"))) => map(w).unwrap_or_else(|| w.to_string()),
-            w => w.to_string(),
-        };
-        out.push(word);
-    }
-    out.join(" ")
+/// The sizing's words name gears by their place among the gears ("gear 3"): named as the
+/// members they are ("member 5").
+fn renamed(text: &str, items: &[Item], gears: &[(usize, Circle3)]) -> String {
+    crate::sketch_rules::rename_gears(text, &|k| gears.get(k).map_or_else(|| format!("gear {}", k + 1), |g| who(items, g.0)))
 }
 
 /// Two gears on shafts at an angle: the set their shafts imply (see [`read`]).
@@ -581,6 +567,14 @@ fn crossed(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], st
             }
             out.members[g1.0].meshes_with = vec![g2.0];
             out.members[g2.0].meshes_with = vec![g1.0];
+            for i in [g1.0, g2.0] {
+                out.members[i].shaft_angle = Some(s.shaft_angle);
+                out.members[i].role = Role::Gear(s.kind).name();
+            }
+            if s.kind == Kind::Worm {
+                out.members[g1.0].role = "wheel";
+                out.members[g2.0].role = "worm";
+            }
             out.notes.extend(solved.notes.iter().cloned());
             out.solved = Some(solved);
         }

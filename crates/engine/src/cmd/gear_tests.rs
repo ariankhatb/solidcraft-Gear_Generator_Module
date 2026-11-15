@@ -1366,3 +1366,95 @@ fn selected_shafts_and_a_bearing_make_a_train_with_a_bearing() {
     let e = s.execute("gear.calculate", &json!({"selection": [{"axis": "Z"}, {"axis": "X", "bearing": "nope"}]})).unwrap_err().to_string();
     assert!(e.contains("no standard bearing"), "{e}");
 }
+
+// ---- The sketch-driven reader: construction geometry, members, 3D sketches, clusters.
+
+/// The user's build 6 sketch: three circles, the first two touching, the third touching nothing,
+/// and construction lines joining the centres. Construction geometry is never a gear or shaft;
+/// the circle meshing with nothing is named, member by member.
+#[test]
+fn build_6_construction_lines_are_left_out_and_the_loose_circle_named() {
+    let mut s = Session::default();
+    let (c2, c3) = ([-10.180755625393433, 20.064949911424925], [12.062125004376336, 21.214432234647948]);
+    let sk = sketch_with(
+        &mut s,
+        &[
+            circle(0.0, 0.0, 15.0, "c1"),
+            circle(c2[0], c2[1], 7.5, "c2"),
+            circle(c3[0], c3[1], 7.5, "c3"),
+            ("sketch.line", json!({"points": [[0, 0], c2], "construction": true, "ids": ["l1"]})),
+            ("sketch.line", json!({"points": [c2, c3], "construction": true, "ids": ["l2"]})),
+            ("sketch.line", json!({"points": [[0, 0], c3], "construction": true, "ids": ["l3"]})),
+        ],
+    );
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "spur"}));
+    let members = r["members"].as_array().unwrap_or_else(|| panic!("{r}"));
+    assert_eq!(members.len(), 3, "{r}");
+    assert!(members[0]["error"].is_null() && members[1]["error"].is_null(), "{r}");
+    assert_eq!(members[0]["meshes_with"], json!([1]), "{r}");
+    assert!(members[2]["error"].as_str().unwrap_or_default().contains("gear 3 meshes with nothing"), "{r}");
+    let e = s.execute("gear.create", &json!({"sketch": sk, "type": "spur"})).unwrap_err().to_string();
+    assert!(e.contains("gear 3 meshes with nothing") && !e.contains("rack"), "{e}");
+}
+
+/// A 3D sketch of a drivetrain: three shaft lines, gear 1 on the first meshing gear 2 on the
+/// second, gear 3 on the second further along (a cluster with gear 2) meshing gear 4 on the
+/// third, and a bearing point on the first shaft.
+fn drivetrain_3d(s: &mut Session) -> u64 {
+    let arc = |c: [f64; 3], r: f64| ("sketch.arc3d", json!({"start": [c[0] + r, c[1], c[2]], "through": [c[0], c[1] + r, c[2]], "end": [c[0] - r, c[1], c[2]]}));
+    sketch_with(
+        s,
+        &[
+            ("sketch.options", json!({"sketch_3d": true})),
+            ("sketch.line3d", json!({"points": [[0, 0, -10], [0, 0, 40]]})),
+            ("sketch.line3d", json!({"points": [[50, 0, -10], [50, 0, 40]]})),
+            ("sketch.line3d", json!({"points": [[85, 0, -10], [85, 0, 40]]})),
+            arc([0.0, 0.0, 0.0], 20.0),
+            arc([50.0, 0.0, 0.0], 30.0),
+            arc([50.0, 0.0, 20.0], 15.0),
+            arc([85.0, 0.0, 20.0], 20.0),
+            ("sketch.point3d", json!({"point": [0, 0, -5]})),
+        ],
+    )
+}
+
+#[test]
+fn a_3d_sketch_drivetrain_with_a_cluster_and_a_bearing() {
+    let mut s = Session::default();
+    let sk = drivetrain_3d(&mut s);
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk, "face_width": 8, "clearance_body": {"bearing": "608"}}));
+    let m = r["members"].as_array().unwrap_or_else(|| panic!("{r}"));
+    // Circles first (members 1–4), then the lines, then the point.
+    assert_eq!(m.len(), 8, "{r}");
+    assert!(m.iter().all(|m| m["error"].is_null()), "{r}");
+    assert!(m[1]["cluster"].is_number() && m[1]["cluster"] == m[2]["cluster"], "{r}");
+    assert_eq!((m[0]["meshes_with"].clone(), m[2]["meshes_with"].clone()), (json!([1]), json!([3])), "{r}");
+    assert_eq!((m[7]["role"].as_str(), m[7]["shaft"].as_u64()), (Some("bearing"), Some(4)), "{r}");
+    let r = run(&mut s, "gear.create", json!({"sketch": sk, "face_width": 8, "clearance_body": {"bearing": "608"}, "assembly": true}));
+    assert!(r["bodies"].as_array().unwrap().len() >= 4, "{r}");
+    assert!(r["members"].as_array().is_some_and(|m| m.len() == 8), "{r}");
+}
+
+/// Circles of a flat sketch selected with roles and per-member sizes: each member's numbers back.
+#[test]
+fn selected_circles_with_roles_and_sizes_report_each_member() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 20.0, "g1"), circle(50.0, 0.0, 30.0, "g2"), circle(50.0, 45.0, 15.0, "g3")]);
+    let sel = json!([
+        {"sketch": sk, "curve": "g1", "role": "spur", "module": 2.5},
+        {"sketch": sk, "curve": "g2", "role": "spur"},
+        {"sketch": sk, "curve": "g3", "role": "spur", "face_width": 6}
+    ]);
+    let r = run(&mut s, "gear.calculate", json!({"selection": sel}));
+    let m = r["members"].as_array().unwrap_or_else(|| panic!("{r}"));
+    assert_eq!(m.iter().map(|m| m["teeth"].as_u64().unwrap()).collect::<Vec<_>>(), vec![16, 24, 12], "{r}");
+    assert_eq!(m[2]["face_width"].as_f64(), Some(6.0), "{r}");
+    // A module that doesn't fit a circle: that member's error.
+    let sel = json!([{"sketch": sk, "curve": "g1", "role": "spur", "teeth": 18, "module": 2.5}, {"sketch": sk, "curve": "g2"}]);
+    let r = run(&mut s, "gear.calculate", json!({"selection": sel}));
+    assert!(r["members"][0]["error"].as_str().unwrap_or_default().contains("18 teeth at module 2.5"), "{r}");
+    // A bearing on no shaft line.
+    let sel = json!([{"sketch": sk, "curve": "g1"}, {"sketch": sk, "curve": "g2"}, {"axis": {"origin": [0, 0, 0], "dir": [0, 0, 1]}, "role": "shaft"}, {"sketch": sk, "point": "origin", "role": "bearing", "bearing": "608"}]);
+    let r = run(&mut s, "gear.calculate", json!({"selection": sel}));
+    assert!(r["members"].as_array().is_some(), "{r}");
+}

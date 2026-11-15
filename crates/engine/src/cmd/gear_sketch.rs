@@ -227,6 +227,15 @@ pub(super) fn sketch_print(s: &Session, request: &Value) -> Option<String> {
     for (k, l) in &gs.lines {
         text.push_str(&format!("l{k}:{},{},{},{};", num(l.a.x), num(l.a.y), num(l.b.x), num(l.b.y)));
     }
+    // A 3D sketch's curves and points (world coordinates).
+    for (k, t) in &gs.things {
+        let v = |q: &[f64; 3]| q.iter().map(|c| num(*c)).collect::<Vec<_>>().join(",");
+        match t {
+            solidcraft_gear::drivetrain::Thing::Circle(c) => text.push_str(&format!("C{k}:{},{},{};", v(&c.c), v(&c.n), num(c.r))),
+            solidcraft_gear::drivetrain::Thing::Line(l) => text.push_str(&format!("L{k}:{},{};", v(&l.a), v(&l.b))),
+            solidcraft_gear::drivetrain::Thing::Point(q) => text.push_str(&format!("P{k}:{};", v(q))),
+        }
+    }
     // FNV-1a: the same in every build (kept with the design).
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in text.bytes() {

@@ -827,7 +827,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     } else {
         ViewState::Current
     };
-    let (closed, action) = ui_kit::Window::new(egui::Id::unique("sc_gear_window"), "gear", title).fields().cards(3.3).actions(primary, &close, None).show(ctx, valid, |ui| {
+    let (closed, action) = ui_kit::Window::new(egui::Id::unique("sc_gear_window"), crate::gear_icons::GENERATOR, title).fields().cards(3.3).actions(primary, &close, None).show(ctx, valid, |ui| {
         body(ui, &mut w, view, preview_error.as_deref());
     });
     if w.animate && !w.paused {
@@ -1057,9 +1057,19 @@ impl Note for Ui {
 fn body(ui: &mut Ui, w: &mut GearWindow, view: ViewState, view_error: Option<&str>) {
     ui.horizontal(|ui| {
         let was = w.mode;
-        ui.selectable_value(&mut w.mode, Mode::Simple, egui::RichText::new("Simple").strong())
-            .on_hover_text("Draw the set in one sketch (circles are pitch circles, lines are shafts) and give a few sizes; the solver picks module, teeth and shifts");
-        ui.selectable_value(&mut w.mode, Mode::Advanced, egui::RichText::new("Advanced").strong()).on_hover_text("Every setting: tooth form, 3D printing, chamfers, shafts, hardware, load, axes picked in the model");
+        use crate::gear_icons::{MODE_ADVANCED, MODE_SIMPLE, choice};
+        if choice(ui, w.mode == Mode::Simple, MODE_SIMPLE, egui::RichText::new("Simple").strong())
+            .on_hover_text("Draw the set in one sketch (circles are pitch circles, lines are shafts) and give a few sizes; the solver picks module, teeth and shifts")
+            .clicked()
+        {
+            w.mode = Mode::Simple;
+        }
+        if choice(ui, w.mode == Mode::Advanced, MODE_ADVANCED, egui::RichText::new("Advanced").strong())
+            .on_hover_text("Every setting: tooth form, 3D printing, chamfers, shafts, hardware, load, axes picked in the model")
+            .clicked()
+        {
+            w.mode = Mode::Advanced;
+        }
         if was == Mode::Advanced && w.mode == Mode::Simple && w.right == RightView::Profile {
             w.right = RightView::Both;
         }
@@ -1112,7 +1122,15 @@ fn right_views(ui: &mut Ui, w: &mut GearWindow, width: f32) {
             &[(RightView::Both, "3D + 2D", "The set in 3D and the teeth meshing in 2D"), (RightView::View3d, "3D", "The set in 3D"), (RightView::Profile, "2D mesh", "The teeth meshing, turning")]
         };
         for (v, name, tip) in views {
-            ui.selectable_value(&mut w.right, *v, *name).on_hover_text(*tip);
+            let icon = match v {
+                RightView::Both => crate::gear_icons::VIEW_SPLIT,
+                RightView::Drawing => crate::gear_icons::VIEW_DRAWING,
+                RightView::View3d => crate::gear_icons::VIEW_3D,
+                RightView::Profile => crate::gear_icons::VIEW_MESH,
+            };
+            if crate::gear_icons::choice(ui, w.right == *v, icon, *name).on_hover_text(*tip).clicked() {
+                w.right = *v;
+            }
         }
     });
     if !simple && w.right == RightView::Drawing {
@@ -1407,7 +1425,7 @@ fn type_picker(ui: &mut Ui, w: &mut GearWindow) {
             for k in Kind::ALL.iter().copied().filter(|k| k.axes() == group) {
                 let c = fit.as_ref().and_then(|f| f.iter().find(|c| c.kind == k));
                 let fits = c.is_none_or(|c| c.fits);
-                let r = ui.add_enabled_ui(fits, |ui| ui.selectable_label(w.spec.kind == k, k.label())).inner;
+                let r = ui.add_enabled_ui(fits, |ui| crate::gear_icons::choice(ui, w.spec.kind == k, crate::gear_icons::kind_icon(k), k.label())).inner;
                 let r = match c {
                     Some(c) => r.on_hover_text(&c.reason).on_disabled_hover_text(&c.reason),
                     None => r,

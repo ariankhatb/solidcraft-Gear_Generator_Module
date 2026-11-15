@@ -31,6 +31,7 @@ pub(crate) fn section(ui: &mut Ui, s: &mut Spec, advanced: bool, names: &[String
     ui.add_space(6.0);
     let mut on = s.clearance_body.is_some();
     ui.horizontal(|ui| {
+        crate::gear_icons::mark(ui, crate::gear_icons::HOUSING_CUTOUT);
         ui.label(RichText::new("Housing clearance").strong());
         if ui.checkbox(&mut on, "Make a clearance body").on_hover_text(SWITCH_TIP).changed() {
             s.clearance_body = on.then(Clearance::default);
@@ -134,6 +135,7 @@ fn seats_ui(ui: &mut Ui, c: &mut Clearance, names: &[String], face: f64) {
     let mut remove = None;
     for (i, seat) in c.seats.iter_mut().enumerate() {
         ui.horizontal(|ui| {
+            crate::gear_icons::mark(ui, crate::gear_icons::BEARING_SEAT);
             match seat {
                 Seat::Along { member, along } => {
                     let tip = "Which member's shaft: the set's bodies in order (gear 1 first; planetary: sun, planets, ring; worm: wheel, then worm).";

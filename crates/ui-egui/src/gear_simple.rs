@@ -255,7 +255,7 @@ fn mode_picker(ui: &mut Ui, w: &mut GearWindow) {
         ui.horizontal_wrapped(|ui| {
             ui.add_sized([104.0, 18.0], egui::Label::new(RichText::new(label).small().weak()));
             for k in Kind::ALL.iter().copied().filter(|k| k.axes() == group && sketch_rules::sketched(*k)) {
-                if ui.selectable_label(w.spec.kind == k, k.label()).clicked() {
+                if crate::gear_icons::choice(ui, w.spec.kind == k, crate::gear_icons::kind_icon(k), k.label()).clicked() {
                     pick = Some(k);
                 }
             }

@@ -48,11 +48,11 @@ pub fn kind_icon(kind: Kind) -> &'static str {
         Kind::Spline => "gear_spline",
         Kind::FaceGear => "gear_face",
         Kind::Elliptical => "gear_elliptical",
-        // Kind::BevelPlanetary => "gear_bevel_planetary", once that kind is merged.
+        Kind::BevelPlanetary => "gear_bevel_planetary",
     }
 }
 
-/// Every id above, the picker's and the buttons', including the one drawn for a kind still on its way.
+/// Every button id above (the kinds' are [`kind_icon`]'s).
 pub const ALL: &[&str] = &[
     GENERATOR,
     MODE_SIMPLE,
@@ -63,8 +63,40 @@ pub const ALL: &[&str] = &[
     VIEW_MESH,
     HOUSING_CUTOUT,
     BEARING_SEAT,
-    "gear_bevel_planetary",
 ];
+
+/// Side of an icon beside a label in the window.
+const SIDE: f32 = 18.0;
+
+/// A selectable label with an icon before its text: the window's type picker, mode and view
+/// switches. Clicked like `ui.selectable_label(selected, text)`.
+pub fn choice(ui: &mut egui::Ui, selected: bool, icon: &str, text: impl Into<egui::WidgetText>) -> egui::Response {
+    let text = text.into();
+    let name = text.text().to_owned();
+    let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
+    let pad = ui.spacing().button_padding;
+    let gap = 4.0;
+    let size = egui::vec2(pad.x * 2.0 + SIDE + gap + galley.size().x, (pad.y * 2.0 + galley.size().y).max(SIDE + 4.0));
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, &name));
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact_selectable(&response, selected);
+        if selected || response.hovered() || response.has_focus() {
+            ui.painter().rect(rect.expand(visuals.expansion), visuals.corner_radius, visuals.weak_bg_fill, visuals.bg_stroke, egui::StrokeKind::Inside);
+        }
+        let at = egui::Rect::from_min_size(egui::pos2(rect.min.x + pad.x, rect.center().y - SIDE / 2.0), egui::vec2(SIDE, SIDE));
+        crate::ui_kit::icons::paint_icon(ui.painter(), at, icon, if ui.is_enabled() { 1.0 } else { 0.45 });
+        let text_at = egui::pos2(at.max.x + gap, rect.center().y - galley.size().y / 2.0);
+        ui.painter().galley(text_at, galley, visuals.text_color());
+    }
+    response
+}
+
+/// An icon on its own, the height of a row, before a heading or a row's controls.
+pub fn mark(ui: &mut egui::Ui, icon: &str) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(SIDE, SIDE), egui::Sense::hover());
+    crate::ui_kit::icons::paint_icon(ui.painter(), rect, icon, if ui.is_enabled() { 1.0 } else { 0.45 });
+}
 
 #[cfg(test)]
 mod tests {

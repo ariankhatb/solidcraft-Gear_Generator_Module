@@ -444,10 +444,6 @@ pub fn update(app: &mut SolveApp, ctx: &egui::Context) {
         _ if app.params.as_ref().and_then(|p| p.preview_commands()).is_some() => {
             app.params.as_ref().and_then(|p| p.preview_commands()).unwrap_or_default()
         }
-        // The Gear Generator's set, as its numbers change.
-        _ if app.gear_window.as_ref().and_then(|g| g.preview_commands()).is_some() => {
-            app.gear_window.as_ref().and_then(|g| g.preview_commands()).unwrap_or_default()
-        }
         // No dialog, or inputs still missing: nothing to preview.
         _ => {
             app.preview.clear();

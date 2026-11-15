@@ -769,9 +769,9 @@ fn vertical_group_row(
         *drag = Some(Drag::Items(selected_drag_items(app, origin_x, group.parent)));
     }
     if !renaming && response.double_clicked() {
-        // A gear set's folder opens the Gear Generator on the set; any other is renamed.
-        if crate::gear_window::is_set(app, group.id) {
-            if let Err(why) = crate::gear_window::open_group(app, group.id) {
+        // A gear set's folder opens the Gears dialog on the set; any other is renamed.
+        if crate::dialogs_gear::is_set(app, group.id) {
+            if let Err(why) = crate::dialogs_gear::open_set(app, group.id) {
                 app.set_status(why, true);
             }
         } else {

@@ -734,7 +734,8 @@ fn clearance_parameters_round_trip_and_bad_ones_are_refused() {
         bearing_fit: 0.15,
         seats: vec![Seat::Along { member: 2, along: -30.0 }, Seat::Point([1.0, 2.0, 3.0])],
         travel: 0.0,
-        ..Clearance::default()
+        keep_out: true,
+        bearing_bodies: false,
     });
     let p = crate::gear_params_of(&spec);
     let back: crate::schema::gear::GearParams = serde_json::from_value(p.clone()).unwrap_or_else(|e| panic!("{p}: {e}"));
@@ -1650,9 +1651,9 @@ fn build_6_construction_lines_are_left_out_and_the_loose_circle_named() {
     assert_eq!(members.len(), 3, "{r}");
     assert!(members[0]["error"].is_null() && members[1]["error"].is_null(), "{r}");
     assert_eq!(members[0]["meshes_with"], json!([1]), "{r}");
-    assert!(members[2]["error"].as_str().unwrap_or_default().contains("gear 3 meshes with nothing"), "{r}");
+    assert!(members[2]["error"].as_str().unwrap_or_default().contains("circle c3 touches no other gear"), "{r}");
     let e = s.execute("gear.create", &json!({"sketch": sk, "type": "spur"})).unwrap_err().to_string();
-    assert!(e.contains("gear 3 meshes with nothing") && !e.contains("rack"), "{e}");
+    assert!(e.contains("circle c3 touches no other gear") && !e.contains("rack"), "{e}");
 }
 
 /// A 3D sketch of a drivetrain: three shaft lines, gear 1 on the first meshing gear 2 on the

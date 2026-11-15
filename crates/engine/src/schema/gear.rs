@@ -689,11 +689,14 @@ pub enum SelectionRole {
     Face,
     Bearing,
     Shaft,
+    /// Worked out from the geometry (the default).
+    Auto,
 }
 
 impl SelectionRole {
     /// Every role, in the order a picker lists them.
-    pub const ALL: [SelectionRole; 12] = [
+    pub const ALL: [SelectionRole; 13] = [
+        SelectionRole::Auto,
         SelectionRole::Spur,
         SelectionRole::Helical,
         SelectionRole::Herringbone,
@@ -722,11 +725,12 @@ impl SelectionRole {
             SelectionRole::Face => "face",
             SelectionRole::Bearing => "bearing",
             SelectionRole::Shaft => "shaft",
+            SelectionRole::Auto => "auto",
         }
     }
     /// A gear (not a bare shaft or a bearing).
     pub fn is_gear(self) -> bool {
-        !matches!(self, SelectionRole::Bearing | SelectionRole::Shaft)
+        !matches!(self, SelectionRole::Bearing | SelectionRole::Shaft | SelectionRole::Auto)
     }
 }
 
@@ -758,6 +762,69 @@ pub struct GearMember {
     pub cluster: Option<usize>,
     /// What is wrong with this member, if anything.
     pub error: Option<String>,
+    /// Its role was worked out from the geometry (`auto`, or none, asked).
+    #[serde(default)]
+    pub inferred: bool,
+    /// A helical gear's hand: "LH" or "RH".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hand: Option<String>,
+    /// A gear on a shaft at an angle to its mate's (bevel, crossed, worm): the shaft angle, deg.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shaft_angle: Option<f64>,
+}
+
+/// A shaft built with a set (`GearResult::shafts`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct GearShaftInfo {
+    /// Its number in the set (0 first).
+    pub index: usize,
+    /// The body it is part of (with its gears).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diameter: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<f64>,
+    /// The gears it carries, as member (row) indices.
+    pub gears: Vec<usize>,
+    /// The picked shaft line it follows, as a member (row) index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+}
+
+/// Where two gears touch (`GearResult::contacts`): the pitch line across the faces they share
+/// (`a` to `b`), or a point (`a`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct GearContact {
+    pub a: [f64; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub b: Option<[f64; 3]>,
+}
+
+/// `shafts`: whether shafts are built on the gears' axes (each joined to its gears as one
+/// part), and per member (its row `index`: a shaft line or a gear) on or off and its diameter.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct GearShaftsParams {
+    /// Build shafts (default true).
+    #[serde(default)]
+    pub generate: Option<bool>,
+    #[serde(default)]
+    pub overrides: Option<Vec<GearShaftOverride>>,
+}
+
+/// One shaft's own setting (`GearShaftsParams::overrides`).
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct GearShaftOverride {
+    /// The member's row `index` (a shaft line, or a gear on the shaft).
+    pub index: usize,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub diameter: Option<f64>,
 }
 
 /// One selected thing of `selection` (gear.create, gear.calculate, gear.update): exactly one of
@@ -796,6 +863,17 @@ pub struct GearSelection {
     /// A gear: its face width, mm (left out: worked out).
     #[serde(default)]
     pub face_width: Option<f64>,
+    /// Its row in the dialog: members are reported by it (default: its place in `selection`).
+    #[serde(default)]
+    pub index: Option<usize>,
+    /// A parallel-axis gear: its helix angle (deg; 0 straight; its mates get the opposite
+    /// hand) and V (herringbone) teeth. A bevel: its spiral angle.
+    #[serde(default)]
+    pub helix_angle: Option<f64>,
+    #[serde(default)]
+    pub herringbone: Option<bool>,
+    #[serde(default)]
+    pub spiral_angle: Option<f64>,
     /// Shaft: how far along it from its origin (a sketch line's first end, an edge's or axis's
     /// origin) the gears sit, mm (the first shaft's; the others' must agree). Bearing on a
     /// shaft: how far along it the bearing's middle sits (default 0). Not for points.
@@ -1252,6 +1330,9 @@ pub struct GearParams {
     /// and, with `assembly`, bearing bodies. Not with `sketch`, `axis1` or `placement`.
     #[serde(default)]
     pub selection: Option<Vec<GearSelection>>,
+    /// With `sketch` or `selection`: the shafts built on the gears' axes (default: built).
+    #[serde(default)]
+    pub shafts: Option<GearShaftsParams>,
 }
 
 /// `gear.inspect`: which set (neither: every set in the design).
@@ -1433,6 +1514,12 @@ pub struct GearResult {
     /// gear, shaft and bearing it read, with what it became or what is wrong with it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub members: Vec<GearMember>,
+    /// The shafts built with the set (each joined to its gears as one body).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shafts: Vec<GearShaftInfo>,
+    /// Where the gears touch, for an abstract preview.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contacts: Vec<GearContact>,
 }
 
 /// A line in space.

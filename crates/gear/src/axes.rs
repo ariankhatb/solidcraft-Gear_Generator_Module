@@ -431,6 +431,52 @@ pub fn solve(axis1: &Axis, axis2: Option<&Axis>, kind: Option<Kind>, base: &Spec
             out.notes.push(format!("{} pinion teeth, {} face gear teeth (ratio {})", spec.teeth, spec.teeth2, num(f64::from(spec.teeth2) / f64::from(spec.teeth))));
             spec.placement = Some(place);
         }
+        Relation::Intersecting { apex, .. } if kind == Kind::BevelPlanetary => {
+            // Axis 1 is the sun's shaft, axis 2 the first planet's; each member on the ray from
+            // the apex its axis's origin is on. The builder's frame: the apex at the origin, the
+            // sun below it on -z, planet 1 in the xz plane.
+            let side = |a: &Axis, flip: bool| {
+                let along = dot(sub(a.origin, apex), a.dir);
+                flipped(if along < -TOUCH { mul(a.dir, -1.0) } else { a.dir }, flip)
+            };
+            let (s1, s2) = (side(&a1, drive.flip1), side(&a2, drive.flip2));
+            let sigma = len(cross(s1, s2)).atan2(dot(s1, s2));
+            if !(5.0..=175.0).contains(&sigma.to_degrees()) {
+                return Err(format!("the shafts meet at {}°: a bevel planetary set needs 5° to 175°", num(sigma.to_degrees())));
+            }
+            spec.shaft_angle = sigma.to_degrees();
+            spec.first_azimuth = 0.0;
+            out.derived.shaft_angle = true;
+            out.facts.push(fact("cone angle (from the axes)", spec.shaft_angle, Unit::Deg));
+            if drive.ratio.is_some() {
+                let (z1, z2) = pick_teeth(drive.ratio.unwrap_or(1.0), &spec, drive, kind);
+                out.derived.teeth = drive.teeth_free;
+                out.derived.teeth2 = drive.teeth2_free;
+                (spec.teeth, spec.teeth2) = (z1, z2);
+            }
+            let g = crate::plan::bevel_planet::geometry(&spec)?;
+            if let Some(re) = drive.cone_distance {
+                if !(re.is_finite() && re > 0.0) {
+                    return Err("the cone distance must be greater than 0".into());
+                }
+                spec.module = 2.0 * re * g.delta_sun.sin() / f64::from(spec.teeth);
+                out.derived.module = true;
+                out.notes.push(format!("module {} from the cone distance {} mm", num(spec.module), num(re)));
+            }
+            let g = crate::plan::bevel_planet::geometry(&spec)?;
+            if (g.sigma - sigma).abs() > 1e-4 {
+                out.notes.push(format!("the planets sit at {}° to the sun's shaft (not the axes' {}°): the second sun's or ring's whole teeth set the cone angle", num(g.sigma.to_degrees()), num(sigma.to_degrees())));
+            }
+            out.facts.push(fact("outer cone distance", g.re, Unit::Mm));
+            let t1 = mul(s1, -1.0);
+            let x = unit(sub(s2, mul(t1, dot(s2, t1)))).unwrap_or_else(|| square_to(t1));
+            let place = Frame { origin: apex, x, z: t1 };
+            let (h1, h2, bs) = (g.re * g.delta_sun.cos(), g.re * g.delta_planet.cos(), g.sigma);
+            let sun = Frame { origin: [0.0, 0.0, -h1], x: [1.0, 0.0, 0.0], z: [0.0, 0.0, 1.0] };
+            let planet = Frame { origin: [bs.sin() * h2, 0.0, -bs.cos() * h2], x: [bs.cos(), 0.0, bs.sin()], z: [-bs.sin(), 0.0, bs.cos()] };
+            out.frames = [place.compose(&sun), place.compose(&planet)];
+            spec.placement = Some(place);
+        }
         Relation::Intersecting { apex, .. } => {
             // Each gear sits on one ray from the apex: the side its axis's origin is on, or
             // along the axis's direction when the origin is the apex itself.

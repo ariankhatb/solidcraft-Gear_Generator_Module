@@ -1670,6 +1670,16 @@ fn hypoid(c: &mut Ctx) -> Result<(), String> {
     let dl2 = (ratio * sigma.to_radians().sin()).atan2(1.0 + ratio * sigma.to_radians().cos());
     let cone = ring / 2.0 / dl2.sin();
     c.face(0.3 * cone);
+    // An offset this large for the ring gear unwinds its spiral (under
+    // `hypoid::LEAST_RING_SPIRAL`): unless the spiral angle was given, a steeper pinion spiral
+    // (up to 60°) keeps it, as the refusal suggests.
+    if s.spiral_angle.is_none() && c.spec.offset > 0.0 && !crate::hypoid::ring_spirals(&c.spec) {
+        let was = c.spec.spiral_angle;
+        if let Some(a) = (1..=12).map(|k| was + 2.5 * f64::from(k)).take_while(|a| *a <= 60.0).find(|a| crate::hypoid::ring_spirals(&Spec { spiral_angle: *a, ..c.spec.clone() })) {
+            c.spec.spiral_angle = a;
+            c.note(format!("pinion spiral angle raised to {}° so the ring gear's teeth still spiral at this offset", num(a)));
+        }
+    }
     c.row("pinion teeth", z1, Unit::None);
     c.row("ring gear teeth", z2, Unit::None);
     ratio_rows(c, ratio, z2 / z1);

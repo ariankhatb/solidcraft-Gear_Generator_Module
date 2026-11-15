@@ -20,15 +20,16 @@ Kind shorthand, used in the "applies to" columns:
   pinion only, as gear 2), Elliptical (through `hub_steps_tip`)
 
 Hide (or grey out) a control when the kind it applies to isn't selected. If a field is set on a
-kind that doesn't take it, the plan warns once per group (see "Extras kinds" below), so leaving
-it set can't break anything.
+kind that doesn't take it, the plan warns once per group (see "What each kind takes" below), so
+leaving it set can't break anything. `plan::left_out::uses(&spec, Opt::…)` answers, for the
+spec's kind, whether a control does anything: use it to hide or grey out controls.
 
 ## Tooth tuning
 
 | field | type | default | range | label | tooltip | applies to |
 |---|---|---|---|---|---|---|
 | `tip_round` | f64 (modules) | 0 | 0 to 0.5 | Tip rounding | Rounds each tip corner with an arc tangent to the flank and the tip circle. The radius is in modules. When the tip is too thin it is cut down, with a warning. | cyl, Pair, Planetary (sun, planets) |
-| `xy_compensation` | f64 mm | 0 | 0 to 0.25·m | Horizontal expansion compensation | Draws the teeth this far inside where the printed teeth should end up (flanks, tips and roots). Set it to your slicer's measured over-extrusion per side. Tune it by measuring the "span over k teeth" fact on a printed gear. | involute kinds that use the spec's rack: cyl, Internal, Rack, Pair, Planetary, Crossed helical, Hypoid |
+| `xy_compensation` | f64 mm | 0 | 0 to 0.25·m | Horizontal expansion compensation | Draws the teeth this far inside where the printed teeth should end up (flanks, tips and roots). Set it to your slicer's measured over-extrusion per side. Tune it by measuring the "span over k teeth" fact on a printed gear. | involute kinds that use the spec's rack: cyl, Internal, Rack, Pair, Planetary, Crossed helical (not Hypoid: its teeth come from the ring gear's form) |
 | `elephant_foot` | f64 mm | 0 | 0 to 0.25·m | Elephant-foot relief | Draws the first layers of the teeth this far inside the rest, so the squashed first layers don't stand proud of the flanks. | cyl, Pair, Planetary (sun, planets) |
 | `elephant_foot_height` | f64 mm | 0 (means 0.2) | ≥ 0 | Elephant-foot height | How high the relief runs from the back face (the face on the print bed). This is usually the first layer height. | as `elephant_foot` |
 | `nozzle` | f64 mm | 0 (no check) | ≥ 0 | Nozzle width | Warns when a tip land is narrower than two nozzle widths, which is too thin to print cleanly. This is only a check: it doesn't change the geometry. | cyl, Pair, Planetary (sun, planets) |
@@ -114,15 +115,15 @@ Arguments are in mm, usually 0.4 and 0.2. A value that isn't a positive number f
 
 | field | set to | for kinds |
 |---|---|---|
-| `rack` | `print_fdm` (addendum 1.0, dedendum 1.3, root radius 0.38) | involute kinds with `tuned_teeth()` |
+| `rack` | `print_fdm` (addendum 1.0, dedendum 1.3, root radius 0.38) | involute kinds with `tuned_teeth()` (unchanged) |
 | `pressure_angle` | max(current, 25°) | same |
-| `nozzle` | nozzle | `tuned_teeth()` kinds |
-| `tip_round` | clamp(0.5·nozzle / m, 0.05, 0.25) modules | `tuned_teeth()` kinds |
-| `xy_compensation` | min(0.125·nozzle, 0.05·m) | `tuned_teeth()` kinds |
-| `elephant_foot` | min(0.5·layer, 0.05·m) | `tuned_teeth()` kinds |
-| `elephant_foot_height` | layer | `tuned_teeth()` kinds |
+| `nozzle` | nozzle | kinds that use it (`left_out::uses`) |
+| `tip_round` | clamp(0.5·nozzle / m, 0.05, 0.25) modules | kinds that use it (`left_out::uses`) |
+| `xy_compensation` | min(0.125·nozzle, 0.05·m) | kinds that use it (`left_out::uses`) |
+| `elephant_foot` | min(0.5·layer, 0.05·m) | kinds that use it (`left_out::uses`) |
+| `elephant_foot_height` | layer | kinds that use it (`left_out::uses`) |
 | `backlash` | max(current, min(0.25·nozzle + 0.05, 0.3·m)) | all kinds (for a spline this is its flank clearance) |
-| `bore_chamfer` | max(current, layer) | all kinds except Spline |
+| `bore_chamfer` | max(current, layer) | kinds that use it (not Spline, Internal, Rack, bevels, Hypoid, Cycloidal drive) |
 | `hardware.bearing_fit`, `hardware2.bearing_fit` | max(current, 0.25·nozzle) | all kinds |
 
 `Kind::tuned_teeth()` is false for Sprocket, Pulley, Spline, Face gear and Elliptical, and true
@@ -142,6 +143,28 @@ applies, the user can still edit every field.
 Whatever is set and left out produces one warning per group, and only when it was set. For
 example: "chain sprocket: tip rounding, crowning don't apply to its teeth (they have their own
 form); left out".
+
+## What each kind takes (`plan::left_out`)
+
+Every kind answers for every option in `left_out::why_left_out` (one `match`, no catch-all, so a
+new kind must too); the test `every_type_uses_or_names_every_option` checks each answer against
+the planners. Gear 2's options on a single gear (and on a sprocket, pulley or cycloidal pair with
+mating teeth 0) are left out with "a single gear has no gear 2" / "there is no gear 2".
+
+| kind | tooth tuning taken | body options taken |
+|---|---|---|
+| cyl | all of gear 1's | all of gear 1's |
+| Pair | all | all |
+| Planetary | all but the tip diameters and gear 2's face width/offset | all (sun = gear 1, planets = gear 2; the ring takes tooth chamfers) |
+| Internal | tip clearance, tip shortening, XY compensation | tooth chamfers only |
+| Rack | tip clearance, tip shortening, XY compensation | none |
+| Bevel, Spiral bevel, Bevel planetary | none | bores, hub, shafts (no holes, hardware or chamfers) |
+| Hypoid | none | bores, hub diameter and length (the pinion's shank) |
+| Crossed helical | tip clearance, tip shortening, XY compensation, gear 2's backlash | all |
+| Worm | gear 2's (the thread's) backlash | all of the wheel's; the worm's bore and shafts (no hardware) |
+| Cycloidal | none | all |
+| Cycloidal drive | none | bore and holes (output holes) |
+| extras | none | see the table above |
 
 ## Behaviour notes for the window
 

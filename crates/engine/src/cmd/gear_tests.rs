@@ -497,6 +497,20 @@ fn tuned_tips_and_other_types_stay_fitted_with_a_note() {
     assert!(r["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("fitted")), "{r}");
 }
 
+/// A helical rack stays fitted because it is lofted, and the note says so (not tip shaping).
+#[test]
+fn a_helical_rack_says_why_its_teeth_stay_fitted() {
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "rack", "tooth_curves": "equations", "helix_angle": 15}));
+    let notes: Vec<&str> = r["warnings"].as_array().unwrap().iter().map(|w| w.as_str().unwrap()).filter(|w| w.contains("fitted")).collect();
+    assert_eq!(notes.len(), 1, "{r}");
+    assert!(notes[0].contains("helical rack") && notes[0].contains("lofted") && !notes[0].contains("tip rounding"), "{}", notes[0]);
+    // Tip rounding on a spur gear names tip rounding only.
+    let r = run(&mut s, "gear.create", json!({"type": "spur", "tip_round": 0.2, "tooth_curves": "equations"}));
+    let notes: Vec<&str> = r["warnings"].as_array().unwrap().iter().map(|w| w.as_str().unwrap()).filter(|w| w.contains("fitted")).collect();
+    assert!(notes.len() == 1 && notes[0].contains("(tip rounding has no formulas here)"), "{r}");
+}
+
 #[test]
 fn a_parametric_ring_keeps_its_rim_profile_through_a_tooth_count_change() {
     let mut s = Session::default();

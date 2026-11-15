@@ -92,6 +92,43 @@ fn prism_outlines(plan: &Plan) -> Vec<&Outline> {
     out
 }
 
+/// Why a member's teeth stay fitted splines: what about it has no formulas here.
+fn fitted_why(spec: &Spec, plan: &Plan, src: &TeethSource) -> String {
+    let who = &src.who;
+    if spec.kind == Kind::Rack && spec.helix != 0.0 {
+        return format!(
+            "{who}: its teeth stay fitted splines (a helical rack's teeth slant across the face, so it is lofted between its end sections rather than extruded, and only extruded teeth take formulas)"
+        );
+    }
+    let mut why = Vec::new();
+    if spec.tip_relief > 0.0 {
+        why.push("tip relief");
+    }
+    if spec.tip_round > 0.0 {
+        why.push("tip rounding");
+    }
+    if spec.crowning > 0.0 && spec.helix == 0.0 {
+        why.push("crowning");
+    }
+    if plan.warnings.iter().any(|w| w.starts_with(&format!("{who}: the teeth come to a point"))) {
+        why.push("a tip lowered to keep a land");
+    }
+    let teeth = match src.member {
+        1 => spec.teeth,
+        2 => spec.teeth2,
+        _ => if spec.teeth3 > 0 { spec.teeth3 } else { spec.teeth + 2 * spec.teeth2 },
+    };
+    if teeth > 500 {
+        why.push("over 500 teeth");
+    }
+    if why.is_empty() {
+        return format!(
+            "{who}: its teeth stay fitted splines (tip relief, tip rounding, crowning, a tip lowered to keep a land or over 500 teeth have no formulas here)"
+        );
+    }
+    format!("{who}: its teeth stay fitted splines ({} {} no formulas here)", why.join(", "), if why.len() == 1 { "has" } else { "have" })
+}
+
 impl Mode {
     /// The mode a request asks for; `group_name` names the parameters when no prefix is given (a
     /// new one, unused by the design's parameters, when `fresh`). Also warnings for members
@@ -130,10 +167,7 @@ impl Mode {
         for src in &plan.teeth {
             let found = outlines.iter().any(|o| cell_for(std::slice::from_ref(src), o).is_some());
             if !found {
-                warnings.push(format!(
-                    "{}: its teeth stay fitted splines (tip relief, tip rounding, crowning, a tip lowered to keep a land or over 500 teeth have no formulas here)",
-                    src.who
-                ));
+                warnings.push(fitted_why(spec, plan, src));
             }
         }
         Ok((mode, warnings))

@@ -378,6 +378,10 @@ fn variants() -> Vec<Spec> {
     v.push(Spec { planets: 4, teeth: 20, teeth2: 16, teeth3: 52, only: 3, ..Spec::defaults_for(Kind::Planetary) });
     v.push(Spec { only: 2, ..Spec::defaults_for(Kind::FaceGear) });
     v.push(Spec { only: 2, ..Spec::defaults_for(Kind::Spline) });
+    let bp = Spec::defaults_for(Kind::BevelPlanetary);
+    v.push(Spec { placement: Some(place), origin: [1.0, 2.0, 3.0], first_azimuth: 20.0, ..bp.clone() });
+    v.push(Spec { bevel_planet_mode: crate::plan::BevelPlanetMode::Ring, shaft_angle: 45.0, teeth: 20, teeth2: 10, planets: 3, ..bp.clone() });
+    v.push(Spec { bevel_planet_mode: crate::plan::BevelPlanetMode::Single, planets: 3, only: 2, ..bp });
     v
 }
 
@@ -388,11 +392,21 @@ fn schematic_frames_match_the_plan() {
         let sch = schematic(&s);
         assert!(sch.note.is_none(), "{:?}: {:?}", s.kind, sch.note);
         // Members are the preview's, in its order.
-        let names: Vec<&str> = sch.members.iter().map(|m| m.name.as_str()).collect();
         let preview: Vec<&str> = p.preview.iter().map(|g| g.name.as_str()).collect();
-        assert_eq!(names, preview, "{:?}", s.kind);
-        for (i, m) in sch.members.iter().enumerate() {
-            assert_eq!(m.color, i);
+        if s.kind == Kind::BevelPlanetary {
+            // Its preview is one spoke: the planets after the first take planet 1's place.
+            let names: Vec<&str> = sch.members.iter().map(|m| m.name.as_str()).filter(|n| preview.contains(n)).collect();
+            assert_eq!(names, preview, "{:?}", s.kind);
+            for m in &sch.members {
+                let at = if m.name.starts_with("planet ") { "planet 1" } else { m.name.as_str() };
+                assert_eq!(preview.get(m.color), Some(&at), "{}", m.name);
+            }
+        } else {
+            let names: Vec<&str> = sch.members.iter().map(|m| m.name.as_str()).collect();
+            assert_eq!(names, preview, "{:?}", s.kind);
+            for (i, m) in sch.members.iter().enumerate() {
+                assert_eq!(m.color, i);
+            }
         }
         let bodies: Vec<usize> = sch.members.iter().filter_map(|m| m.body).collect();
         assert_eq!(bodies.len(), p.bodies.len(), "{:?} only {}", s.kind, s.only);

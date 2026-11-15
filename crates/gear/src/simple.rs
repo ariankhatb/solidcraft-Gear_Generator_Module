@@ -27,6 +27,7 @@
 //! | planetary | sun | planet | ring |
 //! | rack | the pinion (not built) | – | – |
 //! | bevel, spiral bevel, hypoid, face gear | pinion | gear (ring gear) | – |
+//! | bevel planetary | sun | planet | – (the second sun or ring follows from the cone angle) |
 //! | crossed helical | gear 1 | gear 2 | – |
 //! | worm | worm | wheel | – |
 //! | cycloidal | wheel | pinion | – |
@@ -36,7 +37,8 @@
 //!
 //! `ratio` is always the speed reduction from member 1 (the driver) to member 2: gear 2's teeth
 //! over gear 1's; a worm's wheel teeth over its starts; a planetary set's ring fixed, sun in,
-//! carrier out; a cycloidal drive's pins − 1; cycloidal clock gears wheel over pinion.
+//! carrier out; a cycloidal drive's pins − 1; cycloidal clock gears wheel over pinion; a bevel
+//! planetary set's planet teeth over the sun's (carrier fixed; its reductions are in `chosen`).
 
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
@@ -44,6 +46,7 @@ use crate::axes::{self, Axis, Drive, Relation};
 use crate::design::{self, Goal, ISO54_SERIES_2};
 use crate::hub::{Bore, BoreKind};
 use crate::involute::{Internal, Involute, mesh_external, shift_sum_for_center};
+use crate::plan::bevel_planet::{self, BevelPlanetMode};
 use crate::plan::{Fact, Frame, Kind, Spec, Unit};
 
 // =============================================================================================
@@ -90,6 +93,8 @@ pub struct Simple {
     /// Spiral bevel and hypoid pinion mean spiral angle.
     pub spiral_angle: Option<f64>,
     pub planets: Option<u32>,
+    /// Bevel planetary: what meshes the planets besides the sun (`None`: the base spec's).
+    pub bevel_planet_mode: Option<BevelPlanetMode>,
     pub starts: Option<u32>,
     /// Rack length.
     pub length: Option<f64>,
@@ -138,11 +143,13 @@ pub enum Field {
     Chain,
     Belt,
     Printable,
+    /// Bevel planetary: `Simple::bevel_planet_mode`.
+    PlanetMode,
 }
 
 impl Field {
     pub fn numeric(self) -> bool {
-        !matches!(self, Field::LeftHand | Field::Herringbone | Field::Exact | Field::Chain | Field::Belt | Field::Printable)
+        !matches!(self, Field::LeftHand | Field::Herringbone | Field::Exact | Field::Chain | Field::Belt | Field::Printable | Field::PlanetMode)
     }
 }
 
@@ -292,6 +299,21 @@ pub fn fields(kind: Option<Kind>) -> Vec<FieldInfo> {
         Kind::Spline => vec![fi(F::PitchDiameter, "Reference diameter", Mm), fi(F::Teeth, "Teeth", N), fi(F::Module, "Module", N), fi(F::FaceWidth, "Length", Mm)],
         Kind::FaceGear => vec![fi(F::Ratio, "Ratio", N), fi(F::PitchDiameter, "Pinion pitch diameter", Mm), fi(F::PitchDiameter2, "Face gear pitch diameter", Mm), fi(F::Teeth, "Pinion teeth", N), face],
         Kind::Elliptical => vec![fi(F::CenterDistance, "Centre distance", Mm), fi(F::Teeth, "Teeth", N), fi(F::Eccentricity, "Eccentricity", N), face],
+        Kind::BevelPlanetary => vec![
+            fi(F::PlanetMode, "Mode", N),
+            fi(F::ShaftAngle, "Cone angle (sun shaft to planet shaft)", Deg),
+            fi(F::Ratio, "Ratio (planet ÷ sun teeth)", N),
+            fi(F::Planets, "Planets", N),
+            fi(F::PitchDiameter, "Sun outer pitch diameter", Mm),
+            fi(F::PitchDiameter2, "Planet outer pitch diameter", Mm),
+            fi(F::ConeDistance, "Cone distance", Mm),
+            fi(F::Teeth, "Sun teeth", N),
+            fi(F::SpiralAngle, "Spiral angle (0: straight)", Deg),
+            face,
+            bore,
+            fi(F::Bore2, "Planet bore", Mm),
+            print,
+        ],
     }
 }
 
@@ -489,6 +511,9 @@ pub fn auto_kind(relation: &Relation, sizes: &Simple) -> Vec<(Kind, &'static str
             v.push((Kind::SpiralBevel, "the shafts meet: spiral bevel gears (quieter, stronger)", ok * if spiral { 1.0 } else { 0.8 }));
             let square = 1.0 - smooth((af - 90.0).abs(), 0.0, 0.5);
             v.push((Kind::FaceGear, "the shafts meet square: a face gear and spur pinion", 0.4 * square));
+            // Planets asked for (or a bevel planetary mode): planets round a bevel sun.
+            let planets = sizes.planets.is_some_and(|n| n >= 1) || sizes.bevel_planet_mode.is_some();
+            v.push((Kind::BevelPlanetary, "the shafts meet: bevel planets round a bevel sun (a differential, or a bevel epicyclic with a ring)", ok * if planets { 1.05 } else { 0.3 }));
         }
         Relation::Skew { angle, offset, .. } => {
             let af = angle.min(180.0 - angle);
@@ -765,6 +790,7 @@ pub fn solve(simple: &Simple, base: &Spec) -> Solved {
         Kind::Spline => spline(&mut c),
         Kind::FaceGear => face_gear(&mut c),
         Kind::Elliptical => elliptical(&mut c),
+        Kind::BevelPlanetary => bevel_planetary(&mut c),
     };
     if simple.printable {
         // Again, now that the module is known (the tip rounding and compensation follow it).
@@ -1461,6 +1487,125 @@ fn bevel(c: &mut Ctx, kind: Kind) -> Result<(), String> {
     c.versus("gear outer pitch diameter", d2, m * z2);
     c.versus("cone distance", s.cone_distance, re);
     c.row("face width", c.spec.face_width, Unit::Mm);
+    Ok(())
+}
+
+/// A bevel sun with planets round it: the cone angle (sun shaft to planet shaft), the ratio
+/// (planet teeth over the sun's) and one size, as a bevel pair's. With a second sun or a ring
+/// the cone angle is set by whole teeth (far teeth = sun + 2 × planet × cos Σ), so the counts
+/// are chosen to keep it near the one asked, and to space the planets evenly and apart.
+fn bevel_planetary(c: &mut Ctx) -> Result<(), String> {
+    let s = c.s;
+    let mode = s.bevel_planet_mode.unwrap_or(c.spec.bevel_planet_mode);
+    c.spec.bevel_planet_mode = mode;
+    let n = s.planets.unwrap_or(c.spec.planets).clamp(1, 24);
+    c.spec.planets = n;
+    if let Some(a) = s.spiral_angle {
+        c.spec.spiral_angle = a;
+    }
+    let sigma = s.shaft_angle.unwrap_or(c.spec.shaft_angle);
+    if !(5.0..=175.0).contains(&sigma) {
+        return Err(format!("the cone angle (sun shaft to planet shaft) must be 5° to 175°; {} asked", num(sigma)));
+    }
+    c.spec.shaft_angle = sigma;
+    let (d1, d2) = (s.pitch_diameter.filter(|d| *d > 0.0), s.pitch_diameter2.filter(|d| *d > 0.0));
+    let ratio = s
+        .ratio
+        .or(match (d1, d2) {
+            (Some(a), Some(b)) => Some(b / a),
+            _ => None,
+        })
+        .unwrap_or(f64::from(c.spec.teeth2) / f64::from(c.spec.teeth.max(1)));
+    if !(ratio.is_finite() && ratio > 0.0) {
+        return Err("the ratio (planet ÷ sun teeth) must be greater than 0".into());
+    }
+    let (dl1, _) = cones(sigma, 1.0, ratio).ok_or(format!("a {}° cone angle at ratio {} needs a pitch cone over 85°: these aren't built", num(sigma), num(ratio)))?;
+    let target = d1.or(d2.map(|d| d / ratio)).or(s.cone_distance.filter(|r| *r > 0.0).map(|re| 2.0 * re * dl1.sin()));
+    let zl = (14.0 * dl1.cos()).ceil().max(6.0) as u32;
+    let base = c.same.then_some((c.base.module, c.base.teeth, c.base.teeth2));
+    let want = c.spec.teeth.max(zl);
+    let mods = match target {
+        Some(d) => modules(s.module, d / 100.0, d / 5.0, s.printable),
+        None => vec![(s.module.unwrap_or(c.spec.module), false)],
+    };
+    let mut best: Option<(f64, f64, u32, u32)> = None;
+    for (m, second) in mods {
+        let firsts: Vec<u32> = match (s.teeth, target) {
+            (Some(z), _) => vec![z],
+            (None, Some(d)) => [(d / m).floor(), (d / m).ceil()].into_iter().map(|z| z.max(1.0) as u32).collect(),
+            (None, None) => (zl..=want + 40).collect(),
+        };
+        for z1 in firsts {
+            let z2 = (f64::from(z1) * ratio).round() as u32;
+            if z1 < zl.min(s.teeth.unwrap_or(zl)) || z2 < 6 || z2 > 2000 {
+                continue;
+            }
+            let cand = Spec { module: m, teeth: z1, teeth2: z2, teeth3: 0, ..c.spec.clone() };
+            let Ok(g) = bevel_planet::geometry(&cand) else { continue };
+            let mut score = 40.0 * (f64::from(z2) / f64::from(z1) / ratio).ln().abs() + 2.0 * (g.sigma.to_degrees() - sigma).abs() + if second { 0.3 } else { 0.0 };
+            if mode != BevelPlanetMode::Single && (z1 + g.z_far) % n != 0 {
+                score += 3.0;
+            }
+            if g.warnings.iter().any(|w| w.contains("collide")) {
+                score += 20.0;
+            }
+            score += match target {
+                Some(d) => 100.0 * (m * f64::from(z1) - d).abs() / d + 0.03 * (f64::from(z1) - 24.0).max(0.0) + 0.1 * (16.0 - f64::from(z1)).max(0.0),
+                None => 0.02 * (f64::from(z1) - f64::from(want)).abs(),
+            };
+            if base.is_some_and(|b| (b.0 - m).abs() < 1e-12 && b.1 == z1 && b.2 == z2) {
+                score -= 0.01;
+            }
+            if best.is_none_or(|b| score < b.0 - 1e-12) {
+                best = Some((score, m, z1, z2));
+            }
+        }
+    }
+    let (_, m, z1, z2) = best.ok_or("no module and teeth make this set: a pitch cone would open past 85°, or the second sun or ring can't be made at this cone angle; change the cone angle or the ratio")?;
+    c.spec.module = match target {
+        Some(d) if s.exact => d / f64::from(z1),
+        _ => m,
+    };
+    (c.spec.teeth, c.spec.teeth2, c.spec.teeth3) = (z1, z2, 0);
+    let g = bevel_planet::geometry(&c.spec)?;
+    c.spec.teeth3 = g.z_far;
+    (c.spec.shift, c.spec.shift2) = (0.0, 0.0);
+    let m = c.spec.module;
+    c.face(0.3 * g.re);
+    let (fs, fp, ff) = (f64::from(z1), f64::from(z2), f64::from(g.z_far));
+    let far = if mode == BevelPlanetMode::Ring { "ring" } else { "sun 2" };
+    c.row("module", m, Unit::None);
+    c.row("sun teeth", fs, Unit::None);
+    c.row("planet teeth", fp, Unit::None);
+    if mode != BevelPlanetMode::Single {
+        c.row(&format!("{far} teeth"), ff, Unit::None);
+    }
+    c.row("planets", f64::from(n), Unit::None);
+    ratio_rows(c, ratio, fp / fs);
+    c.row("cone angle", g.sigma.to_degrees(), Unit::Deg);
+    if (g.sigma.to_degrees() - sigma).abs() > 0.005 {
+        c.row("cone angle asked", sigma, Unit::Deg);
+    }
+    c.row("sun pitch cone angle", g.delta_sun.to_degrees(), Unit::Deg);
+    c.row("planet pitch cone angle", g.delta_planet.to_degrees(), Unit::Deg);
+    c.versus("sun outer pitch diameter", d1, m * fs);
+    c.versus("planet outer pitch diameter", d2, m * fp);
+    c.versus("cone distance", s.cone_distance, g.re);
+    match mode {
+        BevelPlanetMode::Single => {}
+        BevelPlanetMode::Differential => {
+            c.row("sun 2 outer pitch diameter", m * ff, Unit::Mm);
+            c.row("ratio (sun 2 fixed, sun in, carrier out)", 1.0 + ff / fs, Unit::None);
+        }
+        BevelPlanetMode::Ring => {
+            c.row("ring outer pitch diameter", m * ff, Unit::Mm);
+            c.row("ratio (ring fixed, sun in, carrier out)", 1.0 + ff / fs, Unit::None);
+        }
+    }
+    c.row("face width", c.spec.face_width, Unit::Mm);
+    for w in g.warnings {
+        c.note(w);
+    }
     Ok(())
 }
 
@@ -2190,6 +2335,25 @@ pub fn measures(spec: &Spec) -> Simple {
             o.eccentricity = Some(s.ellipse_eccentricity);
             o.module = Some(s.module);
         }
+        Kind::BevelPlanetary => {
+            let g = bevel_planet::geometry(s).ok();
+            o.shaft_angle = Some(g.as_ref().map_or(s.shaft_angle, |g| g.sigma.to_degrees()));
+            o.offset = Some(0.0);
+            o.ratio = Some(r(s.teeth, s.teeth2));
+            o.planets = Some(s.planets);
+            o.bevel_planet_mode = Some(s.bevel_planet_mode);
+            o.pitch_diameter = Some(s.module * f64::from(s.teeth));
+            o.pitch_diameter2 = Some(s.module * f64::from(s.teeth2));
+            if let Some(g) = &g {
+                o.cone_distance = Some(g.re);
+                if g.z_far > 0 {
+                    o.ring_diameter = Some(s.module * f64::from(g.z_far));
+                }
+            }
+            o.teeth = Some(s.teeth);
+            o.module = Some(s.module);
+            o.spiral_angle = Some(s.spiral_angle);
+        }
     }
     o
 }
@@ -2285,6 +2449,14 @@ pub fn outputs_of(spec: &Spec) -> Simple {
             o.center_distance = all.center_distance;
             o.teeth = all.teeth;
             o.eccentricity = all.eccentricity;
+        }
+        Kind::BevelPlanetary => {
+            o.shaft_angle = all.shaft_angle;
+            o.ratio = all.ratio;
+            o.planets = all.planets;
+            o.bevel_planet_mode = all.bevel_planet_mode;
+            o.pitch_diameter = all.pitch_diameter;
+            o.spiral_angle = all.spiral_angle;
         }
     }
     o
@@ -2617,6 +2789,7 @@ pub fn schematic(spec: &Spec) -> Schematic {
             b.diameter(r, "ring pitch diameter", 2.0 * ring.gear.r(), s.face_width, Some(Field::RingDiameter));
         }
         Kind::Bevel | Kind::SpiralBevel => bevel_schematic(&mut b),
+        Kind::BevelPlanetary => bevel_planet_schematic(&mut b),
         Kind::Hypoid => hypoid_schematic(&mut b),
         Kind::CrossedHelical => {
             let sigma = s.shaft_angle.to_radians();
@@ -2815,6 +2988,94 @@ fn bevel_schematic(b: &mut Build) {
     b.dim(DimKind::ConeDistance, "cone distance", re, Unit::Mm, vec![i, j], vec![apex_w, large1], Some(Field::ConeDistance));
     b.diameter(i, "pinion outer pitch diameter", 2.0 * r1, 0.0, Some(Field::PitchDiameter));
     b.diameter(j, "gear outer pitch diameter", 2.0 * r2, 0.0, Some(Field::PitchDiameter2));
+}
+
+/// A bevel planetary set: the sun, every planet and the second sun or ring, on the frames
+/// `plan()` gives them (the apex at the spec's origin, the sun below it on −z).
+fn bevel_planet_schematic(b: &mut Build) {
+    let s = b.s;
+    let g = match bevel_planet::geometry(s) {
+        Ok(g) => g,
+        Err(e) => {
+            b.out.note = Some(e);
+            return;
+        }
+    };
+    let o = s.origin;
+    let m = s.module;
+    let re = g.re;
+    let scale = (re - g.face) / re;
+    let mn = m * g.spiral.cos();
+    let (ha, hf) = (s.rack.addendum * mn, s.rack.dedendum * mn);
+    // Pitch, tip and root cones from the large end (z = 0) towards the apex (+z); a ring's tip
+    // is inside its pitch cone and its root outside.
+    let cones = |delta: f64, internal: bool| -> Vec<Part> {
+        let h = re * delta.cos();
+        let r = re * delta.sin();
+        let z1 = h * (1.0 - scale);
+        let cone = |rr: f64, role: Role| Part { role, shape: Shape::Cone { r0: rr, z0: 0.0, r1: rr * scale, z1, apex_z: (rr / delta.tan()).min(1e9), half_angle: delta.to_degrees() } };
+        let (tip, root) = if internal { (r - ha * delta.cos(), r + hf * delta.cos()) } else { (r + ha * delta.cos(), (r - hf * delta.cos()).max(0.0)) };
+        vec![cone(r, Role::Pitch), cone(tip.max(0.0), Role::Tip), cone(root, Role::Root)]
+    };
+    let bored = |parts: &mut Vec<Part>, bore: &Bore, delta: f64| {
+        if bore.kind != BoreKind::None && bore.diameter > 0.0 {
+            parts.push(cyl(Role::Bore, bore.diameter / 2.0, 0.0, re * delta.cos() * (1.0 - scale)));
+        }
+    };
+    let (sigma, h_sun, h_planet) = (g.sigma, re * g.delta_sun.cos(), re * g.delta_planet.cos());
+    let mut ps = cones(g.delta_sun, false);
+    bored(&mut ps, &s.bore, g.delta_sun);
+    let sun = b.add("sun", 1, Frame { origin: [o[0], o[1], o[2] - h_sun], x: [1.0, 0.0, 0.0], z: [0.0, 0.0, 1.0] }, m * f64::from(g.z_sun), ps);
+    let rot = |v: [f64; 3], t: f64| {
+        let (sn, cs) = t.sin_cos();
+        [v[0] * cs - v[1] * sn, v[0] * sn + v[1] * cs, v[2]]
+    };
+    let mut first = None;
+    for (k, th) in g.azimuths.iter().enumerate() {
+        let ax = rot([-sigma.sin(), 0.0, sigma.cos()], *th);
+        let frame = Frame { origin: [0, 1, 2].map(|i| o[i] - ax[i] * h_planet), x: rot([sigma.cos(), 0.0, sigma.sin()], *th), z: ax };
+        let mut pp = cones(g.delta_planet, false);
+        bored(&mut pp, &s.bore2, g.delta_planet);
+        let j = b.add(&format!("planet {}", k + 1), 2, frame, m * f64::from(g.z_planet), pp);
+        // The colour (and preview place) of the one planet the preview shows.
+        b.out.members[j].color = 1;
+        first.get_or_insert(j);
+    }
+    let far = match g.mode {
+        BevelPlanetMode::Single => None,
+        BevelPlanetMode::Differential => {
+            let d = PI - g.delta_far;
+            let mut pf = cones(d, false);
+            bored(&mut pf, &s.bore, d);
+            Some(b.add("sun 2", 3, Frame { origin: [o[0], o[1], o[2] + re * d.cos()], x: [1.0, 0.0, 0.0], z: [0.0, 0.0, -1.0] }, m * f64::from(g.z_far), pf))
+        }
+        BevelPlanetMode::Ring => {
+            let d = g.delta_far;
+            let mut pr = cones(d, true);
+            let rim = if s.rim > 0.0 { s.rim } else { 3.0 * m };
+            let outer = re * d.sin() + hf * d.cos() + rim;
+            pr.push(Part { role: Role::Body, shape: Shape::Tube { r_in: re * d.sin() * scale, r_out: outer, z0: 0.0, z1: re * d.cos() * (1.0 - scale) } });
+            Some(b.add("ring", 3, Frame { origin: [o[0], o[1], o[2] - re * d.cos()], x: [1.0, 0.0, 0.0], z: [0.0, 0.0, 1.0] }, m * f64::from(g.z_far), pr))
+        }
+    };
+    if let Some(f) = far {
+        b.out.members[f].color = 2;
+    }
+    let apex_w = b.out.members[sun].world([0.0, 0.0, h_sun]);
+    let norm = |v: [f64; 3]| v_mul(v, re / v_dot(v, v).sqrt().max(1e-12));
+    if let Some(j) = first {
+        let arm1 = v_sub(b.out.members[sun].world([0.0; 3]), apex_w);
+        let arm2 = v_sub(b.out.members[j].world([0.0; 3]), apex_w);
+        b.dim(DimKind::ShaftAngle, "cone angle", sigma.to_degrees(), Unit::Deg, vec![sun, j], vec![apex_w, v_add(apex_w, norm(arm1)), v_add(apex_w, norm(arm2))], Some(Field::ShaftAngle));
+        b.diameter(j, "planet outer pitch diameter", m * f64::from(g.z_planet), 0.0, Some(Field::PitchDiameter2));
+    }
+    let large = b.out.members[sun].world([re * g.delta_sun.sin(), 0.0, 0.0]);
+    b.dim(DimKind::ConeDistance, "cone distance", re, Unit::Mm, vec![sun], vec![apex_w, large], Some(Field::ConeDistance));
+    b.diameter(sun, "sun outer pitch diameter", m * f64::from(g.z_sun), 0.0, Some(Field::PitchDiameter));
+    if let Some(f) = far {
+        let label = if g.mode == BevelPlanetMode::Ring { "ring outer pitch diameter" } else { "sun 2 outer pitch diameter" };
+        b.diameter(f, label, m * f64::from(g.z_far), 0.0, None);
+    }
 }
 
 thread_local! {

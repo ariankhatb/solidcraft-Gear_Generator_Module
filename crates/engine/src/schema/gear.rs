@@ -628,6 +628,66 @@ pub struct ClearanceParams {
     /// longer.
     #[serde(default)]
     pub travel: Option<f64>,
+    /// Make the keep-out body itself (default true); false places the seats only, for
+    /// `bearing_bodies`.
+    #[serde(default)]
+    pub keep_out: Option<bool>,
+    /// Also build each seat's bearing as two bodies, its outer and inner ring (plain sections, no
+    /// balls); with `assembly` the outer ring is held and the inner ring rigid on its gear's
+    /// member. Default false (with `selection` bearings: what `assembly` is).
+    #[serde(default)]
+    pub bearing_bodies: Option<bool>,
+}
+
+/// What a selected thing is for.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionRole {
+    /// A gear's shaft (with a circle: its pitch circle too).
+    Shaft,
+    /// Where a bearing goes.
+    Bearing,
+}
+
+/// One selected thing of `selection` (gear.create, gear.calculate, gear.update): exactly one of
+/// a sketch entity (`sketch` with `point` or `curve`: a line, or a circle, its centre the shaft
+/// and its diameter the pitch diameter), a model `edge` or `face` (a point on it: a straight or
+/// circular edge, a cylinder, cone or torus face) or an `axis` (X, Y, Z, a construction axis's
+/// name, {origin?, dir}).
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct GearSelection {
+    #[serde(default)]
+    pub sketch: Option<Value>,
+    #[serde(default)]
+    pub point: Option<String>,
+    #[serde(default)]
+    pub curve: Option<String>,
+    #[serde(default)]
+    pub edge: Option<Value>,
+    #[serde(default)]
+    pub face: Option<Value>,
+    #[serde(default)]
+    pub axis: Option<Value>,
+    /// Shaft (default) or bearing (the default when `bearing` is given).
+    #[serde(default)]
+    pub role: Option<SelectionRole>,
+    /// Shaft: the gear's pitch diameter in mm (a circle's own diameter when left out).
+    #[serde(default)]
+    pub pitch_diameter: Option<f64>,
+    /// Shaft: the gear's teeth.
+    #[serde(default)]
+    pub teeth: Option<u32>,
+    /// Shaft: how far along it from its origin (a sketch line's first end, an edge's or axis's
+    /// origin) the gears sit, mm (the first shaft's; the others' must agree). Bearing on a
+    /// shaft: how far along it the bearing's middle sits (default 0). Not for points.
+    #[serde(default)]
+    pub along: Option<f64>,
+    /// Bearing: its standard name ("608", "6001", "MR105"...). One size per set: every bearing
+    /// of a selection names the same one (or leaves it to `clearance_body.bearing`).
+    #[serde(default)]
+    pub bearing: Option<String>,
 }
 
 /// A gear set: involute spur, helical, herringbone, internal and rack; pairs and planetary sets;
@@ -1063,6 +1123,13 @@ pub struct GearParams {
     /// sketch's x, then y, then its normal).
     #[serde(default)]
     pub sketch_turn: Option<[f64; 3]>,
+    /// Selected shafts and bearing places, mixed (sketch points, lines and circles of one or
+    /// more sketches, model edges and faces, axes): the shafts in order make the set (one: a
+    /// gear on it; two: the set their lie implies, as gear.from_axes solves it; three or more,
+    /// parallel: a gear train), each with its size; the bearings are seats of the keep-out body
+    /// and, with `assembly`, bearing bodies. Not with `sketch`, `axis1` or `placement`.
+    #[serde(default)]
+    pub selection: Option<Vec<GearSelection>>,
 }
 
 /// `gear.inspect`: which set (neither: every set in the design).

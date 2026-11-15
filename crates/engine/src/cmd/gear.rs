@@ -34,7 +34,7 @@ use super::sketch::{Left, edit_solved};
 use super::sketch_import::add_geometry;
 use crate::params::bad;
 use crate::schema::gear::{
-    BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, SeatAlongParams, SeatPointParams, GearAxesResult, GearAxis, GearAxisLine, GearBevelPlanetMode, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult,
+    BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, SeatAlongParams, SeatPointParams, GearAxesResult, GearAxis, GearSelection, SelectionRole, GearAxisLine, GearBevelPlanetMode, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult,
     DiffDrive, DiffMount, DiffStyle, DifferentialGoalParams, DifferentialParams, GearMaterial, GearParams, GearRelation, GearResult, GearSet, GearType, HardwareParams, PlacementParams, RackStandard, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
 };
 use solidcraft_gear::spline::SplineStandard;
@@ -69,6 +69,8 @@ pub static COMMANDS: &[CommandSpec] = &[
              only?: 1|2|3 (one member; differential: 1 the gears, 2 the case, 3 the drive); origin?: [x,y,z]; coupon?: bool, coupon_teeth? (pair, planetary: a print test coupon instead of the set); name?. Axis-first: axis1?, axis2?: X|Y|Z | construction axis name | {origin?, dir} | {edge|face: [x,y,z]} | \
              {sketch, curve} | {sketch, point} (a sketch point: the shaft through it normal to the sketch) (the shafts: the set is sized and placed on them, type? defaults to what fits, module/teeth/teeth2/starts not given are chosen), \
              Drawn in one sketch: sketch?: id|name (circles = pitch circles, lines = shafts; type = the mode or what the drawing looks like), picks?: [point/curve ids per slot, origin point first], sketch_turn?: [x°, y°, normal°] about the origin point, \
+             Selected: selection?: [{sketch, point|curve} | {edge: [x,y,z]} | {face: [x,y,z]} | {axis}, role?: shaft|bearing, pitch_diameter?, teeth?, along? (mm along the shaft), bearing? (\"608\"...)] \
+             (shafts in order: one a gear on it, two the set their lie implies, three or more parallel a gear train; a circle is a shaft with its pitch Ø; bearings are keep-out seats, with assembly bearing bodies), \
              ratio? (teeth2 ÷ teeth), cone_distance? (bevels, mm), flip1?, flip2?, swap_axes?, along? (mm along axis1); placement?: {origin, x, z}; \
              strength rating: torque? (N·m) | power? (kW), speed? (rpm) on the driver, \
              material?, material2?, material3?: steel_normalized|steel_through_hardened|steel_case_hardened|steel_nitrided|cast_iron|bronze|pom|pa66|pla|petg, \
@@ -382,6 +384,12 @@ fn clearance_of(p: &ClearanceParams) -> Clearance {
     if let Some(v) = p.travel {
         c.travel = v;
     }
+    if let Some(v) = p.keep_out {
+        c.keep_out = v;
+    }
+    if let Some(v) = p.bearing_bodies {
+        c.bearing_bodies = v;
+    }
     c.seats = p
         .seats
         .iter()
@@ -417,6 +425,8 @@ fn clearance_params(c: &Clearance) -> ClearanceParams {
                 .collect()
         }),
         travel: (c.travel > 0.0).then_some(c.travel),
+        keep_out: (!c.keep_out).then_some(false),
+        bearing_bodies: c.bearing_bodies.then_some(true),
     }
 }
 
@@ -1397,8 +1407,149 @@ fn solve_measured(cmd: &str, p: &GearParams, sk: &GearSketch, m: sketch_rules::M
     Ok(solved)
 }
 
+/// A set on selected shafts with bearings (`selection`; see [`GearSelection`]): each shaft
+/// resolved where it is now, the set made by [`solidcraft_gear::select::set_on_shafts`] (one
+/// shaft a gear, two the axis-first solver's set, three or more parallel a train), the bearings
+/// added to the keep-out body's seats.
+fn from_selection(s: &Session, cmd: &str, p: &GearParams, items: &[GearSelection], assembly: bool) -> Result<Solved> {
+    use solidcraft_gear::select::{Ask, Shaft, bearing_point, set_on_shafts};
+    if p.sketch.is_some() || p.axis1.is_some() || p.axis2.is_some() || p.placement.is_some() {
+        return Err(bad(cmd, "give `selection`, or `sketch`, or `axis1` (`axis2`) or `placement`: one of them"));
+    }
+    if items.is_empty() {
+        return Err(bad(cmd, "`selection` is empty: select a shaft for the gear"));
+    }
+    if items.len() > 64 {
+        return Err(bad(cmd, "`selection` takes 64 things at most"));
+    }
+    let mut shafts: Vec<Shaft> = Vec::new();
+    let mut along: Option<f64> = None;
+    let mut seats: Vec<Seat> = Vec::new();
+    let mut bearing: Option<String> = None;
+    for (i, it) in items.iter().enumerate() {
+        let what = format!("selection[{i}]");
+        let given = [("sketch point", it.point.is_some()), ("sketch curve", it.curve.is_some()), ("edge", it.edge.is_some()), ("face", it.face.is_some()), ("axis", it.axis.is_some())];
+        let named: Vec<&str> = given.iter().filter(|(_, g)| *g).map(|(n, _)| *n).collect();
+        if named.len() != 1 {
+            let extra = if named.is_empty() { String::new() } else { format!(", not {}", named.join(" and ")) };
+            return Err(bad(cmd, format!("`{what}`: give exactly one of {{sketch, point}}, {{sketch, curve}}, {{edge: [x,y,z]}}, {{face: [x,y,z]}} or {{axis}}{extra}")));
+        }
+        if (it.point.is_some() || it.curve.is_some()) != it.sketch.is_some() {
+            return Err(bad(cmd, format!("`{what}`: a sketch point or curve needs `sketch` (and `sketch` a point or curve)")));
+        }
+        for (name, v) in [("pitch_diameter", it.pitch_diameter), ("along", it.along)] {
+            if v.is_some_and(|v| !v.is_finite() || v.abs() > 1e6) {
+                return Err(bad(cmd, format!("`{what}.{name}` must be a finite number")));
+            }
+        }
+        let role = it.role.unwrap_or(if it.bearing.is_some() { SelectionRole::Bearing } else { SelectionRole::Shaft });
+        // A sketch circle: its centre the shaft (normal to its sketch), its diameter the gear's.
+        let circle = match (&it.sketch, &it.curve) {
+            (Some(sk), Some(curve)) => {
+                let id = super::features::sketch_id(s, Some(sk), cmd, &what)?;
+                let gs = sketch_entities(s, id).map_err(|e| bad(cmd, format!("`{what}`: {e}")))?;
+                gs.circles.iter().find(|(k, _)| k == curve).map(|(_, c)| (Axis { origin: gs.frame.world([c.c.x, c.c.y, 0.0]), dir: gs.frame.z }, 2.0 * c.r))
+            }
+            _ => None,
+        };
+        let axis = match circle {
+            Some((a, _)) => a,
+            None => {
+                let v = if let Some(e) = &it.edge {
+                    json!({"edge": e})
+                } else if let Some(f) = &it.face {
+                    json!({"face": f})
+                } else if let Some(a) = &it.axis {
+                    a.clone()
+                } else if let Some(pt) = &it.point {
+                    json!({"sketch": it.sketch, "point": pt})
+                } else {
+                    json!({"sketch": it.sketch, "curve": it.curve})
+                };
+                axis_of(s, &GearAxis(v), cmd, &what)?
+            }
+        };
+        match role {
+            SelectionRole::Shaft => {
+                if it.bearing.is_some() {
+                    return Err(bad(cmd, format!("`{what}`: a shaft takes no `bearing`; select it again with role bearing")));
+                }
+                let a = it.along.unwrap_or(0.0);
+                match along {
+                    None => along = Some(a),
+                    Some(first) if it.along.is_some() && (a - first).abs() > 1e-9 => {
+                        return Err(bad(cmd, format!("`{what}.along`: meshing gears sit at one place along their shafts: give `along` on the first shaft only")));
+                    }
+                    _ => {}
+                }
+                let d = it.pitch_diameter.or(circle.map(|(_, d)| d));
+                shafts.push(Shaft { axis, pitch_diameter: d, teeth: it.teeth });
+            }
+            SelectionRole::Bearing => {
+                if it.pitch_diameter.is_some() || it.teeth.is_some() {
+                    return Err(bad(cmd, format!("`{what}`: a bearing takes no pitch_diameter or teeth")));
+                }
+                if let Some(name) = it.bearing.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                    if solidcraft_gear::hub::bearing(name).is_none() {
+                        return Err(bad(cmd, format!("`{what}.bearing`: no standard bearing is called {name}")));
+                    }
+                    match &bearing {
+                        Some(b) if b != name => return Err(bad(cmd, format!("`{what}.bearing`: the bearings of a set are one size for now: {b} and {name} given"))),
+                        _ => bearing = Some(name.to_string()),
+                    }
+                }
+                // A point (or a circle's centre) where it is; on a shaft, `along` it.
+                let at = if it.point.is_some() || circle.is_some() {
+                    if it.along.is_some() {
+                        return Err(bad(cmd, format!("`{what}.along`: a bearing at a point sits there; `along` is for a bearing on a shaft")));
+                    }
+                    axis.origin
+                } else {
+                    bearing_point(&axis, it.along.unwrap_or(0.0))
+                };
+                seats.push(Seat::Point(at));
+            }
+        }
+    }
+    let kind = p.kind.map(|t| KINDS.iter().find(|(x, _)| *x == t).map(|(_, k)| *k).unwrap_or(Kind::Spur));
+    let mut base = spec_of(&GearParams { kind: Some(gear_type(kind.unwrap_or(Kind::Spur))), ..p.clone() }).map_err(|e| bad(cmd, e))?;
+    if !seats.is_empty() {
+        let mut c = base.clearance_body.clone().unwrap_or_default();
+        match (&c.bearing, &bearing) {
+            (Some(b), Some(n)) if b.trim() != n => return Err(bad(cmd, format!("`selection`: bearing {n} selected, but clearance_body.bearing is {b}"))),
+            (None, Some(n)) => c.bearing = Some(n.clone()),
+            (None, None) if c.bearing_size.is_none() => {
+                return Err(bad(cmd, "`selection`: the bearings need a size: give `bearing` (a standard name such as 608) on one of them, or `clearance_body.bearing`"));
+            }
+            _ => {}
+        }
+        c.seats.extend(seats);
+        // Bodies for the bearings with an assembly, unless asked otherwise.
+        if p.clearance_body.as_ref().and_then(|c| c.bearing_bodies).is_none() {
+            c.bearing_bodies = assembly;
+        }
+        base.clearance_body = Some(c);
+    }
+    let ask = Ask {
+        kind,
+        module: p.module,
+        ratio: p.ratio,
+        along: along.or(p.along).unwrap_or(0.0),
+        face_width: p.face_width,
+        helix: p.helix_angle,
+        left_hand: p.hand == Some(SpiralHand::Left) || p.helix_angle.is_some_and(|h| h < 0.0),
+    };
+    set_on_shafts(&shafts, &ask, &base).map_err(|e| bad(cmd, e))
+}
+
 fn ask(s: &Session, cmd: &str, p: &Value) -> Result<(Asked, Plan)> {
     let params = read(cmd, p)?;
+    if let Some(items) = &params.selection {
+        let solved = from_selection(s, cmd, &params, items, assembly::wanted(p))?;
+        let asked = Asked { spec: solved.spec.clone(), solved: Some(solved) };
+        let plan = solidcraft_gear::plan(&asked.spec).map_err(|e| bad(cmd, e))?;
+        return Ok((asked, plan));
+    }
     if params.sketch.is_some() {
         let solved = from_sketch(s, cmd, &params)?;
         let asked = Asked { spec: solved.spec.clone(), solved: Some(solved) };

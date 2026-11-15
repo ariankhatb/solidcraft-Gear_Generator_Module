@@ -1340,3 +1340,29 @@ fn a_users_body_name_stays_through_an_update() {
     assert_eq!(u["bodies"], json!(["Gear z24", "Gear z20 (2)"]), "{u}");
     assert!(!u["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap_or_default().contains("keeps its name")), "{u}");
 }
+
+/// Selected shafts (sketch points, a circle, an axis) and a bearing on one: a train on the
+/// shafts, the bearing a keep-out seat and, with assembly, two ring bodies.
+#[test]
+fn selected_shafts_and_a_bearing_make_a_train_with_a_bearing() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[("sketch.point", json!({"point": [0, 0], "id": "p1"})), ("sketch.point", json!({"point": [50, 0], "id": "p2"})), circle(50.0, 45.0, 15.0, "c3")]);
+    let sel = json!([
+        {"sketch": sk, "point": "p1", "pitch_diameter": 40},
+        {"sketch": sk, "point": "p2"},
+        {"sketch": sk, "curve": "c3"},
+        {"axis": {"origin": [0, 0, 0], "dir": [0, 0, 1]}, "bearing": "608", "along": -15}
+    ]);
+    let r = run(&mut s, "gear.calculate", json!({"selection": sel, "type": "spur"}));
+    assert!(fact_opt(&r, "train ratio gear 1 → gear 3").is_some(), "{r}");
+    let r = run(&mut s, "gear.create", json!({"selection": sel, "type": "spur", "assembly": true}));
+    // Three gears, the bearing's outer and inner ring, and the keep-out body.
+    assert!(r["bodies"].as_array().unwrap().len() >= 5, "{r}");
+    // One shaft: a gear on it.
+    run(&mut s, "gear.calculate", json!({"selection": [{"axis": "Z", "pitch_diameter": 40}]}));
+    // Clear errors.
+    let e = s.execute("gear.calculate", &json!({"selection": [{"axis": "Z", "face": [0, 0, 0]}]})).unwrap_err().to_string();
+    assert!(e.contains("exactly one of"), "{e}");
+    let e = s.execute("gear.calculate", &json!({"selection": [{"axis": "Z"}, {"axis": "X", "bearing": "nope"}]})).unwrap_err().to_string();
+    assert!(e.contains("no standard bearing"), "{e}");
+}

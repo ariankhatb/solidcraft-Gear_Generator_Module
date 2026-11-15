@@ -784,6 +784,9 @@ pub struct Plan {
     /// held, and how their motions are tied ([`Assembly`]). Filled by every kind's planner; the
     /// engine makes components and joints of it (`gear.create` with `assembly: true`).
     pub assembly: Assembly,
+    /// The bearings placed at the clearance body's seats (`Spec::clearance_body`), where they
+    /// are; built as bodies too when it asks for `bearing_bodies`.
+    pub bearings: Vec<crate::clearance::PlacedBearing>,
     /// Why the set can't be built, found while planning it ([`plan`] returns it as the error).
     refused: Option<String>,
 }
@@ -1140,8 +1143,14 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
     // How the bodies go together, where they are (a differential's is planned with it).
     assembly::fill(s, &mut p);
     // The clearance body, from the bodies where they are.
-    if s.clearance_body.is_some() && s.kind != Kind::Differential {
-        p.clearance = Some(crate::clearance::clearance_body(s, &mut p)?);
+    if let Some(c) = s.clearance_body.as_ref().filter(|_| s.kind != Kind::Differential) {
+        let body = crate::clearance::clearance_body(s, &mut p)?;
+        if c.keep_out {
+            p.clearance = Some(body);
+        }
+        if c.bearing_bodies {
+            crate::clearance::add_bearing_bodies(s, &mut p);
+        }
     }
     Ok(p)
 }

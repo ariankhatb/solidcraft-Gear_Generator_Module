@@ -332,7 +332,7 @@ fn fact(label: &str, value: f64, unit: Unit) -> Fact {
 }
 
 /// Some direction square to `z`: world X where it can be, so world Z gives the world frame.
-fn square_to(z: V) -> V {
+pub(crate) fn square_to(z: V) -> V {
     let seed = if z[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
     unit(sub(seed, mul(z, dot(seed, z)))).unwrap_or([1.0, 0.0, 0.0])
 }

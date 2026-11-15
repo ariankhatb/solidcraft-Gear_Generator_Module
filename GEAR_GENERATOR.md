@@ -129,9 +129,6 @@ Tests: `cargo test --release -p solidcraft-gear` (the gear math, over 240 tests)
 
 Checked in the app and the CLI on this build:
 
-- Assembly limits: an elliptical pair is linked at its mean 1:1 ratio, so it drifts in and out of
-  mesh when driven; a cycloidal drive's disc only turns on its own axis inside the grounded pin
-  ring; planetary sets have no carrier body yet, so the carrier is held still.
 - A gear pair with *Assembly*: driving gear 1 by 32° turns gear 2 by −20°. **Edit Gears**, gear 2
   changed to Ø80, **Update**: the joints keep their ids, the link's ratio becomes −0.5 and driving
   still turns both correctly.
@@ -154,6 +151,9 @@ Known issues in this build (being worked on):
 - The kernel's own interference check fails on spiral bevel, hypoid and some differential pairs
   ("proto edge is not listed", "not a closed solid", "Bad Infinite Region"): a kernel Boolean
   issue, not the gears. The gear crate's mesh checker covers those sets.
+- Assembly limits: an elliptical pair is linked at its mean 1:1 ratio, so it drifts in and out of
+  mesh when driven; a cycloidal drive's disc only turns on its own axis inside the grounded pin
+  ring; planetary sets have no carrier body yet, so the carrier is held still.
 - The bevel planetary's internal ring still has flat ends (it doesn't end on its cones yet).
 
 ## Feedback

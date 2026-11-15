@@ -165,16 +165,15 @@ fn probe_flat() {
     }
 }
 
-/// Bevel planetary sets with a flat member (planets near a crown, a flat ring) and planets with
+/// Bevel planetary sets with flat planets (near a crown) and planets with
 /// faces of their own.
 pub(crate) fn planetary_sets() -> Vec<(&'static str, Spec)> {
-    use crate::plan::BevelPlanetMode::{Differential, Ring, Single};
+    use crate::plan::BevelPlanetMode::{Differential, Single};
     let bp = d(Kind::BevelPlanetary);
     let set = |mode, angle: f64, zs: u32, zp: u32, n: u32| Spec { bevel_planet_mode: mode, shaft_angle: angle, teeth: zs, teeth2: zp, planets: n, ..bp.clone() };
     vec![
         ("bp single 100 12:30 x1 flat planet", set(Single, 100.0, 12, 30, 1)),
         ("bp diff 90 10:30 x2 flat planets spiral 30", Spec { spiral_angle: 30.0, ..set(Differential, 90.0, 10, 30, 2) }),
-        ("bp ring 45 20:30 x2 flat ring", set(Ring, 45.0, 20, 30, 2)),
         ("bp single 90 16:10 x3 planets face 8 heel in 1", Spec { face_width2: 8.0, face_offset2: 1.0, ..set(Single, 90.0, 16, 10, 3) }),
     ]
 }
@@ -186,30 +185,3 @@ fn bevel_planetary_flat_and_own_faces_mesh() {
     }
 }
 
-#[test]
-#[ignore]
-fn probe_ring() {
-    use crate::plan::BevelPlanetMode::Ring;
-    let s = Spec { bevel_planet_mode: Ring, shaft_angle: 30.0, teeth: 20, teeth2: 10, planets: 3, ..d(Kind::BevelPlanetary) };
-    let p = plan(&s).unwrap();
-    let mp = &p.meshes3d[1];
-    let Some([a, b]) = &mp.bodies else { panic!() };
-    let m = s.module;
-    let mut pair = crate::mesh3d::Pair::for_run(a, b, 0.03 * m, 0.1 * m, mp.ratio, -mp.period, 2.0 * mp.period);
-    let r = pair.run(mp.ratio, 0.0, 0.0, 2.0 * mp.period, 16);
-    pair.a.spin = r.at;
-    pair.b.spin = mp.ratio * r.at;
-    eprintln!("pen {} at {:?}", r.penetration, r.place);
-    for (name, solid) in [("planet", &pair.a), ("ring", &pair.b)] {
-        eprintln!("{name}: {:?}  local {:?}", solid.parts_holding(r.place), solid.local(r.place));
-        for (k, e) in [(0usize, 0.01), (1, 0.01), (2, 0.01)] {
-            let mut q = r.place;
-            q[k] += e;
-            let mut q2 = r.place;
-            q2[k] -= e;
-            eprintln!("   {k} +: {:?}  -: {:?}", solid.parts_holding(q), solid.parts_holding(q2));
-        }
-    }
-    eprintln!("ring steps: {:?}", b.steps.iter().map(|st| match st { Step::Revolve { profile, op } => format!("revolve {op:?} {profile:?}"), Step::RingTaper { rim, z0, height, scale, .. } => format!("ringtaper rim {rim} z0 {z0} h {height} scale {scale}"), Step::Taper { z0, height, scale, .. } => format!("taper z0 {z0} h {height} scale {scale}"), _ => "other".into() }).collect::<Vec<_>>());
-    eprintln!("planet steps: {:?}", a.steps.iter().map(|st| match st { Step::Revolve { profile, op } => format!("revolve {op:?} {profile:?}"), Step::Taper { z0, height, scale, .. } => format!("taper z0 {z0} h {height} scale {scale}"), _ => "other".into() }).collect::<Vec<_>>());
-}

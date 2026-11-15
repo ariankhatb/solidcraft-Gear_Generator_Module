@@ -1630,9 +1630,10 @@ fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, face: Con
     (teeth, flank)
 }
 
-/// Whether the engine's loft of a spiral [`Step::Taper`] (through [`taper_sections`] sections)
-/// would have the kernel pair a section's segments with others than their own.
-pub(crate) fn taper_slips(step: &Step) -> bool {
+/// Whether the engine's loft of a spiral [`Step::Taper`] of `teeth` teeth (through
+/// [`taper_sections`] sections) would have the kernel pair a tooth's segments with others than
+/// the same tooth's (a restart by whole teeth is harmless).
+pub(crate) fn taper_slips(step: &Step, teeth: u32) -> bool {
     let Step::Taper { outline, twist, scale, .. } = step else { return false };
     if twist.abs() <= 1e-12 {
         return false;
@@ -1644,7 +1645,7 @@ pub(crate) fn taper_slips(step: &Step) -> bool {
             outline.scaled(k).rotated(taper_turn(*twist, *scale, k))
         })
         .collect();
-    crate::hypoid::slips(&sections, 0)
+    crate::hypoid::slips(&sections, teeth as usize)
 }
 
 /// A bevel member's teeth ([`Crown::tooth`], [`cone_teeth`]): with fewer fit points when a long
@@ -1656,7 +1657,9 @@ pub(crate) fn lined_up_cone_teeth(crown: &Crown, z: u32, mn: f64, skew: &dyn Fn(
     for coarse in [1.0, 1.5, 2.0, 3.0] {
         let (sides, flank) = crown.tooth_with(z, mn, skew, coarse);
         let teeth = cone_teeth(&sides, z, phase, delta, re, face, wind, m);
-        let slips = wind != 0.0 && teeth.steps.first().is_some_and(taper_slips);
+        // (Only a flat cone's taper is long enough to need it; a big gear's check would cost
+        // more than the plan.)
+        let slips = wind != 0.0 && delta > 60f64.to_radians() && z <= 120 && teeth.steps.first().is_some_and(|st| taper_slips(st, z));
         out = Some((teeth, flank));
         if !slips {
             break;

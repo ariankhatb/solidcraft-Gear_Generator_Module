@@ -35,8 +35,15 @@ fn lofted(step: &Step) -> Option<Vec<Outline>> {
 
 /// The tooth count a loft's outline repeats with: the first of the set's counts that divides
 /// its corner count (whole-tooth restarts are harmless), else none (any restart must be 0).
-fn teeth_of(s: &Spec, sections: &[Outline]) -> usize {
+fn teeth_of(s: &Spec, sections: &[Outline], body: &str) -> usize {
     let corners = sections[0].segs.len();
+    // The body's own count where its name gives it ("Bevel z34"): a set's other count may
+    // divide the corners too (17 those of a z34 gear), and would allow only restarts by two of
+    // its teeth.
+    let named = body.rsplit(" z").next().and_then(|t| t.split_whitespace().next()).and_then(|t| t.parse::<usize>().ok());
+    if let Some(z) = named.filter(|z| *z > 1 && corners % z == 0) {
+        return z;
+    }
     // A bevel planetary set's second sun or ring has the count its cone angle gives (teeth3 0).
     let far = if s.kind == Kind::BevelPlanetary { crate::plan::bevel_planet::geometry(s).map_or(0, |g| g.z_far) } else { 0 };
     [far, s.teeth3, s.teeth, s.teeth2].into_iter().map(|z| z as usize).find(|z| *z > 1 && corners % z == 0).unwrap_or(0)
@@ -56,7 +63,7 @@ fn check(s: &Spec, label: &str, bad: &mut Vec<String>) {
             if let Some(sections) = lofted(st)
                 && sections.len() >= 2
                 && sections.iter().all(|o| o.segs.len() == sections[0].segs.len())
-                && crate::hypoid::slips(&sections, teeth_of(s, &sections))
+                && crate::hypoid::slips(&sections, teeth_of(s, &sections, &b.name))
             {
                 bad.push(format!("{label}: {} step {} ({} sections)", b.name, i + 1, sections.len()));
             }

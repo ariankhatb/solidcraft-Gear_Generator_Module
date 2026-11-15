@@ -3,7 +3,7 @@
 use crate::mesh2d::{Verdict, check_mesh};
 use crate::plan::{AssemblyLink, Kind, LinkKind, Plan, Spec};
 use crate::simple::Simple;
-use crate::sketch_rules::{Circle, Drawn, Line, Reading, read, train_spec};
+use crate::sketch_rules::{Circle, Drawn, Line, Reading, TrainCircle, read, size_train, train_spec};
 use crate::V2;
 
 fn circle(x: f64, y: f64, r: f64) -> Circle {
@@ -115,23 +115,26 @@ fn a_gear_inside_a_ring_with_an_idler() {
 }
 
 #[test]
-fn a_gear_touching_nothing_is_built_on_its_own_and_said_so() {
+fn a_gear_touching_nothing_is_an_error_naming_it() {
     let mut c = three();
     c.push(circle(130.0, 0.0, 10.0));
-    let (_, p, notes) = train(Kind::Spur, c, Simple::default()).unwrap();
-    assert!(notes.iter().any(|n| n.contains("gear 4 touches no other circle")), "{notes:?}");
-    assert!(p.warnings.iter().any(|w| w.contains("gear 4 not driven by gear 1")), "{:?}", p.warnings);
-    assert_eq!(p.bodies.len(), 4);
-    meshes_clean(&p, 2);
-    assert!(p.assembly.ratio(0, 3).is_none());
+    let e = train(Kind::Spur, c.clone(), Simple::default()).unwrap_err();
+    assert!(e.contains("gear 4 meshes with nothing") && e.contains("from gear 2's"), "{e}");
+    // Per member: only gear 4 is wrong; the others are sized and meshed.
+    let tc: Vec<TrainCircle> = c.iter().map(|k| TrainCircle::of(*k)).collect();
+    let sized = size_train(&tc, Kind::Spur, &Simple::default(), &Spec::default());
+    assert!(sized.spec.is_none());
+    assert!(sized.errors[..3].iter().all(Option::is_none) && sized.errors[3].is_some(), "{:?}", sized.errors);
+    assert_eq!(sized.members[1].meshes_with, vec![0, 2]);
+    assert_eq!(sized.members[1].teeth, 24);
 }
 
 #[test]
-fn a_circle_nearly_touching_is_refused_where_the_teeth_cross() {
-    // Gear 3 one millimetre short of touching gear 2: not a mesh, but the teeth cross.
+fn a_circle_nearly_touching_is_refused_naming_it() {
+    // Gear 3 one millimetre short of touching gear 2.
     let c = vec![circle(0.0, 0.0, 20.0), circle(50.0, 0.0, 30.0), circle(50.0, 46.0, 15.0)];
     let e = train(Kind::Spur, c, Simple::default()).unwrap_err();
-    assert!(e.contains("gears 2 and 3 overlap"), "{e}");
+    assert!(e.contains("gear 3 meshes with nothing") && e.contains("1 mm from gear 2's"), "{e}");
     // Crossing pitch circles on one layer.
     let c = vec![circle(0.0, 0.0, 20.0), circle(50.0, 0.0, 30.0), circle(50.0, 40.0, 15.0)];
     let e = train(Kind::Spur, c, Simple::default()).unwrap_err();

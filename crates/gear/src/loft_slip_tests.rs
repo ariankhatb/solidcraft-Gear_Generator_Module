@@ -32,7 +32,9 @@ fn lofted(step: &Step) -> Option<Vec<Outline>> {
 /// its corner count (whole-tooth restarts are harmless), else none (any restart must be 0).
 fn teeth_of(s: &Spec, sections: &[Outline]) -> usize {
     let corners = sections[0].segs.len();
-    [s.teeth, s.teeth2, s.teeth3].into_iter().map(|z| z as usize).find(|z| *z > 1 && corners % z == 0).unwrap_or(0)
+    // A bevel planetary set's second sun or ring has the count its cone angle gives (teeth3 0).
+    let far = if s.kind == Kind::BevelPlanetary { crate::plan::bevel_planet::geometry(s).map_or(0, |g| g.z_far) } else { 0 };
+    [far, s.teeth3, s.teeth, s.teeth2].into_iter().map(|z| z as usize).find(|z| *z > 1 && corners % z == 0).unwrap_or(0)
 }
 
 fn check(s: &Spec, label: &str, bad: &mut Vec<String>) {

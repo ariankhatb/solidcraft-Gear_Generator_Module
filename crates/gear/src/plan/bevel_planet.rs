@@ -288,6 +288,8 @@ struct Member {
     height: f64,
     scale: f64,
     zv: f64,
+    /// How far a ring's blank stops short of its cutter's ends at each face (mm).
+    inset: f64,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -329,7 +331,7 @@ fn member(s: &Spec, g: &Geometry, z: u32, delta: f64, spiral: f64, phase: f64, p
     let height = h * (1.0 - scale);
     let steps = vec![Step::Taper { outline: sided_outline(&sides, z, phase), z0: 0.0, height, twist: wind * scale.ln(), scale, op: Op::New }];
     let (rf, ra) = crown.radii();
-    Some(Member { steps, rf, ra, height, scale, zv })
+    Some(Member { steps, rf, ra, height, scale, zv, inset: 0.0 })
 }
 
 /// The crown gear that cuts a member's spaces (as `bevel_member`'s, without profile shift).
@@ -468,8 +470,38 @@ fn ring_member(s: &Spec, g: &Geometry, spiral: f64, phase: f64, p: &mut Plan) ->
     }
     let scale = (re - b) / re;
     let height = h * (1.0 - scale);
-    let steps = vec![Step::Taper { outline: sided_outline(&sides, zr, phase), z0: 0.0, height, twist: wind * scale.ln(), scale, op: Op::Cut }];
-    Some(Member { steps, rf: r_tip, ra: r_root, height, scale, zv: f64::from(zr) / dr.cos() })
+    // The cutter runs on past the blank at both ends (as every other cut does): its ends level
+    // with the blank's faces left the kernel refusing the cut, and the build then keeps the
+    // uncut blank. The taper is a projection from the apex, so carried on it is the same cone:
+    // the section at z is the large end's scaled 1 − (1 − scale)·z/height and turned the wind
+    // times the log of that. A spiral cutter turns on as it goes and so wants more sections:
+    // where the kernel's loft limit leaves too few to line them up, it runs on less far.
+    let base = sided_outline(&sides, zr, phase);
+    let k_at = |z: f64| 1.0 - (1.0 - scale) * z / height;
+    let cutter = |over: f64| {
+        let over = over.min(0.5 * height * scale / (1.0 - scale).max(1e-9));
+        let (k0, k1) = (k_at(-over), k_at(height + over));
+        Step::Taper { outline: base.scaled(k0).rotated(wind * k0.ln()), z0: -over, height: height + 2.0 * over, twist: wind * (k1 / k0).ln(), scale: k1 / k0, op: Op::Cut }
+    };
+    let lines_up = |st: &Step| match st {
+        Step::Taper { outline, twist, scale, .. } if twist.abs() > 1e-12 => {
+            let n = crate::plan::taper_sections(outline, *twist, *scale);
+            let sections: Vec<Outline> = (0..n)
+                .map(|i| {
+                    let k = 1.0 + (scale - 1.0) * i as f64 / (n - 1) as f64;
+                    outline.scaled(k).rotated(crate::plan::taper_turn(*twist, *scale, k))
+                })
+                .collect();
+            !crate::hypoid::slips(&sections, zr as usize)
+        }
+        _ => true,
+    };
+    // At least 0.1 m between the cutter's ends and the blank's faces: what the cutter doesn't
+    // run on the blank gives up (its faces set in that much more).
+    let (over, step) = [0.1 * m, 0.05 * m, 0.025 * m, 0.0].into_iter().map(|o| (o, cutter(o))).find(|(_, st)| lines_up(st)).unwrap_or_else(|| (0.0, cutter(0.0)));
+    let inset = (0.1 * m - over).max(0.01 * m);
+    let steps = vec![step];
+    Some(Member { steps, rf: r_tip, ra: r_root, height, scale, zv: f64::from(zr) / dr.cos(), inset })
 }
 
 fn rot(v: [f64; 3], t: f64) -> [f64; 3] {
@@ -546,7 +578,7 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
     let far_body = far.as_ref().map(|f| match mode {
         BevelPlanetMode::Ring => {
             let rim = if s.rim > 0.0 { s.rim } else { 3.0 * s.module };
-            let e = 0.01 * s.module;
+            let e = f.inset;
             let (r_in, r_out) = (0.5 * f.scale * f.rf, f.ra + rim);
             let blank = Step::Revolve { profile: vec![V2::new(r_in, e), V2::new(r_out, e), V2::new(r_out, f.height - e), V2::new(r_in, f.height - e)], op: Op::New };
             let mut steps = vec![blank];

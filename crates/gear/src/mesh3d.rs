@@ -800,17 +800,26 @@ impl Surface {
                         if area < 1e-14 {
                             continue;
                         }
-                        let mut nn = nn.map(|v| v / area);
+                        let nn = nn.map(|v| v / area);
                         // On the finished body's boundary, and which way is out.
-                        let inner = solid.contains_local([0, 1, 2].map(|k| p[k] - eps * nn[k]));
-                        let outer = solid.contains_local([0, 1, 2].map(|k| p[k] + eps * nn[k]));
-                        if inner == outer {
+                        let on = |p: P3| {
+                            let inner = solid.contains_local([0, 1, 2].map(|k| p[k] - eps * nn[k]));
+                            let outer = solid.contains_local([0, 1, 2].map(|k| p[k] + eps * nn[k]));
+                            (inner != outer).then(|| if outer { nn.map(|v| -v) } else { nn })
+                        };
+                        if let Some(n) = on(p) {
+                            samples.push(Sample { p, n, hu: du.map(|v| 0.5 * v), hv: dv.map(|v| 0.5 * v), area });
                             continue;
                         }
-                        if outer {
-                            nn = nn.map(|v| -v);
+                        // A patch whose middle is off the body may still run onto it where another
+                        // part ends it (a cutter's sheet across a blank's face): its quarters along
+                        // the sheet, each tried on its own.
+                        for f in [-0.75, -0.25, 0.25, 0.75] {
+                            let q = [0, 1, 2].map(|k| p[k] + 0.5 * f * dv[k]);
+                            if let Some(n) = on(q) {
+                                samples.push(Sample { p: q, n, hu: du.map(|v| 0.5 * v), hv: dv.map(|v| 0.125 * v), area: 0.25 * area });
+                            }
                         }
-                        samples.push(Sample { p, n: nn, hu: du.map(|v| 0.5 * v), hv: dv.map(|v| 0.5 * v), area });
                     }
                 }
             }

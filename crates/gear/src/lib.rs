@@ -49,6 +49,7 @@ pub mod elliptic;
 pub mod face_gear;
 pub mod design;
 pub mod diff;
+pub mod drivetrain;
 pub mod equations;
 pub mod geom;
 pub mod hub;
@@ -115,3 +116,5 @@ mod train_tests;
 mod system_tests;
 #[cfg(test)]
 mod select_tests;
+#[cfg(test)]
+mod drivetrain_tests;

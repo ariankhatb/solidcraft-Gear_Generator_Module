@@ -105,8 +105,9 @@ off at 0.
 | `bearing_width` | f64 mm | 0 | ≥ 0 | Bearing width | The pocket's depth. | as above |
 | `bearing_fit` | f64 mm | 0 | ≥ 0 | Bearing fit allowance | How much bigger than the bearing the pocket is made, on the diameter, for a printed fit. | as above |
 
-`BEARINGS` (`hub.rs`): MR63, MR84, MR105, MR115, MR126, MR128, 623, 624, 625, 626, 608, 688,
-6800 to 6804, 6000 to 6004, 6200 to 6202 (name, bore, OD, width).
+`BEARINGS` (`hub.rs`): 75 ball bearings as (name, bore, OD, width), from MR52 to 6302 (for example
+MR63, 608, 688, 6800, 6900, 6000, 6200, 6300). `hub::bearing_series(name)` groups them as MR, 6xx,
+68xx, 69xx, 60xx, 62xx and 63xx.
 
 ## The print preset: `Spec::apply_print_defaults(nozzle, layer_height)`
 

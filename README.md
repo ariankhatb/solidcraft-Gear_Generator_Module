@@ -23,16 +23,17 @@ Every set turns in the window's preview as you edit it, drawn from the gear math
 (these are screen captures of that preview, not kernel renders):
 
 <table align="center">
-<tr><td align="center"><img src="docs/gear-generator/pair.gif" width="260" alt="Gear pair turning in the live preview"/><br/><sub>Gear pair</sub></td><td align="center"><img src="docs/gear-generator/helical-turn.gif" width="260" alt="Helical turning in the live preview"/><br/><sub>Helical</sub></td><td align="center"><img src="docs/gear-generator/herringbone-turn.gif" width="260" alt="Herringbone turning in the live preview"/><br/><sub>Herringbone</sub></td></tr>
+<tr><td align="center"><img src="docs/gear-generator/pair.gif" width="260" alt="Gear pair turning in the live preview"/><br/><sub>Gear pair</sub></td><td align="center"><img src="docs/gear-generator/helical-z25.gif" width="260" alt="Helical gear turning in the live preview"/><br/><sub>Helical</sub></td><td align="center"><img src="docs/gear-generator/herringbone-z47.gif" width="260" alt="Herringbone gear turning in the live preview"/><br/><sub>Herringbone</sub></td></tr>
 <tr><td align="center"><img src="docs/gear-generator/internal.gif" width="260" alt="Internal ring turning in the live preview"/><br/><sub>Internal ring</sub></td><td align="center"><img src="docs/gear-generator/planetary.gif" width="260" alt="Planetary turning in the live preview"/><br/><sub>Planetary</sub></td><td align="center"><img src="docs/gear-generator/bevel.gif" width="260" alt="Straight bevel turning in the live preview"/><br/><sub>Straight bevel</sub></td></tr>
 <tr><td align="center"><img src="docs/gear-generator/spiral_bevel.gif" width="260" alt="Spiral bevel turning in the live preview"/><br/><sub>Spiral bevel</sub></td><td align="center"><img src="docs/gear-generator/hypoid.gif" width="260" alt="Hypoid turning in the live preview"/><br/><sub>Hypoid</sub></td><td align="center"><img src="docs/gear-generator/crossed_helical.gif" width="260" alt="Crossed helical turning in the live preview"/><br/><sub>Crossed helical</sub></td></tr>
-<tr><td align="center"><img src="docs/gear-generator/worm.gif" width="260" alt="Worm and wheel turning in the live preview"/><br/><sub>Worm and wheel</sub></td><td align="center"><img src="docs/gear-generator/cycloidal.gif" width="260" alt="Cycloidal turning in the live preview"/><br/><sub>Cycloidal</sub></td></tr>
+<tr><td align="center"><img src="docs/gear-generator/worm.gif" width="260" alt="Worm and wheel turning in the live preview"/><br/><sub>Worm and wheel</sub></td></tr>
 </table>
 
 ### Designed from one small drawing
 
-Simple mode: circles are pitch circles, lines are shafts, a dot is the origin (a bevel's apex); the
-type picker, the editable drawing, the turning 3D preview and the numbers the solver chose:
+Simple mode: circles are pitch circles, lines are shafts, a dot is the origin (a bevel's apex).
+Each screenshot shows the type picker, the editable drawing, the turning 3D preview and the
+numbers the solver chose:
 
 <table align="center">
 <tr><td align="center"><img src="docs/gear-generator/window_pair.png" width="380" alt="Gear pair: two pitch circles"/><br/><sub>Gear pair: two pitch circles</sub></td><td align="center"><img src="docs/gear-generator/window_spiral_bevel.png" width="380" alt="Spiral bevel: side view, apex dot and 90° meeting angle"/><br/><sub>Spiral bevel: side view, apex dot and 90° meeting angle</sub></td></tr>
@@ -42,32 +43,37 @@ type picker, the editable drawing, the turning 3D preview and the numbers the so
 | Shafts | Types |
 |---|---|
 | Parallel | spur, helical, herringbone, internal ring, rack, pair, planetary |
-| Intersecting (any angle) | straight bevel, spiral bevel, face (crown) gear, bevel planetary (differential, single, or with an internal bevel ring) |
-| Crossed | hypoid, crossed helical, worm and throated wheel (1–4 starts) |
-| Wrapped | ISO 606 / ANSI roller-chain sprockets, timing pulleys (GT2, HTD, T, MXL, XL) and the chain or belt between them |
+| Intersecting | straight bevel and spiral bevel (any shaft angle), face (crown) gear (90°), bevel planetary (differential, single, or with an internal bevel ring) |
+| Crossed | hypoid, crossed helical, worm and throated wheel (1 to 12 starts) |
+| Chain and belt | ISO 606 / ANSI roller-chain sprockets, timing pulleys (GT2, HTD, T2.5/T5/T10, MXL, XL) and the chain or belt between them |
 | Special | cycloidal clock gears, cycloidal drive, DIN 5480 / ANSI B92.1 splines, elliptical pairs |
 
 ## How it works
 
 ### Teeth are generated, not drawn from tables
 
-- **Involute teeth** are the envelope of a basic rack (ISO 53 profiles A–D, or custom addendum,
-  dedendum and root radius) rolled along the pitch circle. That gives the true trochoid root fillet,
-  undercut where it really happens, profile shift, tip shortening and the working pressure angle.
-  The flanks are fitted to splines within a set tolerance. Each set reports its centre distance,
+- **Involute teeth** are the envelope of a basic rack (ISO 53 profiles A–D, AGMA full depth, stub,
+  a 3D-print rack, or custom addendum, dedendum and root radius) rolled along the pitch circle.
+  That gives the true trochoid root fillet, undercut where it really happens, profile shift, tip
+  shortening and the working pressure angle. By default the flanks are fitted to splines within a
+  set tolerance. Each set reports its centre distance,
   contact ratio, span and over-pins measurements.
 - **Bevel teeth** are octoids: cut by a crown gear, so they are conjugate along the whole face. That
   holds for straight teeth and for spiral teeth on a logarithmic spiral, at any shaft angle.
-- **Hypoid sets** follow ISO 23509 Method 1 (Gleason's calculation, as in Litvin & Fuentes). The pitch
-  cones are found by iteration, the ring gear has logarithmic-spiral teeth, and the pinion is
-  generated from the ring gear. An offset too large for the sizes is refused, with the largest offset
-  that still works.
-- **Worm wheels** are throated and hobbed by the worm itself: each section through the face is cut by
-  the thread as it turns.
-- **Cycloidal, sprocket, pulley, spline and face-gear** teeth come from their own standards (ISO 606,
-  DIN 5480 and so on). A face gear is cut by its spur pinion.
+- **Hypoid pitch cones** are worked out in the terms of ISO 23509: the wheel pitch angle is found by
+  iteration with the Method 1 curvature condition, and the result reproduces a published ISO 23509
+  Method 1 set. Tooth depths are Gleason's. The ring gear has logarithmic-spiral teeth, and the
+  pinion is generated from the ring gear. An offset too large for the sizes is refused, and the
+  message gives the largest offset that still works.
+- **Worm wheels** are throated and hobbed: the hob is the worm's own thread, made taller by the root
+  clearance. Each section through the face is what the thread leaves as it turns.
+- **Other teeth:** sprockets follow ISO 606 (its A series is ANSI B29.1), and splines follow DIN 5480
+  or ANSI B92.1. Timing-pulley grooves are approximations from published belt dimensions (GT2 and
+  HTD are proprietary profiles). Cycloidal gears have epicycloid addenda and hypocycloid dedenda,
+  and the cycloidal drive's disc is an offset epitrochoid. A face gear is cut by its spur pinion.
 - **Strength:** ISO 6336 Method B (simplified) gives the tooth-root and flank safety factors SF and
-  SH for a given torque or power, with simplified versions for bevels and worms.
+  SH of cylindrical gears for a given torque or power. Bevels get a simplified rating on their
+  virtual cylindrical gears (in the style of ISO 10300), and worm sets an approximate one.
 
 ### Plan, then build
 
@@ -75,70 +81,82 @@ The gear math is a dependency-free crate (`crates/gear`). `plan(spec)` turns a `
 module, angles, bores, shafts…) into a `Plan`:
 
 - **bodies**, each a frame plus a list of solid steps:
-  - `Prism`: an extrude, or a sweep with a twist for helical teeth;
-  - `Taper`: a loft or sweep towards the cone apex, for bevels;
-  - `RingTaper`: a bevel ring in one loft;
-  - `Loft`: through hobbed or generated sections;
-  - `Revolve` and `Coil`, plus `Placed` for members set at an angle;
+  - `Prism`: an extrude, or a sweep with a twist for helical teeth (a herringbone is one twisted
+    half and its mirror);
+  - `Taper`: bevel teeth narrowing towards the cone apex, built as a loft (two sections for straight
+    teeth, more for spiral teeth, whose turn follows the logarithm of the scale);
+  - `RingTaper`: the internal bevel ring of a bevel planetary set, teeth and rim in one loft;
+  - `Loft`: through generated sections (worm wheels, hypoid members, face gears, helical racks);
+  - `Revolve` (edge chamfers, a sprocket's side chamfer, the clearance body) and `Coil` (a worm's
+    thread);
+  - `Placed`: a step in a frame of its own, such as a radial set-screw hole or a part of the
+    clearance body;
   - each step is `New`, `Join`, `Cut` or `Intersect`;
 - facts, warnings, a refusal when the set can't be made, and the 2D and 3D previews.
 
 The engine (`crates/engine/src/cmd/gear.rs`) maps each step 1:1 onto ordinary SolidCraft sketches and
-features. The whole set is one undo step and one timeline group. A set is built with the kernel's
-full face-by-face check off, because for gear teeth that check costs as much as building them. It
-runs again the next time the features are computed.
+features. The whole set is one undo step and one timeline folder. A set is built with the kernel's
+full face-by-face check off, because for gear teeth that check costs about as much as building
+them. The check runs again the next time the features are computed.
 
 Lofts are checked before the kernel sees them. The kernel restarts each section at the segment that
 best lines up with the previous section, so a steep spiral or worm section turned too far would be
 matched a few segments off, and the walls would cut across the teeth. The planner repeats that
 alignment rule and adds sections until none slips. It also stays inside the kernel's limit of 16,384
-curves per loft, counting every spline span. Big multi-start worm wheels draw each tooth side with
-fewer points when they need to.
+curves per loft (all sections together, counting every spline span). Big multi-start worm wheels
+draw each tooth side with fewer points when they need to.
 
 ### Fast to design with
 
 - **Simple mode** designs by what you need. You draw circles (pitch circles), lines (shafts) and a dot
   (the origin, or a bevel's apex) in one small sketch. The solver picks standard ISO 54 modules,
   whole tooth counts and profile shift to hit those sizes and ratio, and lists what it chose.
+  (Cycloidal drives, splines and elliptical pairs are not drawn this way: they are in Advanced
+  mode only.)
 - A bevel is drawn as a side view: a shaft line, the apex dot, and a second line at the meeting
   angle. An 80° bevel is just a line at 80°.
 - The 3D preview is meshed straight from the plan in milliseconds (pitch surfaces, then teeth within
   a triangle budget), so nothing waits for the kernel while you edit.
 - **Advanced mode** shows every option: tooth form, shift, helix and spiral, backlash, bores, hubs,
-  integral and dual shafts, chamfers, lightening holes, bearing pockets, and a **3D-print tooth
-  profile** (tip rounding, XY compensation, elephant-foot relief, tip relief, crowning).
-- A gear type warns once about any option it can't use, instead of dropping it silently.
+  integral and dual shafts, chamfers, lightening holes, bearing pockets, tip relief and crowning,
+  and a **3D-print** section (print preset, tip rounding, XY compensation, elephant-foot relief).
+- An option that is set but that the gear type can't use gets a warning (one per group of
+  options) instead of being dropped silently.
 
 ### Checked, not assumed
 
-- **2D mesh checker:** parallel-axis sets are turned through a tooth pitch. The checker flags overlap
-  deeper than 0.003 × module, or flanks further apart than the backlash plus 0.006 × module. The
-  window shows the verdict as you edit.
-- **3D mesh checker:** bevel, hypoid, crossed helical, worm and planetary bevel sets are sampled from
-  the planned solids over the motion and checked the same way.
-- **Kernel check:** every type builds through the real kernel and passes `inspect.interference` with
-  no overlap or only flank contact. That includes harder variants: bevels at 60–120°, hypoids at
-  75–90°, 4-start worms, and bevel planetary in all three modes.
+- **2D mesh checker:** parallel-axis sets (and a face gear's pinion against the face gear's teeth
+  unrolled at mid length) are turned through a tooth pitch. The checker flags overlap deeper than
+  0.003 × module, or flanks further apart than the backlash plus 0.006 × module (for a cycloidal
+  drive, × the pin radius). The window shows the verdict once the numbers settle.
+- **3D mesh checker:** straight bevel, spiral bevel, hypoid, crossed helical, worm and bevel planetary
+  sets are sampled from the planned solids over the motion and checked against the same limits.
+- **Kernel check:** in test runs every type built through the real kernel and passed
+  `inspect.interference` with no overlap or only flank contact, including harder variants: bevels at
+  60–120°, hypoids at 75–90°, 4-start worms, and bevel planetary in all three modes (see the known
+  issues for where the kernel's own check can fail).
 
 ### Editing and parameters
 
 - **`gear.update`** rebuilds a set in place. Bodies keep their names, and sketches and features keep
   their ids where the steps stay the same, so features built on the gears keep working.
-- **Equation teeth:** with `tooth_curves: equations` each tooth is drawn as formula curves (involute
-  flank, trochoid fillet, tip and root arcs), circular-patterned. With `parametric: true` they are
-  driven by design parameters (module, teeth, pressure angle, shift, backlash, face width). Change a
-  tooth count and the teeth regenerate. The mates move to the new centre distance and turn to mesh
-  again, and the clearance body follows.
+- **Equation teeth:** for the planar involute types (spur, helical, herringbone, internal, pair,
+  planetary, rack), `tooth_curves: equations` draws one tooth as formula curves (involute flank,
+  trochoid root fillet, tip and root arcs) and patterns it round. Add `parametric: true` and the
+  teeth are driven by design parameters (module, teeth, pressure angle, shift, backlash, face
+  width). Change a tooth count and the teeth regenerate. The mates move to the new centre
+  distance and turn to mesh again, and the clearance body follows.
 - **Clearance body:** one closed keep-out solid for the whole set (turning envelopes, shafts, bearing
   seats from a bearing library), for cutting a housing with a single Boolean.
 - **Sketch-driven sets:** draw the set in a sketch and `gear.create {"sketch": id}` recognises the
-  type, sizes it and places it on the drawn shafts. A sketch line or point can also be a shaft for
-  `gear.from_axes`.
+  type, sizes it and places it on the drawn shafts. A sketch line or point can also be a shaft
+  (`axis1`, `axis2`) for `gear.create` and `gear.from_axes`.
 
 ### Scriptable
 
-`gear.create`, `gear.calculate` (facts only), `gear.update` and `gear.from_axes` are normal SolidCraft
-commands, so they run from the CLI, from scripts and through the MCP server:
+`gear.create`, `gear.calculate` (facts only), `gear.update`, `gear.inspect` and `gear.from_axes` (how
+two shafts lie and the set solved on them, without building) are normal SolidCraft commands, so they
+run from the CLI, from scripts and through the MCP server:
 
 ```sh
 cargo build --release -p solidcraft-cli
@@ -155,12 +173,12 @@ target/release/solidcraft-cli run hypoid.json --results
 | `involute.rs`, `octoid.rs`, `hypoid.rs`, `worm.rs`, `cycloid.rs` | tooth generation |
 | `simple.rs`, `sketch_rules.rs`, `axes.rs` | design by outputs, the one-sketch rules, placing sets on shafts |
 | `mesh2d.rs`, `mesh3d.rs` | the mesh checkers |
-| `equations.rs`, `clearance.rs`, `body.rs`, `hub.rs`, `strength.rs` | formula teeth, keep-out body, shafts and chamfers, bores, ISO 6336 |
+| `equations.rs`, `clearance.rs`, `body.rs`, `hub.rs`, `strength.rs` | formula teeth, keep-out body, shafts, chamfers and print tuning, bores and hubs, strength (ISO 6336) |
 | `crates/engine/src/cmd/gear*.rs`, `schema/gear.rs` | the commands and the plan-to-features builder |
 | `crates/ui-egui/src/gear_*.rs` | the window: modes, drawing, 3D preview, clearance UI, icons |
 
-Build: `cargo run --release -p solidcraft`. Tests: `cargo test --release -p solidcraft-gear` (about
-220 tests on the math, under a minute) and `cargo test --release -p solidcraft-engine --lib gear`
+Build: `cargo run --release -p solidcraft`. Tests: `cargo test --release -p solidcraft-gear` (over
+220 tests on the math) and `cargo test --release -p solidcraft-engine --lib gear`
 (building through the kernel).
 
 **Known issues:** see [GEAR_GENERATOR.md](GEAR_GENERATOR.md#status-and-known-issues).

@@ -53,6 +53,14 @@ pub(crate) fn fill(s: &Spec, p: &mut Plan) {
     let gear = |a: usize, b: usize, ra: f64, rb: f64, internal: bool| AssemblyLink::Gear { a, b, ra, rb, internal, reverse: false };
     // One member of a set built alone: it turns, linked to nothing.
     let whole = s.only == 0;
+    if let Some(t) = &s.train {
+        // One member per gear, linked along the train's spanning tree (gear 1 drives).
+        if whole && n == t.gears.len() {
+            links = super::train::assembly_links(t);
+        }
+        p.assembly = Assembly { members, links };
+        return;
+    }
     match s.kind {
         Kind::Rack => {
             // It slides along its length (its frame's x).

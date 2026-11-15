@@ -311,3 +311,25 @@ rings overlap the housing by design when `ring_as_housing`). Scripts come from t
 - User: "add the icons and add it to the main app UI" → agent on `solidcraft-icons` /
   `gear-icons`: icon per kind + a Gear Generator icon, a visible ribbon place, `gear_icons.rs`;
   picker wiring after `gear-bevelplanet` merges.
+
+## Status 2026-11-15, ~01:30 (integration and builds)
+
+- Merged into `gear-generator`: upstream/main (148 commits, clean; user asked to take the latest
+  before the full rebuild), gear-bevelplanet (live mode + ring fix), gear-icons (icons for every
+  kind, window buttons, "Gears" as the 4th promoted button in MODEL › CREATE).
+- Build 1 (full release, 20 min) passed. Kernel `inspect.interference` on it, 27 cases: every
+  kind clean or touching only, hypoid at 90° and 75° now passes the kernel check itself; spline,
+  face gear and cycloidal drive overlaps are flank contact (spline: 757 mm² at 0.038 mm³).
+- Fixed after build 1:
+  - engine: `{sketch, point}` shaft axes; `bevel_planetary` type with `bevel_planet_mode` and
+    `first_azimuth`; formula-drawn teeth keep point picks (ring tooth-count change).
+  - worm wheels: kernel loft limit is 16384 curves in total counting every spline span
+    (`plan::loft_curves`); big steep wheels (4-start z40/z48) fall back to fewer fit points per
+    tooth side (`Hob::tooth_with`) so they line up within the limit.
+  - bevel planetary ring: the cutter ended on the blank's faces, the kernel refused the cut and
+    the optional step was left out (175 mm³ "overlap" = uncut blank); it now runs past both faces.
+- Tests: gear 210/0, engine gear 40/0. Build 2 (incremental) next, then the kernel check again,
+  window screenshots, click steps for the user.
+- Still open: Advanced mode shows the ring refusal at 90° (Simple picks 45°);
+  `requested_icons.txt` needs regenerating (`UPDATE_ICON_MANIFEST=1 cargo test -p
+  solidcraft-ui-egui --test icon_audit`); ribbon/layout tests not yet run.

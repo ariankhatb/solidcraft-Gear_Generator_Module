@@ -1539,6 +1539,28 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         targets: Vec<BodyName>,
     },
+    /// A whole gear set or drivetrain from the Gear Generator as one feature: the set's
+    /// parameters (`gear.create`'s, as the generator keeps them) and the sketches it is read
+    /// from. Each evaluation reads those sketches again, plans the set (`solidcraft_gear`) and
+    /// builds every body in memory, sections and profiles as curves of their own (no sketches):
+    /// one body per rigid member (a gear, or a shaft with the gears on it), then the keep-out
+    /// body when the set asks for one. The bodies are new ones, or join, cut or intersect
+    /// `targets` as any tool feature's; the keep-out can instead cut the bodies in
+    /// `keep_out_cuts` (a housing gets its cavity in the same step).
+    Gears {
+        /// The set's parameters (a JSON object, `gear.create`'s).
+        params: serde_json::Value,
+        /// The sketches the set is drawn in (its `sketch` parameter, in order).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        sketches: Vec<SketchId>,
+        #[serde(default)]
+        operation: Operation,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        targets: Vec<BodyName>,
+        /// Bodies the keep-out body is cut from (it is then no body of its own).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        keep_out_cuts: Vec<BodyName>,
+    },
     /// Sheet metal base flange: a sheet from a closed profile (thickness from the rule).
     SheetBase {
         sketch: SketchId,
@@ -2996,6 +3018,7 @@ impl FeatureKind {
             FeatureKind::MeshImport { .. } => "MeshFeature",
             FeatureKind::MeshConvert { .. } => "MeshConvertFeature",
             FeatureKind::Repair { .. } => "RepairFeature",
+            FeatureKind::Gears { .. } => "GearsFeature",
         }
     }
 
@@ -3080,6 +3103,7 @@ impl FeatureKind {
             FeatureKind::MeshConvert { .. } => "mesh_convert",
             FeatureKind::MeshImport { .. } => "mesh_import",
             FeatureKind::Repair { .. } => "repair",
+            FeatureKind::Gears { .. } => "gears",
         }
     }
 
@@ -3163,6 +3187,7 @@ impl FeatureKind {
             "MeshFeature" => "mesh_import",
             "MeshConvertFeature" => "mesh_convert",
             "RepairFeature" => "repair",
+            "GearsFeature" => "gears",
             _ => return None,
         })
     }
@@ -3251,6 +3276,7 @@ impl FeatureKind {
             FeatureKind::MeshImport { .. } => "Mesh",
             FeatureKind::MeshConvert { .. } => "ConvertMesh",
             FeatureKind::Repair { .. } => "Repair",
+            FeatureKind::Gears { .. } => "Gears",
         }
     }
 }

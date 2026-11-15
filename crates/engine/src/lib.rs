@@ -827,6 +827,8 @@ impl Session {
     pub fn opened_validating(mut doc: Document, saved: Option<&solidcraft_doc::SavedModel>, validation: solidcraft_kernel::Validation) -> Self {
         // A design's font files are checked like its other paths before it is evaluated.
         solidcraft_io::vfs::install_checks();
+        // Gears features are planned by the Gear Generator's reading of the design.
+        cmd::install_gears_feature();
         // The session keeps what is hidden (an undo step of its own); the design file carries it.
         let visibility = std::mem::take(&mut doc.visibility);
         let mut doc = Arc::new(doc);
@@ -856,6 +858,7 @@ impl Session {
 
     /// A session on `doc` evaluated as `model`, with what it hides.
     pub(crate) fn with_model(doc: Arc<Document>, visibility: Visibility, model: Model) -> Self {
+        cmd::install_gears_feature();
         Session {
             stop: Default::default(),
             is_copy: false,

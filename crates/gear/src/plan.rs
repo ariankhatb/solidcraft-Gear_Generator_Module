@@ -19,10 +19,11 @@ pub(crate) mod extras;
 pub mod left_out;
 pub mod bevel_planet;
 pub mod train;
-mod assembly;
+pub(crate) mod assembly;
+pub mod solid;
 
 pub use bevel_planet::BevelPlanetMode;
-pub use train::{LinkKind, Train, TrainGear, TrainLink};
+pub use train::{LinkKind, Train, TrainGear, TrainLink, TrainShaft};
 
 /// Gear set types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
@@ -242,7 +243,10 @@ pub struct Spec {
     pub hole_diameter: f64,
     /// Which members to build: 0 all, 1 the first, 2 the second, 3 the third.
     pub only: u8,
-    /// A gear pair's teeth as herringbone (two opposite helical halves; needs a helix angle).
+    /// A gear pair's teeth as herringbone (two opposite helical halves; needs a helix angle);
+    /// a spiral bevel's as V (chevron) teeth: the spiral at `spiral_angle` on the half of the face
+    /// towards the apex and the opposite hand on the outer half, meeting at mid-face (the mate
+    /// mirrored).
     pub herringbone: bool,
     /// Where the set goes (gear 1's centre).
     pub origin: [f64; 3],
@@ -784,11 +788,89 @@ pub struct Plan {
     /// held, and how their motions are tied ([`Assembly`]). Filled by every kind's planner; the
     /// engine makes components and joints of it (`gear.create` with `assembly: true`).
     pub assembly: Assembly,
+    /// Loops of the set's mesh graph whose ratios don't agree (an over-constrained train: it
+    /// would lock), one per closing mesh, naming the members round the loop
+    /// ([`Assembly::from_graph`]). The assembly leaves the closing mesh out.
+    pub assembly_issues: Vec<AssemblyIssue>,
     /// The bearings placed at the clearance body's seats (`Spec::clearance_body`), where they
     /// are; built as bodies too when it asks for `bearing_bodies`.
     pub bearings: Vec<crate::clearance::PlacedBearing>,
+    /// A set read from a sketch or a selection: what each gear became (one per gear of a train,
+    /// in its order; see [`SetMember`]), its mesh graph (`meshes_with`) and clusters.
+    pub members: Vec<SetMember>,
+    /// Gears joined on one shaft as one part (compound gears): each cluster's gears (indices
+    /// into `members`, which are the bodies' order when the whole set is built).
+    pub clusters: Vec<Vec<usize>>,
+    /// Shafts built with a train ([`train::TrainShaft`]): each one's body and the gears it
+    /// carries (joined to them as one part).
+    pub shafts: Vec<PlanShaft>,
+    /// Where each mesh of a train touches (world, after the placement): the pitch line across
+    /// the faces both gears share, for an abstract preview.
+    pub contacts: Vec<Contact>,
+    /// Each gear's shape without teeth, for an abstract preview (world, after the placement):
+    /// trains' gears and bevel pairs' members.
+    pub shapes: Vec<MemberShape>,
     /// Why the set can't be built, found while planning it ([`plan`] returns it as the error).
     refused: Option<String>,
+}
+
+/// Where two gears touch ([`Plan::contacts`]): the pitch point at each end of the face they
+/// share (the same point twice where they share none).
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Contact {
+    /// The two gears (indices into `Plan::members`).
+    pub a: usize,
+    pub b: usize,
+    pub from: [f64; 3],
+    pub to: [f64; 3],
+}
+
+/// A gear's shape without teeth ([`Plan::shapes`]): its pitch, tip and root circles on its
+/// back face (`center`), the same at the front face `face` mm along `axis`; a bevel's at the
+/// heel, with its apex and its pitch circle at the toe.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct MemberShape {
+    /// The gear (an index into `Plan::members`; a bevel pair's: 0 and 1).
+    pub member: usize,
+    pub center: [f64; 3],
+    pub axis: [f64; 3],
+    pub face: f64,
+    pub pitch_diameter: f64,
+    pub tip_diameter: f64,
+    pub root_diameter: f64,
+    pub apex: Option<[f64; 3]>,
+    pub toe_pitch_diameter: Option<f64>,
+}
+
+/// A shaft built with a set ([`Plan::shafts`]).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct PlanShaft {
+    /// Its body (an index into `Plan::bodies`).
+    pub body: usize,
+    /// The gears it carries (indices into `Plan::members` / the train's gears); the first is the
+    /// one its assembly link joins it to.
+    pub gears: Vec<usize>,
+    pub diameter: f64,
+    pub length: f64,
+}
+
+/// One gear of a set read from a sketch or a selection ([`Plan::members`]).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct SetMember {
+    /// Where it came from: its index in what was read (the drawing's circles, the selection).
+    pub source: usize,
+    pub module: f64,
+    pub teeth: u32,
+    pub pitch_diameter: f64,
+    pub face_width: f64,
+    /// A ring gear (teeth inside).
+    pub ring: bool,
+    /// The gears (indices into `Plan::members`) it meshes with.
+    pub meshes_with: Vec<usize>,
+    /// Its cluster (an index into `Plan::clusters`), when it shares a shaft with other gears.
+    pub cluster: Option<usize>,
+    /// The body it is (an index into `Plan::bodies`), when built.
+    pub body: Option<usize>,
 }
 
 /// A planned set as an assembly: its moving members (each one of [`Plan::bodies`]) and the links
@@ -870,7 +952,125 @@ impl AssemblyLink {
     }
 }
 
+/// A loop of a mesh graph whose ratios don't agree: the meshes round it give a member another
+/// turn than the closing mesh asks for ([`Assembly::from_graph`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct AssemblyIssue {
+    /// The members round the loop, in order (the closing mesh joins the last to the first).
+    pub members: Vec<usize>,
+    /// The closing mesh (an index into the graph's edges).
+    pub link: usize,
+    /// The turn the loop gives the closing mesh's far member, and the one the mesh asks for
+    /// (per radian of the root; mm for a rack).
+    pub given: f64,
+    pub asked: f64,
+    /// For people: which members, and why.
+    pub message: String,
+}
+
+impl AssemblyLink {
+    /// The same tie driven from its other end. A rigid link swaps its ends; a rack and pinion
+    /// names its ends by role, so it stays as it is ([`Assembly::from_graph`] puts the driving
+    /// end's link first).
+    pub fn reversed(&self) -> AssemblyLink {
+        match self.clone() {
+            AssemblyLink::Gear { a, b, ra, rb, internal, reverse } => AssemblyLink::Gear { a: b, b: a, ra: rb, rb: ra, internal, reverse },
+            // The wheel driving the worm: a gear of `wheel_teeth` against one of `starts`.
+            AssemblyLink::Worm { worm, wheel, starts, wheel_teeth } => {
+                AssemblyLink::Gear { a: wheel, b: worm, ra: f64::from(wheel_teeth.max(1)), rb: f64::from(starts.max(1)), internal: false, reverse: false }
+            }
+            AssemblyLink::Rigid { a, b } => AssemblyLink::Rigid { a: b, b: a },
+            l => l,
+        }
+    }
+}
+
 impl Assembly {
+    /// The assembly of a mesh graph: `members`, and `edges` between them in any direction and
+    /// number, loops included (every mesh of a sketch-driven system; a compound cluster's shared
+    /// shaft as an [`AssemblyLink::Rigid`] link). The links become a tree driven from `root`,
+    /// breadth first, each pointing away from it (`members().0` drives; a rack and pinion keeps
+    /// its roles, and its driving end is the one reached first: the links come in the order they
+    /// are reached). A mesh that closes a loop is left out; where the turn it asks for isn't the
+    /// one the loop gives, that is an issue naming the members round the loop. Members no edge
+    /// reaches from `root` start trees of their own, in order.
+    pub fn from_graph(members: Vec<AssemblyMember>, edges: &[AssemblyLink], root: usize) -> (Assembly, Vec<AssemblyIssue>) {
+        let n = members.len();
+        let mut speed: Vec<Option<f64>> = vec![None; n];
+        let mut parent: Vec<Option<usize>> = vec![None; n];
+        let mut used = vec![false; edges.len()];
+        let mut links = Vec::new();
+        let mut issues = Vec::new();
+        let path = |parent: &[Option<usize>], mut x: usize| {
+            let mut v = vec![x];
+            while let Some(p) = parent[x] {
+                v.push(p);
+                x = p;
+            }
+            v
+        };
+        for start in std::iter::once(root).chain(0..n).filter(|r| *r < n) {
+            if speed[start].is_some() {
+                continue;
+            }
+            speed[start] = Some(1.0);
+            let mut queue = std::collections::VecDeque::from([start]);
+            while let Some(m) = queue.pop_front() {
+                let here = speed[m].unwrap_or(1.0);
+                for (k, e) in edges.iter().enumerate() {
+                    let (a, b) = e.members();
+                    if used[k] || a >= n || b >= n || a == b || (a != m && b != m) {
+                        continue;
+                    }
+                    let forward = a == m;
+                    let other = if forward { b } else { a };
+                    let r = e.ratio();
+                    if !forward && r == 0.0 {
+                        continue;
+                    }
+                    // The turn the other end gets across this edge.
+                    let across = if forward { here * r } else { here / r };
+                    used[k] = true;
+                    match speed[other] {
+                        None => {
+                            speed[other] = Some(across);
+                            parent[other] = Some(m);
+                            links.push(if forward { e.clone() } else { e.reversed() });
+                            queue.push_back(other);
+                        }
+                        Some(have) if (have - across).abs() > 1e-9 * have.abs().max(across.abs()).max(1.0) => {
+                            // Round the loop: from `other` up to where its path to the root meets
+                            // `m`'s, then down to `m` (the closing mesh joins `m` back to `other`).
+                            let (po, pm) = (path(&parent, other), path(&parent, m));
+                            let meet = po.iter().position(|x| pm.contains(x)).unwrap_or(po.len() - 1);
+                            let top = po[meet];
+                            let mut round: Vec<usize> = po[..=meet].to_vec();
+                            let below: Vec<usize> = pm.iter().take_while(|x| **x != top).copied().collect();
+                            round.extend(below.into_iter().rev());
+                            let names: Vec<String> = round.iter().map(|i| format!("member {}", i + 1)).collect();
+                            let message = format!(
+                                "the loop {} doesn't turn: the meshes round it turn member {} {:.6} times, the mesh closing it from member {} asks {:.6} (an odd number of outside meshes round a loop, or ratios that don't multiply to 1); that mesh is left out of the assembly",
+                                names.join(" → "),
+                                other + 1,
+                                have,
+                                m + 1,
+                                across
+                            );
+                            issues.push(AssemblyIssue { members: round, link: k, given: have, asked: across, message });
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+        }
+        (Assembly { members, links }, issues)
+    }
+
+    /// The same assembly driven from member `root` (its links turned to point away from it).
+    pub fn rooted(&self, root: usize) -> Assembly {
+        Assembly::from_graph(self.members.clone(), &self.links, root).0
+    }
+
     /// Member `to`'s turn per radian of member `from`'s through the links between them (each
     /// about its own axis; the carrier held), or `None` when no chain of links joins them.
     pub fn ratio(&self, from: usize, to: usize) -> Option<f64> {
@@ -1138,6 +1338,12 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
         // A differential's keep-out body is planned with the set (in the set's frame).
         if let Some(c) = &mut p.clearance {
             c.frame = place.compose(&c.frame);
+        }
+        for c in &mut p.contacts {
+            (c.from, c.to) = (place.world(c.from), place.world(c.to));
+        }
+        for sh in &mut p.shapes {
+            (sh.center, sh.axis, sh.apex) = (place.world(sh.center), place.dir(sh.axis), sh.apex.map(|a| place.world(a)));
         }
     }
     // How the bodies go together, where they are (a differential's is planned with it).
@@ -1797,7 +2003,51 @@ fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, face: Con
     let rm = face.mid;
     let wind = if spiral.abs() > 1e-6 { spiral.tan() / ds } else { 0.0 };
     let skew = |rr: f64| if wind == 0.0 { 0.0 } else { wind * (rr.hypot(h) / rm).ln() };
-    let (teeth, mut flank) = lined_up_cone_teeth(&crown, z, mn, &skew, phase, delta, re, face, wind, m);
+    let (teeth, mut flank) = if s.herringbone && wind != 0.0 && face.toe() < rm && rm < face.heel {
+        // V (chevron) teeth: the spiral's hand changes at mid-face (cone distance `rm`). The half
+        // towards the apex runs at the spiral angle, the outer half at the opposite one: two spiral
+        // halves of opposite hand, each its own taper. A flat section through a tooth spans
+        // several cone distances (its tip further from the apex than its root), so each half ends
+        // where the whole of its section is on its own side of `rm`: a narrow groove round the
+        // middle of the face, filled under the roots so the halves are one part.
+        let (ha, hf) = (crown.addendum.max(0.0), crown.dedendum.max(0.0));
+        let reach = |d: f64, off: f64| (d * dc).hypot(d * ds + off / dc);
+        let solve = |off: f64| {
+            let (mut lo, mut hi) = (face.toe(), face.heel);
+            for _ in 0..80 {
+                let mid = 0.5 * (lo + hi);
+                if reach(mid, off) < rm { lo = mid } else { hi = mid }
+            }
+            0.5 * (lo + hi)
+        };
+        let (d_in, d_out) = (solve(ha), solve(-hf));
+        if !(d_in > face.toe() + 0.1 * m && d_out < face.heel - 0.1 * m && d_out > d_in) {
+            p.refuse(format!("{who}: the face is too short for V teeth (each half needs room past the middle of the face): widen the face, or use plain spiral teeth"));
+        }
+        let inner = ConeFace { heel: d_in, width: d_in - face.toe(), mid: rm };
+        let outer = ConeFace { heel: face.heel, width: face.heel - d_out, mid: rm };
+        let mirrored = |rr: f64| -skew(rr);
+        let (a, fl) = lined_up_cone_teeth(&crown, z, mn, &skew, phase, delta, re, inner, wind, m);
+        let (b, _) = lined_up_cone_teeth(&crown, z, mn, &mirrored, phase, delta, re, outer, -wind, m);
+        let mut steps = a.steps;
+        for mut st in b.steps {
+            if !steps.is_empty() {
+                train::set_new_to_join(&mut st);
+            }
+            steps.push(st);
+        }
+        // The groove's core: under the roots, between the two halves' end planes.
+        let at = |d: f64| re * dc - d * dc;
+        let core = 0.98 * (d_in * ds - hf / dc);
+        if core > 0.0 {
+            let (z0, z1) = (at(d_out), at(d_in));
+            steps.push(Step::Revolve { profile: vec![V2::new(0.0, z0 - 0.05 * m), V2::new(core, z0 - 0.05 * m), V2::new(core, z1 + 0.05 * m), V2::new(0.0, z1 + 0.05 * m)], op: Op::Join });
+        }
+        p.fact(format!("{who} V teeth groove at mid-face"), d_out - d_in, Unit::Mm);
+        (ConeTeeth { steps, ends: ConeEnds { back: b.ends.back, front: a.ends.front, small_root: a.ends.small_root }, tip_radius: b.tip_radius.max(a.tip_radius) }, fl)
+    } else {
+        lined_up_cone_teeth(&crown, z, mn, &skew, phase, delta, re, face, wind, m)
+    };
     flank.undercut = v.undercut();
     // At the heel (the teeth's depth goes with the distance from the apex).
     let k = face.heel / re;
@@ -2008,6 +2258,29 @@ fn bevel(s: &Spec, p: &mut Plan) {
     let ax2 = [-sigma.sin(), 0.0, sigma.cos()];
     let origin2 = [apex[0] - ax2[0] * h2, apex[1] - ax2[1] * h2, apex[2] - ax2[2] * h2];
     let frame2 = Frame { origin: origin2, x: [sigma.cos(), 0.0, sigma.sin()], z: ax2 };
+    // The abstract shapes (heel circles, toe pitch circle, apex) and the pitch line the cones
+    // share (gear 1's tooth towards +x), for a preview.
+    for (k, (f, r, d, face, frame)) in [(f1, r1, d1, f1, Frame::at(s.origin)), (f2, r2, d2, f2, frame2)].into_iter().enumerate() {
+        let (ha, hf) = (s.rack.addendum * s.module, s.rack.dedendum * s.module);
+        let k_heel = f.heel / re;
+        p.shapes.push(MemberShape {
+            member: k,
+            center: frame.origin,
+            axis: frame.z,
+            face: face.width * d.cos(),
+            pitch_diameter: 2.0 * r * k_heel,
+            tip_diameter: 2.0 * k_heel * (r + ha * d.cos()),
+            root_diameter: 2.0 * k_heel * (r - hf * d.cos()),
+            apex: Some(apex),
+            toe_pitch_diameter: Some(2.0 * r * face.toe() / re),
+        });
+    }
+    {
+        let (lo, hi) = faces_overlap(s, re);
+        let heel = [s.origin[0] + r1, s.origin[1], s.origin[2]];
+        let along = |t: f64| [0, 1, 2].map(|i| apex[i] + (heel[i] - apex[i]) * t / re);
+        p.contacts.push(Contact { a: 0, b: 1, from: along(lo), to: along(hi) });
+    }
     if wanted(s, 1) {
         let mut steps = t1.steps;
         bevel_hub(s, &s.bore, r1 * 0.6, &t1.ends, &mut steps, p, "gear 1");

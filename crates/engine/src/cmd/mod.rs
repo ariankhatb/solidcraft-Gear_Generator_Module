@@ -42,6 +42,7 @@ mod face;
 mod features;
 mod features_more;
 mod gear;
+pub(crate) use gear::install_gears_feature;
 pub use gear::{GearSketch, follow_sketches as gear_follow_sketches, params_of as gear_params_of, selected_set as gear_selected_set, sets as gear_sets, sketch_entities as gear_sketch, spec_of as gear_spec_of};
 mod join_pieces;
 pub(crate) use component::follow_expressed_moves;

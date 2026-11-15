@@ -683,7 +683,7 @@ pub fn legacy_panel(tab: &str, panel: &str) -> Option<(&'static str, &'static st
     })
 }
 
-/// Timeline and browser icon of the sheet metal and plastic features (`None`: not one of them).
+/// Timeline and browser icon of the sheet metal, plastic and Gears features (`None`: not one of them).
 pub fn feature_icon(k: &FeatureKind) -> Option<&'static str> {
     Some(match k {
         FeatureKind::SheetBase { .. } | FeatureKind::SheetContour { .. } | FeatureKind::SheetFlange { .. } => "flange",
@@ -699,6 +699,7 @@ pub fn feature_icon(k: &FeatureKind) -> Option<&'static str> {
         FeatureKind::Rest { .. } => "rest",
         FeatureKind::Rib { web: true, .. } => "web",
         FeatureKind::Rib { .. } => "rib",
+        FeatureKind::Gears { .. } => "gear_generator",
         _ => return None,
     })
 }

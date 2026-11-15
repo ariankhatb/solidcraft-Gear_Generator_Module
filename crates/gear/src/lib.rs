@@ -49,6 +49,7 @@ pub mod elliptic;
 pub mod face_gear;
 pub mod design;
 pub mod diff;
+pub mod drivetrain;
 pub mod equations;
 pub mod geom;
 pub mod hub;
@@ -72,7 +73,7 @@ pub mod wrap;
 
 pub use geom::{Outline, Region, Seg, V2};
 pub use mesh2d::{MeshPair, MeshResult, Verdict, check_mesh};
-pub use plan::{Assembly, AssemblyLink, AssemblyMember, Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit, plan};
+pub use plan::{Assembly, AssemblyIssue, AssemblyLink, AssemblyMember, Body, Fact, Frame, Kind, Op, Plan, PreviewGear, SetMember, Spec, Step, Unit, plan};
 
 #[cfg(test)]
 mod bevel_planet_tests;
@@ -112,4 +113,10 @@ mod flat_bevel_tests;
 #[cfg(test)]
 mod train_tests;
 #[cfg(test)]
+mod system_tests;
+#[cfg(test)]
 mod select_tests;
+#[cfg(test)]
+mod drivetrain_tests;
+#[cfg(test)]
+mod solid_tests;

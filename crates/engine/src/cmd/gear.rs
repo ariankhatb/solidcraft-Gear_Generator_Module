@@ -34,7 +34,7 @@ use super::sketch::{Left, edit_solved};
 use super::sketch_import::add_geometry;
 use crate::params::bad;
 use crate::schema::gear::{
-    BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, SeatAlongParams, SeatPointParams, GearAxesResult, GearAxis, GearAxisLine, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult,
+    BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, SeatAlongParams, SeatPointParams, GearAxesResult, GearAxis, GearAxisLine, GearBevelPlanetMode, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult,
     GearMaterial, GearParams, GearRelation, GearResult, GearSet, GearType, HardwareParams, PlacementParams, RackStandard, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
 };
 use solidcraft_gear::spline::SplineStandard;
@@ -124,7 +124,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         ),
 ];
 
-const KINDS: [(GearType, Kind); 19] = [
+const KINDS: [(GearType, Kind); 20] = [
     (GearType::Spur, Kind::Spur),
     (GearType::Helical, Kind::Helical),
     (GearType::Herringbone, Kind::Herringbone),
@@ -144,6 +144,7 @@ const KINDS: [(GearType, Kind); 19] = [
     (GearType::Spline, Kind::Spline),
     (GearType::FaceGear, Kind::FaceGear),
     (GearType::Elliptical, Kind::Elliptical),
+    (GearType::BevelPlanetary, Kind::BevelPlanetary),
 ];
 
 const CHAINS: [(ChainSize, &str); 18] = [
@@ -485,6 +486,19 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     set!(hole_diameter, p.hole_diameter);
     set!(only, p.only);
     set!(herringbone, p.herringbone);
+    if let Some(a) = p.first_azimuth {
+        if !a.is_finite() {
+            return Err("`first_azimuth` must be a finite angle in degrees".into());
+        }
+        s.first_azimuth = a;
+    }
+    if let Some(m) = p.bevel_planet_mode {
+        s.bevel_planet_mode = match m {
+            GearBevelPlanetMode::Single => solidcraft_gear::plan::BevelPlanetMode::Single,
+            GearBevelPlanetMode::Differential => solidcraft_gear::plan::BevelPlanetMode::Differential,
+            GearBevelPlanetMode::Ring => solidcraft_gear::plan::BevelPlanetMode::Ring,
+        };
+    }
     set!(coupon, p.coupon);
     set!(coupon_teeth, p.coupon_teeth);
     set!(origin, p.origin);
@@ -704,6 +718,8 @@ fn explicit_params(s: &Spec) -> GearParams {
         hole_diameter: (s.hole_diameter > 0.0).then_some(s.hole_diameter),
         only: (s.only > 0).then_some(s.only),
         herringbone: s.herringbone.then_some(true),
+        first_azimuth: None,
+        bevel_planet_mode: None,
         origin: (s.origin != [0.0; 3]).then_some(s.origin),
         name: (!s.name.is_empty()).then(|| s.name.clone()),
         placement: s.placement.map(|f| PlacementParams { origin: f.origin, x: f.x, z: f.z }),
@@ -792,6 +808,14 @@ fn with_extras(s: &Spec, mut p: GearParams) -> GearParams {
         }
         Kind::FaceGear => p.inner_diameter = (s.inner_diameter > 0.0).then_some(s.inner_diameter),
         Kind::Elliptical => p.ellipse_eccentricity = Some(s.ellipse_eccentricity),
+        Kind::BevelPlanetary => {
+            p.first_azimuth = Some(s.first_azimuth);
+            p.bevel_planet_mode = Some(match s.bevel_planet_mode {
+                solidcraft_gear::plan::BevelPlanetMode::Single => GearBevelPlanetMode::Single,
+                solidcraft_gear::plan::BevelPlanetMode::Differential => GearBevelPlanetMode::Differential,
+                solidcraft_gear::plan::BevelPlanetMode::Ring => GearBevelPlanetMode::Ring,
+            });
+        }
         _ => {}
     }
     p
@@ -2137,10 +2161,35 @@ fn build_body(s: &mut Session, body: &Body, warnings: &mut Vec<String>, mode: &e
         {
             name = made.to_string();
         }
+        if def.sketches.iter().any(|d| d.eq.is_some()) {
+            keep_point_picks(s, feature_id(&reply), &params);
+        }
         let sketches = def.sketches.iter().zip(&ids).map(|(d, id)| SketchRecord { id: *id, plane: d.plane_key(), geometry: d.geometry_key() }).collect();
         steps.push(StepRecord { shape: def.shape, command: def.command.into(), feature: feature_id(&reply), params, sketches });
     }
     Ok(BodyRecord { name, steps })
+}
+
+/// Teeth drawn from formulas change their curves (and the curves' ids) when a parameter
+/// changes the tooth count, so a profile the feature stored by its boundary's curve ids would be
+/// lost. The gear's picks are points that stay inside the same profile for any tooth count (just
+/// inside the rim or a tooth tip), so the feature keeps them as points.
+fn keep_point_picks(s: &mut Session, feature: Option<u64>, params: &Value) {
+    let Some(id) = feature else { return };
+    let Some(picks) = params.get("profiles").and_then(Value::as_array) else { return };
+    let points: Option<Vec<Vec2>> = picks
+        .iter()
+        .map(|p| {
+            let q = p.get("point")?.as_array()?;
+            Some(Vec2::new(q.first()?.as_f64()?, q.get(1)?.as_f64()?))
+        })
+        .collect();
+    let Some(points) = points.filter(|p| !p.is_empty()) else { return };
+    if let Some(f) = s.doc_mut().feature_mut(id) {
+        for (_, sel) in f.kind.profile_sels_mut() {
+            *sel = solidcraft_doc::ProfileSel::Points { points: points.clone() };
+        }
+    }
 }
 
 /// What a step does to its body.

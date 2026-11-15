@@ -93,6 +93,19 @@ pub enum GearType {
     Spline,
     FaceGear,
     Elliptical,
+    BevelPlanetary,
+}
+
+/// What meshes a bevel planetary set's planets besides the sun.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GearBevelPlanetMode {
+    /// The sun and the planets only.
+    Single,
+    /// A second sun (side gear) opposite the first: a differential.
+    Differential,
+    /// An internal bevel ring round the planets: a bevel epicyclic.
+    Ring,
 }
 
 /// A roller chain size: ISO 606 B series (European) or ANSI B29.1 (ISO 606 A series), or
@@ -590,6 +603,14 @@ pub struct GearParams {
     /// Pair: herringbone teeth (two opposite helical halves; needs `helix_angle`).
     #[serde(default)]
     pub herringbone: Option<bool>,
+    /// Bevel planetary: the first planet's azimuth about the sun's axis in degrees (the rest
+    /// are spaced evenly from it).
+    #[serde(default)]
+    pub first_azimuth: Option<f64>,
+    /// Bevel planetary: what meshes the planets besides the sun (default for the type:
+    /// differential).
+    #[serde(default)]
+    pub bevel_planet_mode: Option<GearBevelPlanetMode>,
     /// Where gear 1's centre goes, in mm (default the origin).
     #[serde(default)]
     pub origin: Option<[f64; 3]>,

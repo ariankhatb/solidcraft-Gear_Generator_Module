@@ -174,6 +174,10 @@ struct Opts {
     dual: [bool; 2],
     /// Show the load inputs for the strength rating.
     load_open: bool,
+    /// Teeth drawn from their formulas (`tooth_curves: equations`), and driven by design
+    /// parameters (`parametric`).
+    equations: bool,
+    parametric: bool,
 }
 
 /// The set being edited (the window's main button is then Update).
@@ -390,7 +394,7 @@ impl GearWindow {
             turned: 0.0,
             speed: 0.4,
             preview_3d: true,
-            opts: Opts { inch: false, advanced: false, printing: false, nozzle: 0.4, layer: 0.2, dual: [false; 2], load_open: false },
+            opts: Opts { inch: false, advanced: false, printing: false, nozzle: 0.4, layer: 0.2, dual: [false; 2], load_open: false, equations: false, parametric: false },
             hover_section: None,
             hover_preview: None,
             edited: None,
@@ -443,6 +447,9 @@ impl GearWindow {
         w.last_relation = w.axes.relation().as_ref().map(Relation::name);
         w.opts.load_open = w.spec.load.torque > 0.0 || w.spec.load.power > 0.0;
         w.opts.dual = [w.spec.shaft_back.exists(), w.spec.shaft2_back.exists()];
+        // How the teeth were drawn: as the set was asked for.
+        w.opts.equations = request.get("tooth_curves").and_then(Value::as_str) == Some("equations");
+        w.opts.parametric = w.opts.equations && request.get("parametric").and_then(Value::as_bool) == Some(true);
         w.editing = Some(Editing { group, name: name.to_string(), bodies: bodies.to_vec() });
         w.planned = None;
         w.replan();
@@ -460,6 +467,8 @@ impl GearWindow {
             "printing": self.opts.printing,
             "nozzle": self.opts.nozzle,
             "layer": self.opts.layer,
+            "equations": self.opts.equations,
+            "parametric": self.opts.parametric,
         })
     }
 
@@ -525,6 +534,13 @@ impl GearWindow {
     fn command(&self, ui: Value) -> (String, Value) {
         let mut params = solidcraft_engine::gear_params_of(&self.built);
         params["ui"] = ui;
+        if self.opts.equations && equation_teeth(self.built.kind) {
+            params["tooth_curves"] = json!("equations");
+            if self.opts.parametric {
+                // (An update keeps the set's parameter prefix by itself.)
+                params["parametric"] = json!(true);
+            }
+        }
         match &self.editing {
             Some(e) => {
                 params["group"] = json!(e.group);
@@ -2029,6 +2045,22 @@ fn section_tooth_form(ui: &mut Ui, cx: &mut Cx<'_>) {
     if matches!(k, Kind::Spur | Kind::Pair | Kind::Planetary) && s.helix == 0.0 {
         num(ui, "Crowning", "Each flank this much thinner at the two faces than at mid face, so slightly misaligned shafts still bear mid face", &mut s.crowning, 0.0..=0.1 * s.module, 0.002, " mm");
     }
+    if equation_teeth(k) {
+        row(ui, "Tooth curves", "Equations: one tooth drawn from the gear formulas (involute flank, trochoid root fillet, tip and root arcs) and a pattern. Fitted: splines through computed points. Tip relief, rounding, crowning and elephant foot stay fitted", |ui| {
+            ui.selectable_value(&mut o.equations, true, "equations");
+            ui.selectable_value(&mut o.equations, false, "fitted");
+        });
+        if o.equations {
+            row(ui, "Drive by design parameters", "Makes design parameters (module, teeth, pressure angle, shift, backlash, face width) that the tooth formulas, pattern counts and extrusions use: edit one and the teeth regenerate. Positions, hubs and bores follow on Update", |ui| {
+                ui.checkbox(&mut o.parametric, "");
+            });
+        }
+    }
+}
+
+/// The types whose teeth can be drawn from their formulas.
+fn equation_teeth(k: Kind) -> bool {
+    matches!(k, Kind::Spur | Kind::Helical | Kind::Herringbone | Kind::Internal | Kind::Pair | Kind::Planetary | Kind::Rack)
 }
 
 /// Designing for FDM printing: the print preset and the nozzle the tooth tips are checked

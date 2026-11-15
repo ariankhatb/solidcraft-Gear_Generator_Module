@@ -15,7 +15,7 @@ use crate::octoid::Crown;
 use crate::worm::Hob;
 use crate::spline::SplineStandard;
 
-mod extras;
+pub(crate) mod extras;
 
 /// Gear set types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
@@ -315,6 +315,9 @@ pub struct Spec {
     pub coupon: bool,
     /// Teeth on each coupon piece (3 to 40; one more where that centres them on the mesh).
     pub coupon_teeth: u32,
+    /// Also plan the set's clearance body (keep-out volume for a housing; see
+    /// [`crate::clearance`]): `Plan::clearance`. None: not made.
+    pub clearance_body: Option<crate::clearance::Clearance>,
 }
 
 impl Default for Spec {
@@ -401,6 +404,7 @@ impl Default for Spec {
             hardware2: Hardware::default(),
             coupon: false,
             coupon_teeth: 4,
+            clearance_body: None,
         }
     }
 }
@@ -656,9 +660,16 @@ pub struct Plan {
     pub preview_note: String,
     /// Which preview members mesh (parallel-axis sets; see [`crate::mesh2d::check_mesh`]).
     pub meshes: Vec<crate::mesh2d::MeshPair>,
+    /// The toothed members' tooth data, for drawing their teeth as formulas
+    /// ([`crate::equations::cell_for`]); one per member (the first of each name).
+    pub teeth: Vec<crate::equations::TeethSource>,
     /// Which bodies mesh in sets whose axes are not parallel (bevel, hypoid, crossed helical,
     /// worm; see [`crate::mesh3d::check`]), with the whole set's bodies.
     pub meshes3d: Vec<crate::mesh3d::MeshPair3>,
+    /// The set's clearance body, when `Spec::clearance_body` asks for it: one solid of the space
+    /// the assembled set needs (turning envelopes, shafts, bearing seats), in world coordinates,
+    /// built after the gears. Not one of `bodies`.
+    pub clearance: Option<Body>,
     /// Why the set can't be built, found while planning it ([`plan`] returns it as the error).
     refused: Option<String>,
 }
@@ -671,6 +682,12 @@ impl Plan {
     pub(crate) fn refuse(&mut self, why: impl Into<String>) {
         if self.refused.is_none() {
             self.refused = Some(why.into());
+        }
+    }
+    /// Records a toothed member's tooth data (the first under each name).
+    pub(crate) fn teeth_source(&mut self, src: crate::equations::TeethSource) {
+        if !self.teeth.iter().any(|t| t.who == src.who) {
+            self.teeth.push(src);
         }
     }
     pub(crate) fn warn(&mut self, w: impl Into<String>) {
@@ -798,6 +815,9 @@ pub fn check(s: &Spec) -> Result<(), String> {
     }
     crate::strength::check(&s.load)?;
     crate::body::check(s)?;
+    if let Some(c) = &s.clearance_body {
+        crate::clearance::check(c)?;
+    }
     extras::check(s)
 }
 
@@ -805,7 +825,11 @@ pub fn check(s: &Spec) -> Result<(), String> {
 pub fn plan(s: &Spec) -> Result<Plan, String> {
     check(s)?;
     if crate::coupon::applies(s) {
-        return crate::coupon::plan(s);
+        let mut p = crate::coupon::plan(s)?;
+        if s.clearance_body.is_some() {
+            p.warn("a test coupon has no clearance body: it is made for the set itself");
+        }
+        return Ok(p);
     }
     let mut p = Plan::default();
     match s.kind {
@@ -852,6 +876,10 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
         for b in &mut p.bodies {
             b.frame = place.compose(&b.frame);
         }
+    }
+    // The clearance body, from the bodies where they are.
+    if s.clearance_body.is_some() {
+        p.clearance = Some(crate::clearance::clearance_body(s, &mut p)?);
     }
     Ok(p)
 }
@@ -1004,6 +1032,18 @@ fn single(s: &Spec, p: &mut Plan) {
     p.preview.push(PreviewGear { name: "gear".into(), region: with_bore(region, &s.bore), center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: g.r() , orbit: 0.0, period: 0.0});
 }
 
+/// A ring gear's tooth data for [`Plan::teeth`].
+fn ring_source(s: &Spec, who: &str, member: u8, ring: &Internal, f: &ToothFlank) -> crate::equations::TeethSource {
+    crate::equations::TeethSource {
+        who: who.into(),
+        member,
+        form: crate::equations::Form::Internal { ring: *ring, f: f.clone() },
+        backlash: s.backlash,
+        face: s.face_width,
+        face_key: "face_width".into(),
+    }
+}
+
 fn with_bore(mut r: Region, b: &Bore) -> Region {
     if let Some(o) = b.outline() {
         r.holes.push(o);
@@ -1051,6 +1091,7 @@ fn internal(s: &Spec, p: &mut Plan) {
     if ring.r_tip() < g.rb() {
         p.warn("ring: the inner tips are inside the base circle; a pinion may interfere (use more teeth or a positive shift)");
     }
+    p.teeth_source(ring_source(s, "ring", 1, &ring, &sf));
     let region = Region { outer: vec![Outline::circle(V2::ZERO, outer_r)], holes: vec![teeth] };
     let mut steps = tooth_steps(region.clone(), s.face_width, twist_for(&g, s.face_width), false, Op::New);
     crate::body::ring_chamfers(s, sf.rf, outer_r, s.face_width, &mut steps, p, "ring");
@@ -1064,6 +1105,14 @@ fn rack(s: &Spec, p: &mut Plan) {
     let below = if s.rack_height > 0.0 { s.rack_height } else { (3.0 * s.module).max((s.rack.dedendum - s.shift + 2.0) * s.module) };
     let n = s.rack_teeth.max(1);
     let o = rack_outline(&g, n, below);
+    p.teeth_source(crate::equations::TeethSource {
+        who: "rack".into(),
+        member: 1,
+        form: crate::equations::Form::Rack { g, count: n, below },
+        backlash: s.backlash,
+        face: s.face_width,
+        face_key: "face_width".into(),
+    });
     let length = PI * g.mt() * f64::from(n);
     p.fact("length", length, Unit::Mm);
     p.fact("pitch", PI * g.mt(), Unit::Mm);
@@ -1274,6 +1323,7 @@ fn planetary(s: &Spec, p: &mut Plan) {
     ring_warnings(p, "ring", &ring_gear, &ring_flank);
     let ring_teeth = teeth_outline(&ring_flank, zr, ring_phase + PI / f64::from(zr));
     let ring_region = Region { outer: vec![Outline::circle(V2::ZERO, ring_gear.r_root() + rim)], holes: vec![ring_teeth] };
+    p.teeth_source(ring_source(s, "ring", 3, &ring_gear, &ring_flank));
     if wanted(s, 1) {
         let mut steps = crate::body::tooth_body(s, &sun, &f_sun, 0.0, s.face_width, false, p, "sun");
         hub_steps(s, &s.bore, f_sun.rf - s.elephant_foot, s.face_width, &mut steps, p, "sun");

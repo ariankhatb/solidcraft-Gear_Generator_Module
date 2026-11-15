@@ -296,7 +296,10 @@ impl Hardware {
     }
 }
 
-/// Common deep-groove ball bearings: (name, bore, outside diameter, width) in mm.
+/// Common deep-groove ball bearings (ISO 15 boundary dimensions): (name, bore, outside diameter,
+/// width) in mm. Series: MR (miniature, metric), 6xx (60 / 62 miniature), 68xx and 69xx (thin
+/// section), 60xx (extra light), 62xx (light), 63xx (medium). The first ones in each series are
+/// the ones the Gear Generator's lists showed before the table grew, in their old order.
 pub const BEARINGS: &[(&str, f64, f64, f64)] = &[
     ("MR63", 3.0, 6.0, 2.5),
     ("MR84", 4.0, 8.0, 3.0),
@@ -323,7 +326,86 @@ pub const BEARINGS: &[(&str, f64, f64, f64)] = &[
     ("6200", 10.0, 30.0, 9.0),
     ("6201", 12.0, 32.0, 10.0),
     ("6202", 15.0, 35.0, 11.0),
+    // Miniature (MR).
+    ("MR52", 2.0, 5.0, 2.0),
+    ("MR62", 2.0, 6.0, 2.5),
+    ("MR74", 4.0, 7.0, 2.5),
+    ("MR83", 3.0, 8.0, 3.0),
+    ("MR85", 5.0, 8.0, 2.5),
+    ("MR95", 5.0, 9.0, 3.0),
+    ("MR104", 4.0, 10.0, 4.0),
+    ("MR106", 6.0, 10.0, 3.0),
+    ("MR117", 7.0, 11.0, 3.0),
+    ("MR137", 7.0, 13.0, 4.0),
+    ("MR148", 8.0, 14.0, 4.0),
+    // 60 and 62 miniature.
+    ("603", 3.0, 9.0, 5.0),
+    ("604", 4.0, 12.0, 4.0),
+    ("605", 5.0, 14.0, 5.0),
+    ("606", 6.0, 17.0, 6.0),
+    ("607", 7.0, 19.0, 6.0),
+    ("609", 9.0, 24.0, 7.0),
+    ("627", 7.0, 22.0, 7.0),
+    ("628", 8.0, 24.0, 8.0),
+    ("629", 9.0, 26.0, 8.0),
+    // Thin section, 68 series.
+    ("683", 3.0, 7.0, 2.0),
+    ("684", 4.0, 9.0, 2.5),
+    ("685", 5.0, 11.0, 3.0),
+    ("686", 6.0, 13.0, 3.5),
+    ("687", 7.0, 14.0, 3.5),
+    ("689", 9.0, 17.0, 4.0),
+    ("6805", 25.0, 37.0, 7.0),
+    ("6806", 30.0, 42.0, 7.0),
+    // Thin section, 69 series.
+    ("693", 3.0, 8.0, 3.0),
+    ("694", 4.0, 11.0, 4.0),
+    ("695", 5.0, 13.0, 4.0),
+    ("696", 6.0, 15.0, 5.0),
+    ("697", 7.0, 17.0, 5.0),
+    ("698", 8.0, 19.0, 6.0),
+    ("699", 9.0, 20.0, 6.0),
+    ("6900", 10.0, 22.0, 6.0),
+    ("6901", 12.0, 24.0, 6.0),
+    ("6902", 15.0, 28.0, 7.0),
+    ("6903", 17.0, 30.0, 7.0),
+    ("6904", 20.0, 37.0, 9.0),
+    ("6905", 25.0, 42.0, 9.0),
+    // 60, 62 and 63 series.
+    ("6005", 25.0, 47.0, 12.0),
+    ("6006", 30.0, 55.0, 13.0),
+    ("6203", 17.0, 40.0, 12.0),
+    ("6204", 20.0, 47.0, 14.0),
+    ("6205", 25.0, 52.0, 15.0),
+    ("6206", 30.0, 62.0, 16.0),
+    ("6300", 10.0, 35.0, 11.0),
+    ("6301", 12.0, 37.0, 12.0),
+    ("6302", 15.0, 42.0, 13.0),
 ];
+
+/// The bearing series a name from [`BEARINGS`] belongs to, for grouping a picker: "MR",
+/// "6xx", "68xx", "69xx", "60xx", "62xx" or "63xx".
+pub fn bearing_series(name: &str) -> &'static str {
+    let n = name.trim();
+    if n.len() >= 2 && n[..2].eq_ignore_ascii_case("MR") {
+        "MR"
+    } else if n.len() == 3 {
+        match &n[..2] {
+            "68" => "68xx",
+            "69" => "69xx",
+            _ => "6xx",
+        }
+    } else {
+        match n.get(..2) {
+            Some("68") => "68xx",
+            Some("69") => "69xx",
+            Some("60") => "60xx",
+            Some("62") => "62xx",
+            Some("63") => "63xx",
+            _ => "6xx",
+        }
+    }
+}
 
 /// A standard bearing's (bore, outside diameter, width) by name ("608", "6001", "MR105", ...).
 pub fn bearing(name: &str) -> Option<(f64, f64, f64)> {

@@ -181,6 +181,17 @@ pub enum RackStandard {
     PrintFdm,
 }
 
+/// How gear teeth are drawn in their sketches.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToothCurves {
+    /// Fit point splines through points computed from the tooth geometry.
+    #[default]
+    Fitted,
+    /// Equation curves of the gear formulas, tip and root arcs, and a pattern.
+    Equations,
+}
+
 /// How a gear is bored.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -333,6 +344,96 @@ pub struct HardwareParams {
     /// How much larger than the bearing the pocket is made, on the diameter, in mm.
     #[serde(default)]
     pub bearing_fit: Option<f64>,
+}
+
+/// A bearing size for the clearance body's seats, in mm.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct BearingSizeParams {
+    /// Outside diameter.
+    pub od: f64,
+    /// Width.
+    pub width: f64,
+    /// Bore (optional: checked against the shaft when given).
+    #[serde(default)]
+    pub bore: Option<f64>,
+}
+
+/// The clearance body's bearing: a standard deep-groove ball bearing by name (MR52..MR148,
+/// 603..629, 683..689, 693..699, 6800..6806, 6900..6905, 6000..6006, 6200..6206, 6300..6302;
+/// e.g. "608"), or a size.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(untagged)]
+pub enum ClearanceBearing {
+    Named(String),
+    Size(BearingSizeParams),
+}
+
+/// A bearing seat on a member's shaft, by the member and the distance along its axis.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct SeatAlongParams {
+    /// The member: 1, 2, ... (the set's bodies in their order: gear 1 first; planetary: sun,
+    /// planets, ring; worm: wheel, worm).
+    pub member: u32,
+    /// Signed distance in mm along the member's axis from the middle of its teeth.
+    pub along: f64,
+}
+
+/// A bearing seat at a world point, moved onto the nearest member's axis.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct SeatPointParams {
+    /// [x, y, z] in mm.
+    pub point: [f64; 3],
+}
+
+/// Where a bearing seat goes: a dot on a shaft.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(untagged)]
+pub enum ClearanceSeat {
+    Along(SeatAlongParams),
+    Point(SeatPointParams),
+}
+
+/// The clearance body: one more solid, the space the assembled set needs to turn (every
+/// member's swept teeth, shafts through the housing walls, bearing seats), grown by the
+/// clearances, to cut out of a housing block in one Boolean.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct ClearanceParams {
+    /// Radial clearance round tips, shafts and chain or belt runs, mm (default 0.5).
+    #[serde(default)]
+    pub radial: Option<f64>,
+    /// Axial clearance past each member's faces, mm (default 0.5).
+    #[serde(default)]
+    pub axial: Option<f64>,
+    /// How far shafts run on past each gear on each side, mm (default 2 × face width).
+    /// Integral shafts (`shaft_*`) are taken as built.
+    #[serde(default)]
+    pub shaft_extension: Option<f64>,
+    /// An internal ring (or a cycloidal drive's pin ring) is part of the housing and left out
+    /// (default true); false clears its outer rim.
+    #[serde(default)]
+    pub ring_as_housing: Option<bool>,
+    /// The bearing for the seats: a standard name ("608") or {od, width, bore?}.
+    #[serde(default)]
+    pub bearing: Option<ClearanceBearing>,
+    /// How much larger than the bearing's outside diameter each seat is, on the diameter, mm
+    /// (default 0).
+    #[serde(default)]
+    pub bearing_fit: Option<f64>,
+    /// The seats: {member, along} or {point: [x, y, z]}.
+    #[serde(default)]
+    pub seats: Option<Vec<ClearanceSeat>>,
+    /// Rack: how far it slides in all, mm (default its own length): its slot is that much
+    /// longer.
+    #[serde(default)]
+    pub travel: Option<f64>,
 }
 
 /// A gear set: involute spur, helical, herringbone, internal and rack; pairs and planetary sets;
@@ -682,6 +783,26 @@ pub struct GearParams {
     /// Teeth on each coupon piece, 3..40 (default 4).
     #[serde(default)]
     pub coupon_teeth: Option<u32>,
+    /// How the teeth of planar involute sets (spur, helical, herringbone, internal, pair,
+    /// planetary, rack) are drawn: `fitted` (default) fit point splines through computed points;
+    /// `equations` equation curves of the gear's own formulas (involute, trochoid root fillet)
+    /// with tip and root arcs, one tooth and a circular pattern. Other types are always fitted.
+    #[serde(default)]
+    pub tooth_curves: Option<ToothCurves>,
+    /// With `tooth_curves: equations`: make design parameters (`<prefix>_module`,
+    /// `<prefix>_teeth`, `<prefix>_pressure_angle`, `<prefix>_shift`, `<prefix>_backlash`,
+    /// `<prefix>_face_width`… and derived radii) and draw the teeth, pattern counts and tooth
+    /// extrusions from them, so editing a parameter regenerates the teeth. Default false.
+    #[serde(default)]
+    pub parametric: Option<bool>,
+    /// The design parameters' prefix (default: from the set's name).
+    #[serde(default)]
+    pub parameter_prefix: Option<String>,
+    /// Also make the set's clearance body (keep-out volume for a housing), named
+    /// "<set name> clearance": see [`ClearanceParams`]. Not made when absent. (`clearance` is
+    /// the tip clearance coefficient c*.)
+    #[serde(default)]
+    pub clearance_body: Option<ClearanceParams>,
     /// `gear.update` and `gear.inspect` only: the set, by the timeline folder `gear.create`
     /// made for it.
     #[serde(default)]
@@ -765,6 +886,10 @@ pub struct GearResult {
     /// Numbers describing the set: diameters, ratios, centre distances, contact ratios,
     /// measurements over teeth and pins.
     pub facts: Vec<GearFact>,
+    /// The clearance body made with the set (`clearance_body`), by name; also the last of
+    /// `bodies`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<String>,
     /// Problems worth knowing: undercut, pointed teeth, low contact ratio, interference.
     pub warnings: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

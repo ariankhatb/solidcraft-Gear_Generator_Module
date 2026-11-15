@@ -348,6 +348,15 @@ fn same_pieces(a: &Outline, b: &Outline) -> bool {
 /// the middle of the face when the shafts are a little out of line.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn tooth_body(s: &Spec, g: &Involute, f: &ToothFlank, phase: f64, face: f64, herringbone: bool, p: &mut Plan, who: &str) -> Vec<Step> {
+    // What the teeth are, for drawing them as formulas (gear 2 and the planets are member 2).
+    p.teeth_source(crate::equations::TeethSource {
+        who: who.into(),
+        member: if matches!(who, "gear 2" | "planet") { 2 } else { 1 },
+        form: crate::equations::Form::External { g: *g, f: f.clone() },
+        backlash: s.backlash,
+        face,
+        face_key: if (face - s.face_width).abs() <= 1e-12 { "face_width".into() } else { "face_width2".into() },
+    });
     let outline = teeth_outline(f, g.teeth, phase);
     let twist_total = face * g.helix.tan() / g.r();
     if s.crowning > 0.0 {

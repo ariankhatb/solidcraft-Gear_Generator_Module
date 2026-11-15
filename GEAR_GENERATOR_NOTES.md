@@ -148,3 +148,157 @@ points, optionally driven by design parameters so Change Parameters reshapes the
 Planar tooth kinds (spur, helical, herringbone, internal, pair, planetary, rack) first; bevel,
 spiral bevel, hypoid and worm wheel keep fitted splines (no closed-form planar section).
 Agent worktree: `solidcraft-eqn` / `gear-equations`.
+
+## Status 2026-11-14, 18:30
+
+Build of 18:03 (`target/release`) contains everything except equation-driven teeth. Kernel
+results on that build (`inspect.interference`, defaults): pair, planetary, bevel, spiral bevel,
+crossed helical, worm, cycloidal: no overlap; cycloidal drive 0.001 mm^3 and face gear
+0.014 mm^3 (touching contact); **hypoid 12.4 mm^3 (about 0.04 mm deep over 290 mm^2), being
+fixed on `gear-hypoid`** (its math checker said 3.6 um, so the kernel's loft differs from the
+checker's model). All single-gear kinds build.
+
+Merged since that build (needs the next build): `gear-equations` — `tooth_curves:
+fitted|equations`, `parametric`, `parameter_prefix`; planar kinds only; default still fitted.
+Verified on the kernel with scripts (volume and a teeth 20->24 parameter change), but the engine
+path and its new engine tests have never been compiled into a build or run.
+
+Next build: after the hypoid fix lands. Also run the engine gear tests once
+(`cargo test --release -p solidcraft-engine gear` — compiles all engine tests; do it when nothing
+else is compiling).
+
+## User feedback 2026-11-14, ~18:45 — UI redesign (priority)
+
+"I want the UI to be a little faster. We don't want to generate the gears immediately. We should
+do the preview first, more realistically though, even including the 3D aspect … use a drawing
+setup where you're able to change the angles … just input the angle and it'll happen … design by
+outputs … I don't want the 0.3 whatever 3D printed thing in the settings; it makes it look too
+complicated. Have a simple mode where you just say the diameters you want, or the angle of the
+shaft … there is no actual 3D preview; the one that generates is too slow, but we don't need to
+generate everything. Generating the angles between the gears, the shafts, all of that is easy
+compute, so we can do that without the teeth."
+
+Plan:
+1. No kernel builds while designing: the live `gear.create` view preview becomes an on-demand
+   button; only Create builds solids.
+2. An instant, orbitable 3D preview inside the window drawn from the math (shafts/axes, angles,
+   pitch cylinders/cones/hyperboloids, gear blanks, optional quick toothed extrusions).
+3. A schematic drawing of the set with editable dimensions (shaft angle, offset, centre distance,
+   diameters): click a dimension, type a value, everything updates.
+4. Simple mode (default): design by outputs — diameters, ratio, shaft angle, centre distance or
+   offset; the solver picks module/teeth/shifts. Advanced mode holds everything else (basic rack,
+   print tuning, hardware, chamfers, tooth tuning).
+Agents: `gear-simple` (outputs solver, gear crate) and `gear-ui2` (window: modes, 3D view,
+drawing, no auto kernel preview).
+
+### Refinement (same evening): the shafts decide the type
+
+User: "Instead of choosing between hypoid [and the rest], we want an automatic mode selector …
+we are given two shafts. One is coming through the plane of the screen. The other one is placed
+by hand — draw it, 2 points 1 and 2, roughly, then dimension it … and that will give you exactly
+what you need, whether it's going to be a bevel or a hypoid or whatever in between. … I should be
+able to draw this out first using sketches — a sketch with a dot and an angled shaft — and that's
+what you select in the program, and that will generate the gear. … Apply this logic to the other
+ones as well."
+- Simple mode input = the drawing: shaft 1 a dot, shaft 2 two points, then dimensions (angle,
+  offset, position). Type is a label (override only when several fit).
+- Same axis → single gear; parallel → pair; intersecting → bevel; skew → hypoid (small offset;
+  offset 0 = spiral bevel) / worm or crossed helical (large offset).
+- Axis slots accept sketch points (axis normal to the sketch plane) and sketch lines.
+Sent to `gear-ui2` (window, engine axis references) and `gear-simple` (`auto_kind`, two-shaft
+`Simple`).
+
+### Clearance body for housings (same evening)
+
+User: "this should also output … the cutout of the gear without the tooth … the surface of the
+gear if you were to Boolean cut it out of a block. And it all has to be just one geometry, so
+it's easy to make a housing: you make whatever shape you want and then Boolean-cut whatever this
+gear set requires out of it. … Add one bearing [size] … load bearings as a library … select it
+… cut that out for all the places you want, which are dots on the shaft … add that to the
+housing-side design. But it's mostly the Boolean part of all of the clearance needed for the
+assembly."
+- One body: every member's swept tip envelope (cylinder/cone/hyperboloid/worm tube) plus
+  radial and axial clearance, the shafts, and bearing seats (one bearing size from the library,
+  placed at dots on the shafts). Other housing features stay manual for now.
+Agent worktree: `solidcraft-keepout` / `gear-keepout`.
+
+### Sketch rules (confirmed by the user) — circles are pitch diameters, lines are shafts
+
+One sketch = gear 1's plane. A circle is a gear's pitch circle (Ø = pitch Ø), its shaft through
+the centre normal to the sketch unless a line says otherwise.
+
+| Drawn | Set | Sizes |
+|---|---|---|
+| one circle | single gear (spur/helical by helix field) | pitch Ø |
+| two circles touching outside | parallel pair (helix field: helical/herringbone) | both pitch Ø; centre distance |
+| circle touching inside a bigger one | internal pair | both pitch Ø |
+| centre circle + circles around it inside a big circle | planetary | sun, planets, ring |
+| circle + tangent line | rack and pinion OR worm and wheel (one choice; worm Ø a field or a second parallel line) | line = pitch line |
+| circle + line through its centre | bevel, 90° | line = shaft 2 seen from above; meets shaft 1 at the apex |
+| circle + line crossing the circle off-centre | hypoid | offset = line's distance from centre |
+| circle + line missing the circle | crossed helical | offset = line's distance from centre |
+| second circle in another sketch touching the first | bevel at any angle | both pitch Ø; shaft angle = angle between sketch planes |
+
+Face width: a field per gear (default ≈ 10×module; 30% of cone distance for bevel/hypoid),
+shown as a dimension. Mate size for bevel/hypoid with one circle: ratio field (or the side-sketch
+circle). Non-90° bevel/hypoid: angle field or the two-sketch form.
+- Bevels at any shaft angle (user's example: 80°) must be easy in Simple mode: a shaft-angle
+  dimension on the bevel's side-view drawing (default 90°), side-view sketch input (two lines
+  meeting at the apex), cone angles and apex drawn. The generator already supports 5–175°.
+
+### Mode first, then pick from the sketch; new mode: bevel planetary (user, same evening)
+
+User: keep the mode selection for now; after choosing the mode, select the components from the
+sketch that the mode needs. New set: "something similar to a sun gear and planet gears around
+it, but the planets are made at a cone shape, so each one goes in a different direction, not
+perpendicular or parallel to each other."
+- **Bevel planetary**: a bevel sun; N bevel planets whose axes meet the sun axis at one apex at a
+  cone angle (90° = differential spider gears); optional second sun opposite (full
+  differential) or an outer bevel ring. Sketch: sun circle + one line per planet from the centre
+  (azimuths) + cone angle dimension (or a side-view sketch: two lines meeting at the apex);
+  planet size from a second circle on a spoke or a ratio.
+- Window: mode picker stays; each mode lists its pick slots (circle / line / point / second
+  sketch) and validates picks; auto-detection only as a hint. Per-mode slots:
+  single gear: 1 circle; pair: 2 touching circles; internal: circle inside circle; planetary:
+  sun/planet/ring circles; rack/worm: circle + tangent line; bevel: circle + line through centre
+  (or 2 side-view lines); hypoid: circle + off-centre crossing line; crossed helical: circle +
+  missing line; bevel planetary: sun circle + planet lines + cone angle.
+Agent worktree for the new kind: `solidcraft-bevelplanet` / `gear-bevelplanet`.
+- **Correction: ONE sketch only**, basic geometry (circles, lines). No second sketch, no side-view
+  sketch. Out-of-plane angles (bevel/hypoid/crossed shaft angle, bevel planetary cone angle) are
+  settings (default 90°). Counts are settings: draw one planet (one line from the sun's centre
+  for bevel planetary, one planet circle for classic planetary) and set the planet count.
+- **Origin dot, always**: every mode's first pick is a sketch point = origin of the set; default
+  orientation follows the sketch (circle modes: shafts normal to the sketch; line modes: shafts in
+  the plane); rotate about the origin in 90° steps (+ free angle) to align to the wanted plane.
+- **Bevel and bevel planetary drawn as a side view** in the one sketch: a line (sun/gear 1 shaft),
+  the dot on it (apex = origin), a second line from the dot at an angle (planet/gear 2 shaft);
+  the angle between the lines is the meeting angle (drawn). Sizes, planet count, face width are
+  settings. Hypoid stays circle + off-centre line with the out-of-plane offset as a setting.
+- Optimization agent (user request: "faster and smoother"): worktree `solidcraft-perf` /
+  `gear-perf` — kernel build path per kind, plan/check_mesh/solver costs; measure before/after.
+
+## Integrator plan while the user is away (from ~19:15, back in a couple of hours)
+
+User: "whenever that is done, rebuild everything yourself … if the first rebuild goes wrong, redo
+it … if it finishes and I'm not around, double check everything and rebuild again if there are
+bugs." Steps: merge each agent branch as it lands (gear tests + cargo check after each) → full
+release build → kernel overlap check on every kind, engine gear tests, renders, window
+screenshots (Simple and Advanced) via the control channel → fix and rebuild until clean →
+summary for the user.
+- Merged `gear-simple` (design-by-outputs `simple.rs`: Simple/solve/outputs_of/auto_kind/schematic).
+  TODO at integration: pairs (and planetary) can't be herringbone — `pair()` checks
+  `s.kind == Kind::Herringbone`; add `Spec.herringbone: bool` (+ `GearParams.herringbone`, window
+  toggle) so a pair builds herringbone teeth. `sweep_tests::big_gears_plan_quickly` (50 ms) is
+  flaky under load; passes alone.
+
+#### Clearance body: status (`gear-keepout`)
+
+Done in the gear crate (`clearance.rs`, tests in `clearance_tests.rs`, all pass). Engine: `clearance_body: {...}`
+on gear.create/update/calculate, reply `clearance` (passes `cargo check -p solidcraft-ui-egui`; engine tests
+`a_clearance_body_comes_with_the_set_and_cuts_a_housing`, `clearance_parameters_round_trip_and_bad_ones_are_refused`,
+ignored `every_type_builds_its_clearance_body` written but never run). Engine key is `clearance_body` because
+`clearance` is already c*. Window fields: `crates/gear/CLEARANCE_UI.md`. Kernel: every kind's clearance body
+built with the 18:03 CLI, cut out of a box, `inspect.interference` housing vs gears = 0 for all kinds (hypoid included;
+rings overlap the housing by design when `ring_as_housing`). Scripts come from the ignored test `dump_clearance_scripts`
+(env `CLEARANCE_DUMP`, `CLEARANCE_KINDS`, `<kind>_housing` variants with Ø8 bores and 608 seats).

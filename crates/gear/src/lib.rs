@@ -8,6 +8,8 @@
 //! - [`body`]: integral shafts, chamfers, hub hardware and bearing pockets; tooth tuning for
 //!   printing (tip rounding, horizontal-expansion compensation, elephant-foot relief), tip relief
 //!   and crowning.
+//! - [`clearance`]: the clearance body (keep-out volume) of a set, for cutting a housing: turning
+//!   envelopes, shafts and bearing seats in one solid.
 //! - [`plan`]: a gear set ([`plan::Spec`]: spur, helical, herringbone, internal, rack, pair,
 //!   planetary, straight and spiral bevel, hypoid, crossed helical, worm, cycloidal, cycloidal
 //!   drive, chain sprocket, timing pulley, involute spline, face gear) as bodies of solid steps,
@@ -20,6 +22,8 @@
 //!   the chain or belt between two of them.
 //! - [`spline`]: DIN 5480 and ANSI B92.1 involute splines; [`face_gear`]: face gears cut by a
 //!   spur pinion; [`elliptic`]: a centre-pivoted elliptical gear and its conjugate.
+//! - [`equations`]: a tooth as formulas (involute, trochoid root fillet, tip and root arcs) and a
+//!   pattern, for sketches whose teeth follow design parameters.
 //! - [`coupon`]: a print test coupon of a pair or planetary set (a few teeth of each member at
 //!   the true centre distance), asked for with `Spec::coupon`.
 //! - [`design`]: design by goal (ranked tooth counts, modules and shifts for a ratio, size and
@@ -38,11 +42,13 @@
 
 pub mod axes;
 pub mod body;
+pub mod clearance;
 pub mod coupon;
 pub mod cycloid;
 pub mod elliptic;
 pub mod face_gear;
 pub mod design;
+pub mod equations;
 pub mod geom;
 pub mod hub;
 pub mod hypoid;
@@ -55,6 +61,7 @@ pub mod pulley;
 pub mod spline;
 pub mod sprocket;
 pub mod sheet;
+pub mod simple;
 pub mod strength;
 pub mod worm;
 pub mod wrap;
@@ -70,12 +77,16 @@ mod accuracy_tests;
 #[cfg(test)]
 mod body_tests;
 #[cfg(test)]
+mod clearance_tests;
+#[cfg(test)]
 mod sweep_tests;
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 mod coupon_tests;
+#[cfg(test)]
+mod equations_tests;
 #[cfg(test)]
 mod mesh3d_tests;
 #[cfg(test)]

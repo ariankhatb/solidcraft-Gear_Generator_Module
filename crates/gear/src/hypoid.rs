@@ -1317,6 +1317,53 @@ pub(crate) fn work_out(s: &Spec) -> Result<Set, String> {
     Ok(Set { d, form, op, xp, zp, heel_first, zeta, teeth, loft_z, loft, gear_n })
 }
 
+/// A hypoid set's axes and pitch cones without its teeth, for a fast preview
+/// ([`crate::simple::schematic`]): the design, where the bodies' frames go (as [`build`] places
+/// them about `s.origin`, before the right-hand mirror and `s.placement`), the ring gear's
+/// outside radius and the pinion's toothed length. The same steps as [`work_out`] up to its
+/// sections, which are what take the time.
+pub(crate) struct Layout {
+    pub d: Design,
+    /// The pinion's body frame (origin, x, z) and the gear's origin, world.
+    pub pinion_origin: V3,
+    pub pinion_x: V3,
+    pub pinion_z: V3,
+    pub gear_origin: V3,
+    /// The gear's back face below the design frame's z = 0 (the body frame's z = 0), its teeth's
+    /// top, and its outside radius.
+    pub back: f64,
+    pub z_hi: f64,
+    pub r_out: f64,
+    pub length: f64,
+}
+
+pub(crate) fn layout(s: &Spec) -> Result<Layout, String> {
+    let d = design(s)?;
+    let form = Form::new(s, &d)?;
+    let g2 = d.g2();
+    let along = |x: V3| dot(sub(x, d.o1), d.a1);
+    let past = 0.12 * d.b2;
+    let inner = (d.cone_m2 - d.b2 / 2.0 - past).max(0.15 * d.cone_m2);
+    let s_heel = along(sub(d.apex2, mul(g2, d.cone_e2 + past)));
+    let s_toe = along(sub(d.apex2, mul(g2, inner)));
+    let length = (s_toe - s_heel).abs();
+    let ratio = d.z1 / d.z2;
+    let across = cross(d.n2, d.tooth);
+    let miss = |zp: V3| -> f64 {
+        let v1 = cross(zp, sub(d.p, d.o1));
+        let v2 = mul(cross([0.0, 0.0, 1.0], d.p), -ratio);
+        dot(sub(v1, v2), across).abs()
+    };
+    let forward = miss(d.a1) <= miss(mul(d.a1, -1.0));
+    let zp = if forward { d.a1 } else { mul(d.a1, -1.0) };
+    let (s_min, s_max) = (s_heel.min(s_toe), s_heel.max(s_toe));
+    let op = add(d.o1, mul(d.a1, if forward { s_min } else { s_max }));
+    let web = if s.rim > 0.0 { s.rim } else { 0.06 * 2.0 * d.re2 };
+    let back = form.z_lo - web;
+    let world = |q: V3| -> V3 { [q[0] + s.origin[0], q[1] + s.origin[1], q[2] - back + s.origin[2]] };
+    Ok(Layout { pinion_origin: world(op), pinion_x: pinion_x(zp), pinion_z: zp, gear_origin: world([0.0, 0.0, back]), back, z_hi: form.z_hi, r_out: form.r_out, length, d })
+}
+
 /// Builds the hypoid set into `p`.
 pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
     let set = work_out(s)?;

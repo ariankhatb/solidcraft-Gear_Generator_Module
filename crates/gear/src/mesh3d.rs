@@ -623,6 +623,23 @@ impl Solid {
         }
         inside
     }
+    /// Points on the side surfaces of the parts that add material (the first part and the
+    /// joins), in the body's own coordinates (unturned): round each outline about `h` apart (the
+    /// solid's own spacing) and along each sweep about `hz` apart. Whatever the body sweeps when it
+    /// turns about its axis lies within these points' radii, row by row.
+    pub fn material_points(&self, hz: f64) -> Vec<P3> {
+        let mut out = Vec::new();
+        for (part, op) in &self.parts {
+            if matches!(op, Op::New | Op::Join) {
+                for sheet in part.sheets(self.h, hz, (f64::MIN, f64::MAX)) {
+                    for row in sheet {
+                        out.extend(row);
+                    }
+                }
+            }
+        }
+        out
+    }
     /// Is the world point inside the body?
     pub fn contains(&self, p: P3) -> bool {
         self.contains_local(self.local(p))

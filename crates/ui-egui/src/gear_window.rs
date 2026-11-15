@@ -862,8 +862,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     } else {
         ViewState::Current
     };
-    let (closed, action) = ui_kit::Window::new(egui::Id::unique("sc_gear_window"), crate::gear_icons::GENERATOR, title).fields().cards(window_cards(ctx)).actions(primary, &close, None).show(ctx, valid, |ui| {
-        body(ui, &mut w, view, preview_error.as_deref());
+    let (closed, action) = ui_kit::Window::new(egui::Id::unique("sc_gear_window"), crate::gear_icons::GENERATOR, title).fields().cards(window_cards(ctx)).placed(egui::Align2::CENTER_TOP, window_top(ctx)).actions(primary, &close, None).show(ctx, valid, |ui| {
+        within_width(ui, |ui| body(ui, &mut w, view, preview_error.as_deref()));
     });
     if w.animate && !w.paused {
         let dt = ctx.input(|i| i.stable_dt).min(0.1) as f64;
@@ -910,7 +910,28 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
 fn window_cards(ctx: &egui::Context) -> f32 {
     let card = solidcraft_theme::Tokens::get().form_card_width.max(1.0);
     let screen = ctx.content_rect().width();
-    (3.3 + (screen - 1600.0).max(0.0) * 0.5 / card).min(4.8)
+    (3.3 + (screen - 1600.0).max(0.0) * 0.5 / card).min(4.8).min(((screen - 4.0) / card).max(1.0))
+}
+
+/// Where the window's top edge starts: it is pinned by its top, not its centre, so it stays put
+/// when its content gets taller or shorter (centred, it jumped with every gear type). Near the
+/// screen's top, so the tallest body the kit allows still fits under it.
+fn window_top(ctx: &egui::Context) -> Pos2 {
+    let screen = ctx.content_rect();
+    pos2(screen.center().x, screen.top() + 8.0)
+}
+
+/// Lays `add` out in the width there is and tells the window only that width: something too
+/// wide inside is cut at the window's edge instead of widening the window past the screen (which
+/// pushed Create and Close out of sight).
+fn within_width(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    let top = ui.cursor().min;
+    let width = ui.available_width();
+    let max = egui::Rect::from_min_max(top, pos2(top.x + width, f32::INFINITY));
+    let mut child = ui.new_child(egui::UiBuilder::new().id_salt("gear_body").max_rect(max).layout(*ui.layout()));
+    add(&mut child);
+    let height = child.min_rect().height();
+    ui.advance_cursor_after_rect(egui::Rect::from_min_size(top, vec2(width, height)));
 }
 
 /// Below this width the two columns stack: the form on top, the views under it at the whole
@@ -1324,17 +1345,31 @@ fn simple_facts(ui: &mut Ui, w: &GearWindow) {
         }
     }
     if !w.simple.chosen.is_empty() {
-        let col = ((ui.available_width() - 12.0) / 2.0).clamp(80.0, 160.0);
-        egui::Grid::new("gear_simple_chosen").num_columns(2).striped(true).spacing([12.0, 2.0]).min_col_width(col).show(ui, |ui| {
+        let cap = fact_label_cap(ui);
+        egui::Grid::new("gear_simple_chosen").num_columns(2).striped(true).spacing([12.0, 2.0]).min_col_width(80.0).show(ui, |ui| {
             for f in w.simple.chosen.iter().take(10) {
                 // The whole name: a narrow column cut them to "gear 1 t…".
-                ui.add(egui::Label::new(egui::RichText::new(&f.label).small()).wrap_mode(egui::TextWrapMode::Extend));
+                fact_label(ui, &f.label, cap);
                 ui.label(egui::RichText::new(fact_value(f)).small().monospace());
                 ui.end_row();
             }
         });
     }
     egui::CollapsingHeader::new(egui::RichText::new("All numbers").small()).id_salt("gear_simple_all").show(ui, |ui| facts(ui, w));
+}
+
+/// The widest a fact's name may be: the column less room for its value.
+fn fact_label_cap(ui: &Ui) -> f32 {
+    (ui.available_width() - 12.0 - 120.0).max(80.0)
+}
+
+/// A fact's name in a grid cell: whole, wrapped onto a second line past `cap` (never cut short,
+/// never wider than the column).
+fn fact_label(ui: &mut Ui, text: &str, cap: f32) {
+    ui.scope(|ui| {
+        ui.set_max_width(cap);
+        ui.add(egui::Label::new(egui::RichText::new(text).small()).wrap_mode(egui::TextWrapMode::Wrap));
+    });
 }
 
 pub(crate) fn fact_value(f: &solidcraft_gear::Fact) -> String {
@@ -2814,11 +2849,11 @@ fn facts(ui: &mut Ui, w: &GearWindow) {
                 ui.note(format!("⚠ {warn}"), ui.visuals().warn_fg_color);
             }
             egui::ScrollArea::vertical().id_salt("gear_facts").max_height(170.0).auto_shrink([false, true]).show(ui, |ui| {
-                let col = ((ui.available_width() - 12.0) / 2.0).clamp(80.0, 200.0);
-                egui::Grid::new("gear_facts_grid").num_columns(2).striped(true).spacing([12.0, 2.0]).min_col_width(col).show(ui, |ui| {
+                let cap = fact_label_cap(ui);
+                egui::Grid::new("gear_facts_grid").num_columns(2).striped(true).spacing([12.0, 2.0]).min_col_width(80.0).show(ui, |ui| {
                     // What the axes fixed first, then the set's own numbers.
                     for f in w.solved.iter().flat_map(|s| s.facts.iter()).chain(p.facts.iter()) {
-                        ui.add(egui::Label::new(egui::RichText::new(&f.label).small()).wrap_mode(egui::TextWrapMode::Extend));
+                        fact_label(ui, &f.label, cap);
                         let v = match f.unit {
                             Unit::Mm => format!("{:.3} mm", f.value),
                             Unit::Deg => format!("{:.3}°", f.value),

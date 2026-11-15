@@ -98,6 +98,10 @@ fn problems(h: &Harness, what: &str) -> Vec<String> {
         if !win.expand(1.0).contains_rect(c.shown) {
             bad.push(format!("{what}: `{}` at {:?} is outside the window {win:?}", c.label, c.shown));
         }
+        // Laid out wider than the window: cut off at its edge.
+        if c.rect.right() > win.right() + 1.0 || c.rect.left() < win.left() - 1.0 {
+            bad.push(format!("{what}: `{}` at {:?} runs past the window's edge {win:?}", c.label, c.rect));
+        }
     }
     for (i, a) in shown.iter().enumerate() {
         for b in &shown[i + 1..] {
@@ -207,4 +211,80 @@ fn gear_window_widens_on_wide_screens_and_stays_on_narrow_ones() {
     resize(&mut h, (420.0, 640.0));
     let narrow = window(&h).expect("drawn").1.width();
     assert!(narrow <= 421.0, "the window must fit a 420 pt screen: {narrow}");
+}
+
+/// Texts drawn cut short ("Helix…") in the last frame, in full.
+fn elided(h: &Harness) -> Vec<String> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(t) if t.galley.elided => out.push(t.galley.text().to_string()),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    h.shapes.iter().for_each(|c| walk(&c.shape, &mut out));
+    out
+}
+
+/// Simple mode's settings labels are never cut ("Helix…", "Gear …", "3D p…"), wide or narrow.
+#[test]
+fn gear_simple_settings_labels_show_whole() {
+    let mut h = Harness::new();
+    open(&mut h.app);
+    h.frames(5);
+    let mut bad = Vec::new();
+    for k in Kind::ALL.iter().copied().filter(|k| solidcraft_gear::sketch_rules::sketched(*k)) {
+        set_kind(&mut h, Mode::Simple, k);
+        let labels: Vec<&str> = solidcraft_gear::simple::fields(Some(k)).iter().map(|f| f.label).collect();
+        for size in [(1600.0, 1000.0), (1024.0, 640.0), (800.0, 600.0), (420.0, 640.0), (3440.0, 1392.0)] {
+            resize(&mut h, size);
+            for text in elided(&h) {
+                if labels.contains(&text.as_str()) {
+                    bad.push(format!("{k:?} at {}×{}: `{text}` is cut short", size.0, size.1));
+                }
+            }
+        }
+        resize(&mut h, SIZES[0]);
+    }
+    assert!(bad.is_empty(), "{} cut labels:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// The Turn buttons are plain text: the font has no rotate glyph (it drew a box: "▯X 90°").
+#[test]
+fn gear_simple_turn_buttons_have_no_missing_glyph() {
+    let mut h = Harness::new();
+    open(&mut h.app);
+    h.frames(5);
+    for axis in ["X", "Y", "normal"] {
+        assert!(h.widget(&format!("{axis} +90°")).is_some(), "no `{axis} +90°` button");
+    }
+    let tree = h.output.accesskit_update.as_ref().expect("an accessibility tree");
+    let boxed: Vec<&str> = tree.nodes.iter().filter_map(|(_, n)| n.label()).filter(|l| l.contains('⟲')).collect();
+    assert!(boxed.is_empty(), "labels with the missing rotate glyph: {boxed:?}");
+}
+
+/// The window keeps its place while its content changes height (centred on its content, it
+/// jumped with every gear type): only its bottom edge moves.
+#[test]
+fn gear_window_stays_put_when_its_content_changes() {
+    let mut bad = Vec::new();
+    for mode in [Mode::Simple, Mode::Advanced] {
+        let mut h = Harness::new();
+        open(&mut h.app);
+        h.frames(5);
+        let top = window(&h).expect("drawn").1.top();
+        for k in KINDS {
+            if mode == Mode::Simple && !solidcraft_gear::sketch_rules::sketched(k) {
+                continue;
+            }
+            set_kind(&mut h, mode, k);
+            let now = window(&h).expect("drawn").1;
+            // A few points' give: the screen may nudge a window as tall as the kit allows.
+            if (now.top() - top).abs() > 16.0 {
+                bad.push(format!("{mode:?} {k:?}: the window's top moved from {top} to {}", now.top()));
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }

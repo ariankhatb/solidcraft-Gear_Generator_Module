@@ -78,7 +78,7 @@ fn candidates_say_what_fits_and_why_not() {
     assert_eq!(fits(&Relation::Coincident), [Kind::Planetary, Kind::CycloidalDrive, Kind::Spline]);
     assert_eq!(natural(Some(&Relation::Coincident)), Kind::Planetary);
     let meet = relate(&Axis::Z, &axis([0.0; 3], [1.0, 0.0, 0.0]));
-    assert_eq!(fits(&meet), [Kind::Bevel, Kind::SpiralBevel, Kind::FaceGear]);
+    assert_eq!(fits(&meet), [Kind::Bevel, Kind::SpiralBevel, Kind::FaceGear, Kind::BevelPlanetary]);
     assert_eq!(natural(Some(&meet)), Kind::Bevel);
     let skew90 = relate(&Axis::Z, &axis([25.0, 0.0, 0.0], [0.0, 1.0, 0.0]));
     assert_eq!(fits(&skew90), [Kind::Hypoid, Kind::CrossedHelical, Kind::Worm]);

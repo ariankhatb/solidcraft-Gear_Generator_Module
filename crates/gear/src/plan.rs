@@ -16,6 +16,9 @@ use crate::worm::Hob;
 use crate::spline::SplineStandard;
 
 pub(crate) mod extras;
+pub mod bevel_planet;
+
+pub use bevel_planet::BevelPlanetMode;
 
 /// Gear set types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
@@ -45,6 +48,9 @@ pub enum Kind {
     FaceGear,
     /// Elliptical gear and its conjugate (non-circular pair).
     Elliptical,
+    /// Bevel sun with bevel planets whose shafts meet its axis at one apex at the cone angle
+    /// (`shaft_angle`); optionally a second sun (differential) or a bevel ring.
+    BevelPlanetary,
 }
 
 /// How the axes of a set lie, for grouping types in a picker.
@@ -59,7 +65,7 @@ pub enum Axes {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 19] = [
+    pub const ALL: [Kind; 20] = [
         Kind::Spur,
         Kind::Helical,
         Kind::Herringbone,
@@ -79,6 +85,7 @@ impl Kind {
         Kind::Spline,
         Kind::FaceGear,
         Kind::Elliptical,
+        Kind::BevelPlanetary,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -101,6 +108,7 @@ impl Kind {
             Kind::Spline => "spline",
             Kind::FaceGear => "face_gear",
             Kind::Elliptical => "elliptical",
+            Kind::BevelPlanetary => "bevel_planetary",
         }
     }
     pub fn label(self) -> &'static str {
@@ -124,12 +132,13 @@ impl Kind {
             Kind::Spline => "Involute spline",
             Kind::FaceGear => "Face (crown) gear",
             Kind::Elliptical => "Elliptical pair",
+            Kind::BevelPlanetary => "Bevel planetary (differential)",
         }
     }
     pub fn axes(self) -> Axes {
         match self {
             Kind::Spur | Kind::Helical | Kind::Herringbone | Kind::Internal | Kind::Rack | Kind::Pair | Kind::Planetary => Axes::Parallel,
-            Kind::Bevel | Kind::SpiralBevel | Kind::FaceGear => Axes::Intersecting,
+            Kind::Bevel | Kind::SpiralBevel | Kind::FaceGear | Kind::BevelPlanetary => Axes::Intersecting,
             Kind::Hypoid | Kind::CrossedHelical | Kind::Worm => Axes::Crossed,
             Kind::Cycloidal | Kind::CycloidalDrive | Kind::Spline | Kind::Elliptical => Axes::Special,
             Kind::Sprocket | Kind::Pulley => Axes::Wrapped,
@@ -160,6 +169,7 @@ impl Kind {
                 | Kind::Spline
                 | Kind::FaceGear
                 | Kind::Elliptical
+                | Kind::BevelPlanetary
         )
     }
 }
@@ -175,7 +185,8 @@ pub struct Spec {
     pub teeth: u32,
     /// Gear 2 teeth (mate, planet).
     pub teeth2: u32,
-    /// Ring teeth for a planetary set (0: sun + 2 × planet).
+    /// Ring teeth for a planetary set (0: sun + 2 × planet); bevel planetary: the second sun's
+    /// or the ring's (0: sun + 2 × planet × cos Σ, rounded).
     pub teeth3: u32,
     pub planets: u32,
     pub pressure_angle: f64,
@@ -317,6 +328,12 @@ pub struct Spec {
     pub coupon: bool,
     /// Teeth on each coupon piece (3 to 40; one more where that centres them on the mesh).
     pub coupon_teeth: u32,
+
+    // ---- Bevel planetary. ----
+    /// The first planet's azimuth about the sun's axis (degrees; the rest are patterned from it).
+    pub first_azimuth: f64,
+    /// What meshes the planets besides the sun.
+    pub bevel_planet_mode: BevelPlanetMode,
     /// Also plan the set's clearance body (keep-out volume for a housing; see
     /// [`crate::clearance`]): `Plan::clearance`. None: not made.
     pub clearance_body: Option<crate::clearance::Clearance>,
@@ -407,6 +424,8 @@ impl Default for Spec {
             hardware2: Hardware::default(),
             coupon: false,
             coupon_teeth: 4,
+            first_azimuth: 0.0,
+            bevel_planet_mode: BevelPlanetMode::Single,
             clearance_body: None,
         }
     }
@@ -491,6 +510,18 @@ impl Spec {
                 s.module = 2.0;
                 s.teeth = 30;
                 s.face_width = 8.0;
+            }
+            Kind::BevelPlanetary => {
+                // A car differential: two 16-tooth side gears and four 10-tooth spiders at 90°.
+                s.module = 2.5;
+                s.teeth = 16;
+                s.teeth2 = 10;
+                s.teeth3 = 0;
+                s.planets = 4;
+                s.shaft_angle = 90.0;
+                s.spiral_angle = 0.0;
+                s.face_width = 7.0;
+                s.bevel_planet_mode = BevelPlanetMode::Differential;
             }
             Kind::FaceGear => {
                 s.module = 2.0;
@@ -751,8 +782,22 @@ pub fn check(s: &Spec) -> Result<(), String> {
     {
         return Err(format!("mating teeth must be between {min} and 2000"));
     }
-    if matches!(s.kind, Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical) && !(5.0..=175.0).contains(&s.shaft_angle) {
+    if matches!(s.kind, Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical | Kind::BevelPlanetary) && !(5.0..=175.0).contains(&s.shaft_angle) {
         return Err("shaft angle must be between 5° and 175°".into());
+    }
+    if s.kind == Kind::BevelPlanetary {
+        if !(1..=24).contains(&s.planets) {
+            return Err("planets must be between 1 and 24".into());
+        }
+        if !s.first_azimuth.is_finite() {
+            return Err("the first planet's azimuth must be a number".into());
+        }
+        if s.spiral_angle.abs() > 60.0 {
+            return Err("spiral angle must be within ±60°".into());
+        }
+        if s.teeth3 > 2000 {
+            return Err("second sun or ring teeth must be 2000 or fewer".into());
+        }
     }
     if s.kind == Kind::Planetary && !(1..=24).contains(&s.planets) {
         return Err("planets must be between 1 and 24".into());
@@ -880,6 +925,7 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
         Kind::Spline => extras::spline(s, &mut p),
         Kind::FaceGear => extras::face_gear(s, &mut p),
         Kind::Elliptical => extras::elliptical(s, &mut p),
+        Kind::BevelPlanetary => bevel_planet::build(s, &mut p),
     }
     if !s.kind.tuned_teeth() {
         extras::left_out(s, &mut p);

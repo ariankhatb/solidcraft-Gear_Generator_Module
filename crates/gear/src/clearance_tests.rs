@@ -447,3 +447,23 @@ fn dump_clearance_scripts() {
         std::fs::write(format!("{dir}/{name}.json"), format!("{{\"commands\":[\n{}\n]}}\n", cmds.join(",\n"))).unwrap();
     }
 }
+
+#[test]
+fn bevel_planet_clearance_is_quick_enough() {
+    // Diagnostic of the planets' sweep cost: the clearance adds well under a second to the plan.
+    for mode in [crate::plan::BevelPlanetMode::Differential, crate::plan::BevelPlanetMode::Ring] {
+        let base = Spec { bevel_planet_mode: mode, ..Spec::defaults_for(Kind::BevelPlanetary) };
+        let base = if mode == crate::plan::BevelPlanetMode::Ring { Spec { shaft_angle: 45.0, teeth: 20, teeth2: 10, planets: 3, ..base } } else { base };
+        let t = std::time::Instant::now();
+        let bare = planned(&base);
+        let t_bare = t.elapsed();
+        let t = std::time::Instant::now();
+        let s = Spec { clearance_body: Some(Clearance::default()), ..base };
+        let p = planned(&s);
+        let t_all = t.elapsed();
+        eprintln!("{mode:?}: plan {t_bare:?}, with clearance {t_all:?}");
+        assert!(t_all.saturating_sub(t_bare).as_secs_f64() < 1.0, "{mode:?}: {t_bare:?} against {t_all:?}");
+        assert_eq!(bare.bodies, p.bodies);
+        contains_every_member(&s, &p, 0.01);
+    }
+}

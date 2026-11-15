@@ -126,6 +126,13 @@ pub(crate) fn template(k: Kind, s: &Spec) -> Drawn {
             let a = s.shaft_angle.to_radians();
             d.lines = vec![l(0.0, 0.0, 0.0, -len), l(0.0, 0.0, len * a.sin(), -len * a.cos())];
         }
+        // The same side view: the apex dot, the sun's shaft down from it, the first planet's
+        // at the cone angle.
+        Kind::BevelPlanetary => {
+            let len = 1.6 * r(s.teeth.max(10));
+            let a = s.shaft_angle.to_radians();
+            d.lines = vec![l(0.0, 0.0, 0.0, -len), l(0.0, 0.0, len * a.sin(), -len * a.cos())];
+        }
         Kind::FaceGear => {
             let rf = r(s.teeth2);
             d.circles = vec![c(0.0, 0.0, rf)];
@@ -170,7 +177,7 @@ fn drawn_field(k: Kind, f: Field, m: Option<&Measured>) -> bool {
         Kind::Planetary => matches!(f, F::PitchDiameter | F::PitchDiameter2 | F::RingDiameter | F::Ratio),
         Kind::Rack => matches!(f, F::PitchDiameter | F::Length | F::Teeth | F::Module),
         Kind::Worm => matches!(f, F::PitchDiameter2 | F::CenterDistance) || (f == F::PitchDiameter && m.is_some_and(|m| m.worm_diameter > 0.0)),
-        Kind::Bevel | Kind::SpiralBevel => f == F::ShaftAngle,
+        Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary => f == F::ShaftAngle,
         Kind::FaceGear => f == F::PitchDiameter2,
         Kind::Hypoid => matches!(f, F::PitchDiameter2 | F::PitchDiameter | F::Offset),
         Kind::CrossedHelical => matches!(f, F::PitchDiameter | F::CenterDistance | F::Ratio),
@@ -240,8 +247,8 @@ pub(crate) fn set_mode(w: &mut GearWindow, k: Kind) {
     s.dirty = true;
 }
 
-/// The modes Simple mode draws, grouped as in the type picker, and a placeholder for the bevel
-/// planetary set (enabled once its `Kind` exists: add it to the Intersecting group's list).
+/// The modes Simple mode draws, grouped as in the type picker (the bevel planetary set among the
+/// meeting shafts).
 fn mode_picker(ui: &mut Ui, w: &mut GearWindow) {
     let mut pick = None;
     for (group, label) in [(Axes::Parallel, "Parallel shafts"), (Axes::Intersecting, "Meeting shafts"), (Axes::Crossed, "Crossed shafts"), (Axes::Wrapped, "Chain and belt"), (Axes::Special, "Special")] {
@@ -251,9 +258,6 @@ fn mode_picker(ui: &mut Ui, w: &mut GearWindow) {
                 if ui.selectable_label(w.spec.kind == k, k.label()).clicked() {
                     pick = Some(k);
                 }
-            }
-            if group == Axes::Intersecting {
-                ui.add_enabled_ui(false, |ui| ui.selectable_label(false, "Bevel planetary")).inner.on_disabled_hover_text("Coming: a sun, a line per planet direction from its centre, planets patterned round it");
             }
         });
     }
@@ -390,6 +394,19 @@ fn settings_ui(ui: &mut Ui, w: &mut GearWindow) {
                         for c in solidcraft_gear::sprocket::CHAINS {
                             if ui.selectable_label(st.chain == Some(c.id), c.label).clicked() {
                                 st.chain = Some(c.id);
+                                changed = true;
+                            }
+                        }
+                    });
+                    ui.label("");
+                }
+                Field::PlanetMode => {
+                    use solidcraft_gear::plan::BevelPlanetMode;
+                    let now = st.bevel_planet_mode.or(outputs.bevel_planet_mode).unwrap_or_default();
+                    egui::ComboBox::from_id_salt("gear_simple_planet_mode").selected_text(now.label()).show_ui(ui, |ui| {
+                        for m in BevelPlanetMode::ALL {
+                            if ui.selectable_label(now == m, m.label()).clicked() {
+                                st.bevel_planet_mode = Some(m);
                                 changed = true;
                             }
                         }

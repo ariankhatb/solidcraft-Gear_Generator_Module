@@ -393,7 +393,7 @@ pub fn inv_inv(v: f64) -> f64 {
         if d <= 0.0 {
             break;
         }
-        let next = (a - f / d).clamp(1e-9, 1.5707);
+        let next = (a - f / d).clamp(1e-9, std::f64::consts::FRAC_PI_2);
         if (next - a).abs() < 1e-15 {
             a = next;
             break;

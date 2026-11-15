@@ -291,3 +291,14 @@ summary for the user.
   `s.kind == Kind::Herringbone`; add `Spec.herringbone: bool` (+ `GearParams.herringbone`, window
   toggle) so a pair builds herringbone teeth. `sweep_tests::big_gears_plan_quickly` (50 ms) is
   flaky under load; passes alone.
+
+#### Clearance body: status (`gear-keepout`)
+
+Done in the gear crate (`clearance.rs`, tests in `clearance_tests.rs`, all pass). Engine: `clearance_body: {...}`
+on gear.create/update/calculate, reply `clearance` (passes `cargo check -p solidcraft-ui-egui`; engine tests
+`a_clearance_body_comes_with_the_set_and_cuts_a_housing`, `clearance_parameters_round_trip_and_bad_ones_are_refused`,
+ignored `every_type_builds_its_clearance_body` written but never run). Engine key is `clearance_body` because
+`clearance` is already c*. Window fields: `crates/gear/CLEARANCE_UI.md`. Kernel: every kind's clearance body
+built with the 18:03 CLI, cut out of a box, `inspect.interference` housing vs gears = 0 for all kinds (hypoid included;
+rings overlap the housing by design when `ring_as_housing`). Scripts come from the ignored test `dump_clearance_scripts`
+(env `CLEARANCE_DUMP`, `CLEARANCE_KINDS`, `<kind>_housing` variants with Ø8 bores and 608 seats).

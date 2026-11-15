@@ -670,14 +670,94 @@ pub struct ClearanceParams {
     pub bearing_bodies: Option<bool>,
 }
 
-/// What a selected thing is for.
+/// What a selected thing is for. A gear role on a circle makes that gear (its tooth style or
+/// family); on a shaft line or axis, a gear on it (sized by `pitch_diameter`, `module`,
+/// `teeth`). `shaft` is a bare shaft (a line other circles lie on, or a gear on it with the
+/// set's style); `bearing` a bearing seat (a point on a shaft line, or `along` a shaft).
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SelectionRole {
-    /// A gear's shaft (with a circle: its pitch circle too).
-    Shaft,
-    /// Where a bearing goes.
+    Spur,
+    Helical,
+    Herringbone,
+    Bevel,
+    SpiralBevel,
+    Worm,
+    Wheel,
+    Rack,
+    Internal,
+    Face,
     Bearing,
+    Shaft,
+}
+
+impl SelectionRole {
+    /// Every role, in the order a picker lists them.
+    pub const ALL: [SelectionRole; 12] = [
+        SelectionRole::Spur,
+        SelectionRole::Helical,
+        SelectionRole::Herringbone,
+        SelectionRole::Bevel,
+        SelectionRole::SpiralBevel,
+        SelectionRole::Worm,
+        SelectionRole::Wheel,
+        SelectionRole::Rack,
+        SelectionRole::Internal,
+        SelectionRole::Face,
+        SelectionRole::Bearing,
+        SelectionRole::Shaft,
+    ];
+    /// Its name in the parameters.
+    pub fn name(self) -> &'static str {
+        match self {
+            SelectionRole::Spur => "spur",
+            SelectionRole::Helical => "helical",
+            SelectionRole::Herringbone => "herringbone",
+            SelectionRole::Bevel => "bevel",
+            SelectionRole::SpiralBevel => "spiral_bevel",
+            SelectionRole::Worm => "worm",
+            SelectionRole::Wheel => "wheel",
+            SelectionRole::Rack => "rack",
+            SelectionRole::Internal => "internal",
+            SelectionRole::Face => "face",
+            SelectionRole::Bearing => "bearing",
+            SelectionRole::Shaft => "shaft",
+        }
+    }
+    /// A gear (not a bare shaft or a bearing).
+    pub fn is_gear(self) -> bool {
+        !matches!(self, SelectionRole::Bearing | SelectionRole::Shaft)
+    }
+}
+
+/// One member of a set as `gear.calculate` worked it out (`GearResult::members`): one per
+/// gear, shaft and bearing read from the sketch or the selection, in their order.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct GearMember {
+    /// Its place in the selection (or the sketch's reading order: circles, then lines, then
+    /// points).
+    pub index: usize,
+    /// What it is (a `SelectionRole` name).
+    pub role: String,
+    /// Gears: their module, teeth, pitch diameter and face width (mm); null for shafts and
+    /// bearings, or where an error left them unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teeth: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch_diameter: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face_width: Option<f64>,
+    /// The members (indices) it meshes with.
+    #[serde(default)]
+    pub meshes_with: Vec<usize>,
+    /// The shaft member (index) it sits on (a gear, a bearing), if one is drawn.
+    pub shaft: Option<usize>,
+    /// The cluster it belongs to: gears on one shaft joined as one part (compound gears).
+    pub cluster: Option<usize>,
+    /// What is wrong with this member, if anything.
+    pub error: Option<String>,
 }
 
 /// One selected thing of `selection` (gear.create, gear.calculate, gear.update): exactly one of
@@ -707,9 +787,15 @@ pub struct GearSelection {
     /// Shaft: the gear's pitch diameter in mm (a circle's own diameter when left out).
     #[serde(default)]
     pub pitch_diameter: Option<f64>,
-    /// Shaft: the gear's teeth.
+    /// A gear: its teeth (a shaft's: the gear on it).
     #[serde(default)]
     pub teeth: Option<u32>,
+    /// A gear: its module (its mesh group shares it).
+    #[serde(default)]
+    pub module: Option<f64>,
+    /// A gear: its face width, mm (left out: worked out).
+    #[serde(default)]
+    pub face_width: Option<f64>,
     /// Shaft: how far along it from its origin (a sketch line's first end, an edge's or axis's
     /// origin) the gears sit, mm (the first shaft's; the others' must agree). Bearing on a
     /// shaft: how far along it the bearing's middle sits (default 0). Not for points.
@@ -1340,6 +1426,10 @@ pub struct GearResult {
     /// read from a sketch is read by the engine, not again by the front end).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<Value>,
+    /// `gear.calculate` (and `gear.create`) of a set read from a sketch or a selection: each
+    /// gear, shaft and bearing it read, with what it became or what is wrong with it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<GearMember>,
 }
 
 /// A line in space.

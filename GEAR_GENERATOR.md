@@ -129,6 +129,9 @@ Tests: `cargo test --release -p solidcraft-gear` (the gear math, over 240 tests)
 
 Checked in the app and the CLI on this build:
 
+- Assembly limits: an elliptical pair is linked at its mean 1:1 ratio, so it drifts in and out of
+  mesh when driven; a cycloidal drive's disc only turns on its own axis inside the grounded pin
+  ring; planetary sets have no carrier body yet, so the carrier is held still.
 - A gear pair with *Assembly*: driving gear 1 by 32° turns gear 2 by −20°. **Edit Gears**, gear 2
   changed to Ø80, **Update**: the joints keep their ids, the link's ratio becomes −0.5 and driving
   still turns both correctly.

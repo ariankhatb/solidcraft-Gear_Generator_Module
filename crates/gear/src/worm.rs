@@ -169,6 +169,12 @@ impl Hob {
     /// tooth's centre line (the middle of the tooth space the thread sits in is half a pitch
     /// before it). None when no tooth is left.
     pub fn tooth(&self, w: f64, tip_radius: f64, teeth: u32, m: f64) -> Option<ToothSides> {
+        self.tooth_with(w, tip_radius, teeth, m, FILLET_POINTS, FLANK_POINTS)
+    }
+    /// [`Self::tooth`] with `fillet_points` fit points on each fillet and `flank_points` + 1 on
+    /// each flank: fewer for a big, steep wheel, whose loft needs many sections within the
+    /// kernel's curve limit.
+    pub fn tooth_with(&self, w: f64, tip_radius: f64, teeth: u32, m: f64, fillet_points: usize, flank_points: usize) -> Option<ToothSides> {
         let rf = self.root_radius(w);
         let pitch_half = PI / f64::from(teeth);
         let (_, _, zc, _) = self.corner_arc();
@@ -209,13 +215,13 @@ impl Hob {
             let angle = |rr: f64| sign * (pitch_half - space(i, rr.clamp(rf, ra)).0);
             // The fillet up to where the flank takes over, each piece a fair share of the side.
             let split = handover[i].unwrap_or(rf).clamp(rf + 0.04 * (ra - rf), rf + 0.6 * (ra - rf));
-            let mut fillet = fit_profile(&angle, &|s| if s >= 1.0 { split } else { rf + (split - rf) * s * s }, FILLET_TOLERANCE * m, FILLET_POINTS, FILLET_POINTS);
+            let mut fillet = fit_profile(&angle, &|s| if s >= 1.0 { split } else { rf + (split - rf) * s * s }, FILLET_TOLERANCE * m, fillet_points, fillet_points);
             // The flank's points at set places along it (closer at the ends), not crowded where it
             // bends as a fitted side's are: a nearly straight flank's bends are noise that would
             // move its points about from one section to the next, and the loft's skin with them.
-            let flank: Vec<(f64, f64)> = (0..=FLANK_POINTS)
+            let flank: Vec<(f64, f64)> = (0..=flank_points)
                 .map(|j| {
-                    let t = j as f64 / FLANK_POINTS as f64;
+                    let t = j as f64 / flank_points as f64;
                     let rr = split + (ra - split) * (0.6 * t + 0.2 * (1.0 - (PI * t).cos()));
                     (rr, angle(rr))
                 })

@@ -39,13 +39,12 @@ fn check(s: &Spec, label: &str, bad: &mut Vec<String>) {
     let Ok(p) = plan(s) else { return };
     for b in p.bodies.iter().chain(p.clearance.iter()) {
         for (i, st) in b.steps.iter().enumerate() {
-            // The kernel's loft limit, counted as its spans (checked for bevel planetary sets:
-            // a 4-start worm wheel's 15-section loft comes to 19200 here).
-            if s.kind == Kind::BevelPlanetary
-                && let Some(sections) = lofted(st)
-                && sections.iter().map(|o| crate::hypoid::corners(o).len()).sum::<usize>() > 16_384
+            // The kernel's loft limit, counted as its spans (a 4-start z40 worm wheel once came
+            // to 19200 and the kernel refused it).
+            if let Some(sections) = lofted(st)
+                && sections.iter().map(crate::plan::loft_curves).sum::<usize>() > crate::plan::LOFT_CURVE_LIMIT
             {
-                bad.push(format!("{label}: {} step {} has {} curves in {} sections: over the kernel's loft limit of 16384", b.name, i + 1, sections.iter().map(|o| crate::hypoid::corners(o).len()).sum::<usize>(), sections.len()));
+                bad.push(format!("{label}: {} step {} has {} curves in {} sections: over the kernel's loft limit of 16384", b.name, i + 1, sections.iter().map(crate::plan::loft_curves).sum::<usize>(), sections.len()));
             }
             if let Some(sections) = lofted(st)
                 && sections.len() >= 2
@@ -69,7 +68,7 @@ fn no_kernel_loft_slips_in_any_kind() {
     for (angle, spiral) in [(90.0, 45.0), (60.0, 35.0), (120.0, 35.0), (90.0, 20.0)] {
         variants.push((format!("spiral bevel {angle}°/{spiral}°"), Spec { shaft_angle: angle, spiral_angle: spiral, ..Spec::defaults_for(Kind::SpiralBevel) }));
     }
-    for (starts, teeth) in [(1, 30), (2, 41), (4, 40)] {
+    for (starts, teeth) in [(1, 30), (2, 41), (4, 40), (4, 48), (1, 80)] {
         variants.push((format!("worm {starts}-start z{teeth}"), Spec { starts, teeth, ..Spec::defaults_for(Kind::Worm) }));
     }
     for angle in [60.0, 75.0, 90.0] {

@@ -624,8 +624,15 @@ pub enum Step {
     Placed { frame: Frame, step: Box<Step> },
 }
 
-/// The most curves the kernel takes in one loft (all sections together).
+/// The most curves the kernel takes in one loft (all sections together, each spline counted as
+/// its spans: [`loft_curves`]).
 pub const LOFT_CURVE_LIMIT: usize = 16_384;
+
+/// The curves the kernel makes of one loft section: one per line or arc, one per span of a
+/// spline.
+pub fn loft_curves(o: &Outline) -> usize {
+    crate::hypoid::corners(o).len()
+}
 /// The most sections a worm wheel is lofted through to keep the kernel's alignment.
 const WHEEL_SECTIONS_SLIP_MAX: usize = 41;
 
@@ -634,7 +641,7 @@ const WHEEL_SECTIONS_SLIP_MAX: usize = 41;
 /// segment that best matches, so a section turned too far from its neighbour slips by a few
 /// segments and the loft's walls cut across the teeth), within the kernel's loft curve limit.
 pub fn taper_sections(outline: &Outline, twist: f64, scale: f64) -> usize {
-    let per = outline.segs.len().max(1);
+    let per = loft_curves(outline).max(1);
     let most = (LOFT_CURVE_LIMIT / per).clamp(2, 61);
     let mut n = 7usize.min(most);
     loop {
@@ -1853,35 +1860,62 @@ fn worm(s: &Spec, p: &mut Plan) {
     // until the skin between them is within a small part of the profile tolerance of the
     // section the hob cuts there.
     let mut sections: Vec<(f64, ToothSides)> = Vec::new();
-    let mut count = WHEEL_SECTIONS_MIN;
-    loop {
-        sections.clear();
-        for i in 0..count {
-            let w = -face / 2.0 * (PI * i as f64 / (count - 1) as f64).cos();
-            match hob.tooth(w, tip_at(w), zw, m) {
-                Some(t) => sections.push((w, t)),
-                None => {
-                    p.refuse(format!("wheel: {zw} teeth are too few for this worm (no tooth is left {} mm off the mid plane): use more teeth, a narrower face or a larger pressure angle", mm(w.abs())));
-                    return;
+    let mut count;
+    // Fit points per tooth side (fillet, flank): the full count first; a big, steep wheel whose
+    // loft cannot line up within the kernel's curve limit takes fewer points per tooth, so that
+    // more sections fit (and coarser segments line up across a bigger turn).
+    let densities = [(crate::worm::FILLET_POINTS, crate::worm::FLANK_POINTS), (5, 6), (4, 4)];
+    let mut misaligned = false;
+    let mut few = None;
+    for (d, &(fillet_points, flank_points)) in densities.iter().enumerate() {
+        let last = d + 1 == densities.len();
+        let tooth = |w: f64| hob.tooth_with(w, tip_at(w), zw, m, fillet_points, flank_points);
+        // The most sections within the kernel's loft limit (an odd count, one on the mid plane).
+        let per_section = tooth(0.0).map_or(1, |t| loft_curves(&sided_outline(&t, zw, PI / f64::from(zw))).max(1));
+        let most = {
+            let n = (LOFT_CURVE_LIMIT / per_section).max(3);
+            if n % 2 == 0 { n - 1 } else { n }
+        };
+        count = WHEEL_SECTIONS_MIN.min(most);
+        loop {
+            sections.clear();
+            for i in 0..count {
+                let w = -face / 2.0 * (PI * i as f64 / (count - 1) as f64).cos();
+                match tooth(w) {
+                    Some(t) => sections.push((w, t)),
+                    None => {
+                        p.refuse(format!("wheel: {zw} teeth are too few for this worm (no tooth is left {} mm off the mid plane): use more teeth, a narrower face or a larger pressure angle", mm(w.abs())));
+                        return;
+                    }
                 }
             }
-        }
-        let err = skin_error(&hob, &sections, zw);
-        // The kernel restarts each loft section where it best lines up with the one before; a
-        // steep multi-start wheel turns enough between sections to be matched a few segments off
-        // (its walls would cut across the teeth), so sections are added until it lines up.
-        let lined_up = || {
+            let err = skin_error(&hob, &sections, zw);
+            // The kernel restarts each loft section where it best lines up with the one before;
+            // a steep multi-start wheel turns enough between sections to be matched a few
+            // segments off (its walls would cut across the teeth), so sections are added until
+            // it lines up.
             let outlines: Vec<Outline> = sections.iter().map(|(_, t)| sided_outline(t, zw, PI / f64::from(zw))).collect();
-            !crate::hypoid::slips(&outlines, zw as usize)
-        };
-        let curves = sided_outline(&sections[0].1, zw, PI / f64::from(zw)).segs.len() * count;
-        if curves * (count + 2) / count > LOFT_CURVE_LIMIT || (count >= WHEEL_SECTIONS_MAX || err <= WHEEL_SKIN_TOLERANCE * m) && lined_up() || count >= WHEEL_SECTIONS_SLIP_MAX {
-            if !lined_up() {
-                p.warn("wheel: the kernel may mis-align this wheel's loft sections (a steep multi-start worm): check the teeth after building, or use fewer starts or a narrower face");
+            let lined_up = !crate::hypoid::slips(&outlines, zw as usize);
+            if count + 2 > most || (count >= WHEEL_SECTIONS_MAX || err <= WHEEL_SKIN_TOLERANCE * m) && lined_up || count >= WHEEL_SECTIONS_SLIP_MAX {
+                misaligned = !lined_up;
+                few = (most < WHEEL_SECTIONS_MIN).then_some(most);
+                break;
+            }
+            count += 2;
+        }
+        if !misaligned || last {
+            if d > 0 {
+                p.warn(format!("wheel: {zw} teeth on a steep worm make a large loft; each tooth side is drawn with fewer points ({fillet_points} on the fillet, {} on the flank) to stay within the kernel's loft limit", flank_points + 1));
             }
             break;
         }
-        count += 2;
+    }
+    let count = sections.len();
+    if let Some(most) = few {
+        p.warn(format!("wheel: {zw} teeth make a large loft; it is built through {most} sections (fewer than usual), so check the teeth across the face after building"));
+    }
+    if misaligned {
+        p.warn("wheel: the kernel may mis-align this wheel's loft sections (a steep multi-start worm): check the teeth after building, or use fewer starts or a narrower face");
     }
     p.fact("wheel loft sections", count as f64, Unit::None);
     let mid_tooth = sections[count / 2].1.clone();

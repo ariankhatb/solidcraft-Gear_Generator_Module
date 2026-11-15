@@ -1053,7 +1053,9 @@ fn member_joints(r: &Value) -> Vec<Option<u64>> {
 fn drive_and_read(s: &mut Session, a: u64, deg: f64, b: u64) -> f64 {
     let d = run(s, "joint.drive", json!({"joint": a, "value": deg}));
     assert_eq!(d["conflicts"].as_array().map(Vec::len).unwrap_or(0), 0, "{d}");
-    joint_value(s, b)
+    let got = joint_value(s, b);
+    eprintln!("GATE   joint {a} driven to {deg}°: joint {b} measured {got:+.6}");
+    got
 }
 
 fn assembled(s: &mut Session, p: Value) -> Value {

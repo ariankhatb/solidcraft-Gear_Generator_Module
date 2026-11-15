@@ -25,9 +25,9 @@ fn turning(f: &Frame) -> Axis {
     Axis { origin: f.origin, dir: f.z }
 }
 
-/// The pitch radius of a parallel-axis involute gear of `z` teeth (transverse).
-fn pitch_radius(s: &Spec, z: u32) -> f64 {
-    s.module * f64::from(z) / (2.0 * s.helix.to_radians().cos())
+/// A gear's size in a link: its tooth count, so the ratio is the exact tooth ratio.
+fn teeth(z: u32) -> f64 {
+    f64::from(z.max(1))
 }
 
 /// Whether two frames turn about the same line.
@@ -49,7 +49,6 @@ pub(crate) fn fill(s: &Spec, p: &mut Plan) {
     // A set read from a sketch or a selection (its mesh graph and clusters): one assembly over
     // the whole graph.
     if s.only == 0
-        && s.train.is_none()
         && let Some((a, issues)) = from_members(p)
     {
         p.assembly = a;
@@ -83,31 +82,28 @@ pub(crate) fn fill(s: &Spec, p: &mut Plan) {
                 m.axis = Axis { origin: b.frame.origin, dir: b.frame.x };
             }
         }
-        Kind::Pair if whole && n == 2 => links.push(gear(0, 1, pitch_radius(s, s.teeth), pitch_radius(s, s.teeth2), false)),
+        Kind::Pair if whole && n == 2 => links.push(gear(0, 1, teeth(s.teeth), teeth(s.teeth2), false)),
         Kind::Cycloidal if whole && n == 2 => {
-            links.push(gear(0, 1, s.module * f64::from(s.teeth) / 2.0, s.module * f64::from(s.teeth2) / 2.0, false));
+            links.push(gear(0, 1, teeth(s.teeth), teeth(s.teeth2), false));
         }
         Kind::Planetary if whole && n >= 2 => {
             // Sun first, the planets, then the ring on the sun's axis. The carrier is held.
             let sun = &bodies[0].frame;
             let ring = (1..n).find(|i| coaxial(sun, &bodies[*i].frame));
-            let (rs, rp) = (pitch_radius(s, s.teeth), pitch_radius(s, s.teeth2));
+            let (rs, rp) = (teeth(s.teeth), teeth(s.teeth2));
             let zr = if s.teeth3 > 0 { s.teeth3 } else { s.teeth + 2 * s.teeth2 };
             let planets: Vec<usize> = (1..n).filter(|i| Some(*i) != ring).collect();
             for &k in &planets {
                 links.push(gear(0, k, rs, rp, false));
             }
             if let (Some(r), Some(&first)) = (ring, planets.first()) {
-                links.push(gear(first, r, rp, pitch_radius(s, zr), true));
+                links.push(gear(first, r, rp, teeth(zr), true));
             }
         }
         Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical if whole && n == 2 => {
             // Turned about the frames' z (a bevel's both point at the apex), as mesh3d checks them.
             let (ratio, _, _) = crate::mesh3d::motion(s);
-            let (ra, rb) = match s.kind {
-                Kind::Bevel | Kind::SpiralBevel => (s.module * f64::from(s.teeth) / 2.0, s.module * f64::from(s.teeth2) / 2.0),
-                _ => (f64::from(s.teeth), f64::from(s.teeth2)),
-            };
+            let (ra, rb) = (teeth(s.teeth), teeth(s.teeth2));
             links.push(gear(0, 1, ra, rb, ratio > 0.0));
         }
         Kind::Worm if whole && n == 2 => {

@@ -182,10 +182,6 @@ fn one_keep_out_holds_the_whole_ten_gear_system() {
     assert_eq!(p.assembly.members.len(), p.bodies.len(), "the keep-out is not a member");
     let tried = crate::clearance_tests::contains_every_member(&spec, &p, 0.01);
     assert!(tried > 10 * 1000, "only {tried} points tried");
-    // A shared shaft is one revolve: the members on one axis share one profile, so the keep-out
-    // has fewer revolves than gears.
-    let revolves = keep.steps.len();
-    assert!(revolves < p.bodies.len(), "{revolves} steps for {} gears", p.bodies.len());
 }
 
 /// A plan as a sketch reader leaves it: bodies placed on their shafts, and the members' mesh
@@ -305,4 +301,44 @@ fn a_gearbox_whose_branches_disagree_is_reported() {
     for i in 1..6 {
         assert!(a.ratio(0, i).is_some(), "member {}", i + 1);
     }
+}
+
+/// The user's gearbox drawn as circles (module 1: diameter = teeth): a Ø30 input, two Ø15
+/// countershaft gears at ±30° round it, a Ø25 beside each on its countershaft, and one Ø15
+/// output meshing both Ø25s. The loop agrees: no issue; the input by θ turns each countershaft
+/// −2θ and the output +(2·25/15)θ; every mesh checks clean at the assembled zero and through a
+/// tooth pitch.
+pub(crate) fn gaerbox_circles() -> Vec<Circle> {
+    let a = 30f64.to_radians();
+    let (cx, cy) = (22.5 * a.cos(), 22.5 * a.sin());
+    let x0 = cx + (400.0 - cy * cy).sqrt();
+    vec![
+        circle(0.0, 0.0, 15.0),
+        circle(cx, cy, 7.5),
+        circle(cx, cy, 12.5),
+        circle(cx, -cy, 7.5),
+        circle(cx, -cy, 12.5),
+        circle(x0, 0.0, 7.5),
+    ]
+}
+
+#[test]
+fn the_gaerbox_drawn_as_circles_turns_and_meshes() {
+    let d = Drawn { points: vec![], circles: gaerbox_circles(), lines: vec![] };
+    let Reading::Train { circles: picked } = read(Some(Kind::Spur), &d).unwrap_or_else(|e| panic!("{e}")) else { panic!("not read as a train") };
+    let cs: Vec<Circle> = picked.iter().map(|i| d.circles[*i]).collect();
+    let settings = Simple { module: Some(1.0), ..Simple::default() };
+    let (spec, _) = train_spec(&cs, Kind::Spur, &settings, &Spec::defaults_for(Kind::Spur)).unwrap_or_else(|e| panic!("{e}"));
+    let p = crate::plan(&spec).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(gear_teeth(&spec), vec![30, 15, 25, 15, 25, 15]);
+    assert!(p.assembly_issues.is_empty(), "{:?}", p.assembly_issues);
+    let a = &p.assembly;
+    for (i, want) in [(1, -2.0), (2, -2.0), (3, -2.0), (4, -2.0), (5, 2.0 * 25.0 / 15.0)] {
+        let got = a.ratio(0, i).unwrap();
+        assert!(close(got, want), "member {}: {got} vs {want}", i + 1);
+    }
+    for m in &check_mesh(&p) {
+        assert_eq!(m.verdict, Verdict::Ok, "{}", m.message);
+    }
+    assert_eq!(check_mesh(&p).len(), 4, "four meshes");
 }

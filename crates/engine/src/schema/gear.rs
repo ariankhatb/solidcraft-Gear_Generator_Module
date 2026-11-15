@@ -1361,6 +1361,9 @@ pub struct GearAssemblyMember {
     pub joint: Option<u64>,
     /// Held fixed (grounded).
     pub grounded: bool,
+    /// The shaft it turns about (world): a point on it and its direction (a rack: the line it
+    /// slides along).
+    pub axis: [[f64; 3]; 2],
 }
 
 /// What `assembly: true` made of a gear set.

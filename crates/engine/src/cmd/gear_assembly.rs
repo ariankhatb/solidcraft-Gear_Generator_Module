@@ -528,7 +528,7 @@ pub(super) fn sync(
         .members
         .iter()
         .enumerate()
-        .map(|(i, m)| GearAssemblyMember { body: bodies[i].clone(), component: components[i], occurrence: occs[i], joint: records[i].joint, grounded: m.grounded })
+        .map(|(i, m)| GearAssemblyMember { body: bodies[i].clone(), component: components[i], occurrence: occs[i], joint: records[i].joint, grounded: m.grounded, axis: [m.axis.origin, m.axis.dir] })
         .collect();
     let keep_out_record = keep_out_component.and_then(|c| keep_out.map(|b| (b.to_string(), c)));
     let joints = records.iter().filter_map(|r| r.joint).collect();

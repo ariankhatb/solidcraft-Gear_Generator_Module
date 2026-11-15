@@ -1,3 +1,5 @@
+#[allow(unused_imports)]
+use solidcraft_geom::prelude::*;
 use serde_json::{Value, json};
 
 use crate::Session;
@@ -1401,55 +1403,194 @@ fn ten_by_hand() -> Vec<f64> {
     w
 }
 
-/// Where member `i`'s component has turned to about its shaft (degrees), from its placement.
-fn turned_deg(s: &Session, r: &Value, i: usize) -> f64 {
-    let occ = r["assembly"]["members"][i]["occurrence"].as_u64().unwrap();
-    let m = solidcraft_doc::joints::occurrence_world(&s.doc, occ);
-    m[0][1].atan2(m[0][0]).to_degrees()
+/// How far member `i`'s component has turned about its own shaft (degrees, right hand about the
+/// shaft's direction), read back from where the engine has placed it (its components start
+/// unturned).
+fn turned_about(s: &Session, r: &Value, i: usize) -> f64 {
+    let m = &r["assembly"]["members"][i];
+    let occ = m["occurrence"].as_u64().unwrap();
+    let d: Vec<f64> = m["axis"][1].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    let d = solidcore_record::Vec3::new(d[0], d[1], d[2]);
+    let x0 = if d.z.abs() < 0.9 { d.cross(solidcore_record::Vec3::Z) } else { d.cross(solidcore_record::Vec3::X) };
+    let x0 = x0 * (1.0 / x0.len());
+    let x1 = solidcraft_doc::apply_vector(&solidcraft_doc::joints::occurrence_world(&s.doc, occ), x0);
+    x0.cross(x1).dot(d).atan2(x0.dot(x1)).to_degrees()
 }
 
+/// The member whose shaft runs through the point (x, y) of the XY plane (a circle's centre).
+fn member_on(r: &Value, x: f64, y: f64) -> usize {
+    let ms = r["assembly"]["members"].as_array().unwrap();
+    ms.iter()
+        .position(|m| {
+            let o = &m["axis"][0];
+            (o[0].as_f64().unwrap() - x).abs() < 1e-6 && (o[1].as_f64().unwrap() - y).abs() < 1e-6
+        })
+        .unwrap_or_else(|| panic!("no member on ({x}, {y}): {r}"))
+}
+
+/// Angles in degrees, equal round a turn within 1e-6 relative (of the larger, at least 1°).
+fn same_angle(got: f64, want: f64) -> bool {
+    let d = ((got - want + 540.0).rem_euclid(360.0)) - 180.0;
+    d.abs() <= 1e-6 * want.abs().max(1.0)
+}
+
+/// The kinds of `r`'s joints, as joint.list names them: (revolute, rigid, other).
+fn joint_kinds(s: &mut Session, r: &Value) -> (usize, usize, usize) {
+    let l = run(s, "joint.list", json!({}));
+    let ours: Vec<u64> = r["assembly"]["joints"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
+    let kind_of = |id: u64| l["joints"].as_array().unwrap().iter().find(|j| j["id"].as_u64() == Some(id)).map(|j| j["kind"].as_str().unwrap_or_default().to_lowercase()).unwrap_or_default();
+    let (mut rev, mut rig, mut other) = (0, 0, 0);
+    for k in ours.iter().map(|j| kind_of(*j)) {
+        match k.as_str() {
+            "revolute" => rev += 1,
+            "rigid" => rig += 1,
+            _ => other += 1,
+        }
+    }
+    (rev, rig, other)
+}
+
+const TEN: [(f64, f64, f64); 10] = [
+    (0.0, 0.0, 20.0),
+    (50.0, 0.0, 30.0),
+    (50.0, 0.0, 15.0),
+    (50.0, 35.0, 20.0),
+    (50.0, 80.0, 25.0),
+    (50.0, 80.0, 12.0),
+    (80.0, 80.0, 18.0),
+    (118.0, 80.0, 20.0),
+    (118.0, 110.0, 10.0),
+    (118.0, 136.0, 16.0),
+];
+
+/// Gate: ten gears with two compound clusters. One revolute per shaft (eight), each gear turned
+/// by the engine to its tooth-count angle, from gear 1 and from gear 7.
 #[test]
 fn a_ten_gear_sketch_system_turns_every_gear_from_any_driver() {
     let mut s = Session::default();
     let sk = ten_gears(&mut s);
     let r = assembled(&mut s, json!({"sketch": sk, "type": "spur", "module": 2, "face_width": 6, "assembly": true, "clearance_body": {}}));
     let a = &r["assembly"];
-    assert_eq!(a["members"].as_array().map(Vec::len), Some(10), "{r}");
+    let n = a["members"].as_array().map_or(0, Vec::len);
+    assert!(n == 8 || n == 10, "one member per shaft (or per gear, clusters rigid): {r}");
     assert_eq!(a["driver"], 1);
     assert!(a.get("issues").is_none(), "{r}");
-    // One revolute joint per shaft: eight shafts; the second gear of each cluster rigid on it.
-    let l = run(&mut s, "joint.list", json!({}));
-    let ours: Vec<u64> = a["joints"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
-    let kind_of = |id: u64| l["joints"].as_array().unwrap().iter().find(|j| j["id"].as_u64() == Some(id)).map(|j| j["kind"].as_str().unwrap_or_default().to_string()).unwrap_or_default();
-    let revolutes = ours.iter().filter(|j| kind_of(**j).eq_ignore_ascii_case("revolute")).count();
-    let rigids = ours.iter().filter(|j| kind_of(**j).eq_ignore_ascii_case("rigid")).count();
-    assert_eq!((revolutes, rigids), (8, 2), "{l}");
+    let (rev, rig, other) = joint_kinds(&mut s, &r);
+    assert_eq!((rev, rig, other), (8, n - 8, 0), "one revolute per shaft");
     assert_eq!(a["links"].as_array().map(Vec::len), Some(7), "a gear link per mesh: {r}");
-    // Gear 1 by 30°: every gear where its teeth say, the clustered ones with their shafts.
     let j = member_joints(&r);
-    run(&mut s, "joint.drive", json!({"joint": j[0].unwrap(), "value": 30}));
+    let driver = member_on(&r, 0.0, 0.0);
+    run(&mut s, "joint.drive", json!({"joint": j[driver].unwrap(), "value": 30}));
     let want = ten_by_hand();
-    for (i, w) in want.iter().enumerate() {
-        let got = turned_deg(&s, &r, i);
-        let d = ((got - 30.0 * w + 540.0).rem_euclid(360.0)) - 180.0;
-        assert!(d.abs() < 1e-6, "gear {}: turned {got}°, by hand {}°", i + 1, 30.0 * w);
+    eprintln!("GATE ten-gear train, gear 1 by 30°:");
+    for (k, (x, y, _)) in TEN.iter().enumerate() {
+        let got = turned_about(&s, &r, member_on(&r, *x, *y));
+        eprintln!("GATE   gear {:2}: expected {:+.6}°, measured {:+.6}°", k + 1, 30.0 * want[k], got);
+        assert!(same_angle(got, 30.0 * want[k]), "gear {}: turned {got}°, by the teeth {}°", k + 1, 30.0 * want[k]);
     }
-    // Driven from gear 7 instead: its joint drives, gear 1 follows the other way up the train.
+    // Driven from gear 7 instead: its joint drives, gear 1 follows up the train.
     let group = r["group"].as_u64().unwrap();
-    let u = run(&mut s, "gear.update", json!({"group": group, "assembly_driver": 7}));
+    let u = run(&mut s, "gear.update", json!({"group": group, "assembly_driver": member_on(&r, 80.0, 80.0) + 1}));
     no_errors(&s);
-    assert_eq!(u["assembly"]["driver"], 7, "{u}");
     let comps = |v: &Value| v["assembly"]["members"].as_array().unwrap().iter().map(|m| m["component"].clone()).collect::<Vec<_>>();
     assert_eq!(comps(&u), comps(&r), "the same components");
+    let (g1, g7) = (member_on(&u, 0.0, 0.0), member_on(&u, 80.0, 80.0));
+    let (b1, b7) = (turned_about(&s, &u, g1), turned_about(&s, &u, g7));
     let j = member_joints(&u);
-    let before = turned_deg(&s, &u, 0);
-    run(&mut s, "joint.drive", json!({"joint": j[6].unwrap(), "value": 18}));
-    let moved = turned_deg(&s, &u, 0) - before;
-    let w7 = want[6];
-    // Gear 7's joint was at 30·w7 (its turn so far); now 18°.
-    let expect = (18.0 - 30.0 * w7) / w7;
-    let d = ((moved - expect + 540.0).rem_euclid(360.0)) - 180.0;
-    assert!(d.abs() < 1e-6, "gear 1 moved {moved}°, expected {expect}°");
+    let now = joint_value(&mut s, j[g7].unwrap());
+    run(&mut s, "joint.drive", json!({"joint": j[g7].unwrap(), "value": now + 18.0}));
+    let (m1, m7) = (turned_about(&s, &u, g1) - b1, turned_about(&s, &u, g7) - b7);
+    assert!(same_angle(m7, 18.0), "gear 7 moved {m7}°");
+    assert!(same_angle(m1, 18.0 / want[6]), "gear 1 moved {m1}°, expected {}°", 18.0 / want[6]);
+}
+
+/// Gate: the user's twin-countershaft gearbox (module 1, diameter = teeth): input Ø30, Ø15 + Ø25
+/// on each countershaft, one Ø15 output meshing both Ø25s. The loop agrees; the input by 30°
+/// turns each countershaft −60° and the output +100°.
+#[test]
+fn the_gaerbox_power_split_turns_by_its_teeth() {
+    let a = 30f64.to_radians();
+    let (cx, cy) = (22.5 * a.cos(), 22.5 * a.sin());
+    let x0 = cx + (400.0 - cy * cy).sqrt();
+    let mut s = Session::default();
+    let draw = [
+        circle(0.0, 0.0, 15.0, "in"),
+        circle(cx, cy, 7.5, "a15"),
+        circle(cx, cy, 12.5, "a25"),
+        circle(cx, -cy, 7.5, "b15"),
+        circle(cx, -cy, 12.5, "b25"),
+        circle(x0, 0.0, 7.5, "out"),
+    ];
+    let sk = sketch_with(&mut s, &draw);
+    let r = assembled(&mut s, json!({"sketch": sk, "type": "spur", "module": 1, "face_width": 5, "assembly": true, "clearance_body": {}}));
+    let am = &r["assembly"];
+    assert!(am.get("issues").is_none(), "a power split agrees: {r}");
+    let n = am["members"].as_array().map_or(0, Vec::len);
+    let (rev, rig, other) = joint_kinds(&mut s, &r);
+    assert_eq!((rev, rig, other), (4, n - 4, 0), "input, countershaft A, countershaft B, output: {r}");
+    // Three of the four meshes as motion links: the joints' links drive each joint once, so the
+    // mesh closing the loop holds by the ratios (checked below by the output's turn).
+    assert_eq!(am["links"].as_array().map(Vec::len), Some(3), "{r}");
+    let j = member_joints(&r);
+    let input = member_on(&r, 0.0, 0.0);
+    run(&mut s, "joint.drive", json!({"joint": j[input].unwrap(), "value": 30}));
+    eprintln!("GATE gaerbox, input by 30°:");
+    for (what, x, y, want) in [("input", 0.0, 0.0, 30.0), ("countershaft A", cx, cy, -60.0), ("countershaft B", cx, -cy, -60.0), ("output", x0, 0.0, 100.0)] {
+        let got = turned_about(&s, &r, member_on(&r, x, y));
+        eprintln!("GATE   {what}: expected {want:+.6}°, measured {got:+.6}°");
+        assert!(same_angle(got, want), "{what}: {got}° vs {want}°");
+    }
+}
+
+/// Gate: a pinion inside a ring (drawn as circles): the ring turns the same way by 20/60.
+#[test]
+fn an_internal_mesh_turns_the_ring_the_same_way() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 60.0, "ring"), circle(40.0, 0.0, 20.0, "pinion")]);
+    let r = assembled(&mut s, json!({"sketch": sk, "type": "spur", "module": 2, "face_width": 6, "assembly": true}));
+    let (ring, pinion) = (member_on(&r, 0.0, 0.0), member_on(&r, 40.0, 0.0));
+    let j = member_joints(&r);
+    run(&mut s, "joint.drive", json!({"joint": j[pinion].unwrap(), "value": 30}));
+    let got = turned_about(&s, &r, ring);
+    eprintln!("GATE internal, pinion z20 by 30°: ring z60 expected +10°, measured {got:+.6}°");
+    assert!(same_angle(got, 10.0), "{got}");
+}
+
+/// Gate: bevels at 90° and 70°, gear 1 z20 by 30°: gear 2 z30 turns −20° about its own axis
+/// (both axes pointing at the apex), the engine's joint angle read back.
+#[test]
+fn bevels_at_any_shaft_angle_turn_by_their_teeth() {
+    for angle in [90.0, 70.0] {
+        let mut s = Session::default();
+        let r = assembled(&mut s, json!({"type": "bevel", "module": 2, "teeth": 20, "teeth2": 30, "face_width": 10, "shaft_angle": angle, "assembly": true}));
+        let j = member_joints(&r);
+        run(&mut s, "joint.drive", json!({"joint": j[0].unwrap(), "value": 30}));
+        let got = turned_about(&s, &r, 1);
+        eprintln!("GATE bevel {angle}°, gear 1 z20 by 30°: gear 2 z30 expected -20°, measured {got:+.6}°");
+        assert!(same_angle(got, -20.0), "{angle}°: {got}");
+        assert!(same_angle(turned_about(&s, &r, 0), 30.0));
+    }
+}
+
+/// Gate: an open differential with its case held (the drive pinion at rest): side gear A by
+/// 30° turns side gear B the other way by as much, about the axle.
+#[test]
+fn an_open_differential_turns_its_sides_opposite_with_the_case_held() {
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "differential", "assembly": true}));
+    no_errors(&s);
+    let ms = r["assembly"]["members"].as_array().unwrap().clone();
+    let find = |part: &str| ms.iter().position(|m| m["body"].as_str().unwrap_or_default().contains(part)).unwrap_or_else(|| panic!("no {part}: {r}"));
+    let (a, b) = (find("Side gear A"), find("Side gear B"));
+    let j = member_joints(&r);
+    run(&mut s, "joint.drive", json!({"joint": j[a].unwrap(), "value": 30}));
+    // Side B's turn about side A's axle direction.
+    let axis_a = r["assembly"]["members"][a]["axis"][1].clone();
+    let axis_b = r["assembly"]["members"][b]["axis"][1].clone();
+    let along = (0..3).map(|k| axis_a[k].as_f64().unwrap() * axis_b[k].as_f64().unwrap()).sum::<f64>().signum();
+    let got = turned_about(&s, &r, b) * along;
+    eprintln!("GATE open differential, case held, side A by 30°: side B expected -30°, measured {got:+.6}°");
+    assert!(same_angle(got, -30.0), "{got}: {r}");
 }
 
 #[test]

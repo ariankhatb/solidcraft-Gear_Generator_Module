@@ -557,12 +557,13 @@ pub(crate) fn mesh_pairs(s: &Spec, t: &Train, preview: &[crate::plan::PreviewGea
 /// link per mesh and a rigid link per shared shaft, loops and all, for
 /// [`crate::plan::Assembly::from_graph`].
 pub(crate) fn assembly_edges(t: &Train) -> Vec<crate::plan::AssemblyLink> {
-    let radius = |g: &TrainGear| g.module * f64::from(g.teeth) / (2.0 * g.helix.to_radians().cos());
+    // Sized by teeth: the ratio is the exact tooth ratio.
+    let teeth = |g: &TrainGear| f64::from(g.teeth.max(1));
     t.links
         .iter()
         .map(|l| match l.kind {
             LinkKind::Compound => crate::plan::AssemblyLink::Rigid { a: l.a, b: l.b },
-            kind => crate::plan::AssemblyLink::Gear { a: l.a, b: l.b, ra: radius(&t.gears[l.a]), rb: radius(&t.gears[l.b]), internal: kind == LinkKind::Internal, reverse: false },
+            kind => crate::plan::AssemblyLink::Gear { a: l.a, b: l.b, ra: teeth(&t.gears[l.a]), rb: teeth(&t.gears[l.b]), internal: kind == LinkKind::Internal, reverse: false },
         })
         .collect()
 }

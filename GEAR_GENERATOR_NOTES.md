@@ -333,3 +333,17 @@ rings overlap the housing by design when `ring_as_housing`). Scripts come from t
 - Still open: Advanced mode shows the ring refusal at 90° (Simple picks 45°);
   `requested_icons.txt` needs regenerating (`UPDATE_ICON_MANIFEST=1 cargo test -p
   solidcraft-ui-egui --test icon_audit`); ribbon/layout tests not yet run.
+
+## Status 2026-11-15, ~02:40 — build 3 ready for user testing
+
+- Build 3 (incremental, 17 min) passed: `target\release\solidcraft.exe`.
+- Bevel planetary ring is now one `Step::RingTaper` loft (rim circle + toothed loop per
+  section); the kernel's boolean cut of a toothed cutter from the blank always failed. Kernel
+  check: planets touch the ring at ~0.001 mm³ (was 175 mm³ with the cut dropped).
+- 4-start worm wheels (z40, z48) build; 0.006 mm³ contact.
+- Type pickers: group names on their own rows. gear.calculate / gear.from_axes have the
+  gear_generator icon; icon manifest regenerated.
+- Tests: gear 210/0, engine gear 40/0, ui-egui lib 605 pass (2 render_workspace failures need
+  the raytrace-cpu feature: unrelated).
+- Still open: `gear.create` ring mode at the default 90° is refused (Simple mode picks 45°;
+  Advanced shows the refusal); bevel planetary profile shift is ignored.

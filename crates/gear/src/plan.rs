@@ -18,6 +18,7 @@ use crate::spline::SplineStandard;
 pub(crate) mod extras;
 pub mod left_out;
 pub mod bevel_planet;
+mod assembly;
 
 pub use bevel_planet::BevelPlanetMode;
 
@@ -1093,6 +1094,8 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
             b.frame = place.compose(&b.frame);
         }
     }
+    // How the bodies go together, where they are.
+    assembly::fill(s, &mut p);
     // The clearance body, from the bodies where they are.
     if s.clearance_body.is_some() {
         p.clearance = Some(crate::clearance::clearance_body(s, &mut p)?);

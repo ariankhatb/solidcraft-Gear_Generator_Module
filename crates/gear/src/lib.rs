@@ -86,6 +86,8 @@ mod clearance_tests;
 mod sweep_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod assembly_tests;
 
 #[cfg(test)]
 mod coupon_tests;

@@ -484,6 +484,7 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     set!(holes, p.holes);
     set!(hole_diameter, p.hole_diameter);
     set!(only, p.only);
+    set!(herringbone, p.herringbone);
     set!(coupon, p.coupon);
     set!(coupon_teeth, p.coupon_teeth);
     set!(origin, p.origin);
@@ -702,6 +703,7 @@ fn explicit_params(s: &Spec) -> GearParams {
         holes: (s.holes > 0).then_some(s.holes),
         hole_diameter: (s.hole_diameter > 0.0).then_some(s.hole_diameter),
         only: (s.only > 0).then_some(s.only),
+        herringbone: s.herringbone.then_some(true),
         origin: (s.origin != [0.0; 3]).then_some(s.origin),
         name: (!s.name.is_empty()).then(|| s.name.clone()),
         placement: s.placement.map(|f| PlacementParams { origin: f.origin, x: f.x, z: f.z }),
@@ -1762,7 +1764,6 @@ fn new_sketch(s: &mut Session, def: &SketchDef) -> Result<u64> {
 }
 
 /// Sections a spiral taper is lofted through.
-const TAPER_SECTIONS: usize = 7;
 
 fn op_name(op: Op) -> &'static str {
     match op {
@@ -1922,9 +1923,12 @@ fn step_def(body: &Body, i: usize, step: &Step, nudge: f64, mode: &equations::Mo
         // twist does not, so the taper is a loft through its own sections, each the first one
         // scaled and turned.
         Step::Taper { outline: o, z0, height, twist, scale, op } => {
-            let sketches = (0..TAPER_SECTIONS)
+            // As many sections as keep the kernel's alignment (each section lined up with the one
+            // before), at least 7.
+            let n = solidcraft_gear::plan::taper_sections(o, *twist, *scale);
+            let sketches = (0..n)
                 .map(|i| {
-                    let t = i as f64 / (TAPER_SECTIONS - 1) as f64;
+                    let t = i as f64 / (n - 1) as f64;
                     let k = 1.0 + (scale - 1.0) * t;
                     let section = o.scaled(k).rotated(solidcraft_gear::plan::taper_turn(*twist, *scale, k));
                     sketch(format!("section {}", i + 1), f.world([0.0, 0.0, z0 + height * t]), x, y, outline(&section))
@@ -1973,7 +1977,7 @@ fn step_params(s: &Session, body: &Body, step: &Step, sketches: &[u64], target: 
         }
         Step::Taper { twist, op, .. } if twist.abs() <= 1e-12 => merge(json!({"sections": [{"sketch": id(0)?}, {"sketch": id(1)?}]}), own(*op)),
         Step::Taper { op, .. } => {
-            let ids = (0..TAPER_SECTIONS).map(|k| id(k).map(|i| json!({"sketch": i}))).collect::<Result<Vec<Value>>>()?;
+            let ids = (0..sketches.len()).map(|k| id(k).map(|i| json!({"sketch": i}))).collect::<Result<Vec<Value>>>()?;
             merge(json!({"sections": ids}), own(*op))
         }
         Step::Loft { sections, op } => {

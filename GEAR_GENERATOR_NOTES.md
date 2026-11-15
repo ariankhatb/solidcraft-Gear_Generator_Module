@@ -302,3 +302,12 @@ ignored `every_type_builds_its_clearance_body` written but never run). Engine ke
 built with the 18:03 CLI, cut out of a box, `inspect.interference` housing vs gears = 0 for all kinds (hypoid included;
 rings overlap the housing by design when `ring_as_housing`). Scripts come from the ignored test `dump_clearance_scripts`
 (env `CLEARANCE_DUMP`, `CLEARANCE_KINDS`, `<kind>_housing` variants with Ø8 bores and 608 seats).
+- Merged `gear-hypoid` (kernel loft-slip fix: the kernel restarts each loft section where it best
+  lines up with the previous one — `loft_numbered_loops`; too much turn between sections made the
+  hypoid's walls cut across teeth). Applied the same rule everywhere: `plan::taper_sections`
+  (spiral tapers, was a fixed 7) and worm wheels add sections until aligned; test
+  `loft_slip_tests::no_kernel_loft_slips_in_any_kind`.
+- Herringbone pairs now build (`Spec.herringbone`, `GearParams.herringbone`).
+- User: "add the icons and add it to the main app UI" → agent on `solidcraft-icons` /
+  `gear-icons`: icon per kind + a Gear Generator icon, a visible ribbon place, `gear_icons.rs`;
+  picker wiring after `gear-bevelplanet` merges.

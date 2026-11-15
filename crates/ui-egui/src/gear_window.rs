@@ -269,6 +269,9 @@ pub struct GearWindow {
     /// The set shown in the model as a kernel preview: asked for once by "Show in model" for
     /// the plan of this generation; any edit lets it lapse.
     pub(crate) model_preview: Option<u64>,
+    /// The differential designer's Simple-mode goal, and what its last Design said.
+    pub(crate) diff_goal: solidcraft_gear::diff::Goal,
+    pub(crate) diff_notes: Vec<String>,
 }
 
 /// The window's two modes.
@@ -327,6 +330,7 @@ fn members(k: Kind) -> &'static [&'static str] {
         Kind::FaceGear => &["Face gear", "Pinion"],
         Kind::Internal => &["Ring gear"],
         Kind::Rack => &["Rack"],
+        Kind::Differential => &["Case", "Ring gear", "Drive pinion", "Side gears", "Pinions or elements"],
         // A single gear (spur, helical, herringbone), and any family added later until it
         // names its members here.
         _ => &["Gear"],
@@ -348,6 +352,8 @@ pub(crate) fn member_of_outline(k: Kind, i: usize, name: &str) -> Option<usize> 
         Kind::Sprocket | Kind::Pulley => usize::from(name.ends_with('2')),
         Kind::Spline => usize::from(name == "hub"),
         Kind::FaceGear => usize::from(name == "pinion"),
+        Kind::Differential if name.starts_with("side gear") => 3,
+        Kind::Differential => 4,
         _ => i.min(last),
     })
 }
@@ -365,6 +371,11 @@ pub(crate) fn member_of_body(k: Kind, only: u8, i: usize, name: &str) -> usize {
         Kind::BevelPlanetary => 0,
         Kind::FaceGear => usize::from(name.contains("pinion")),
         Kind::Spline => usize::from(name.contains("hub")),
+        Kind::Differential if name.contains("Ring gear") => 1,
+        Kind::Differential if name.contains("Drive pinion") => 2,
+        Kind::Differential if name.contains("Side gear") => 3,
+        Kind::Differential if name.contains("Pinion pins") || name.contains("Differential case") => 0,
+        Kind::Differential => 4,
         _ if only > 0 => usize::from(only - 1).min(last),
         _ => i.min(last),
     }
@@ -455,6 +466,8 @@ impl GearWindow {
             schematic: None,
             right: RightView::Both,
             model_preview: None,
+            diff_goal: solidcraft_gear::diff::Goal::default(),
+            diff_notes: Vec::new(),
         };
         crate::gear_simple::apply(&mut w);
         w.replan();
@@ -1576,6 +1589,14 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
         suggest_open: &mut w.suggest_open,
         suggestions: &mut w.suggestions,
     };
+    if k == Kind::Differential {
+        // The differential designer has its own sections (gears, case, drive, load).
+        egui::ScrollArea::vertical().id_salt("gear_params").max_height(470.0).auto_shrink([false, true]).show(ui, |ui| {
+            crate::gear_diff::advanced(ui, &mut *cx.s);
+            crate::gear_clearance_ui::section(ui, &mut *cx.s, true, &names, &warnings, &facts);
+        });
+        return;
+    }
     let mut hovered = None;
     let mut edited = None;
     egui::ScrollArea::vertical().id_salt("gear_params").max_height(470.0).auto_shrink([false, true]).show(ui, |ui| {

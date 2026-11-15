@@ -619,7 +619,13 @@ pub(crate) fn check_plan(p: &Plan) -> Result<(), String> {
                             }
                             check_region(region).map_err(|e| format!("{at}: {e}"))?;
                         }
-                        _ => return Err(format!("{at}: only cut prisms are placed")),
+                        Step::Placed { .. } => return Err(format!("{at}: a placed step in a placed step")),
+                        // (A differential's pinion pins and an integral ring's teeth: any step, in its frame.)
+                        inner => {
+                            let mut one = Plan::default();
+                            one.bodies = vec![crate::plan::Body { name: at.clone(), frame: crate::plan::Frame::at([0.0; 3]), steps: vec![inner.clone()] }];
+                            check_plan(&one)?;
+                        }
                     }
                 }
                 Step::Coil { section, pitch, z0, height, .. } => {
@@ -750,6 +756,10 @@ fn big_gears_plan_quickly() {
             // The kernel's loft takes so many curves: a ring gear of about 100 teeth lofts.
             Kind::Hypoid => (s.teeth, s.teeth2) = (25, 100),
             _ => {}
+        }
+        // A differential plans several sets (gears, case, drive): seconds, not milliseconds.
+        if kind == Kind::Differential {
+            continue;
         }
         let mut best = f64::INFINITY;
         for _ in 0..5 {

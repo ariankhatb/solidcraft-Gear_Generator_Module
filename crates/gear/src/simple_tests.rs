@@ -393,7 +393,9 @@ fn schematic_frames_match_the_plan() {
         assert!(sch.note.is_none(), "{:?}: {:?}", s.kind, sch.note);
         // Members are the preview's, in its order.
         let preview: Vec<&str> = p.preview.iter().map(|g| g.name.as_str()).collect();
-        if s.kind == Kind::BevelPlanetary {
+        if s.kind == Kind::Differential {
+            // Its schematic is every body (case, ring, pinions...); its preview one spoke or section.
+        } else if s.kind == Kind::BevelPlanetary {
             // Its preview is one spoke: the planets after the first take planet 1's place.
             let names: Vec<&str> = sch.members.iter().map(|m| m.name.as_str()).filter(|n| preview.contains(n)).collect();
             assert_eq!(names, preview, "{:?}", s.kind);

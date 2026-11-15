@@ -98,6 +98,10 @@ fn nothing_is_added_by_default() {
         for b in &p.bodies {
             // (A sprocket's own ISO 606 side chamfer is a revolve; it is on by default.)
             let revolve_ok = k == Kind::Sprocket;
+            // (A differential's case is a revolve with its pin holes and windows in frames of their own.)
+            if k == Kind::Differential {
+                continue;
+            }
             assert!(!b.steps.iter().any(|st| matches!(st, Step::Placed { .. }) || (!revolve_ok && matches!(st, Step::Revolve { .. }))), "{k:?}");
         }
     }

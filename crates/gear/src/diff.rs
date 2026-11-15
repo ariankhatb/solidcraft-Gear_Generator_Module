@@ -229,7 +229,8 @@ pub struct Diff {
     pub bolts: u32,
     pub bolt_diameter: f64,
     /// Also make the keep-out body (the space the turning assembly needs, for cutting the axle
-    /// housing): `Plan::clearance`.
+    /// housing): `Plan::clearance` (also made when `Spec::clearance_body` is set; Simple mode's
+    /// designs turn it on).
     pub keep_out: bool,
 }
 
@@ -267,7 +268,7 @@ impl Default for Diff {
             drive_position: 0.0,
             bolts: 0,
             bolt_diameter: 0.0,
-            keep_out: true,
+            keep_out: false,
         }
     }
 }
@@ -283,7 +284,8 @@ impl Diff {
                 d.side_teeth = 12;
                 d.side_teeth2 = 18;
                 d.pinion_teeth = 12;
-                d.module = 2.5;
+                d.module = 3.0;
+                d.drive_module = 6.0;
             }
             Style::TorsenB => {
                 d.module = 2.0;
@@ -291,6 +293,7 @@ impl Diff {
                 d.pinion_teeth = 11;
                 d.pinions = 3;
                 d.helix = 30.0;
+                d.drive_module = 6.0;
             }
             Style::TorsenA => {
                 d.module = 2.0;
@@ -514,6 +517,22 @@ fn least_root(b: &Body, h: f64) -> f64 {
     Solid::new(&first, h).material_points(4.0 * h).iter().map(|q| q[0].hypot(q[1])).fold(f64::INFINITY, f64::min)
 }
 
+/// A body's teeth (its first step) swept a full turn about its own axis: `n` places round, in
+/// world coordinates.
+fn swept_points(b: &Body, h: f64, n: u32) -> Vec<V3> {
+    let first = Body { name: String::new(), frame: b.frame, steps: b.steps.iter().take(1).cloned().collect() };
+    let pts = Solid::new(&first, h).material_points(4.0 * h);
+    let mut out = Vec::with_capacity(pts.len() * n as usize);
+    for q in pts {
+        let r = q[0].hypot(q[1]);
+        for k in 0..n {
+            let t = TAU * f64::from(k) / f64::from(n);
+            out.push(b.frame.world([r * t.cos(), r * t.sin(), q[2]]));
+        }
+    }
+    out
+}
+
 /// A name with the set's name in front.
 fn named(s: &Spec, base: &str) -> String {
     if s.name.trim().is_empty() { base.to_string() } else { format!("{} {base}", s.name.trim()) }
@@ -696,13 +715,28 @@ fn bevel_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     let rs = (reach + clr).max((h_a + washer).hypot(ra_a + clr)).max((h_b + washer).hypot(ra_b + clr));
     let wall = if d.wall > 0.0 { d.wall } else { (0.15 * rs).max(3.0).max(0.6 * pin) };
     let hub_bore = r_hub + clr;
-    let mut cavity = vec![V2::new(hub_bore, za_face)];
-    let k = 48;
-    for i in 0..=k {
-        let z = za_face + (zb_face - za_face) * f64::from(i) / f64::from(k);
-        cavity.push(V2::new((rs * rs - z * z).max(0.0).sqrt(), z));
+    // The thrust faces behind the side gears reach out only as far as the pinions, turning on
+    // their pins, leave room: past that the cavity is the sphere (the pinions' large-end corners
+    // reach behind the side gears' back planes).
+    let swept: Vec<V3> = bodies[2..].iter().flat_map(|b| swept_points(b, h, 72)).collect();
+    let face_reach = |z_face: f64, sign: f64, ra: f64| {
+        let behind = swept.iter().filter(|q| sign * q[2] > sign * z_face - clr).map(|q| q[0].hypot(q[1])).fold(f64::INFINITY, f64::min);
+        (behind - clr).min(ra + clr).max(hub_bore)
+    };
+    let (rt_a, rt_b) = (face_reach(za_face, -1.0, ra_a), face_reach(zb_face, 1.0, ra_b));
+    if rt_a.min(rt_b) < hub_bore + 1.0 {
+        p.warn("the thrust faces behind the side gears are narrow (the pinions' corners come close to the hubs)");
     }
-    cavity.push(V2::new(hub_bore, zb_face));
+    // The sphere from where it meets each thrust face's rim, as a polygon round it.
+    let (fa0, fb0) = ((-(rs * rs - rt_a * rt_a).max(0.0).sqrt()).atan2(rt_a), (rs * rs - rt_b * rt_b).max(0.0).sqrt().atan2(rt_b));
+    let k = 64;
+    let step = (fb0 - fa0) / f64::from(k);
+    let rr = rs / (0.5 * step).cos();
+    let mut cavity = vec![V2::new(hub_bore, za_face), V2::new(rt_a, za_face), V2::polar(rs, fa0)];
+    for i in 1..k {
+        cavity.push(V2::polar(rr, fa0 + step * f64::from(i)));
+    }
+    cavity.extend([V2::polar(rs, fb0), V2::new(rt_b, zb_face), V2::new(hub_bore, zb_face)]);
     let hub_end = [-h_a - l_hub - clr, h_b + l_hub + clr];
 
     // Pins: one stub per pinion from the apex out into the case wall (two opposite ones make a
@@ -1059,11 +1093,215 @@ pub fn torsen_a_layout(d: &Diff) -> Vec<(String, f64, Unit)> {
     ]
 }
 
+/// A body turned about its own frame's z by `a` (its teeth's phase).
+fn spun(b: &Body, a: f64) -> Body {
+    let f = b.frame;
+    let y = f.y();
+    let (s, c) = a.sin_cos();
+    Body { frame: Frame { x: [0, 1, 2].map(|i| f.x[i] * c + y[i] * s), ..f }, ..b.clone() }
+}
+
+/// A body turned about the world's z axis (through the origin) by `a`.
+fn turned_about_z(b: &Body, a: f64) -> Body {
+    let (s, c) = a.sin_cos();
+    let r = |v: V3| [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]];
+    Body { frame: Frame { origin: r(b.frame.origin), x: r(b.frame.x), z: r(b.frame.z) }, ..b.clone() }
+}
+
+/// Every surface point of a body's material swept a full turn about its own axis (world).
+fn swept_all(b: &Body, h: f64, n: u32) -> Vec<V3> {
+    let pts = Solid::new(b, h).material_points(4.0 * h);
+    let mut out = Vec::with_capacity(pts.len() * n as usize);
+    for q in pts {
+        let r = q[0].hypot(q[1]);
+        for k in 0..n {
+            let t = TAU * f64::from(k) / f64::from(n);
+            out.push(b.frame.world([r * t.cos(), r * t.sin(), q[2]]));
+        }
+    }
+    out
+}
+
+/// Torsen Type A (T‑1): each side gear is a worm-like helical gear on the axle; each element is
+/// a helical worm wheel across the axle (a crossed helical pair at 90°, planned by the crossed
+/// helical planner), with a spur gear on each end; the two elements of a pair sit side by side
+/// along the axle, one over each side gear, and their spur gears mesh. Side gear B, its elements
+/// and the pair's second element are the first ones moved along the axle; each element's spur
+/// teeth are clocked to mesh its partner's. The elements turn on journals in the case.
 fn torsen_a_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
-    for (l, v, u) in torsen_a_layout(&s.diff) {
+    let d = &s.diff;
+    for (l, v, u) in torsen_a_layout(d) {
         p.fact(l, v, u);
     }
-    Err("Torsen Type A: the layout and bias are worked out (see gear.calculate), but its bodies aren't built yet: the side worms, the element worm wheels with their spur ends and the case with the element axles are still to come".into())
+    let (zs, ze, n) = (d.side_teeth, d.pinion_teeth, d.pinions);
+    let m = d.module;
+    let clr = d.clr();
+    let axle = d.axle_diameter;
+    let w = if d.face_width > 0.0 { d.face_width } else { 8.0 * m };
+    let beta_s = d.helix;
+    if !(30.0..=74.0).contains(&beta_s) {
+        return Err(format!("a Torsen Type A's side gears are worms: their helix angle must be 30° to 74° (the lead angle 16° to 60°), not {}°", mm(beta_s)));
+    }
+    let sub = Spec {
+        kind: Kind::CrossedHelical,
+        module: m,
+        teeth: zs,
+        teeth2: ze,
+        helix: beta_s,
+        shaft_angle: 90.0,
+        pressure_angle: d.pa(),
+        backlash: d.backlash,
+        face_width: w,
+        name: s.name.clone(),
+        bore: Bore { kind: BoreKind::Round, diameter: axle, ..Bore::default() },
+        ..Spec::defaults_for(Kind::CrossedHelical)
+    };
+    let sp = crate::plan::plan(&sub).map_err(|e| format!("Torsen Type A side gear and element: {}", e.replace("gear 1", "side gear").replace("gear 2", "element")))?;
+    for w in &sp.warnings {
+        p.warn(w.replace("gear 1", "side gear").replace("gear 2", "element"));
+    }
+    let e = sp.facts.iter().find(|f| f.label == "centre distance").map_or(0.0, |f| f.value);
+    let ge = sub.involute2(ze, 0.0, 90.0 - beta_s);
+    let gs = sub.involute(zs, 0.0, beta_s);
+    let (ra_e, ra_s) = (ge.ra(), gs.ra());
+    // The spur gears: as many teeth as the wheel, big enough that the two wheels clear.
+    let z_sp = ze;
+    let m_sp = ((2.0 * (ra_e + clr) / f64::from(z_sp)) / 0.05).ceil() * 0.05;
+    let spur = Spec { module: m_sp, pressure_angle: 20.0, backlash: d.backlash, ..Spec::default() }.involute(z_sp, 0.0, 0.0);
+    let dz = spur.r();
+    let ra_sp = spur.ra();
+    // Along the element's axis: the wheel in the middle, the spurs past the side gear's tips.
+    let w_sp = 0.6 * w;
+    let l0 = (w / 2.0 + clr).max(((ra_s + clr).powi(2) - (e - ra_sp).max(0.0).powi(2)).max(0.0).sqrt() + clr);
+    let (o_sp1, _) = external_outline(&spur, 0.0);
+    let psi2 = mesh_phase(z_sp, 0.0, z_sp, PI / 2.0);
+    let (o_sp2, _) = external_outline(&spur, psi2);
+    let spur_steps = |o: &Outline| {
+        vec![
+            Step::Prism { region: Region { outer: vec![o.clone()], holes: vec![] }, z0: l0, height: w_sp, twist: 0.0, op: Op::Join },
+            Step::Prism { region: Region { outer: vec![o.clone()], holes: vec![] }, z0: -l0 - w_sp, height: w_sp, twist: 0.0, op: Op::Join },
+        ]
+    };
+    let (side0, elem0) = (sp.bodies[0].clone(), sp.bodies[1].clone());
+    let side_teeth: Vec<Step> = side0.steps.iter().take(1).cloned().collect();
+    let (mut r_hub, mut l_hub) = hub_size(axle);
+    r_hub = r_hub.min(gs.rf() - 0.5 * m);
+    let mut e1 = elem0.clone();
+    e1.steps.extend(spur_steps(&o_sp1));
+    let mut e2 = elem0.clone();
+    e2.steps.extend(spur_steps(&o_sp2));
+    let e1 = shifted(&e1, [0.0, 0.0, -dz]);
+    let e2 = shifted(&e2, [0.0, 0.0, dz]);
+    // Room in the case: round the elements, and how far they reach along the axle near it.
+    let h = 0.05 * m;
+    let swept: Vec<V3> = [&e1, &e2].iter().flat_map(|b| swept_all(b, h, 48)).collect();
+    let r1 = ra_s + clr;
+    let rc = swept.iter().map(|q| q[0].hypot(q[1])).fold(0.0, f64::max) + clr;
+    let ze_reach = swept.iter().map(|q| q[2].abs()).fold(0.0, f64::max) + clr;
+    let washer = if d.washer > 0.0 { d.washer } else { 1.0 };
+    let near = swept.iter().filter(|q| q[0].hypot(q[1]) < r1 + clr).map(|q| q[2].abs()).fold(0.0, f64::max) + clr;
+    let za = (dz + w / 2.0 + washer).max(near);
+    l_hub = l_hub.max(za - (dz + w / 2.0) + 2.0);
+    // Pairs round the axle; side B and the second elements follow side A's phase.
+    let ratio = -f64::from(zs) / f64::from(ze);
+    let mut bodies = Vec::new();
+    let mut side_a = Body { name: named(s, &format!("Side gear A z{zs}")), frame: Frame::at([0.0, 0.0, -dz]), steps: side_teeth.clone() };
+    side_hub(&mut side_a.steps, -w / 2.0, r_hub, l_hub, axle);
+    side_a.steps.push(Step::Prism { region: circle(V2::ZERO, axle / 2.0), z0: -w / 2.0 - 1.0, height: w + 2.0, twist: 0.0, op: Op::Cut });
+    let mut side_b = Body { name: named(s, &format!("Side gear B z{zs}")), frame: Frame::at([0.0, 0.0, dz]), steps: side_teeth };
+    side_b.steps.push(Step::Prism { region: circle(V2::ZERO, r_hub), z0: w / 2.0 - 0.01, height: l_hub + 0.01, twist: 0.0, op: Op::Join });
+    side_b.steps.push(Step::Prism { region: circle(V2::ZERO, axle / 2.0), z0: -w / 2.0 - 1.0, height: w + l_hub + 2.0, twist: 0.0, op: Op::Cut });
+    bodies.push(side_a);
+    bodies.push(side_b);
+    let mut roles = vec![Role::Side, Role::Side];
+    let mut meshes = Vec::new();
+    let mut links = Vec::new();
+    let mut cuts = Vec::new();
+    let r_j = (0.35 * ge.rf()).max(1.0);
+    let y_end = ((rc + 0.6 * (2.0 * m).max(3.0)).powi(2) - e * e).max(0.0).sqrt();
+    let an = d.pa().to_radians();
+    let gap_sw = 0.5 * an.cos() * d.backlash * (beta_s.to_radians().cos() + (90.0 - beta_s).to_radians().cos());
+    let gap_sp = d.backlash * 20f64.to_radians().cos();
+    let fs = f64::from(zs);
+    let fe = f64::from(ze);
+    for k in 0..n {
+        let th = TAU * f64::from(k) / f64::from(n);
+        // Side A turned back by the pair's azimuth: the element turns by the ratio of it.
+        let place = |b: &Body| {
+            let mut b = turned_about_z(&spun(b, ratio * -th), th);
+            b.steps.push(Step::Prism { region: circle(V2::ZERO, r_j), z0: -y_end, height: 2.0 * y_end, twist: 0.0, op: Op::Join });
+            b
+        };
+        let (mut a, mut b) = (place(&e1), place(&e2));
+        a.name = named(s, &format!("Element {}a z{ze}", k + 1));
+        b.name = named(s, &format!("Element {}b z{ze}", k + 1));
+        for el in [&a, &b] {
+            cuts.push(Step::Placed { frame: el.frame, step: Box::new(Step::Prism { region: circle(V2::ZERO, r_j), z0: -y_end - 5.0 * m - 20.0, height: 2.0 * (y_end + 5.0 * m + 20.0), twist: 0.0, op: Op::Cut }) });
+        }
+        let i1 = bodies.len();
+        bodies.push(a);
+        bodies.push(b);
+        roles.extend([Role::Carried, Role::Carried]);
+        let label = |j: u32| format!("element {}{}", k + 1, if j == 1 { "a" } else { "b" });
+        let pair = |x: usize, y: usize, ratio: f64, period: f64, gap: f64, la: String, lb: String, bodies: &Vec<Body>| MeshPair3 {
+            a: 0,
+            b: 1,
+            bodies: Some([bodies[x].clone(), bodies[y].clone()]),
+            ratio,
+            period,
+            gap: (gap, gap),
+            scale: m,
+            labels: Some([la, lb]),
+        };
+        meshes.push(pair(0, i1, ratio, TAU / fs, gap_sw, "side gear A".into(), label(1), &bodies));
+        meshes.push(pair(i1, i1 + 1, -1.0, TAU / f64::from(z_sp), gap_sp, label(1), label(2), &bodies));
+        meshes.push(pair(i1 + 1, 1, 1.0 / ratio, TAU / fe, gap_sw, label(2), "side gear B".into(), &bodies));
+        links.push((0, i1, gs.r(), ge.r()));
+        links.push((i1, i1 + 1, spur.r(), spur.r()));
+        links.push((i1 + 1, 1, ge.r(), gs.r()));
+    }
+    // Neighbouring pairs mustn't meet: their ends at the journals' reach.
+    if n > 1 {
+        let half = (y_end.max(l0 + w_sp)).atan2(e - ra_sp.max(ra_e));
+        if 2.0 * half > TAU / f64::from(n) {
+            p.warn(format!("{n} element pairs may crowd each other round the side gears (each spans {}°): use fewer pairs or smaller elements", mm((2.0 * half).to_degrees())));
+        }
+    }
+    let hub_bore = r_hub + clr;
+    let cavity = vec![
+        V2::new(hub_bore, -za),
+        V2::new(r1, -za),
+        V2::new(r1, -ze_reach),
+        V2::new(rc, -ze_reach),
+        V2::new(rc, ze_reach),
+        V2::new(r1, ze_reach),
+        V2::new(r1, za),
+        V2::new(hub_bore, za),
+    ];
+    let wall = if d.wall > 0.0 { d.wall } else { (2.0 * m).max(3.0) };
+    p.fact("element centre distance from the axle", e, Unit::Mm);
+    p.fact("element spur gears: teeth", f64::from(z_sp), Unit::None);
+    p.fact("element spur gears: module", m_sp, Unit::None);
+    p.fact("elements of a pair: axis spacing along the axle", 2.0 * dz, Unit::Mm);
+    p.fact("element journal diameter", 2.0 * r_j, Unit::Mm);
+    p.warn("Torsen Type A: the element journals are integral pins turning in holes in the case; the case is one piece here (a real one splits to put the elements in)");
+    let preview = sp.preview.iter().map(|g| PreviewGear { name: g.name.replace("gear 1", "side gear A").replace("gear 2", "element 1a"), ..g.clone() }).collect();
+    Ok(Core {
+        bodies,
+        roles,
+        meshes,
+        links,
+        cavity,
+        hub_bore,
+        hub_end: [-(dz + w / 2.0) - l_hub - clr, dz + w / 2.0 + l_hub + clr],
+        case_r: rc + wall,
+        wall,
+        cuts,
+        preview,
+        preview_note: "each member's transverse section: a side gear and an element (their axes cross at 90°)".into(),
+        split: [0.5, 0.5],
+        face: w,
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1098,7 +1336,9 @@ fn drive_spec(s: &Spec, ring_bore: f64) -> Option<Spec> {
             let (z1, z2) = (f64::from(zp), f64::from(zr));
             let d2 = (z2 / z1).atan();
             let re = m * z2 / (2.0 * d2.sin());
-            let face = if d.drive_face > 0.0 { d.drive_face } else { (0.3 * re).min(10.0 * m) };
+            // (A straight bevel's own planner meshes cleanly with a narrower face.)
+            let k = if d.drive == DriveKind::Bevel { 0.22 } else { 0.3 };
+            let face = if d.drive_face > 0.0 { d.drive_face } else { (k * re).min(10.0 * m) };
             Spec { shaft_angle: 90.0, spiral_angle: d.drive_spiral, face_width: face, ..base(kind) }
         }
         DriveKind::Hypoid => {
@@ -1112,6 +1352,11 @@ fn drive_spec(s: &Spec, ring_bore: f64) -> Option<Spec> {
             Spec { helix: d.drive_helix, face_width: face, ..base(Kind::Pair) }
         }
     })
+}
+
+#[cfg(test)]
+pub(crate) fn drive_spec_for_tests(s: &Spec) -> Option<Spec> {
+    drive_spec(s, 0.0)
 }
 
 fn plan_drive(s: &Spec, core: &Core, p: &mut Plan) -> Result<Option<Drive>, String> {
@@ -1128,6 +1373,8 @@ fn plan_drive(s: &Spec, core: &Core, p: &mut Plan) -> Result<Option<Drive>, Stri
     }
     let mut ring = sp.bodies.remove(1);
     let mut pinion = sp.bodies.remove(0);
+    ring.name = named(s, &format!("Ring gear z{}", d.ring_teeth));
+    pinion.name = named(s, &format!("Drive pinion z{}", d.drive_pinion_teeth));
     for f in &sp.facts {
         p.facts.push(Fact { label: format!("drive: {}", f.label.replace("gear 1", "pinion").replace("gear 2", "ring gear")), value: f.value, unit: f.unit });
     }
@@ -1313,7 +1560,6 @@ fn case_body(s: &Spec, core: &Core, drive: Option<&Drive>, p: &mut Plan) -> Resu
     let s0 = zc0 - cone - shoulder;
     let s1 = zc1 + cone + shoulder;
     let outer = vec![
-        V2::new(0.0, zt0),
         V2::new(r_tr, zt0),
         V2::new(r_tr, s0),
         V2::new(r_sh, s0),
@@ -1324,14 +1570,17 @@ fn case_body(s: &Spec, core: &Core, drive: Option<&Drive>, p: &mut Plan) -> Resu
         V2::new(r_sh, s1),
         V2::new(r_tr, s1),
         V2::new(r_tr, zt1),
-        V2::new(0.0, zt1),
     ];
-    let mut steps = vec![Step::Revolve { profile: outer.clone(), op: Op::New }];
-    if let Some((rf, f0, f1)) = flange {
-        steps.push(Step::Revolve { profile: vec![V2::new(r_o - 0.5, f0), V2::new(rf, f0), V2::new(rf, f1), V2::new(r_o - 0.5, f1)], op: Op::Join });
-    }
+    // The case in one revolve: the outside up, the inside (axle bores, hub journals, thrust faces,
+    // the cavity) back down, never reaching the axis.
+    let mut profile = outer.clone();
+    profile.extend([V2::new(axle_bore, zt1), V2::new(axle_bore, core.hub_end[1]), V2::new(core.hub_bore, core.hub_end[1])]);
+    profile.extend(core.cavity.iter().rev().copied());
+    profile.extend([V2::new(core.hub_bore, core.hub_end[0]), V2::new(axle_bore, core.hub_end[0]), V2::new(axle_bore, zt0)]);
+    let mut steps = Vec::new();
     if let (Some(dr), Mount::Integral) = (drive, d.mount) {
-        // The ring's teeth joined to the case (its own bore and holes left out).
+        // The ring's teeth first (its own bore and holes left out), its middle taken out inside
+        // the case's wall; the case then joins round it.
         for st in &dr.ring.steps {
             let op = match st {
                 Step::Prism { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => *op,
@@ -1341,15 +1590,17 @@ fn case_body(s: &Spec, core: &Core, drive: Option<&Drive>, p: &mut Plan) -> Resu
                 continue;
             }
             let mut st = st.clone();
-            set_op(&mut st, Op::Join);
+            set_op(&mut st, if steps.is_empty() { Op::New } else { Op::Join });
             steps.push(Step::Placed { frame: dr.ring.frame, step: Box::new(st) });
         }
+        let r_in = r_o - 0.5 * wall;
+        steps.push(Step::Prism { region: circle(V2::ZERO, r_in), z0: dr.z_back - 1.0, height: dr.z_top - dr.z_back + 2.0, twist: 0.0, op: Op::Cut });
     }
-    // The inside.
-    let mut inner = vec![V2::new(0.0, zt0 - 1.0), V2::new(axle_bore, zt0 - 1.0), V2::new(axle_bore, core.hub_end[0]), V2::new(core.hub_bore, core.hub_end[0])];
-    inner.extend(core.cavity.iter().copied());
-    inner.extend([V2::new(core.hub_bore, core.hub_end[1]), V2::new(axle_bore, core.hub_end[1]), V2::new(axle_bore, zt1 + 1.0), V2::new(0.0, zt1 + 1.0)]);
-    steps.push(Step::Revolve { profile: inner, op: Op::Cut });
+    let op = if steps.is_empty() { Op::New } else { Op::Join };
+    steps.push(Step::Revolve { profile, op });
+    if let Some((rf, f0, f1)) = flange {
+        steps.push(Step::Revolve { profile: vec![V2::new(r_o - 0.5, f0), V2::new(rf, f0), V2::new(rf, f1), V2::new(r_o - 0.5, f1)], op: Op::Join });
+    }
     steps.extend(core.cuts.iter().cloned());
     if let (Some(dr), Some((n, b, rbc))) = (drive, drive.and_then(|x| x.bolts)) {
         let holes = crate::hub::lightening_holes(n, 1.1 * b, rbc, PI / f64::from(n));
@@ -1578,11 +1829,11 @@ pub(crate) fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
     if let Some(dr) = &drive {
         if d.mount == Mount::Bolted {
             ring_i = Some(bodies.len());
-            bodies.push(Body { name: named(s, &format!("Ring gear z{}", d.ring_teeth)), ..dr.ring.clone() });
+            bodies.push(dr.ring.clone());
             roles.push(None);
         }
         pin_i = Some(bodies.len());
-        bodies.push(Body { name: named(s, &format!("Drive pinion z{}", d.drive_pinion_teeth)), ..dr.pinion.clone() });
+        bodies.push(dr.pinion.clone());
         roles.push(None);
     }
     let first = bodies.len();
@@ -1608,19 +1859,41 @@ pub(crate) fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
         };
         asm.members.push(AssemblyMember { body: i, axis: Axis { origin: b.frame.origin, dir: b.frame.z }, grounded: false, carrier });
     }
+    // The links as a tree (each member driven by one link at most): the drive pinion turns the
+    // ring, the ring the case, the case holds the pins; side gear A turns every pinion or element
+    // chain (their turns relative to the case), and side gear B follows pinion 1 (or element
+    // pair 1). Side gear A is left free: an open differential has two degrees of freedom.
+    let radius = |a: usize, b: usize| -> Option<(f64, f64)> {
+        if let (Some(dr), Some(pi)) = (&drive, pin_i)
+            && a == pi
+            && (Some(b) == ring_i || b == 0)
+        {
+            return Some((dr.radii.0, dr.radii.1));
+        }
+        core.links.iter().find(|(x, y, ..)| first + x == a && first + y == b).map(|(_, _, ra, rb)| (*ra, *rb))
+    };
+    let index = |name: &str| bodies.iter().position(|b| b.name == name);
+    let mut driven = vec![false; bodies.len()];
+    for mp in &meshes {
+        let Some([ba, bb]) = &mp.bodies else { continue };
+        let (Some(a), Some(b)) = (index(&ba.name), index(&bb.name)) else { continue };
+        if driven[b] || mp.ratio == 0.0 || !mp.ratio.is_finite() {
+            continue;
+        }
+        let Some((ra, _)) = radius(a, b) else { continue };
+        driven[b] = true;
+        asm.links.push(AssemblyLink::Gear { a, b, ra, rb: ra / mp.ratio.abs(), internal: mp.ratio > 0.0, reverse: false });
+    }
     if let Some(r) = ring_i {
-        asm.links.push(AssemblyLink::Rigid { a: 0, b: r });
+        asm.links.push(AssemblyLink::Rigid { a: r, b: 0 });
     }
     for (i, r) in roles.iter().enumerate() {
         if *r == Some(Role::Fixed) {
             asm.links.push(AssemblyLink::Rigid { a: 0, b: i });
         }
     }
-    if let (Some(dr), Some(pi)) = (&drive, pin_i) {
-        asm.links.push(AssemblyLink::Gear { a: ring_i.unwrap_or(0), b: pi, ra: dr.radii.1, rb: dr.radii.0, internal: false, reverse: false });
-    }
-    for (a, b, ra, rb) in &core.links {
-        asm.links.push(AssemblyLink::Gear { a: first + a, b: first + b, ra: *ra, rb: *rb, internal: false, reverse: false });
+    if s.only == 0 {
+        p.warn("assembly: the case is driven and side gear A is left free to turn (an open differential has two degrees of freedom: the pinions and side gear B follow side gear A relative to the case)");
     }
 
     // `only`: 1 the gear set, 2 the case (and pins), 3 the drive.
@@ -1649,7 +1922,7 @@ pub(crate) fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
     p.meshes3d = meshes;
     p.preview = core.preview.clone();
     p.preview_note = core.preview_note.clone();
-    if d.keep_out && s.only == 0 {
+    if (d.keep_out || s.clearance_body.is_some()) && s.only == 0 {
         let n_outer = 1 + usize::from(drive.is_some()) + usize::from(ring_i.is_some());
         let outer: Vec<Body> = bodies[..n_outer].iter().map(|b| shifted(b, origin)).collect();
         p.clearance = Some(keep_out(s, outer, &shape, p)?);
@@ -1703,9 +1976,14 @@ fn keep_out(s: &Spec, bodies: Vec<Body>, shape: &CaseShape, p: &mut Plan) -> Res
         p.facts.push(f);
     }
     for w in tmp_plan.warnings {
+        // The seats sit on the case's trunnions (its first step is the whole case) and the
+        // bearing's bore is the trunnion's, not the axle's: those notes don't apply.
+        if w.contains("overlaps the teeth of") || w.contains("bore but") {
+            continue;
+        }
         p.warn(w);
     }
-    Ok(Body { name: named(s, "Differential keep-out"), ..body })
+    Ok(Body { name: named(s, "Differential clearance"), ..body })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1802,6 +2080,13 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
                     if c >= 0.5 {
                         continue;
                     }
+                    // Both side gears' pitch cones under 72° (flatter ones take no full-depth teeth).
+                    let sg = c.acos();
+                    let ds = sg.sin().atan2(f64::from(zp) / f64::from(za) + sg.cos());
+                    let dfar = PI - (2.0 * sg - ds);
+                    if ds.to_degrees() > 72.0 || dfar.to_degrees() > 72.0 {
+                        continue;
+                    }
                     let err = (f64::from(zb) / f64::from(za) - want).abs() + 0.002 * f64::from(za + zp);
                     if best.is_none_or(|b| err < b.0) {
                         best = Some((err, za, zb, zp));
@@ -1861,21 +2146,29 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
     }
     // The smallest module that takes the axle and (with a torque) the load.
     let mut chosen = None;
+    let mut last = String::new();
     for &m in &MODULES {
         let mut t = d.clone();
         t.module = m;
         t.drive = DriveKind::None;
+        t.keep_out = false;
         let s = Spec { kind: Kind::Differential, diff: t.clone(), load: load.clone(), only: 0, clearance_body: None, ..base.clone() };
         // The ring gear's torque reaches the set multiplied by the ratio.
         let s = Spec { load: crate::strength::Load { torque: goal.torque * ratio, ..load.clone() }, ..s };
-        let Ok(p) = crate::plan::plan(&s) else { continue };
+        let p = match crate::plan::plan(&s) {
+            Ok(p) => p,
+            Err(e) => {
+                last = e;
+                continue;
+            }
+        };
         if goal.torque <= 0.0 || min_sf(&p) >= crate::strength::SF_MIN {
             let od = p.facts.iter().find(|f| f.label == "case outside diameter").map_or(0.0, |f| f.value);
             chosen = Some((m, od));
             break;
         }
     }
-    let Some((m, case_od)) = chosen else { return Err(format!("no module up to {} fits a Ø{} axle and the load", mm(MODULES[MODULES.len() - 1]), mm(axle))) };
+    let Some((m, case_od)) = chosen else { return Err(format!("no module up to {} fits a Ø{} axle and the load ({last})", mm(MODULES[MODULES.len() - 1]), mm(axle))) };
     d.module = m;
     notes.push(format!("differential gears: module {}", mm(m)));
     // The drive.
@@ -1908,6 +2201,7 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
         let try_m = |dm: f64| {
             let mut t = d.clone();
             t.drive_module = dm;
+            t.keep_out = false;
             let s = Spec { kind: Kind::Differential, diff: t, load: load.clone(), clearance_body: None, ..base.clone() };
             crate::plan::plan(&s).ok().filter(|p| goal.torque <= 0.0 || min_sf(p) >= crate::strength::SF_MIN).map(|p| (s, p))
         };
@@ -1937,6 +2231,7 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
         notes.push(format!("ring gear Ø{} (module {})", mm(dm * f64::from(zr)), mm(dm)));
         let _ = s;
     }
+    d.keep_out = true;
     let spec = Spec { kind: Kind::Differential, diff: d, load, ..base.clone() };
     crate::plan::plan(&spec)?;
     Ok(Solved { spec, notes })
@@ -1964,6 +2259,69 @@ pub fn goal_of(s: &Spec) -> Goal {
         },
         material: s.load.material,
     }
+}
+
+/// The differential's schematic for the window's 3D preview: every planned body as its turning
+/// envelope about its own axis (no teeth), from a plan without the keep-out body. Slower than
+/// the other kinds' math-only schematics (the members are planned), so a front end should debounce
+/// it.
+pub fn schematic(spec: &Spec) -> crate::simple::Schematic {
+    use crate::simple::Schematic;
+    // The last few, kept: a window asks for the same one every frame until an edit.
+    thread_local! {
+        static LAST: std::cell::RefCell<Vec<(Spec, Schematic)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    if let Some(hit) = LAST.with(|l| l.borrow().iter().find(|(s, _)| s == spec).map(|(_, sch)| sch.clone())) {
+        return hit;
+    }
+    let sch = schematic_of(spec);
+    LAST.with(|l| {
+        let mut l = l.borrow_mut();
+        l.push((spec.clone(), sch.clone()));
+        if l.len() > 4 {
+            l.remove(0);
+        }
+    });
+    sch
+}
+
+fn schematic_of(spec: &Spec) -> crate::simple::Schematic {
+    use crate::simple::{Member, Part, Role as R, Schematic, Shape};
+    let mut s = spec.clone();
+    s.diff.keep_out = false;
+    s.clearance_body = None;
+    let p = match crate::plan::plan(&s) {
+        Ok(p) => p,
+        Err(e) => return Schematic { note: Some(e), ..Schematic::default() },
+    };
+    let mut out = Schematic::default();
+    for (i, b) in p.bodies.iter().enumerate() {
+        let h = (0.25 * s.diff.module).clamp(0.2, 2.0);
+        let solid = Solid::new(b, h);
+        let pts = solid.material_points(2.0 * h);
+        if pts.is_empty() {
+            continue;
+        }
+        let (z0, z1) = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q[2]), a.1.max(q[2])));
+        let n = 40usize;
+        let dz = ((z1 - z0) / n as f64).max(1e-6);
+        let mut r = vec![0.0f64; n + 1];
+        for q in &pts {
+            let k = (((q[2] - z0) / dz).round() as usize).min(n);
+            r[k] = r[k].max(q[0].hypot(q[1]));
+        }
+        let mut profile = Vec::new();
+        for (k, rr) in r.iter().enumerate() {
+            if *rr > 0.0 {
+                profile.push([*rr, z0 + dz * k as f64]);
+            }
+        }
+        let role = if i == 0 { R::Body } else { R::Tip };
+        let lower = b.name.to_lowercase();
+        let name = if s.name.trim().is_empty() { lower } else { lower.trim_start_matches(&s.name.trim().to_lowercase()).trim().to_string() };
+        out.members.push(Member { name, color: i, body: Some(i), frame: b.frame, pitch_diameter: 0.0, parts: vec![Part { role, shape: Shape::Revolved { profile } }] });
+    }
+    out
 }
 
 /// Used by `plan()` after placement: the assembly's axes follow the bodies.

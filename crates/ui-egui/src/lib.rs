@@ -307,6 +307,7 @@ pub mod sketch_palette;
 mod sketch_pattern_tree;
 pub mod sketch_report;
 mod gear_clearance_ui;
+mod gear_diff;
 pub mod gear_icons;
 mod gear_drawing;
 mod gear_simple;

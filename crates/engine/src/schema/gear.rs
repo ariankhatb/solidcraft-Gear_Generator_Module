@@ -580,6 +580,9 @@ pub struct GearParams {
     /// planets, worm, pins), 3 the ring. Default: all.
     #[serde(default)]
     pub only: Option<u8>,
+    /// Pair: herringbone teeth (two opposite helical halves; needs `helix_angle`).
+    #[serde(default)]
+    pub herringbone: Option<bool>,
     /// Where gear 1's centre goes, in mm (default the origin).
     #[serde(default)]
     pub origin: Option<[f64; 3]>,

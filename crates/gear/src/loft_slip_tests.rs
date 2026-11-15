@@ -72,3 +72,19 @@ fn no_kernel_loft_slips_in_any_kind() {
     }
     assert!(bad.is_empty(), "lofts the kernel would mis-align:\n{}", bad.join("\n"));
 }
+
+#[test]
+fn a_pair_can_be_herringbone() {
+    let s = Spec { helix: 20.0, herringbone: true, ..Spec::defaults_for(Kind::Pair) };
+    let p = plan(&s).unwrap();
+    // Each gear's teeth are two opposite halves: the helical body turns one way, then back.
+    for b in &p.bodies {
+        let twisted = b.steps.iter().filter(|st| match st { Step::Loft { .. } => true, Step::Prism { twist, .. } => *twist != 0.0, _ => false }).count();
+        assert!(twisted >= 1, "{}: {:?}", b.name, b.steps.len());
+    }
+    let simple = crate::simple::outputs_of(&s);
+    assert!(simple.herringbone);
+    let back = crate::simple::solve(&simple, &s);
+    assert!(back.spec.herringbone, "{:?}", back.notes);
+    assert!(!back.notes.iter().any(|n| n.contains("not built")), "{:?}", back.notes);
+}

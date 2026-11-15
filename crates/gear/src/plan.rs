@@ -220,6 +220,8 @@ pub struct Spec {
     pub hole_diameter: f64,
     /// Which members to build: 0 all, 1 the first, 2 the second, 3 the third.
     pub only: u8,
+    /// A gear pair's teeth as herringbone (two opposite helical halves; needs a helix angle).
+    pub herringbone: bool,
     /// Where the set goes (gear 1's centre).
     pub origin: [f64; 3],
     /// Body name prefix.
@@ -359,6 +361,7 @@ impl Default for Spec {
             holes: 0,
             hole_diameter: 0.0,
             only: 0,
+            herringbone: false,
             origin: [0.0; 3],
             name: String::new(),
             placement: None,
@@ -1208,7 +1211,10 @@ fn pair(s: &Spec, p: &mut Plan) {
     involute_facts(p, "gear 1", &g1, &f1);
     involute_facts(p, "gear 2", &g2, &f2);
     let a = m.center_distance;
-    let herring = s.kind == Kind::Herringbone;
+    let herring = s.kind == Kind::Herringbone || (s.herringbone && s.helix != 0.0);
+    if s.herringbone && s.helix == 0.0 {
+        p.warn("herringbone needs a helix angle: built as a spur pair");
+    }
     if wanted(s, 1) {
         let mut steps = crate::body::tooth_body(s, &g1, &f1, 0.0, s.face_width, herring, p, "gear 1");
         hub_steps(s, &s.bore, f1.rf - s.elephant_foot, s.face_width, &mut steps, p, "gear 1");

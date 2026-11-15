@@ -484,6 +484,7 @@ pub fn spec_of(p: &GearParams) -> std::result::Result<Spec, String> {
     set!(holes, p.holes);
     set!(hole_diameter, p.hole_diameter);
     set!(only, p.only);
+    set!(herringbone, p.herringbone);
     set!(coupon, p.coupon);
     set!(coupon_teeth, p.coupon_teeth);
     set!(origin, p.origin);
@@ -702,6 +703,7 @@ fn explicit_params(s: &Spec) -> GearParams {
         holes: (s.holes > 0).then_some(s.holes),
         hole_diameter: (s.hole_diameter > 0.0).then_some(s.hole_diameter),
         only: (s.only > 0).then_some(s.only),
+        herringbone: s.herringbone.then_some(true),
         origin: (s.origin != [0.0; 3]).then_some(s.origin),
         name: (!s.name.is_empty()).then(|| s.name.clone()),
         placement: s.placement.map(|f| PlacementParams { origin: f.origin, x: f.x, z: f.z }),

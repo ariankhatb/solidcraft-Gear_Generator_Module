@@ -787,8 +787,33 @@ pub struct Plan {
     /// The bearings placed at the clearance body's seats (`Spec::clearance_body`), where they
     /// are; built as bodies too when it asks for `bearing_bodies`.
     pub bearings: Vec<crate::clearance::PlacedBearing>,
+    /// A set read from a sketch or a selection: what each gear became (one per gear of a train,
+    /// in its order; see [`SetMember`]), its mesh graph (`meshes_with`) and clusters.
+    pub members: Vec<SetMember>,
+    /// Gears joined on one shaft as one part (compound gears): each cluster's gears (indices
+    /// into `members`, which are the bodies' order when the whole set is built).
+    pub clusters: Vec<Vec<usize>>,
     /// Why the set can't be built, found while planning it ([`plan`] returns it as the error).
     refused: Option<String>,
+}
+
+/// One gear of a set read from a sketch or a selection ([`Plan::members`]).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct SetMember {
+    /// Where it came from: its index in what was read (the drawing's circles, the selection).
+    pub source: usize,
+    pub module: f64,
+    pub teeth: u32,
+    pub pitch_diameter: f64,
+    pub face_width: f64,
+    /// A ring gear (teeth inside).
+    pub ring: bool,
+    /// The gears (indices into `Plan::members`) it meshes with.
+    pub meshes_with: Vec<usize>,
+    /// Its cluster (an index into `Plan::clusters`), when it shares a shaft with other gears.
+    pub cluster: Option<usize>,
+    /// The body it is (an index into `Plan::bodies`), when built.
+    pub body: Option<usize>,
 }
 
 /// A planned set as an assembly: its moving members (each one of [`Plan::bodies`]) and the links

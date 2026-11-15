@@ -1366,3 +1366,117 @@ fn selected_shafts_and_a_bearing_make_a_train_with_a_bearing() {
     let e = s.execute("gear.calculate", &json!({"selection": [{"axis": "Z"}, {"axis": "X", "bearing": "nope"}]})).unwrap_err().to_string();
     assert!(e.contains("no standard bearing"), "{e}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// A whole sketch-driven system: ten gears, two compound clusters, one assembly
+// ---------------------------------------------------------------------------------------------
+
+/// Ten circles (module 2: radius = teeth): 1 drives 2; 2 and 3 share a shaft; 3 → 4 → 5; 5 and
+/// 6 share a shaft; 6 → 7 → 8 → 9 → 10.
+fn ten_gears(s: &mut Session) -> u64 {
+    let c = [
+        (0.0, 0.0, 20.0),
+        (50.0, 0.0, 30.0),
+        (50.0, 0.0, 15.0),
+        (50.0, 35.0, 20.0),
+        (50.0, 80.0, 25.0),
+        (50.0, 80.0, 12.0),
+        (80.0, 80.0, 18.0),
+        (118.0, 80.0, 20.0),
+        (118.0, 110.0, 10.0),
+        (118.0, 136.0, 16.0),
+    ];
+    let draw: Vec<(&str, Value)> = c.iter().enumerate().map(|(i, (x, y, r))| circle(*x, *y, *r, &format!("g{}", i + 1))).collect();
+    sketch_with(s, &draw)
+}
+
+/// Each gear's turn per turn of gear 1, from the teeth by hand.
+fn ten_by_hand() -> Vec<f64> {
+    let z = [20.0, 30.0, 15.0, 20.0, 25.0, 12.0, 18.0, 20.0, 10.0, 16.0];
+    let mut w = vec![1.0; 10];
+    for (i, shared) in [(1, false), (2, true), (3, false), (4, false), (5, true), (6, false), (7, false), (8, false), (9, false)] {
+        w[i] = if shared { w[i - 1] } else { -w[i - 1] * z[i - 1] / z[i] };
+    }
+    w
+}
+
+/// Where member `i`'s component has turned to about its shaft (degrees), from its placement.
+fn turned_deg(s: &Session, r: &Value, i: usize) -> f64 {
+    let occ = r["assembly"]["members"][i]["occurrence"].as_u64().unwrap();
+    let m = solidcraft_doc::joints::occurrence_world(&s.doc, occ);
+    m[0][1].atan2(m[0][0]).to_degrees()
+}
+
+#[test]
+fn a_ten_gear_sketch_system_turns_every_gear_from_any_driver() {
+    let mut s = Session::default();
+    let sk = ten_gears(&mut s);
+    let r = assembled(&mut s, json!({"sketch": sk, "type": "spur", "module": 2, "face_width": 6, "assembly": true, "clearance_body": {}}));
+    let a = &r["assembly"];
+    assert_eq!(a["members"].as_array().map(Vec::len), Some(10), "{r}");
+    assert_eq!(a["driver"], 1);
+    assert!(a.get("issues").is_none(), "{r}");
+    // One revolute joint per shaft: eight shafts; the second gear of each cluster rigid on it.
+    let l = run(&mut s, "joint.list", json!({}));
+    let ours: Vec<u64> = a["joints"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
+    let kind_of = |id: u64| l["joints"].as_array().unwrap().iter().find(|j| j["id"].as_u64() == Some(id)).map(|j| j["kind"].as_str().unwrap_or_default().to_string()).unwrap_or_default();
+    let revolutes = ours.iter().filter(|j| kind_of(**j).eq_ignore_ascii_case("revolute")).count();
+    let rigids = ours.iter().filter(|j| kind_of(**j).eq_ignore_ascii_case("rigid")).count();
+    assert_eq!((revolutes, rigids), (8, 2), "{l}");
+    assert_eq!(a["links"].as_array().map(Vec::len), Some(7), "a gear link per mesh: {r}");
+    // Gear 1 by 30°: every gear where its teeth say, the clustered ones with their shafts.
+    let j = member_joints(&r);
+    run(&mut s, "joint.drive", json!({"joint": j[0].unwrap(), "value": 30}));
+    let want = ten_by_hand();
+    for (i, w) in want.iter().enumerate() {
+        let got = turned_deg(&s, &r, i);
+        let d = ((got - 30.0 * w + 540.0).rem_euclid(360.0)) - 180.0;
+        assert!(d.abs() < 1e-6, "gear {}: turned {got}°, by hand {}°", i + 1, 30.0 * w);
+    }
+    // Driven from gear 7 instead: its joint drives, gear 1 follows the other way up the train.
+    let group = r["group"].as_u64().unwrap();
+    let u = run(&mut s, "gear.update", json!({"group": group, "assembly_driver": 7}));
+    no_errors(&s);
+    assert_eq!(u["assembly"]["driver"], 7, "{u}");
+    let comps = |v: &Value| v["assembly"]["members"].as_array().unwrap().iter().map(|m| m["component"].clone()).collect::<Vec<_>>();
+    assert_eq!(comps(&u), comps(&r), "the same components");
+    let j = member_joints(&u);
+    let before = turned_deg(&s, &u, 0);
+    run(&mut s, "joint.drive", json!({"joint": j[6].unwrap(), "value": 18}));
+    let moved = turned_deg(&s, &u, 0) - before;
+    let w7 = want[6];
+    // Gear 7's joint was at 30·w7 (its turn so far); now 18°.
+    let expect = (18.0 - 30.0 * w7) / w7;
+    let d = ((moved - expect + 540.0).rem_euclid(360.0)) - 180.0;
+    assert!(d.abs() < 1e-6, "gear 1 moved {moved}°, expected {expect}°");
+}
+
+#[test]
+fn adding_a_gear_to_the_sketch_keeps_the_systems_components_and_joints() {
+    let mut s = Session::default();
+    let sk = ten_gears(&mut s);
+    let r = assembled(&mut s, json!({"sketch": sk, "type": "spur", "module": 2, "face_width": 6, "assembly": true}));
+    let group = r["group"].as_u64().unwrap();
+    // An eleventh gear meshing gear 10.
+    run(&mut s, "sketch.edit", json!({"sketch": sk}));
+    run(&mut s, "sketch.circle.center", json!({"center": [148, 136], "radius": 14, "id": "g11"}));
+    run(&mut s, "sketch.finish", json!({}));
+    let u = run(&mut s, "gear.update", json!({"group": group}));
+    no_errors(&s);
+    let members = u["assembly"]["members"].as_array().unwrap();
+    assert_eq!(members.len(), 11, "{u}");
+    for i in 0..10 {
+        assert_eq!(members[i]["component"], r["assembly"]["members"][i]["component"], "gear {} keeps its component: {u}", i + 1);
+        assert_eq!(members[i]["joint"], r["assembly"]["members"][i]["joint"], "gear {} keeps its joint: {u}", i + 1);
+    }
+    assert_eq!(u["assembly"]["links"].as_array().map(Vec::len), Some(8), "{u}");
+    // And taken away again: the eleventh's component and joint go, the rest stay.
+    run(&mut s, "sketch.edit", json!({"sketch": sk}));
+    run(&mut s, "sketch.delete", json!({"entities": ["g11"]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let v = run(&mut s, "gear.update", json!({"group": group}));
+    no_errors(&s);
+    assert_eq!(v["assembly"]["members"].as_array().map(Vec::len), Some(10), "{v}");
+    let gone = members[10]["component"].as_u64().unwrap();
+    assert!(!s.doc.components.iter().any(|c| c.id == gone));
+}

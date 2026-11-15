@@ -32,8 +32,8 @@ fn the_gears_dialog_makes_a_set_from_a_native_sketch_that_follows_it() {
     let c = apply_commands(&app, &d).unwrap();
     assert_eq!(c[0].0, "gear.create");
     assert_eq!(c[0].1["sketch"], json!(sk));
-    // (Until the train reading lands: two touching circles are a pair.)
-    assert_eq!(c[0].1["type"], "pair", "{}", c[0].1);
+    // The tooth style: the drawing decides the set (two touching circles, a pair).
+    assert_eq!(c[0].1["type"], "spur", "{}", c[0].1);
     run_all(&mut app, c);
     app.dialog = None;
     let sets = solidcraft_engine::gear_sets(&app.session);
@@ -111,4 +111,48 @@ fn a_spline_points_to_the_window() {
     g.kind = TYPES.iter().position(|t| t.0 == GearKind::Spline).unwrap();
     let e = apply_commands(&app, &d).unwrap_err();
     assert!(e.contains("Gear Generator window"), "{e}");
+}
+
+/// Shafts and bearings picked: the set goes on them (`selection`), the bearings sized from the
+/// library; the drawing is not asked for then.
+#[test]
+fn picked_shafts_and_bearings_make_a_selection() {
+    let mut app = app();
+    let sk = app.session.execute("sketch.create", &json!({"plane": "XY"})).unwrap()["sketch"].as_u64().unwrap();
+    app.session.execute("sketch.line", &json!({"points": [[0, 0], [0, 40]], "ids": ["s1"]})).unwrap();
+    app.session.execute("sketch.line", &json!({"points": [[50, 0], [50, 40]], "ids": ["s2"]})).unwrap();
+    app.session.execute("sketch.point", &json!({"point": [0, 10], "id": "b1"})).unwrap();
+    app.session.execute("sketch.finish", &json!({})).unwrap();
+    app.start("gear.create");
+    let mut d = app.dialog.clone().unwrap();
+    d.inputs[1].items = vec![Sel::SketchCurve { id: "s1".into(), sketch: Some(sk) }, Sel::SketchCurve { id: "s2".into(), sketch: Some(sk) }];
+    d.inputs[2].items = vec![Sel::ExternalSketchPoint { sketch: sk, id: "b1".into() }];
+    let c = apply_commands(&app, &d).unwrap();
+    let p = &c[0].1;
+    assert!(p.get("sketch").is_none(), "{p}");
+    let sel = p["selection"].as_array().unwrap();
+    assert_eq!(sel.len(), 3, "{p}");
+    assert_eq!((sel[0]["curve"].as_str(), sel[0]["role"].as_str()), (Some("s1"), Some("shaft")));
+    assert_eq!((sel[2]["point"].as_str(), sel[2]["role"].as_str(), sel[2]["bearing"].as_str()), (Some("b1"), Some("bearing"), Some("608")));
+}
+
+/// The preview is the abstract set (shafts and pitch surfaces) drawn in the viewport; the
+/// teeth are only previewed when asked for.
+#[test]
+fn the_preview_is_the_abstract_shape_unless_teeth_are_asked_for() {
+    let mut app = app();
+    let made = app.session.execute("gear.sketch", &json!({"type": "pair", "gear": {"module": 2, "teeth": 20, "teeth2": 40}})).unwrap();
+    app.start("gear.create");
+    let Some(Kind::Gear(g)) = app.dialog.as_mut().map(|d| &mut d.kind) else { panic!() };
+    g.sketch = made["sketch"].as_u64();
+    assert!(!g.previews(), "no teeth preview by default");
+    let mut d = app.dialog.take().unwrap();
+    let Kind::Gear(g) = &mut d.kind else { panic!() };
+    let ctx = egui::Context::default();
+    let _ = ctx.run_ui(Default::default(), |ui| {
+        rows(&mut app, ui, g, &d.inputs);
+    });
+    assert!(!g.shape.is_empty(), "the shape to draw: {:?}", g.calc);
+    g.teeth = true;
+    assert!(g.previews());
 }

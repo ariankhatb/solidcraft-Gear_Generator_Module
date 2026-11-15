@@ -236,9 +236,13 @@ pub(super) fn sketch_print(s: &Session, request: &Value) -> Option<String> {
     Some(format!("{id}:{h:016x}"))
 }
 
-/// The sketch a set's request names, if it is still there.
+/// The sketch a set's request names (its `sketch`, or the sketch of the first shaft or
+/// bearing picked in one in its `selection`), if it is still there.
 pub(super) fn sketch_of(s: &Session, request: &Value) -> Option<u64> {
-    let v = request.get("sketch").filter(|v| !v.is_null())?;
+    let v = request
+        .get("sketch")
+        .filter(|v| !v.is_null())
+        .or_else(|| request.get("selection")?.as_array()?.iter().find_map(|item| item.get("sketch").filter(|v| !v.is_null())))?;
     super::super::features::sketch_id(s, Some(v), "gear.update", "sketch").ok()
 }
 

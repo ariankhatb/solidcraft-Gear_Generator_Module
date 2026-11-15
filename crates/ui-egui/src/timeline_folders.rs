@@ -274,11 +274,11 @@ pub(crate) fn folder_chip(
     };
     let tip = if folder.open { "click to fold them" } else { "click to show each one" };
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand).backing_on_hover_text(format!("{name}: {what}, {tip}"));
-    if response.double_clicked() && crate::gear_window::is_set(app, folder.id) {
-        // A gear set's folder: double-click opens the Gear Generator on the set (the fold the
+    if response.double_clicked() && crate::dialogs_gear::is_set(app, folder.id) {
+        // A gear set's folder: double-click opens the Gears dialog on the set (the fold the
         // first click made is undone).
         set_open(app, folder.id, !folder.open);
-        if let Err(why) = crate::gear_window::open_group(app, folder.id) {
+        if let Err(why) = crate::dialogs_gear::open_set(app, folder.id) {
             app.set_status(why, true);
         }
     } else if response.clicked() {

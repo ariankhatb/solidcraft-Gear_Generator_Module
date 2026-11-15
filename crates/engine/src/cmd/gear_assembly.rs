@@ -52,6 +52,10 @@ pub(super) struct MemberRecord {
     /// whose body is named afresh is found again by its shaft.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) axis: Option<[[f64; 3]; 2]>,
+    /// The generated shaft it is (an index into `Plan::shafts`, the dialog's `shafts[].index`):
+    /// a member keeps its component and joint by it when its body is named afresh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) shaft: Option<usize>,
 }
 
 fn identity() -> Mat {
@@ -224,7 +228,19 @@ pub(super) fn sync(
     // where they are), else the one at the same place among the members.
     let mut rehoused: Vec<(usize, u64)> = Vec::new();
     let mut claim: Vec<Option<usize>> = vec![None; left.len()];
+    // The shaft each new member is (`Plan::shafts`), the dialog's stable index for it.
+    let shaft_of = |i: usize| plan.shafts.iter().position(|sh| sh.body == a.members[i].body);
     for i in (0..n).filter(|i| kept[*i].is_none()) {
+        let Some(k_shaft) = shaft_of(i) else { continue };
+        let same = left.iter().enumerate().position(|(k, slot)| claim[k].is_none() && slot.as_ref().is_some_and(|m| !bodies.contains(&m.body) && m.shaft == Some(k_shaft)));
+        if let Some(k) = same {
+            claim[k] = Some(i);
+        }
+    }
+    for i in 0..n {
+        if kept[i].is_some() || claim.contains(&Some(i)) {
+            continue;
+        }
         let on_shaft = left.iter().enumerate().position(|(k, slot)| {
             claim[k].is_none() && slot.as_ref().is_some_and(|m| !bodies.contains(&m.body) && m.axis.as_ref().is_some_and(|x| same_shaft(x, &a.members[i].axis)))
         });
@@ -373,10 +389,12 @@ pub(super) fn sync(
             a_inv: identity(),
             b_inv: identity(),
             axis: None,
+            shaft: None,
         });
         rec.body = bodies[i].clone();
         rec.component = components[i];
         rec.axis = Some([m.axis.origin, m.axis.dir]);
+        rec.shaft = plan.shafts.iter().position(|sh| sh.body == m.body);
         if m.grounded {
             rec.joint = None;
             records.push(rec);
@@ -528,7 +546,7 @@ pub(super) fn sync(
         .members
         .iter()
         .enumerate()
-        .map(|(i, m)| GearAssemblyMember { body: bodies[i].clone(), component: components[i], occurrence: occs[i], joint: records[i].joint, grounded: m.grounded })
+        .map(|(i, m)| GearAssemblyMember { body: bodies[i].clone(), component: components[i], occurrence: occs[i], joint: records[i].joint, grounded: m.grounded, axis: [m.axis.origin, m.axis.dir] })
         .collect();
     let keep_out_record = keep_out_component.and_then(|c| keep_out.map(|b| (b.to_string(), c)));
     let joints = records.iter().filter_map(|r| r.joint).collect();

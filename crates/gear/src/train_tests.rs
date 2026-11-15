@@ -119,7 +119,7 @@ fn a_gear_touching_nothing_is_an_error_naming_it() {
     let mut c = three();
     c.push(circle(130.0, 0.0, 10.0));
     let e = train(Kind::Spur, c.clone(), Simple::default()).unwrap_err();
-    assert!(e.contains("gear 4 meshes with nothing") && e.contains("from gear 2's"), "{e}");
+    assert!(e.contains("gear 4 touches no other gear") && e.contains("from gear 2's"), "{e}");
     // Per member: only gear 4 is wrong; the others are sized and meshed.
     let tc: Vec<TrainCircle> = c.iter().map(|k| TrainCircle::of(*k)).collect();
     let sized = size_train(&tc, Kind::Spur, &Simple::default(), &Spec::default());
@@ -134,7 +134,7 @@ fn a_circle_nearly_touching_is_refused_naming_it() {
     // Gear 3 one millimetre short of touching gear 2.
     let c = vec![circle(0.0, 0.0, 20.0), circle(50.0, 0.0, 30.0), circle(50.0, 46.0, 15.0)];
     let e = train(Kind::Spur, c, Simple::default()).unwrap_err();
-    assert!(e.contains("gear 3 meshes with nothing") && e.contains("1 mm from gear 2's"), "{e}");
+    assert!(e.contains("gear 3 touches no other gear") && e.contains("1 mm from gear 2's"), "{e}");
     // Crossing pitch circles on one layer.
     let c = vec![circle(0.0, 0.0, 20.0), circle(50.0, 0.0, 30.0), circle(50.0, 40.0, 15.0)];
     let e = train(Kind::Spur, c, Simple::default()).unwrap_err();
@@ -202,8 +202,9 @@ fn concentric_circles_are_compound_gears_on_one_shaft() {
     let (z1, z2, z3, z4) = (t.gears[0].teeth, t.gears[1].teeth, t.gears[2].teeth, t.gears[3].teeth);
     let want = (f64::from(z2) / f64::from(z1)) * (f64::from(z4) / f64::from(z3));
     assert!((fact(&p, "train ratio gear 1 → gear 4") - want).abs() < 1e-12);
-    assert!(p.assembly.links.iter().any(|l| matches!(l, AssemblyLink::Rigid { a: 1, b: 2 })));
-    assembly_matches_preview(&p);
+    // Gears 2 and 3 are one body (one part on their shaft).
+    assert_eq!(p.bodies.len(), 3);
+    assert_eq!((p.members[1].body, p.members[2].body), (Some(1), Some(1)));
 }
 
 #[test]

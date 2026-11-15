@@ -23,7 +23,7 @@ pub(crate) mod assembly;
 pub mod solid;
 
 pub use bevel_planet::BevelPlanetMode;
-pub use train::{LinkKind, Train, TrainGear, TrainLink};
+pub use train::{LinkKind, Train, TrainGear, TrainLink, TrainShaft};
 
 /// Gear set types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
@@ -798,8 +798,37 @@ pub struct Plan {
     /// Gears joined on one shaft as one part (compound gears): each cluster's gears (indices
     /// into `members`, which are the bodies' order when the whole set is built).
     pub clusters: Vec<Vec<usize>>,
+    /// Shafts built with a train ([`train::TrainShaft`]): each one's body and the gears it
+    /// carries (joined to them as one part).
+    pub shafts: Vec<PlanShaft>,
+    /// Where each mesh of a train touches (world, after the placement): the pitch line across
+    /// the faces both gears share, for an abstract preview.
+    pub contacts: Vec<Contact>,
     /// Why the set can't be built, found while planning it ([`plan`] returns it as the error).
     refused: Option<String>,
+}
+
+/// Where two gears touch ([`Plan::contacts`]): the pitch point at each end of the face they
+/// share (the same point twice where they share none).
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Contact {
+    /// The two gears (indices into `Plan::members`).
+    pub a: usize,
+    pub b: usize,
+    pub from: [f64; 3],
+    pub to: [f64; 3],
+}
+
+/// A shaft built with a set ([`Plan::shafts`]).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct PlanShaft {
+    /// Its body (an index into `Plan::bodies`).
+    pub body: usize,
+    /// The gears it carries (indices into `Plan::members` / the train's gears); the first is the
+    /// one its assembly link joins it to.
+    pub gears: Vec<usize>,
+    pub diameter: f64,
+    pub length: f64,
 }
 
 /// One gear of a set read from a sketch or a selection ([`Plan::members`]).
@@ -1286,6 +1315,9 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
         // A differential's keep-out body is planned with the set (in the set's frame).
         if let Some(c) = &mut p.clearance {
             c.frame = place.compose(&c.frame);
+        }
+        for c in &mut p.contacts {
+            (c.from, c.to) = (place.world(c.from), place.world(c.to));
         }
     }
     // How the bodies go together, where they are (a differential's is planned with it).

@@ -436,3 +436,21 @@ sections, cross-section drawing). Engine and UI code not compiled yet.
 Known: the straight bevel planner's own 41:11 pinion interferes (1 mm) on its own (tests use 13);
 hypoid drives want a 45–50° pinion spiral; `requested_icons.txt` needs regenerating for
 `gear_differential`.
+
+### Kernel check of trimmed bevels (`gear-facefix`, 2026-11-15)
+
+- SMLib's check (validation each_step) refuses every bevel whose teeth are trimmed by a
+  revolved blank: all failures are `SmBSplineCurve::Test #13 Bad CurveCusp` ("2D BSplineCurve
+  Warning: extremely small radius of curvature", offsets 1e-5..1e-4 against tolerances ~1e-4),
+  in the 2D curves the boolean makes. Reproduced outside the gear command with primitive
+  scripts (`flat_bevel_tests::dump_trim_scripts`, `FLAT_DUMP=dir`, run with the CLI): 4 per
+  tooth per cone on a 71.7° gear; the same with only the back cone (half), with cylinders
+  instead of cones, with denser fit points, with flat-sided (polyline) teeth, a blank clear of
+  the axis, or the taper lofted through 5 sections. The taper alone passes.
+- So bevels up to `plan::FLAT_CONE` (70°) end on planes again (through the heel's and toe's
+  pitch circles: per-member face width and heel offset kept); they pass the check (scripts for
+  a straight pinion, the default spiral's gear and a gear 2 with its own face and heel).
+  Flatter members keep the cone trim (flat ends would be blades) and still fail the check on
+  CurveCusp only: the kernel's check counts that SMLib warning. OPEN: kernel side (treat
+  CurveCusp as the warning SMLib calls it, or fix the boolean's pcurve fit).
+- Engine test `bevel_bodies_pass_the_kernels_check` (ignored, uncompiled) guards both.

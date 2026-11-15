@@ -1825,6 +1825,16 @@ pub(crate) struct ConeTeeth {
     pub tip_radius: f64,
 }
 
+/// Pitch cone angles above this (70°) end their teeth on the back and front cones; flatter
+/// cones' plane sections square to the axis run far past them (on a crown's the tips never
+/// meet that plane). Up to it the teeth end on planes square to the axis, as always: SMLib's
+/// check refuses every curved trim of a bevel's teeth (back and front cones, even cylinders;
+/// even of flat-sided teeth), finding near-cusps in the boolean's own 2D curves ("Bad
+/// CurveCusp", which it calls a warning but counts), so a trimmed member is built (validation
+/// is off while gears are made) but fails the kernel's check, `inspect.interference`
+/// included. Only where flat ends would make long thin blades is that taken.
+pub const FLAT_CONE: f64 = 70.0 * PI / 180.0;
+
 /// How deep a bevel's body runs under its roots (× module, along the back cone at the heel and
 /// along the front cone at the toe; less on a slim pinion, to stay clear of the axis). Kept
 /// small: the taper has to reach that far, and the further it reaches the more a spiral
@@ -1842,7 +1852,9 @@ const TOE_RIM: f64 = 0.5;
 /// [`Step::Taper`]. A taper ends on planes square to the axis, but on such a plane a bevel's
 /// teeth run from the root cone, inside the back cone, to the tip cone, outside it (by far on a
 /// flat cone: a crown's tips never meet that plane, and a taper ending there makes long thin
-/// blades). So the taper is made long enough to hold the whole face (its roots past the back
+/// blades). Up to [`FLAT_CONE`] the taper does end on planes, through the pitch circles at the
+/// heel and the toe (the tips run on a little past the back cone, the roots stop a little short
+/// of it). Flatter, the taper is made long enough to hold the whole face (its roots past the back
 /// cone at its start, its tips inside the front cone at its end) and is intersected with a
 /// revolved blank bounded by the back and front cones, square to the pitch cone's elements at
 /// the heel and the toe. The body's back is a disc [`HEEL_RIM`] modules (along the back cone)
@@ -1857,6 +1869,17 @@ pub(crate) fn cone_teeth(sides: &ToothSides, z: u32, phase: f64, delta: f64, re:
     let h = re * delta.cos();
     let outline = sided_outline(sides, z, phase);
     let (heel, toe) = (face.heel, face.toe());
+    if delta <= FLAT_CONE {
+        // Flat ends: the planes square to the axis through the pitch circles at the heel and
+        // the toe (at the heel at the cone distance, the plane of `sides` itself).
+        let (k0, k1) = (heel / re, toe / re);
+        let base = outline.scaled(k0).rotated(wind * k0.ln());
+        let scale = k1 / k0;
+        let small_root = k1 * outline.polyline(1e-3).iter().map(|q| q.len()).fold(f64::INFINITY, f64::min);
+        let (z0, z1) = (h * (1.0 - k0), h * (1.0 - k1));
+        let steps = vec![Step::Taper { outline: base, z0, height: z1 - z0, twist: wind * scale.ln(), scale, op: Op::New }];
+        return ConeTeeth { steps, ends: ConeEnds { back: z0, front: z1, small_root }, tip_radius: k0 * sides.ra };
+    }
     let (sd, cd) = delta.sin_cos();
     // The root and tip cones' angles from the axis (seen from the apex).
     let (phi_r, phi_t) = (sides.rf.atan2(h), sides.ra.atan2(h));

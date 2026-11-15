@@ -239,3 +239,28 @@ fn window_check_passes_every_default_set() {
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
+
+/// The face gear's window verdict (its pinion against the face gear's teeth unrolled as a rack
+/// at mid length, as the preview draws them): sound sets mesh, and the rack slid half a pitch
+/// interferes. (The check once met the rack without the preview's half-pitch start and read
+/// every face gear as interfering by 0.5 mm.)
+#[test]
+fn face_gear_window_check_meets_the_rack_as_drawn() {
+    use crate::mesh2d::{Verdict, check_mesh};
+    for (label, s) in [
+        ("face gear default", d(Kind::FaceGear)),
+        ("face gear 20:60 m1.5", Spec { teeth: 20, teeth2: 60, module: 1.5, ..d(Kind::FaceGear) }),
+        ("face gear backlash", Spec { backlash: 0.1, ..d(Kind::FaceGear) }),
+    ] {
+        let mut p = plan(&s).unwrap_or_else(|e| panic!("{label}: {e}"));
+        let r = check_mesh(&p);
+        assert_eq!(r.len(), 1, "{label}");
+        assert_eq!(r[0].verdict, Verdict::Ok, "{label}: {}", r[0].message);
+        // The rack half a period further on: a tooth where the pinion has one.
+        let g = &mut p.preview[1];
+        let half = 0.5 * g.period;
+        g.center.x += half;
+        let r = check_mesh(&p);
+        assert_eq!(r[0].verdict, Verdict::Interferes, "{label} half a pitch out: {}", r[0].message);
+    }
+}

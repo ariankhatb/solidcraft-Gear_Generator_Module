@@ -5,7 +5,7 @@
 
 use crate::mesh3d::Solid;
 use crate::mesh3d_tests::measure;
-use crate::plan::{Kind, Op, Spec, Step, faces_of, plan};
+use crate::plan::{FLAT_CONE, Kind, Op, Spec, Step, faces_of, plan};
 
 fn d(k: Kind) -> Spec {
     Spec::defaults_for(k)
@@ -69,9 +69,10 @@ pub(crate) fn own_face_sets() -> Vec<(&'static str, Spec)> {
     ]
 }
 
-/// Every member ends on its back cone (nothing past its heel along the pitch element) and its
-/// front cone (nothing of the teeth nearer the apex than its toe), and its outer tip diameter
-/// is (r + ha·cos δ) at its heel.
+/// A member flatter than [`FLAT_CONE`] ends on its back cone (nothing past its heel along the
+/// pitch element) and its front cone (nothing of the teeth nearer the apex than its toe), its
+/// outer tip diameter (r + ha·cos δ) at its heel; the others end on the planes through the
+/// pitch circles at their heel and toe.
 #[test]
 fn bevels_end_on_their_back_and_front_cones() {
     let mut sets = flat_sets();
@@ -91,6 +92,13 @@ fn bevels_end_on_their_back_and_front_cones() {
             let (heel, toe) = (face.heel, face.toe());
             let h = re * delta.cos();
             let trims = body.steps.iter().filter(|st| matches!(st, Step::Revolve { op: Op::Intersect, .. })).count();
+            if delta <= FLAT_CONE {
+                // Flat ends on the planes through the heel's and the toe's pitch circles.
+                assert_eq!(trims, 0, "{label} {}", body.name);
+                let Step::Taper { z0, height, .. } = body.steps[0] else { panic!("{label}") };
+                assert!((z0 - h * (1.0 - heel / re)).abs() < 1e-9 && (z0 + height - h * (1.0 - toe / re)).abs() < 1e-9, "{label} {}", body.name);
+                continue;
+            }
             assert_eq!(trims, 1, "{label} {}: {:?}", body.name, body.steps.len());
             let pts = Solid::new(body, 0.03 * m).material_points(0.1 * m);
             assert!(pts.len() > 1000, "{label} {}: {} points", body.name, pts.len());
@@ -185,3 +193,119 @@ fn bevel_planetary_flat_and_own_faces_mesh() {
     }
 }
 
+
+/// Writes CLI scripts that build a bevel body's teeth (its taper and trim) from primitive
+/// commands with the kernel's check on every step: `FLAT_DUMP=dir`.
+#[test]
+#[ignore]
+fn dump_trim_scripts() {
+    use crate::geom::{Outline, Seg};
+    use crate::plan::{taper_sections, taper_turn};
+    let Ok(dir) = std::env::var("FLAT_DUMP") else { return };
+    let v3 = |v: [f64; 3]| format!("[{},{},{}]", v[0], v[1], v[2]);
+    let p2 = |q: crate::geom::V2| format!("[{},{}]", q.x, q.y);
+    for (name, s, i) in [
+        ("st100g2", Spec { module: 2.5, teeth: 17, teeth2: 34, shaft_angle: 100.0, ..d(Kind::Bevel) }, 1usize),
+        ("st90g1", d(Kind::Bevel), 0),
+        ("sp110g2", Spec { module: 2.5, teeth: 17, teeth2: 34, shaft_angle: 110.0, ..d(Kind::SpiralBevel) }, 1),
+        ("sp90g2", d(Kind::SpiralBevel), 1),
+        ("st90g2face", Spec { face_width2: 8.0, face_offset2: 1.5, ..d(Kind::Bevel) }, 1),
+    ] {
+        let p = plan(&s).unwrap();
+        let b = &p.bodies[i];
+        let f = b.frame;
+        let (x, y, z) = (f.x, f.y(), f.z);
+        let mut cmds = vec![r#"{"command":"diagnostics.validation","params":{"mode":"each_step"}}"#.to_string()];
+        let mut sketch = 0;
+        let mut outline_cmds = |cmds: &mut Vec<String>, o: &Outline, h: f64| {
+            cmds.push(format!(r#"{{"command":"sketch.create","params":{{"plane":{{"origin":{},"x_dir":{},"y_dir":{}}},"project_edges":false}}}}"#, v3(f.world([0.0, 0.0, h])), v3(x), v3(y)));
+            for sg in &o.segs {
+                cmds.push(match sg {
+                    Seg::Line(a, c) => format!(r#"{{"command":"sketch.line","params":{{"points":[{},{}]}}}}"#, p2(*a), p2(*c)),
+                    Seg::Arc { c, a, b, ccw } => {
+                        let (a, b) = if *ccw { (*a, *b) } else { (*b, *a) };
+                        format!(r#"{{"command":"sketch.arc.center_point","params":{{"center":{},"start":{},"end":{}}}}}"#, p2(*c), p2(a), p2(b))
+                    }
+                    Seg::Spline(pts) => format!(r#"{{"command":"sketch.spline.fit_point","params":{{"points":[{}]}}}}"#, pts.iter().map(|q| p2(*q)).collect::<Vec<_>>().join(",")),
+                    Seg::Circle(..) => panic!(),
+                });
+            }
+            cmds.push(r#"{"command":"sketch.finish","params":{}}"#.to_string());
+        };
+        let Step::Taper { outline, z0, height, twist, scale, .. } = &b.steps[0] else { panic!() };
+        // Experiments: FLAT_DENSE=k refits every spline through k times as many points.
+        let dense: usize = std::env::var("FLAT_DENSE").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+        let lines = std::env::var("FLAT_LINES").is_ok();
+        let outline = &if lines {
+            Outline { segs: outline.segs.iter().flat_map(|sg| match sg { Seg::Spline(pts) => pts.windows(2).map(|w| Seg::Line(w[0], w[1])).collect::<Vec<_>>(), other => vec![other.clone()] }).collect() }
+        } else if dense > 1 {
+            Outline {
+                segs: outline
+                    .segs
+                    .iter()
+                    .map(|sg| match sg {
+                        Seg::Spline(pts) => {
+                            let mut out = Vec::new();
+                            crate::geom::natural_spline(pts, dense, &mut out);
+                            out.dedup_by(|a, b| a.dist(*b) < 1e-12);
+                            Seg::Spline(out)
+                        }
+                        other => other.clone(),
+                    })
+                    .collect(),
+            }
+        } else {
+            outline.clone()
+        };
+        let n = if twist.abs() < 1e-12 { std::env::var("FLAT_N").ok().and_then(|v| v.parse().ok()).unwrap_or(2) } else { taper_sections(outline, *twist, *scale) };
+        let mut ids = Vec::new();
+        for k in 0..n {
+            let t = k as f64 / (n - 1) as f64;
+            let sc = 1.0 + (scale - 1.0) * t;
+            outline_cmds(&mut cmds, &outline.scaled(sc).rotated(taper_turn(*twist, *scale, sc)), z0 + height * t);
+            sketch += 1;
+            ids.push(format!(r#"{{"sketch":{sketch}}}"#));
+        }
+        cmds.push(format!(r#"{{"command":"solid.loft","params":{{"sections":[{}],"operation":"new","body_name":"G"}}}}"#, ids.join(",")));
+        let Some(Step::Revolve { profile, .. }) = b.steps.get(1).filter(|st| matches!(st, Step::Revolve { op: Op::Intersect, .. })) else {
+            std::fs::write(format!("{dir}/{name}.json"), format!("{{\"commands\":[
+{}
+]}}
+", cmds.join(",
+"))).unwrap();
+            eprintln!("{name}: {n} sections, {} commands, no trim", cmds.len());
+            continue;
+        };
+        // FLAT_BLANK=back: only the back cone trims (the front of the blank far past the toe).
+        let mut profile = profile.clone();
+        if std::env::var("FLAT_BLANK").as_deref() == Ok("cyl") {
+            // Cylinders through the pitch circles at the heel and the toe instead of the cones.
+            let sigma = s.shaft_angle.to_radians();
+            let d1 = sigma.sin().atan2(f64::from(s.teeth2) / f64::from(s.teeth) + sigma.cos());
+            let delta = if i == 0 { d1 } else { sigma - d1 };
+            let r = s.module * f64::from(if i == 0 { s.teeth } else { s.teeth2 }) / 2.0;
+            let re = r / delta.sin();
+            let b = s.face_width.min(0.45 * re);
+            let (rh, rt) = (r, (re - b) * delta.sin());
+            let (lo, hi, face) = (profile[0].y, profile[3].y, profile[profile.len() - 1].y);
+            profile = [(0.0, lo), (rh, lo), (rh, hi), (rt, hi), (rt, face), (0.0, face)].iter().map(|q| crate::geom::V2::new(q.0, q.1)).collect();
+        }
+        if std::env::var("FLAT_BLANK").as_deref() == Ok("ring") {
+            for q in profile.iter_mut() {
+                if q.x == 0.0 {
+                    q.x = 1.0;
+                }
+            }
+        }
+        if std::env::var("FLAT_BLANK").as_deref() == Ok("back") {
+            let top = profile[3].y;
+            profile = vec![profile[0], profile[1], profile[2], profile[3], crate::geom::V2::new(0.0, top)];
+        }
+        cmds.push(format!(r#"{{"command":"sketch.create","params":{{"plane":{{"origin":{},"x_dir":{},"y_dir":{}}},"project_edges":false}}}}"#, v3(f.origin), v3(x), v3(z)));
+        cmds.push(format!(r#"{{"command":"sketch.line","params":{{"points":[{}],"closed":true}}}}"#, profile.iter().map(|q| p2(*q)).collect::<Vec<_>>().join(",")));
+        cmds.push(r#"{"command":"sketch.finish","params":{}}"#.to_string());
+        cmds.push(r#"{"command":"solid.revolve","params":{"axis":"y","operation":"intersect","targets":["G"]}}"#.to_string());
+        std::fs::write(format!("{dir}/{name}.json"), format!("{{\"commands\":[\n{}\n]}}\n", cmds.join(",\n"))).unwrap();
+        eprintln!("{name}: {n} sections, {} commands", cmds.len());
+    }
+}

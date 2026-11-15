@@ -7,30 +7,75 @@
 //! others. Made inside `gear.create`/`gear.update`, so in their undo step, and moved into the
 //! set's timeline folder.
 //!
-//! An update takes the set's assembly down first ([`remove`]: its joints and links, then its
-//! components with the transfers that moved the bodies in, which puts the bodies back where the
-//! set's features make them) and makes it again for the new set, so there is only ever one set
-//! of components and joints.
+//! An update keeps the assembly where it stands ([`sync`]): members are matched by their bodies'
+//! names (which `gear.update` keeps), so a member's component keeps its id and name (its body is
+//! regenerated inside it: the Body Transfer that moved it in finds it again by name), its joint
+//! keeps its id and value and has its two frames moved onto the new shaft, and each link keeps
+//! its place and is given the new ratio. Only members that appear get a component and a joint,
+//! and only members that are gone lose theirs. Joints the user made to the set's components, and
+//! anything else built on them, are left alone.
 
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use solidcore_record::Vec3;
+use solidcraft_doc::Mat;
+use solidcraft_doc::joints::Snap;
 use solidcraft_gear::axes::Axis;
 use solidcraft_gear::plan::{Assembly, AssemblyLink, Kind, Plan};
 
 use crate::schema::gear::{GearAssembly, GearAssemblyMember};
 use crate::{EngineError, Result, Session};
 
-/// What a set's assembly was made of, kept with the set's record so an update can take it down.
+/// One member as made: its body, component and joint, and how world points became each joint
+/// side's component coordinates when the joint was made (so an update can move the joint's
+/// frames onto a moved shaft, whatever the parts' poses are now).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct MemberRecord {
+    pub(super) body: String,
+    pub(super) component: u64,
+    #[serde(default)]
+    pub(super) joint: Option<u64>,
+    /// The joint's type as joint.create takes it (revolute, slider, rigid).
+    #[serde(default)]
+    pub(super) kind: String,
+    /// The occurrence the joint's side a is on (0: the world).
+    #[serde(default)]
+    pub(super) base: u64,
+    /// World → side a's and side b's component coordinates, as they were placed when made.
+    #[serde(default = "identity")]
+    pub(super) a_inv: Mat,
+    #[serde(default = "identity")]
+    pub(super) b_inv: Mat,
+}
+
+fn identity() -> Mat {
+    solidcraft_doc::IDENTITY
+}
+
+/// What a set's assembly was made of, kept with the set's record.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(super) struct AssemblyRecord {
-    /// The components made (the members', then the keep-out's).
+    /// The members, in the order of the set's bodies.
     #[serde(default)]
-    pub(super) components: Vec<u64>,
-    /// The joints made.
+    pub(super) members: Vec<MemberRecord>,
+    /// The keep-out body's name and its component.
     #[serde(default)]
-    pub(super) joints: Vec<u64>,
+    pub(super) keep_out: Option<(String, u64)>,
+}
+
+impl AssemblyRecord {
+    /// Whether `component` is one of the set's (a member's or the keep-out).
+    pub(super) fn holds(&self, component: u64) -> bool {
+        self.members.iter().any(|m| m.component == component) || self.keep_out.as_ref().is_some_and(|k| k.1 == component)
+    }
+    fn components(&self) -> Vec<u64> {
+        self.members.iter().map(|m| m.component).chain(self.keep_out.as_ref().map(|k| k.1)).collect()
+    }
+    fn joints(&self) -> Vec<u64> {
+        self.members.iter().filter_map(|m| m.joint).collect()
+    }
 }
 
 /// Whether the request asks for the set as an assembly.
@@ -44,6 +89,27 @@ const KEEP_OUT_OPACITY: f64 = 0.25;
 
 fn occurrence_of(s: &Session, component: u64) -> Option<u64> {
     s.doc.occurrence_of(component).map(|o| o.id)
+}
+
+fn component_exists(s: &Session, c: u64) -> bool {
+    s.doc.components.iter().any(|k| k.id == c)
+}
+
+fn joint_exists(s: &Session, j: u64) -> bool {
+    s.doc.assembly.joints.iter().any(|k| k.id == j)
+}
+
+/// World → an occurrence's component coordinates, where it is placed now (identity: the world).
+fn world_to_local(s: &Session, occurrence: u64) -> Mat {
+    if occurrence == 0 {
+        return identity();
+    }
+    let t = solidcraft_doc::joints::occurrence_world(&s.doc, occurrence);
+    solidcraft_doc::mat_inverse(&t).unwrap_or_else(identity)
+}
+
+fn v3(p: [f64; 3]) -> Vec3 {
+    Vec3::new(p[0], p[1], p[2])
 }
 
 /// Whether two axes are one line (either way round).
@@ -72,10 +138,11 @@ fn base_of(a: &Assembly, i: usize) -> Option<usize> {
     })
 }
 
-/// Makes the assembly of a set just built: `names` are its gear bodies' names in plan order,
-/// `keep_out` its clearance body's name, `set` its name, `group` its timeline folder.
+/// Makes the assembly of a set just built, or brings the one it had (`old`) up to date with it in
+/// place: `names` are its gear bodies' names in plan order, `keep_out` its clearance body's
+/// name, `set` its name, `group` its timeline folder.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn make(
+pub(super) fn sync(
     s: &mut Session,
     plan: &Plan,
     kind: Kind,
@@ -83,6 +150,7 @@ pub(super) fn make(
     names: &[String],
     keep_out: Option<&str>,
     group: Option<u64>,
+    old: Option<AssemblyRecord>,
     warnings: &mut Vec<String>,
 ) -> Result<(AssemblyRecord, GearAssembly)> {
     let a = &plan.assembly;
@@ -94,57 +162,172 @@ pub(super) fn make(
             None => return Err(EngineError::Other(format!("assembly: no body {} in the set", m.body + 1))),
         }
     }
-    if let Some(k) = keep_out {
-        bodies.push(k.to_string());
-    }
-    if bodies.is_empty() {
-        warnings.push("assembly: the set has nothing to assemble".into());
-        return Ok((AssemblyRecord::default(), GearAssembly::default()));
-    }
     if s.model.is_stale() {
         s.refresh();
     }
-    // One component per body, in order.
-    let r = s.execute("component.from_bodies", &json!({"bodies": bodies}))?;
-    let made: Vec<(u64, u64)> = r
-        .get("components")
-        .and_then(Value::as_array)
-        .map(|cs| cs.iter().filter_map(|c| Some((c.get("component")?.as_u64()?, c.get("feature")?.as_u64()?))).collect())
-        .unwrap_or_default();
-    if made.len() != bodies.len() {
-        return Err(EngineError::Other("assembly: not every body became a component".into()));
-    }
-    let components: Vec<u64> = made.iter().map(|m| m.0).collect();
-    let transfers: Vec<u64> = made.iter().map(|m| m.1).collect();
-    let mut occs = Vec::new();
-    for c in &components {
-        occs.push(occurrence_of(s, *c).ok_or_else(|| EngineError::Other(format!("assembly: component {c} is not placed")))?);
-    }
-    // Held members are grounded, the rest free to move on their joints (a design's first part
-    // is grounded by itself: each is set as it should be).
-    for (i, m) in a.members.iter().enumerate() {
-        s.execute("occurrence.ground", &json!({"occurrence": occs[i], "grounded": m.grounded}))?;
-    }
-    let mut keep_out_component = None;
-    if keep_out.is_some() {
-        let (c, o) = (components[n], occs[n]);
-        keep_out_component = Some(c);
-        s.execute("occurrence.ground", &json!({"occurrence": o, "grounded": true}))?;
-        if let Err(e) = s.execute("component.rename", &json!({"component": c, "name": format!("{set} keep-out")})) {
-            warnings.push(format!("assembly: the keep-out component keeps its body's name ({e})"));
+    let old = old.unwrap_or_default();
+
+    // What was there and is still wanted: by body name (an update keeps the names), then by
+    // place among the members for a body named afresh (a set rebuilt with another member
+    // count names its bodies from the plan); what is gone comes down.
+    let mut kept: Vec<Option<MemberRecord>> = vec![None; n];
+    let mut gone_components = Vec::new();
+    let mut gone_joints = Vec::new();
+    let mut left: Vec<Option<MemberRecord>> = old.members.into_iter().map(Some).collect();
+    for slot in &mut left {
+        let Some(m) = slot.as_ref() else { continue };
+        if !component_exists(s, m.component) {
+            gone_joints.extend(m.joint);
+            *slot = None;
+            continue;
         }
-        if let Err(e) = s.execute("appearance.assign", &json!({"components": [c.to_string()], "color": KEEP_OUT_COLOR, "opacity": KEEP_OUT_OPACITY})) {
-            warnings.push(format!("assembly: the keep-out component could not be made see-through ({e})"));
+        if let Some(i) = bodies.iter().position(|b| *b == m.body).filter(|i| kept[*i].is_none()) {
+            kept[i] = slot.take();
+        }
+    }
+    // Bodies named afresh move into the component of the member they take the place of.
+    let mut rehoused: Vec<(usize, u64)> = Vec::new();
+    for (i, slot) in left.iter_mut().enumerate() {
+        if i < n && kept[i].is_none() && !bodies.iter().any(|b| slot.as_ref().is_some_and(|m| m.body == *b)) {
+            if let Some(m) = slot.take() {
+                let (home, old_body) = (m.component, m.body.clone());
+                rehoused.push((i, home));
+                kept[i] = Some(MemberRecord { body: bodies[i].clone(), ..m });
+                // The transfer that moved the old body in has nothing to move now.
+                let stale: Vec<u64> = s
+                    .doc
+                    .features
+                    .iter()
+                    .filter(|f| matches!(&f.kind, solidcraft_doc::FeatureKind::BodyTransfer { to, bodies, .. } if *to == home && bodies.iter().any(|b| *b == old_body.as_str())))
+                    .map(|f| f.id)
+                    .collect();
+                if !stale.is_empty() {
+                    s.execute("timeline.delete", &json!({"features": stale}))?;
+                }
+            }
+        }
+    }
+    for m in left.into_iter().flatten() {
+        gone_joints.extend(m.joint);
+        gone_components.push(m.component);
+    }
+    let mut keep_out_kept = None;
+    if let Some((body, c)) = old.keep_out {
+        if keep_out == Some(body.as_str()) && component_exists(s, c) {
+            keep_out_kept = Some(c);
+        } else {
+            gone_components.push(c);
+        }
+    }
+    // A member that is now held loses its joint.
+    for (i, m) in a.members.iter().enumerate() {
+        if let Some(k) = kept[i].as_mut()
+            && m.grounded
+            && let Some(j) = k.joint.take()
+        {
+            gone_joints.push(j);
+        }
+    }
+    if !gone_joints.is_empty() {
+        super::super::joints::delete_joints(s.doc_mut(), &gone_joints);
+    }
+    for c in gone_components {
+        if component_exists(s, c) {
+            s.execute("component.delete", &json!({"component": c}))?;
         }
     }
 
-    // A joint per member that moves: on its shaft, to the world or its carrier.
+    // A component for each body that has none yet.
+    let mut fresh: Vec<String> = (0..n).filter(|i| kept[*i].is_none()).map(|i| bodies[i].clone()).collect();
+    let new_keep_out = keep_out.filter(|_| keep_out_kept.is_none()).map(str::to_string);
+    fresh.extend(new_keep_out.clone());
+    let mut transfers = Vec::new();
+    let mut made_for: Vec<(String, u64)> = Vec::new();
+    if s.model.is_stale() {
+        s.refresh();
+    }
+    for (i, c) in &rehoused {
+        match s.execute("component.move_bodies", &json!({"bodies": [bodies[*i].clone()], "component": c})) {
+            Ok(r) => transfers.extend(r.get("features").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64)),
+            Err(e) => return Err(EngineError::Other(format!("assembly: {} could not go into its component ({e})", bodies[*i]))),
+        }
+    }
+    if !fresh.is_empty() {
+        if s.model.is_stale() {
+            s.refresh();
+        }
+        let r = s.execute("component.from_bodies", &json!({"bodies": fresh}))?;
+        let made: Vec<(u64, u64)> = r
+            .get("components")
+            .and_then(Value::as_array)
+            .map(|cs| cs.iter().filter_map(|c| Some((c.get("component")?.as_u64()?, c.get("feature")?.as_u64()?))).collect())
+            .unwrap_or_default();
+        if made.len() != fresh.len() {
+            return Err(EngineError::Other("assembly: not every body became a component".into()));
+        }
+        for (name, (c, f)) in fresh.iter().zip(made) {
+            made_for.push((name.clone(), c));
+            transfers.push(f);
+        }
+    }
+    let made_component = |body: &str| made_for.iter().find(|(b, _)| b == body).map(|(_, c)| *c);
+    let mut components = Vec::new();
+    let mut occs = Vec::new();
+    for i in 0..n {
+        let c = kept[i].as_ref().map(|k| k.component).or_else(|| made_component(&bodies[i]));
+        let c = c.ok_or_else(|| EngineError::Other(format!("assembly: {} has no component", bodies[i])))?;
+        components.push(c);
+        occs.push(occurrence_of(s, c).ok_or_else(|| EngineError::Other(format!("assembly: component {c} is not placed")))?);
+    }
+    // New members are grounded or freed as the plan says (a design's first part is grounded by
+    // itself); kept ones keep what they are (the user may have grounded one), unless now held.
+    for (i, m) in a.members.iter().enumerate() {
+        if kept[i].is_none() || m.grounded {
+            s.execute("occurrence.ground", &json!({"occurrence": occs[i], "grounded": m.grounded}))?;
+        }
+    }
+    let keep_out_component = match (keep_out_kept, &new_keep_out) {
+        (Some(c), _) => Some(c),
+        (None, Some(body)) => {
+            let c = made_component(body);
+            if let Some(c) = c {
+                let o = occurrence_of(s, c).unwrap_or(0);
+                s.execute("occurrence.ground", &json!({"occurrence": o, "grounded": true}))?;
+                if let Err(e) = s.execute("component.rename", &json!({"component": c, "name": format!("{set} keep-out")})) {
+                    warnings.push(format!("assembly: the keep-out component keeps its body's name ({e})"));
+                }
+                if let Err(e) = s.execute("appearance.assign", &json!({"components": [c.to_string()], "color": KEEP_OUT_COLOR, "opacity": KEEP_OUT_OPACITY})) {
+                    warnings.push(format!("assembly: the keep-out component could not be made see-through ({e})"));
+                }
+            }
+            c
+        }
+        (None, None) => None,
+    };
+
+    // A joint per member that moves: on its shaft, to the world or its carrier. A kept joint of
+    // the same type on the same side keeps its id, name and value, its frames moved onto the
+    // shaft as it is now.
     let slides: Vec<bool> = (0..n).map(|i| kind == Kind::Rack || a.links.iter().any(|l| matches!(l, AssemblyLink::RackPinion { rack, .. } if *rack == i))).collect();
     let rigid_to: Vec<Option<usize>> = (0..n).map(|i| a.links.iter().find_map(|l| matches!(l, AssemblyLink::Rigid { b, .. } if *b == i).then(|| l.members().0))).collect();
-    let mut joint: Vec<Option<u64>> = vec![None; n];
-    let mut joints = Vec::new();
+    let mut records: Vec<MemberRecord> = Vec::new();
+    let mut new_joints = Vec::new();
+    let mut moved = false;
     for (i, m) in a.members.iter().enumerate() {
+        let mut rec = kept[i].clone().unwrap_or(MemberRecord {
+            body: bodies[i].clone(),
+            component: components[i],
+            joint: None,
+            kind: String::new(),
+            base: 0,
+            a_inv: identity(),
+            b_inv: identity(),
+        });
+        rec.body = bodies[i].clone();
+        rec.component = components[i];
         if m.grounded {
+            rec.joint = None;
+            records.push(rec);
             continue;
         }
         let (kind_name, other) = match rigid_to[i] {
@@ -152,6 +335,27 @@ pub(super) fn make(
             None => (if slides[i] { "slider" } else { "revolute" }, base_of(a, i).map_or(0, |c| occs[c])),
         };
         let ax = &m.axis;
+        let same = rec.joint.filter(|j| joint_exists(s, *j)).filter(|_| rec.kind == kind_name && rec.base == other);
+        if let Some(j) = same {
+            // Both frames onto the shaft, each in its side's own coordinates.
+            let at = |inv: &Mat| Snap::Point { point: solidcraft_doc::apply_point(inv, v3(ax.origin)), z: Some(solidcraft_doc::apply_vector(inv, v3(ax.dir))), x: None };
+            let (sa, sb) = (at(&rec.a_inv), at(&rec.b_inv));
+            if let Some(joint) = s.doc_mut().assembly.joints.iter_mut().find(|k| k.id == j)
+                && (joint.a.snap != sa || joint.b.snap != sb)
+            {
+                joint.a.snap = sa;
+                joint.b.snap = sb;
+                moved = true;
+            }
+            records.push(rec);
+            continue;
+        }
+        if let Some(j) = rec.joint.take()
+            && joint_exists(s, j)
+        {
+            super::super::joints::delete_joints(s.doc_mut(), &[j]);
+        }
+        let (a_inv, b_inv) = (world_to_local(s, other), world_to_local(s, occs[i]));
         let side = |occurrence: u64| json!({"occurrence": occurrence, "point": ax.origin, "z": ax.dir});
         let what = match kind_name {
             "slider" => "slide",
@@ -162,16 +366,36 @@ pub(super) fn make(
         match s.execute("joint.create", &json!({"type": kind_name, "a": side(other), "b": side(occs[i]), "flip": true, "name": name})) {
             Ok(r) => {
                 if let Some(id) = r.get("joint").and_then(Value::as_u64) {
-                    joint[i] = Some(id);
-                    joints.push(id);
+                    rec.joint = Some(id);
+                    new_joints.push(id);
                 }
             }
             Err(e) => warnings.push(format!("assembly: {name} could not be made ({e})")),
         }
+        rec.kind = kind_name.to_string();
+        rec.base = other;
+        rec.a_inv = a_inv;
+        rec.b_inv = b_inv;
+        records.push(rec);
+    }
+    if moved {
+        let _ = super::super::joints::resolve(s);
     }
 
-    // A motion link per mesh, b driven by a.
-    let mut links = Vec::new();
+    // A motion link per mesh, b driven by a: one between the same two joints keeps its place
+    // and takes the new ratio; ours that no mesh wants any more go.
+    let joint: Vec<Option<u64>> = records.iter().map(|r| r.joint).collect();
+    let ours: BTreeSet<u64> = joint.iter().flatten().copied().collect();
+    let wanted_pairs: Vec<(u64, u64)> = a
+        .links
+        .iter()
+        .filter(|l| !matches!(l, AssemblyLink::Rigid { .. }))
+        .filter_map(|l| {
+            let (x, y) = l.members();
+            Some((joint.get(x).copied().flatten()?, joint.get(y).copied().flatten()?))
+        })
+        .collect();
+    s.doc_mut().assembly.links.retain(|l| !(ours.contains(&l.a) && ours.contains(&l.b)) || wanted_pairs.contains(&(l.a, l.b)));
     for l in &a.links {
         if matches!(l, AssemblyLink::Rigid { .. }) {
             continue;
@@ -185,23 +409,21 @@ pub(super) fn make(
             ));
             continue;
         };
-        let r = match *l {
-            AssemblyLink::Gear { ra, rb, internal, reverse, .. } => {
-                s.execute("joint.gear", &json!({"a": ja, "b": jb, "ra": ra, "rb": rb, "internal": internal, "reverse": reverse}))
-            }
-            AssemblyLink::Worm { starts, wheel_teeth, .. } => s.execute("joint.gear", &json!({"a": ja, "b": jb, "ra": f64::from(starts), "rb": f64::from(wheel_teeth)})),
-            AssemblyLink::RackPinion { pitch_radius, .. } => s.execute("joint.rack_pinion", &json!({"a": ja, "b": jb, "radius": pitch_radius})),
+        let mut p = match *l {
+            AssemblyLink::Gear { ra, rb, internal, reverse, .. } => json!({"a": ja, "b": jb, "ra": ra, "rb": rb, "internal": internal, "reverse": reverse}),
+            AssemblyLink::Worm { starts, wheel_teeth, .. } => json!({"a": ja, "b": jb, "ra": f64::from(starts), "rb": f64::from(wheel_teeth)}),
+            AssemblyLink::RackPinion { pitch_radius, .. } => json!({"a": ja, "b": jb, "radius": pitch_radius}),
             AssemblyLink::Rigid { .. } => continue,
         };
-        match r {
-            Ok(v) => {
-                if let Some(i) = v.get("link").and_then(Value::as_u64) {
-                    links.push(i as usize);
-                }
-            }
-            Err(e) => warnings.push(format!("assembly: {} and {} could not be linked ({e})", bodies[x], bodies[y])),
+        if let Some(i) = s.doc.assembly.links.iter().position(|k| k.a == ja && k.b == jb) {
+            p["link"] = json!(i);
+        }
+        let cmd = if matches!(l, AssemblyLink::RackPinion { .. }) { "joint.rack_pinion" } else { "joint.gear" };
+        if let Err(e) = s.execute(cmd, &p) {
+            warnings.push(format!("assembly: {} and {} could not be linked ({e})", bodies[x], bodies[y]));
         }
     }
+    let links: Vec<usize> = wanted_pairs.iter().filter_map(|(ja, jb)| s.doc.assembly.links.iter().position(|k| k.a == *ja && k.b == *jb)).collect();
 
     // What the joints can't show.
     match kind {
@@ -213,9 +435,10 @@ pub(super) fn make(
         _ => {}
     }
 
-    // In the set's folder, with its features.
+    // What is new goes in the set's folder, with its features.
     if let Some(g) = group
-        && let Err(e) = s.execute("timeline.move_to_group", &json!({"features": transfers, "joints": joints, "group": g}))
+        && (!transfers.is_empty() || !new_joints.is_empty())
+        && let Err(e) = s.execute("timeline.move_to_group", &json!({"features": transfers, "joints": new_joints, "group": g}))
     {
         warnings.push(format!("assembly: the components and joints stay outside the set's folder ({e})"));
     }
@@ -224,19 +447,22 @@ pub(super) fn make(
         .members
         .iter()
         .enumerate()
-        .map(|(i, m)| GearAssemblyMember { body: bodies[i].clone(), component: components[i], occurrence: occs[i], joint: joint[i], grounded: m.grounded })
+        .map(|(i, m)| GearAssemblyMember { body: bodies[i].clone(), component: components[i], occurrence: occs[i], joint: records[i].joint, grounded: m.grounded })
         .collect();
-    let record = AssemblyRecord { components: components.clone(), joints: joints.clone() };
+    let keep_out_record = keep_out_component.and_then(|c| keep_out.map(|b| (b.to_string(), c)));
+    let joints = records.iter().filter_map(|r| r.joint).collect();
+    let record = AssemblyRecord { members: records, keep_out: keep_out_record };
     Ok((record, GearAssembly { members, keep_out: keep_out_component, joints, links }))
 }
 
-/// Takes a set's assembly down: its joints (with their motion links), then its components with
-/// what is in them (the transfers that moved the bodies in: the bodies go back where the set's
-/// features make them). Joints made by hand to the set's components go too, and are named in a
-/// warning.
+/// Takes a set's assembly down (`assembly` switched off on an update): its joints (with their
+/// motion links), then its components with what is in them (the transfers that moved the bodies
+/// in: the bodies go back where the set's features make them). Joints made by hand to the set's
+/// components go with them, and are named in a warning.
 pub(super) fn remove(s: &mut Session, rec: &AssemblyRecord, warnings: &mut Vec<String>) -> Result<()> {
-    let ours: BTreeSet<u64> = rec.joints.iter().copied().collect();
-    let components: Vec<u64> = rec.components.iter().copied().filter(|c| s.doc.components.iter().any(|k| k.id == *c)).collect();
+    let mine = rec.joints();
+    let ours: BTreeSet<u64> = mine.iter().copied().collect();
+    let components: Vec<u64> = rec.components().into_iter().filter(|c| component_exists(s, *c)).collect();
     let occs: BTreeSet<u64> = s.doc.occurrences.iter().filter(|o| components.contains(&o.component)).map(|o| o.id).collect();
     let foreign: Vec<String> = s
         .doc
@@ -247,9 +473,9 @@ pub(super) fn remove(s: &mut Session, rec: &AssemblyRecord, warnings: &mut Vec<S
         .map(|j| j.name.clone())
         .collect();
     if !foreign.is_empty() {
-        warnings.push(format!("assembly: the set's components were made again, and the joints made to them are gone: {}", foreign.join(", ")));
+        warnings.push(format!("assembly: the set is no longer an assembly, and the joints made to its components are gone: {}", foreign.join(", ")));
     }
-    super::super::joints::delete_joints(s.doc_mut(), &rec.joints);
+    super::super::joints::delete_joints(s.doc_mut(), &mine);
     for c in components {
         s.execute("component.delete", &json!({"component": c}))?;
     }

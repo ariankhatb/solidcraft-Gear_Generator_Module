@@ -769,7 +769,14 @@ fn vertical_group_row(
         *drag = Some(Drag::Items(selected_drag_items(app, origin_x, group.parent)));
     }
     if !renaming && response.double_clicked() {
-        start_folder_rename(app, group.id);
+        // A gear set's folder opens the Gear Generator on the set; any other is renamed.
+        if crate::gear_window::is_set(app, group.id) {
+            if let Err(why) = crate::gear_window::open_group(app, group.id) {
+                app.set_status(why, true);
+            }
+        } else {
+            start_folder_rename(app, group.id);
+        }
     }
     if response.secondary_clicked() && !selected {
         select_only(app, TimelineItem::Group(group.id));

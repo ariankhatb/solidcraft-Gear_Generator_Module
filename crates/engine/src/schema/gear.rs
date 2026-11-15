@@ -840,8 +840,10 @@ pub struct GearParams {
     /// rack-and-pinion or rigid motion link per mesh with the set's ratio and direction, so
     /// driving one gear (`joint.drive`) turns the others. With `clearance_body` the keep-out
     /// body goes in too, as a grounded see-through component "<set name> keep-out", to cut a
-    /// housing with. All in the set's undo step and timeline folder; `gear.update` makes them
-    /// again for the new set (one set of components and joints at any time). Default false.
+    /// housing with. All in the set's undo step and timeline folder; `gear.update` keeps them
+    /// in place: the same components (the bodies regenerated inside them), the same joints moved
+    /// onto the new shafts, the links given the new ratios, and joints users made to them kept;
+    /// only members that appear or go are added or taken away. Default false.
     #[serde(default)]
     pub assembly: Option<bool>,
     /// `gear.update` and `gear.inspect` only: the set, by the timeline folder `gear.create`

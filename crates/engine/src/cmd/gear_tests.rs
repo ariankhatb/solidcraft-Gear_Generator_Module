@@ -1123,7 +1123,7 @@ fn an_assembled_worm_drives_its_wheel_by_starts_over_teeth() {
 }
 
 #[test]
-fn an_update_keeps_one_set_of_components_and_joints() {
+fn an_update_keeps_the_assemblys_components_joints_and_links_in_place() {
     let mut s = Session::default();
     let counts = |s: &Session| (s.doc.components.len(), s.doc.assembly.joints.len(), s.doc.assembly.links.len());
     let empty = counts(&s);
@@ -1131,11 +1131,15 @@ fn an_update_keeps_one_set_of_components_and_joints() {
     let group = r["group"].as_u64().unwrap();
     let before = counts(&s);
     assert_eq!(before, (empty.0 + 3, empty.1 + 2, empty.2 + 1), "two gears and the keep-out; two joints; one link");
-    // In place (the same steps) and rebuilt (another tooth count's steps): one set each time.
+    let ids = |a: &Value| (a["members"].clone(), a["keep_out"].clone(), a["joints"].clone());
+    let made = ids(&r["assembly"]);
+    // In place (the same steps) and rebuilt (another tooth count's steps): the same components,
+    // occurrences, joints and keep-out each time, the link given the new ratio.
     for (p, teeth2) in [(json!({"group": group, "face_width": 10}), 32.0), (json!({"group": group, "teeth2": 40}), 40.0)] {
         let u = run(&mut s, "gear.update", p);
         no_errors(&s);
         assert_eq!(counts(&s), before, "{u}");
+        assert_eq!(ids(&u["assembly"]), made, "{u}");
         let j = member_joints(&u);
         let got = drive_and_read(&mut s, j[0].unwrap(), 40.0, j[1].unwrap());
         assert!((got + 40.0 * 20.0 / teeth2).abs() < 1e-6, "{got} for {teeth2} teeth: {u}");
@@ -1144,4 +1148,32 @@ fn an_update_keeps_one_set_of_components_and_joints() {
     run(&mut s, "gear.update", json!({"group": group, "assembly": null}));
     assert_eq!(counts(&s), empty);
     no_errors(&s);
+}
+
+/// A joint the user made from a part of their own to gear 1 is still there, on gear 1, after
+/// the set is edited, and the set still turns by its new ratio.
+#[test]
+fn a_users_joint_to_an_assembled_gear_survives_an_update() {
+    let mut s = Session::default();
+    let r = assembled(&mut s, json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 32, "face_width": 8, "assembly": true}));
+    let group = r["group"].as_u64().unwrap();
+    let gear1 = r["assembly"]["members"][0]["occurrence"].as_u64().unwrap();
+    // A bracket of the user's, fixed to gear 1's front face at its centre.
+    run(&mut s, "component.activate", json!({"component": "root"}));
+    run(&mut s, "component.create", json!({"name": "Bracket", "grounded": false}));
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 4, "corner": [-5, -5, 8]}));
+    run(&mut s, "component.activate", json!({"component": "root"}));
+    let bracket = s.doc.occurrence_of(s.doc.find_component("Bracket").unwrap()).unwrap().id;
+    let at = |o: u64| json!({"occurrence": o, "point": [0, 0, 8], "z": [0, 0, 1]});
+    let mine = run(&mut s, "joint.create", json!({"type": "rigid", "a": at(gear1), "b": at(bracket), "flip": true, "name": "Bracket on gear 1"}))["joint"].as_u64().unwrap();
+    // More teeth on gear 1: a bigger gear, gear 2 further out.
+    let u = run(&mut s, "gear.update", json!({"group": group, "teeth": 24}));
+    no_errors(&s);
+    let j = s.doc.assembly.joints.iter().find(|j| j.id == mine).unwrap_or_else(|| panic!("the user's joint is gone: {u}"));
+    assert!(j.a.occurrence == gear1 || j.b.occurrence == gear1, "{u}");
+    assert_eq!(u["assembly"]["members"][0]["occurrence"].as_u64(), Some(gear1));
+    assert!(!u["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap_or_default().contains("gone")), "{u}");
+    let jj = member_joints(&u);
+    let got = drive_and_read(&mut s, jj[0].unwrap(), 32.0, jj[1].unwrap());
+    assert!((got + 24.0).abs() < 1e-6, "{got}");
 }

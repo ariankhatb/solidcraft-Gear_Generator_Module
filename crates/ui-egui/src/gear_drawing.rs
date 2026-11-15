@@ -61,6 +61,8 @@ pub(crate) enum Dim {
     Angle(usize, usize),
     ShaftAngle,
     Helix,
+    /// The `i`-th clearance seat's distance along its member's shaft.
+    SeatAlong(usize),
 }
 
 /// Screen ↔ sketch.
@@ -310,6 +312,8 @@ pub(crate) struct Ctx<'a> {
     pub spec: &'a mut Spec,
     /// The member lit elsewhere (a hovered section).
     pub lit: Option<usize>,
+    /// The set's body names in order (clearance seats name their member by body).
+    pub bodies: &'a [String],
 }
 
 struct Hit {
@@ -426,6 +430,43 @@ pub(crate) fn sketch(ui: &mut Ui, cv: &mut Canvas, d: &mut Drawn, cx: Ctx<'_>, s
             }
         }
         _ => {}
+    }
+    // Clearance seats: a bearing glyph at the member's shaft, with its "along" to type.
+    if let Some(c) = cx.spec.clearance_body.as_ref().filter(|c| c.bearing.is_some() || c.bearing_size.is_some()) {
+        let slots = sketch_rules::slots(k);
+        let mut stacked: Vec<(Pos2, usize)> = Vec::new();
+        for (si, seat) in c.seats.iter().enumerate() {
+            let solidcraft_gear::clearance::Seat::Along { member, along } = *seat else { continue };
+            let b = (member as usize).saturating_sub(1);
+            let name = cx.bodies.get(b).map_or("", String::as_str);
+            let wm = crate::gear_window::member_of_body(k, cx.spec.only, b, name);
+            let anchor = (0..slots.len()).find(|s| slot_member(k, *s) == Some(wm)).and_then(|s| {
+                let i = pick(s)?;
+                match slots[s].role {
+                    Role::Circle => d.circles.get(i).map(|cc| cc.c),
+                    Role::Line => d.lines.get(i).map(|l| (l.a + l.b) * 0.5),
+                    Role::Point => d.points.get(i).copied(),
+                }
+            });
+            let Some(at) = anchor else { continue };
+            let at = to_screen(at);
+            let n = match stacked.iter_mut().find(|(p, _)| p.distance(at) < 1.0) {
+                Some((_, n)) => {
+                    *n += 1;
+                    *n
+                }
+                None => {
+                    stacked.push((at, 0));
+                    0
+                }
+            };
+            let col = crate::gear_window::member_color(wm);
+            let g = at + vec2(-14.0, 14.0 + 16.0 * n as f32);
+            painter.circle_filled(g, 5.0, bg);
+            painter.circle_stroke(g, 5.0, Stroke::new(1.4, col));
+            painter.circle_stroke(g, 2.2, Stroke::new(1.0, col));
+            hits.push(text_dim(&painter, g + vec2(8.0, 0.0), &format!("seat {}", fmt(along)), Dim::SeatAlong(si), along, ink, bg, egui::Align2::LEFT_CENTER));
+        }
     }
     // Typing into a dimension.
     let mut applied = false;
@@ -750,6 +791,12 @@ fn bevel_dims(p: &egui::Painter, to_screen: &dyn Fn(V2) -> Pos2, l1: Line, l2: L
 /// Applies a typed dimension.
 fn apply_dim(d: &mut Drawn, spec: &mut Spec, k: Kind, picks: &Picks, dim: Dim, v: f64, out: &mut Changed) {
     match dim {
+        Dim::SeatAlong(i) if v.abs() <= 100000.0 => {
+            if let Some(solidcraft_gear::clearance::Seat::Along { along, .. }) = spec.clearance_body.as_mut().and_then(|c| c.seats.get_mut(i)) {
+                *along = v;
+                out.spec = true;
+            }
+        }
         Dim::Diameter(i) if v > 0.0 && i < d.circles.len() => {
             d.circles[i].r = v / 2.0;
             reimpose(d, k, picks, i);

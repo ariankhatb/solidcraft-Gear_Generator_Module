@@ -488,13 +488,14 @@ pub(crate) fn drawing(ui: &mut Ui, w: &mut GearWindow, size: egui::Vec2) {
     let k = w.spec.kind;
     let side = matches!(k, Kind::Hypoid | Kind::CrossedHelical);
     let lit = w.lit();
+    let (bodies, _, _) = w.clearance_inputs();
     let s = &mut w.simple;
     let main = if side { egui::vec2(size.x, size.y * 0.66) } else { size };
     let changed = crate::gear_drawing::sketch(
         ui,
         &mut s.canvas,
         &mut s.drawn,
-        crate::gear_drawing::Ctx { kind: k, picks: &mut s.picks, auto: &mut s.auto, armed: &mut s.armed, spec: &mut w.spec, lit },
+        crate::gear_drawing::Ctx { kind: k, picks: &mut s.picks, auto: &mut s.auto, armed: &mut s.armed, spec: &mut w.spec, lit, bodies: &bodies },
         main,
     );
     if changed.drawing {

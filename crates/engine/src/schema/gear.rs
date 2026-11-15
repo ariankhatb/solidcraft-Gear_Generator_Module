@@ -801,6 +801,26 @@ pub struct GearContact {
     pub b: Option<[f64; 3]>,
 }
 
+/// A gear's shape without teeth (`GearResult::outlines`), for the dialog's abstract preview:
+/// pitch, tip and root circles on its back face (`center`, square to `axis`) and the same at
+/// its front face `face_width` mm along the axis; a bevel's at the heel, with its apex and its
+/// pitch circle at the toe (the cone between).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct GearOutline {
+    /// The member (row).
+    pub index: usize,
+    pub center: [f64; 3],
+    pub axis: [f64; 3],
+    pub face_width: f64,
+    pub pitch_diameter: f64,
+    pub tip_diameter: f64,
+    pub root_diameter: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apex: Option<[f64; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toe_pitch_diameter: Option<f64>,
+}
+
 /// `shafts`: whether shafts are built on the gears' axes (each joined to its gears as one
 /// part), and per member (its row `index`: a shaft line or a gear) on or off and its diameter.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
@@ -1544,6 +1564,9 @@ pub struct GearResult {
     /// Where the gears touch, for an abstract preview.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub contacts: Vec<GearContact>,
+    /// Each gear's shape without teeth, for an abstract preview.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outlines: Vec<GearOutline>,
 }
 
 /// A line in space.

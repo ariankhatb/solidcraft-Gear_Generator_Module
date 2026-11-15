@@ -477,6 +477,17 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
             p.teeth_source(super::ring_source(sg, &w, 1, ring, &sf));
             involute_ring_facts(p, &w, ring, sf.rf, sf.ra, outer_r);
             rims[i] = (sf.rf, outer_r);
+            p.shapes.push(crate::plan::MemberShape {
+                member: i,
+                center: Frame::at(s.origin).world([tg.center.x, tg.center.y, tg.z]),
+                axis: [0.0, 0.0, 1.0],
+                face: faces[i],
+                pitch_diameter: 2.0 * ring.gear.r(),
+                tip_diameter: 2.0 * sf.rf,
+                root_diameter: 2.0 * sf.ra,
+                apex: None,
+                toe_pitch_diameter: None,
+            });
             if wanted(s, (i + 1).min(255) as u8) {
                 let face = faces[i];
                 let mut steps = super::tooth_steps(region.clone(), face, twist_for(&ring.gear, face), (herring || tg.herringbone) && tg.helix != 0.0, super::Op::New);
@@ -494,6 +505,17 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
             }
             rims[i] = (0.0, f.ra);
             flanks[i] = Some(f.clone());
+            p.shapes.push(crate::plan::MemberShape {
+                member: i,
+                center: Frame::at(s.origin).world([tg.center.x, tg.center.y, tg.z]),
+                axis: [0.0, 0.0, 1.0],
+                face: faces[i],
+                pitch_diameter: 2.0 * g.r(),
+                tip_diameter: 2.0 * f.ra,
+                root_diameter: 2.0 * f.rf,
+                apex: None,
+                toe_pitch_diameter: None,
+            });
             if wanted(s, (i + 1).min(255) as u8) {
                 let face = faces[i];
                 let mut steps = crate::body::tooth_body(sg, g, &f, phase[i], face, (herring || tg.herringbone) && tg.helix != 0.0, p, &w);
@@ -813,7 +835,7 @@ fn shifted(st: super::Step, dz: f64) -> super::Step {
 }
 
 /// A step that starts a body joins the one it is added to instead.
-fn set_new_to_join(st: &mut super::Step) {
+pub(crate) fn set_new_to_join(st: &mut super::Step) {
     use super::{Op, Step};
     let op = match st {
         Step::Prism { op, .. } | Step::Loft { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => op,

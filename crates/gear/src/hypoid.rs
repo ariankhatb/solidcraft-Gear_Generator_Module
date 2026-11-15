@@ -835,11 +835,6 @@ impl Form {
     fn radius(&self, t: f64, z: f64) -> f64 {
         (self.hap - z) * (self.rm + t * self.cd) / (self.hap - t * self.sd)
     }
-    /// The cone through the circle of radius `r` on the plane `z`.
-    fn cone(&self, r: f64, z: f64) -> f64 {
-        let up = self.hap - z;
-        (self.hap * r - self.rm * up) / (self.cd * up + self.sd * r)
-    }
     fn height(&self, t: f64, mu: f64) -> f64 {
         self.hap - mu * (self.hap - t * self.sd)
     }
@@ -1416,9 +1411,6 @@ impl Set {
     fn z_of(&self, s: f64) -> f64 {
         if self.forward { s - self.s_min } else { self.s_max - s }
     }
-    fn s_of(&self, z: f64) -> f64 {
-        if self.forward { self.s_min + z } else { self.s_max - z }
-    }
     /// A pinion radius along the axis (the tips' or the roots', `pick`), straight between the
     /// exact sections.
     fn pinion_radius(&self, s: f64, pick: &dyn Fn(&Teeth) -> f64) -> f64 {
@@ -1431,11 +1423,26 @@ impl Set {
     /// Where the pinion's tips (or roots) meet the cone square to its pitch cone at `cone`: the
     /// radius there.
     fn pinion_on_cone(&self, cone: f64, pick: &dyn Fn(&Teeth) -> f64) -> f64 {
-        let mut r = self.face.at(cone, 0.0).x;
-        for _ in 0..12 {
-            r = self.pinion_radius(self.face.s_on(cone, r), pick);
+        // The crossing nearest the pitch radius, by a scan and halving (a fixed-point iteration
+        // runs away on steep pinion cones).
+        let r0 = self.face.at(cone, 0.0).x;
+        let f = |r: f64| self.pinion_radius(self.face.s_on(cone, r), pick) - r;
+        let n = 200;
+        let at = |k: usize| r0 * (0.02 + 2.98 * k as f64 / n as f64);
+        let mut best: Option<(f64, f64, f64)> = None;
+        for k in 0..n {
+            let (a, b) = (at(k), at(k + 1));
+            if f(a).signum() != f(b).signum() && best.is_none_or(|x| (a - r0).abs() < (x.0 - r0).abs()) {
+                best = Some((a, a, b));
+            }
         }
-        r
+        let Some((_, mut lo, mut hi)) = best else { return self.pinion_radius(self.face.at(cone, 0.0).y, pick) };
+        let flo = f(lo).signum();
+        for _ in 0..50 {
+            let mid = 0.5 * (lo + hi);
+            if f(mid).signum() == flo { lo = mid } else { hi = mid }
+        }
+        0.5 * (lo + hi)
     }
 }
 
@@ -2875,6 +2882,14 @@ mod tests {
         let set = work_out(&s).unwrap();
         let back = set.form.z_lo - 0.06 * 2.0 * set.d.re2;
         let m = &p.meshes3d[0];
+        let untrim = |b: &Body| Body { steps: b.steps.iter().filter(|st| !matches!(st, Step::Revolve { .. })).cloned().collect(), ..b.clone() };
+        for (label, pb, gb) in [("both trimmed", p.bodies[0].clone(), p.bodies[1].clone()), ("pinion untrimmed", untrim(&p.bodies[0]), p.bodies[1].clone()), ("gear untrimmed", p.bodies[0].clone(), untrim(&p.bodies[1]))] {
+            let (h, hz) = (s.module / 10.0, s.module / 3.0);
+            let mut pair = crate::mesh3d::Pair::for_run(&pb, &gb, h, hz, m.ratio, -0.5 * m.period, 0.5 * m.period);
+            let r = pair.run(m.ratio, 0.0, -0.5 * m.period, 0.5 * m.period, crate::mesh3d::CHECK_STEPS);
+            let q = r.place;
+            eprintln!("{label}: penetration {:.4} at ring (t, mu) {:?}", r.penetration, set.form.coords(q[0].hypot(q[1]), q[2] + back));
+        }
         for (h, hz) in [(s.module / 10.0, s.module / 3.0), (s.module / 20.0, s.module / 8.0)] {
             let mut pair = crate::mesh3d::Pair::for_run(&p.bodies[0], &p.bodies[1], h, hz, m.ratio, -0.5 * m.period, 0.5 * m.period);
             let r = pair.run(m.ratio, 0.0, -0.5 * m.period, 0.5 * m.period, crate::mesh3d::CHECK_STEPS);

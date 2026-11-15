@@ -1990,14 +1990,12 @@ fn step_params(s: &Session, body: &Body, step: &Step, sketches: &[u64], target: 
 /// Builds every body of the plan, each under its name in `names` where there is one (an
 /// update keeps the names the bodies had).
 fn build_set(s: &mut Session, plan: &Plan, names: &[String], warnings: &mut Vec<String>, mode: &equations::Mode) -> Result<Vec<BodyRecord>> {
-    // Lofts through many tooth sections (a hypoid set) are many hundreds of faces: the kernel's
-    // full check of them takes several times as long as making them (minutes for a ring gear),
-    // so they are built without it. The check still runs whenever the features are computed again.
-    let heavy = plan.bodies.iter().flat_map(|b| &b.steps).any(|st| matches!(st, Step::Loft { sections, .. } if sections.len() > 6));
+    // A gear's teeth are hundreds of faces: the kernel's full check of them takes about as long
+    // as making them (a spiral bevel's twisted lofts 7 s of 13, a planetary set 3 s of 5, a
+    // hypoid's minutes for the ring gear), so the set is built without it. The check still runs whenever the features are computed
+    // again (an edit before them, or the design opened).
     let checked = s.validation();
-    if heavy {
-        s.set_validation(solidcraft_kernel::Validation::Off);
-    }
+    s.set_validation(solidcraft_kernel::Validation::Off);
     let mut made = Vec::new();
     let mut built = Ok(());
     let gears = plan.bodies.len();

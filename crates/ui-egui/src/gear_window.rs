@@ -838,7 +838,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     } else {
         ViewState::Current
     };
-    let (closed, action) = ui_kit::Window::new(egui::Id::unique("sc_gear_window"), crate::gear_icons::GENERATOR, title).fields().cards(3.3).actions(primary, &close, None).show(ctx, valid, |ui| {
+    let (closed, action) = ui_kit::Window::new(egui::Id::unique("sc_gear_window"), crate::gear_icons::GENERATOR, title).fields().cards(window_cards(ctx)).actions(primary, &close, None).show(ctx, valid, |ui| {
         body(ui, &mut w, view, preview_error.as_deref());
     });
     if w.animate && !w.paused {
@@ -878,6 +878,34 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         }
     }
     app.gear_window = Some(w);
+}
+
+/// The window's width in form cards: 3.3 up to a 1600 pt wide screen, then wider with the
+/// screen (to 4.8 cards) so the drawing and the 3D view sit side by side and the columns need
+/// less height. The kit never lets it be wider than the screen.
+fn window_cards(ctx: &egui::Context) -> f32 {
+    let card = solidcraft_theme::Tokens::get().form_card_width.max(1.0);
+    let screen = ctx.content_rect().width();
+    (3.3 + (screen - 1600.0).max(0.0) * 0.5 / card).min(4.8)
+}
+
+/// Below this width the two columns stack: the form on top, the views under it at the whole
+/// width (side by side they would be cut off at the window's edge, and Create with them).
+const STACK_BELOW: f32 = 600.0;
+/// The least height a preview (drawing, 3D view, 2D mesh) is given, however short the window.
+const VIEW_MIN_H: f32 = 180.0;
+
+/// The height of the window's scrolling body, as the kit gives it from the screen (less a
+/// margin for the app's title bar, which windows are kept below).
+fn body_height(ui: &Ui) -> f32 {
+    let t = solidcraft_theme::Tokens::get();
+    (ui.ctx().content_rect().height() - t.form_header_height - t.form_footer_height - t.space_24 * 2.0 - 32.0).max(0.0)
+}
+
+/// What is left of the window's body below the cursor (`ui` is the body itself, its top the
+/// body's top): the columns size themselves to it, so they fit without the body scrolling.
+fn room_below(ui: &Ui) -> f32 {
+    (body_height(ui) - (ui.cursor().top() - ui.min_rect().top())).max(0.0)
 }
 
 /// Says how an update went: in place or rebuilt, and which features built on the gears now fail.
@@ -946,7 +974,7 @@ fn set_slot(w: &mut GearWindow, slot: usize, pick: Slot) {
 fn axes_step(ui: &mut Ui, w: &mut GearWindow) {
     ui.label(egui::RichText::new("Axes").strong()).on_hover_text("Start from the shafts: pick the two axes and the gears are sized and placed on them");
     for i in 0..2 {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.add_sized([110.0, 18.0], egui::Label::new(egui::RichText::new(if i == 0 { "Axis 1" } else { "Axis 2" }).small().weak()));
             if ui.small_button("Use selection").on_hover_text("Take the axis of what is selected in the view: a construction or origin axis, a straight or round edge, a cylinder face, a sketch line").clicked() {
                 w.capture = Some(i);
@@ -971,7 +999,7 @@ fn axes_step(ui: &mut Ui, w: &mut GearWindow) {
             }
         });
         if w.manual[i] {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.add_sized([110.0, 18.0], egui::Label::new(egui::RichText::new("  point, direction").small().weak()));
                 let (o, d) = &mut w.entered[i];
                 let mut changed = false;
@@ -1066,7 +1094,8 @@ impl Note for Ui {
 }
 
 fn body(ui: &mut Ui, w: &mut GearWindow, view: ViewState, view_error: Option<&str>) {
-    ui.horizontal(|ui| {
+    // Wrapped: in a narrow window the note goes under the buttons instead of past the edge.
+    ui.horizontal_wrapped(|ui| {
         let was = w.mode;
         use crate::gear_icons::{MODE_ADVANCED, MODE_SIMPLE, choice};
         if choice(ui, w.mode == Mode::Simple, MODE_SIMPLE, egui::RichText::new("Simple").strong())
@@ -1110,37 +1139,59 @@ fn assembly_row(ui: &mut Ui, w: &mut GearWindow) {
 }
 
 /// Simple mode: the mode, its picks and a short form on the left; the drawing and the 3D view
-/// on the right, then the mesh badge, the key numbers and Show in model.
+/// on the right, then the mesh badge, the key numbers and Show in model. In a narrow window the
+/// form goes on top and the views under it.
 fn simple_body(ui: &mut Ui, w: &mut GearWindow, view: ViewState, view_error: Option<&str>) {
     let full = ui.available_width();
+    if full < STACK_BELOW {
+        crate::gear_simple::panel(ui, w);
+        ui.add_space(8.0);
+        let room = body_height(ui);
+        simple_views(ui, w, view, view_error, full, room);
+        return;
+    }
+    let room = room_below(ui);
     let left = (full * 0.36).clamp(260.0, 340.0);
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.set_width(left);
-            egui::ScrollArea::vertical().id_salt("gear_simple_left").max_height(560.0).auto_shrink([false, true]).show(ui, |ui| {
+            // As tall as the window allows (a fixed height cut the settings off with room to spare).
+            egui::ScrollArea::vertical().id_salt("gear_simple_left").max_height(room.max(260.0)).auto_shrink([false, true]).show(ui, |ui| {
                 crate::gear_simple::panel(ui, w);
             });
         });
         ui.add_space(8.0);
         ui.vertical(|ui| {
-            let width = (full - left - 8.0).max(260.0);
+            let width = full - left - 8.0;
             ui.set_width(width);
-            right_views(ui, w, width);
-            motion_row(ui, w);
-            mesh_badge(ui, w);
-            view_row(ui, w, view, view_error);
-            if let Some(e) = &w.error {
-                ui.note(e, ui.visuals().error_fg_color);
-            }
-            simple_facts(ui, w);
+            simple_views(ui, w, view, view_error, width, room);
         });
     });
 }
 
+/// Simple mode's views column: the previews, Turn, the mesh badge, Show in model, the numbers.
+fn simple_views(ui: &mut Ui, w: &mut GearWindow, view: ViewState, view_error: Option<&str>, width: f32, room: f32) {
+    right_views(ui, w, width, room - UNDER_VIEWS_SIMPLE);
+    motion_row(ui, w);
+    mesh_badge(ui, w);
+    view_row(ui, w, view, view_error);
+    if let Some(e) = &w.error {
+        ui.note(e, ui.visuals().error_fg_color);
+    }
+    simple_facts(ui, w);
+}
+
+/// About the height of what goes under the previews (the 3D view's row, Turn, the mesh badge,
+/// Show in model, the numbers): the previews leave it that much of the window.
+const UNDER_VIEWS_SIMPLE: f32 = 300.0;
+const UNDER_VIEWS_ADVANCED: f32 = 220.0;
+
 /// The drawing, the 3D view and the 2D mesh preview, as the toggle above them says.
-fn right_views(ui: &mut Ui, w: &mut GearWindow, width: f32) {
+/// `budget` is the height the previews may take; they never go below [`VIEW_MIN_H`] (the body
+/// scrolls then).
+fn right_views(ui: &mut Ui, w: &mut GearWindow, width: f32, budget: f32) {
     let simple = w.mode == Mode::Simple;
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let views: &[(RightView, &str, &str)] = if simple {
             &[(RightView::Both, "Drawing + 3D", "The sketch and the set in 3D"), (RightView::Drawing, "Drawing", "The sketch, larger"), (RightView::View3d, "3D", "The set in 3D, larger"), (RightView::Profile, "2D mesh", "The teeth meshing, turning")]
         } else {
@@ -1166,12 +1217,21 @@ fn right_views(ui: &mut Ui, w: &mut GearWindow, width: f32) {
     if let Err(e) = &w.plan {
         ui.note(format!("⛔ {e}"), ui.visuals().error_fg_color);
     }
-    let side = width >= 640.0;
-    let half = if side { (width - 8.0) / 2.0 } else { width };
+    // Less the toggle row above (and a note, if any).
+    let budget = (budget - 30.0).max(VIEW_MIN_H);
     let tall = |w: f32| (w * 0.78).clamp(220.0, 420.0);
+    // Two views side by side or one above the other: side by side where the column is wide, or
+    // where stacking would squeeze them flatter than side by side would.
+    let halved = ((width - 8.0) / 2.0).max(0.0);
+    let side_h = tall(halved).min(budget).max(VIEW_MIN_H);
+    let stack_h = tall(width).min(budget / 2.0).max(VIEW_MIN_H);
+    let side = width >= 640.0 || (halved >= 200.0 && halved.min(side_h) > width.min(stack_h));
+    let half = if side { halved } else { width };
+    let both_h = if side { side_h } else { stack_h };
+    let one = |w: f32| tall(w).min(budget).max(VIEW_MIN_H);
     match (w.right, simple) {
         (RightView::Both, true) => {
-            let size = vec2(half, tall(half));
+            let size = vec2(half, both_h);
             if side {
                 ui.horizontal_top(|ui| {
                     ui.vertical(|ui| crate::gear_simple::drawing(ui, w, size));
@@ -1183,23 +1243,23 @@ fn right_views(ui: &mut Ui, w: &mut GearWindow, width: f32) {
             }
         }
         (RightView::Both, false) => {
-            let size = vec2(half, tall(half));
+            let size = vec2(half, both_h);
             if side {
                 ui.horizontal_top(|ui| {
                     ui.vertical(|ui| view3d_ui(ui, w, size));
                     ui.vertical(|ui| {
                         ui.set_width(half);
-                        w.hover_preview = w.hover_preview.or(preview(ui, w));
+                        w.hover_preview = w.hover_preview.or(preview(ui, w, both_h));
                     });
                 });
             } else {
                 view3d_ui(ui, w, size);
-                w.hover_preview = w.hover_preview.or(preview(ui, w));
+                w.hover_preview = w.hover_preview.or(preview(ui, w, both_h));
             }
         }
-        (RightView::Drawing, _) => crate::gear_simple::drawing(ui, w, vec2(width, tall(width))),
-        (RightView::View3d, _) => view3d_ui(ui, w, vec2(width, tall(width))),
-        (RightView::Profile, _) => w.hover_preview = preview(ui, w),
+        (RightView::Drawing, _) => crate::gear_simple::drawing(ui, w, vec2(width, one(width))),
+        (RightView::View3d, _) => view3d_ui(ui, w, vec2(width, one(width))),
+        (RightView::Profile, _) => w.hover_preview = preview(ui, w, budget),
     }
 }
 
@@ -1240,7 +1300,8 @@ fn simple_facts(ui: &mut Ui, w: &GearWindow) {
         }
     }
     if !w.simple.chosen.is_empty() {
-        egui::Grid::new("gear_simple_chosen").num_columns(2).striped(true).spacing([12.0, 2.0]).min_col_width(160.0).show(ui, |ui| {
+        let col = ((ui.available_width() - 12.0) / 2.0).clamp(80.0, 160.0);
+        egui::Grid::new("gear_simple_chosen").num_columns(2).striped(true).spacing([12.0, 2.0]).min_col_width(col).show(ui, |ui| {
             for f in w.simple.chosen.iter().take(10) {
                 // The whole name: a narrow column cut them to "gear 1 t…".
                 ui.add(egui::Label::new(egui::RichText::new(&f.label).small()).wrap_mode(egui::TextWrapMode::Extend));
@@ -1277,33 +1338,47 @@ fn advanced_body(ui: &mut Ui, w: &mut GearWindow, view: ViewState, view_error: O
     type_picker(ui, w);
     ui.add_space(6.0);
     let full = ui.available_width();
+    // The axes and the type picker take the top: past them (the body scrolls) the settings and
+    // the views get at least most of a window's height.
+    let room = room_below(ui).max(body_height(ui) * 0.6);
+    if full < STACK_BELOW {
+        params(ui, w, (room * 0.6).max(260.0));
+        ui.add_space(8.0);
+        advanced_views(ui, w, view, view_error, full, room);
+        return;
+    }
     let left = (full * 0.42).clamp(240.0, 360.0);
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.set_width(left);
-            params(ui, w);
+            params(ui, w, room.max(260.0));
         });
         ui.add_space(8.0);
         ui.vertical(|ui| {
-            let width = (full - left - 8.0).max(200.0);
+            let width = full - left - 8.0;
             ui.set_width(width);
-            w.hover_preview = None;
-            right_views(ui, w, width);
-            motion_row(ui, w);
-            mesh_badge(ui, w);
-            output_row(ui, w);
-            view_row(ui, w, view, view_error);
-            if let Some(e) = &w.error {
-                ui.note(e, ui.visuals().error_fg_color);
-            }
-            facts(ui, w);
+            advanced_views(ui, w, view, view_error, width, room);
         });
     });
 }
 
+/// Advanced mode's views column: the previews, Turn, the mesh badge, the outputs, the numbers.
+fn advanced_views(ui: &mut Ui, w: &mut GearWindow, view: ViewState, view_error: Option<&str>, width: f32, room: f32) {
+    w.hover_preview = None;
+    right_views(ui, w, width, room - UNDER_VIEWS_ADVANCED);
+    motion_row(ui, w);
+    mesh_badge(ui, w);
+    output_row(ui, w);
+    view_row(ui, w, view, view_error);
+    if let Some(e) = &w.error {
+        ui.note(e, ui.visuals().error_fg_color);
+    }
+    facts(ui, w);
+}
+
 /// Turn, pause, speed, and back to the pose the bodies are built in.
 fn motion_row(ui: &mut Ui, w: &mut GearWindow) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.checkbox(&mut w.animate, "Turn").on_hover_text("Turn the set in this preview. Off: the pose the bodies are built in, which is what the view shows");
         if w.animate {
             if ui.small_button(if w.paused { "Go on" } else { "Pause" }).on_hover_text(if w.paused { "Go on turning" } else { "Hold this pose" }).clicked() {
@@ -1341,7 +1416,7 @@ fn mesh_badge(ui: &mut Ui, w: &mut GearWindow) {
     let tip = results.iter().map(|r| r.message.as_str()).collect::<Vec<_>>().join("\n");
     let worst_at = results.iter().position(|r| r.verdict == verdict);
     let mut hovered = None;
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let chip = egui::Frame::new().fill(color.gamma_multiply(0.22)).stroke(Stroke::new(1.0, color)).corner_radius(4.0).inner_margin(egui::Margin::symmetric(6, 1));
         let r = chip.show(ui, |ui| ui.label(egui::RichText::new(text).small().strong().color(color))).response.interact(Sense::hover());
         if r.on_hover_text(&tip).hovered() {
@@ -1494,7 +1569,8 @@ fn mm(v: f64) -> String {
 }
 
 fn row(ui: &mut Ui, label: &str, tip: &str, add: impl FnOnce(&mut Ui)) {
-    ui.horizontal(|ui| {
+    // Wrapped: in a narrow column the fields go under the label instead of past the edge.
+    ui.horizontal_wrapped(|ui| {
         let r = ui.add_sized([128.0, 20.0], egui::Label::new(label).truncate());
         if !tip.is_empty() {
             r.on_hover_text(tip);
@@ -1573,7 +1649,8 @@ struct Cx<'a> {
 ///   coupon): [`section_output`]; design by goal: [`section_suggest`];
 /// - new tables (shafts, chamfers, print tuning, hardware from `gear-body`; hypoid inputs): a
 ///   section function of their own, called from the list below, or the member stubs.
-fn params(ui: &mut Ui, w: &mut GearWindow) {
+/// `height`: the most the settings' scroll area takes (the window's room, not a fixed height).
+fn params(ui: &mut Ui, w: &mut GearWindow, height: f32) {
     // What the axes decided is shown from the solved set, read-only.
     let d: Derived = w.solved.as_ref().map(|s| s.derived).unwrap_or_default();
     let b = w.built.clone();
@@ -1600,7 +1677,7 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
     };
     let mut hovered = None;
     let mut edited = None;
-    egui::ScrollArea::vertical().id_salt("gear_params").max_height(470.0).auto_shrink([false, true]).show(ui, |ui| {
+    egui::ScrollArea::vertical().id_salt("gear_params").max_height(height).auto_shrink([false, true]).show(ui, |ui| {
         section_set(ui, &mut cx);
         section_suggest(ui, &mut cx);
         section_family(ui, &mut cx);
@@ -2647,7 +2724,8 @@ fn facts(ui: &mut Ui, w: &GearWindow) {
                 ui.note(format!("⚠ {warn}"), ui.visuals().warn_fg_color);
             }
             egui::ScrollArea::vertical().id_salt("gear_facts").max_height(170.0).auto_shrink([false, true]).show(ui, |ui| {
-                egui::Grid::new("gear_facts_grid").num_columns(2).striped(true).spacing([12.0, 2.0]).min_col_width(200.0).show(ui, |ui| {
+                let col = ((ui.available_width() - 12.0) / 2.0).clamp(80.0, 200.0);
+                egui::Grid::new("gear_facts_grid").num_columns(2).striped(true).spacing([12.0, 2.0]).min_col_width(col).show(ui, |ui| {
                     // What the axes fixed first, then the set's own numbers.
                     for f in w.solved.iter().flat_map(|s| s.facts.iter()).chain(p.facts.iter()) {
                         ui.add(egui::Label::new(egui::RichText::new(&f.label).small()).wrap_mode(egui::TextWrapMode::Extend));
@@ -2667,9 +2745,10 @@ fn facts(ui: &mut Ui, w: &GearWindow) {
 
 /// The 2D preview: every member in its colour, turned by the motion the gear crate's mesh
 /// tests prove, the lit member brighter. Returns the member under the pointer.
-fn preview(ui: &mut Ui, w: &GearWindow) -> Option<usize> {
+/// `max_h`: the most height it takes (it fits the set to whatever box it gets).
+fn preview(ui: &mut Ui, w: &GearWindow, max_h: f32) -> Option<usize> {
     let side = ui.available_width().min(420.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(side, side * 0.82), Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(vec2(side, (side * 0.82).min(max_h.max(VIEW_MIN_H))), Sense::hover());
     let painter = ui.painter_at(rect);
     let bg = ui.visuals().extreme_bg_color;
     painter.rect_filled(rect, 6.0, bg);
@@ -2842,3 +2921,7 @@ mod freeze_tests {
         assert!(t.elapsed().as_secs_f64() < 30.0, "{:?}", t.elapsed());
     }
 }
+
+#[cfg(test)]
+#[path = "gear_layout_tests.rs"]
+mod layout_tests;

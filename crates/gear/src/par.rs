@@ -7,8 +7,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Threads to use for `n` jobs: none spare for fewer than two jobs, at most the cores (and 8).
 fn threads_for(n: usize) -> usize {
-    let cores = std::thread::available_parallelism().map_or(1, |c| c.get());
-    cores.min(8).min(n).max(1)
+    static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    // `SOLIDCRAFT_GEAR_THREADS` caps it (1: all on the calling thread), for timing.
+    let cap = *CAP.get_or_init(|| {
+        let cores = std::thread::available_parallelism().map_or(1, |c| c.get()).min(8);
+        std::env::var("SOLIDCRAFT_GEAR_THREADS").ok().and_then(|v| v.parse().ok()).map_or(cores, |t: usize| t.clamp(1, cores))
+    });
+    cap.min(n).max(1)
 }
 
 /// `f` of each of `0..n`, in order, computed on several threads (jobs handed out one at a time,

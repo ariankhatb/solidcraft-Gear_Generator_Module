@@ -8,10 +8,13 @@
 //! tessellated as they are, so helical teeth twist and bevel teeth shrink to the apex. The set
 //! turns as the 2D preview does.
 //!
-//! Drawing: a small software rasteriser with a depth buffer (correct where teeth interleave,
-//! which painter's-order polygons are not) into a texture, flat Lambert shading per triangle,
-//! the shafts and labels painted over it. Meshes are cached per plan; a still view is not drawn
-//! again. Drag to orbit, right- or middle-drag to pan, wheel to zoom, double-click to fit.
+//! Drawing: depth-tested triangles (correct where teeth interleave, which painter's-order
+//! polygons are not) into a texture, flat Lambert shading per triangle, the shafts and labels
+//! painted over it. On the app's GPU ([`crate::gear_view3d_gpu`]) the meshes go up once per
+//! plan and a frame is a few draws; without one a small software rasteriser draws the same
+//! picture, coarser while the set turns or is dragged. Meshes are cached per plan; a still view
+//! is not drawn again; the member under the pointer is picked from the meshes. Drag to orbit,
+//! right- or middle-drag to pan, wheel to zoom, double-click to fit.
 //!
 //! The geometry comes from [`schematic_of`], one function over the plan's bodies and the spec:
 //! when `solidcraft_gear::simple::schematic` lands, that function is the one to point at it.
@@ -672,6 +675,8 @@ pub(crate) struct Scene {
     pub triangles: usize,
     /// How long building took (ms).
     pub built_ms: f64,
+    /// Boxes round runs of each part's triangles, for the hover pick.
+    bounds: Vec<Vec<Bounds>>,
 }
 
 fn normals(tris: &[Tri]) -> Vec<[f32; 3]> {
@@ -783,7 +788,8 @@ fn build_scene(sch: &Schematic, plan: &Plan, teeth: bool, clear: Option<&Clearan
     }
     clearance_parts(sch, plan, clear, &mut parts, &mut segs);
     let triangles = parts.iter().map(|p| p.tris.len()).sum();
-    Scene { parts, segs, dropped, triangles, built_ms: crate::now_ms() - started }
+    let bounds = parts.iter().map(|p| chunk_bounds(&p.tris)).collect();
+    Scene { parts, segs, dropped, triangles, built_ms: crate::now_ms() - started, bounds }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -822,16 +828,15 @@ struct Raster {
     h: usize,
     color: Vec<Color32>,
     depth: Vec<f32>,
-    id: Vec<u8>,
 }
 
 impl Raster {
     fn new(w: usize, h: usize, bg: Color32) -> Raster {
-        Raster { w, h, color: vec![bg; w * h], depth: vec![f32::NEG_INFINITY; w * h], id: vec![0; w * h] }
+        Raster { w, h, color: vec![bg; w * h], depth: vec![f32::NEG_INFINITY; w * h] }
     }
 
     /// A triangle in pixel coordinates (x, y, depth: larger nearer).
-    fn tri(&mut self, a: [f32; 3], b: [f32; 3], c: [f32; 3], col: Color32, id: u8, alpha: f32) {
+    fn tri(&mut self, a: [f32; 3], b: [f32; 3], c: [f32; 3], col: Color32, alpha: f32) {
         let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
         if area.abs() < 1e-6 || !area.is_finite() {
             return;
@@ -860,7 +865,6 @@ impl Raster {
                     if alpha >= 1.0 {
                         self.depth[i] = z;
                         self.color[i] = col;
-                        self.id[i] = id;
                     } else {
                         let d = self.color[i];
                         let mix = |p: u8, q: u8| (f32::from(p) * (1.0 - alpha) + f32::from(q) * alpha) as u8;
@@ -892,6 +896,157 @@ impl Raster {
     }
 }
 
+/// Triangles per box of the hover pick's boxes.
+const PICK_CHUNK: usize = 64;
+
+type Bounds = ([f32; 3], [f32; 3]);
+
+/// Boxes round each run of [`PICK_CHUNK`] triangles, in the part's own frame.
+fn chunk_bounds(tris: &[Tri]) -> Vec<Bounds> {
+    tris.chunks(PICK_CHUNK)
+        .map(|c| {
+            let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for v in c.iter().flatten() {
+                for i in 0..3 {
+                    lo[i] = lo[i].min(v[i]);
+                    hi[i] = hi[i].max(v[i]);
+                }
+            }
+            (lo, hi)
+        })
+        .collect()
+}
+
+/// Whether the line `o + s·d` (any s) passes through the box.
+fn crosses(b: &Bounds, o: [f32; 3], d: [f32; 3]) -> bool {
+    let (mut s0, mut s1) = (f32::NEG_INFINITY, f32::INFINITY);
+    for i in 0..3 {
+        if d[i].abs() < 1e-12 {
+            if o[i] < b.0[i] || o[i] > b.1[i] {
+                return false;
+            }
+            continue;
+        }
+        let (a, c) = ((b.0[i] - o[i]) / d[i], (b.1[i] - o[i]) / d[i]);
+        s0 = s0.max(a.min(c));
+        s1 = s1.min(a.max(c));
+    }
+    s0 <= s1
+}
+
+/// Where along `o + s·d` the triangle is crossed, if it is.
+fn hit(t: &Tri, o: [f32; 3], d: [f32; 3]) -> Option<f32> {
+    let s3 = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let x3 = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let d3 = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let (e1, e2) = (s3(t[1], t[0]), s3(t[2], t[0]));
+    let p = x3(d, e2);
+    let det = d3(e1, p);
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    let tv = s3(o, t[0]);
+    let u = d3(tv, p) * inv;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = x3(tv, e1);
+    let v = d3(d, q) * inv;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    Some(d3(e2, q) * inv)
+}
+
+/// The member nearest the eye along the view line through `at` (world), the solids only.
+fn pick(scene: &Scene, pose: &[(P3, P3, P3, P3)], at: P3, view: P3) -> Option<usize> {
+    let mut best: Option<(f32, usize)> = None;
+    for (part, bounds) in scene.parts.iter().zip(&scene.bounds) {
+        if part.fixed || part.alpha < 1.0 || part.tris.is_empty() {
+            continue;
+        }
+        let (o, ex, ey, ez) = pose[part.body];
+        let q = sub(at, o);
+        let org = [dot(q, ex) as f32, dot(q, ey) as f32, dot(q, ez) as f32];
+        let dir = [dot(view, ex) as f32, dot(view, ey) as f32, dot(view, ez) as f32];
+        for (chunk, b) in part.tris.chunks(PICK_CHUNK).zip(bounds) {
+            if !crosses(b, org, dir) {
+                continue;
+            }
+            for t in chunk {
+                if let Some(s) = hit(t, org, dir)
+                    && best.is_none_or(|(bs, _)| s > bs)
+                {
+                    best = Some((s, part.member));
+                }
+            }
+        }
+    }
+    best.map(|(_, m)| m)
+}
+
+/// Where each part's and each line group's vertices are in the uploaded scene.
+struct Layout {
+    parts: Vec<std::ops::Range<u32>>,
+    /// (body, member, vertices).
+    lines: Vec<(usize, usize, std::ops::Range<u32>)>,
+}
+
+/// The scene as GPU vertices (position, normal; lines with a zero normal) and where each part is.
+fn vertex_bytes(scene: &Scene) -> (Vec<u8>, Layout) {
+    let tris: usize = scene.parts.iter().map(|p| p.tris.len()).sum();
+    let mut bytes = Vec::with_capacity((tris * 3 + scene.segs.len() * 2) * crate::gear_view3d_gpu::VERTEX);
+    let put = |p: [f32; 3], n: [f32; 3], bytes: &mut Vec<u8>| {
+        for f in p.iter().chain(&n) {
+            bytes.extend_from_slice(&f.to_le_bytes());
+        }
+    };
+    let mut at = 0u32;
+    let mut parts = Vec::with_capacity(scene.parts.len());
+    for part in &scene.parts {
+        let start = at;
+        for (t, n) in part.tris.iter().zip(&part.normals) {
+            for v in t {
+                put(*v, *n, &mut bytes);
+            }
+            at += 3;
+        }
+        parts.push(start..at);
+    }
+    let mut order: Vec<usize> = (0..scene.segs.len()).collect();
+    order.sort_by_key(|i| (scene.segs[*i].body, scene.segs[*i].member));
+    let mut lines: Vec<(usize, usize, std::ops::Range<u32>)> = Vec::new();
+    for i in order {
+        let sg = &scene.segs[i];
+        put(sg.a, [0.0; 3], &mut bytes);
+        put(sg.b, [0.0; 3], &mut bytes);
+        match lines.last_mut() {
+            Some((b, m, r)) if *b == sg.body && *m == sg.member => r.end = at + 2,
+            _ => lines.push((sg.body, sg.member, at..at + 2)),
+        }
+        at += 2;
+    }
+    (bytes, Layout { parts, lines })
+}
+
+/// What the view did, for the bounded-work checks.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Work {
+    /// Scenes built (meshed).
+    pub builds: u64,
+    /// Pictures drawn (CPU or GPU).
+    pub renders: u64,
+    /// Triangles the CPU rasteriser filled in the last CPU picture (0 on the GPU).
+    pub raster_tris: usize,
+    /// Pixels of the last picture.
+    pub pixels: usize,
+    /// Scenes uploaded to the GPU.
+    pub uploads: u64,
+    /// Whether the last picture was drawn on the GPU.
+    pub gpu: bool,
+}
+
 /// The view's camera and cached drawing, kept by the window.
 pub(crate) struct View3d {
     yaw: f64,
@@ -903,14 +1058,41 @@ pub(crate) struct View3d {
     scene: Option<(u64, Scene)>,
     texture: Option<egui::TextureHandle>,
     drawn: Option<u64>,
-    ids: (usize, usize, Vec<u8>, f32),
     /// The fitted centre and radius of the set at the build pose.
     fit: Option<(u64, P3, f64)>,
+    /// The GPU drawing (none without a device: the CPU rasteriser draws then).
+    gpu: Option<crate::gear_view3d_gpu::Gpu>,
+    /// No device was there when looked for (looked for again on the next scene).
+    no_gpu: Option<u64>,
+    layout: Option<(u64, Layout)>,
+    shown: Option<egui::TextureId>,
+    /// The last hover pick: pointer (pixels), picture, member.
+    picked: Option<((i32, i32), u64, Option<usize>)>,
+    /// The driver angle of the last frame, to tell a turning view from a still one.
+    last_turned: f64,
+    pub(crate) work: Work,
 }
 
 impl Default for View3d {
     fn default() -> Self {
-        View3d { yaw: -45f64.to_radians(), pitch: 35.264f64.to_radians(), zoom: 1.0, pan: [0.0; 3], teeth: true, scene: None, texture: None, drawn: None, ids: (0, 0, Vec::new(), 1.0), fit: None }
+        View3d {
+            yaw: -45f64.to_radians(),
+            pitch: 35.264f64.to_radians(),
+            zoom: 1.0,
+            pan: [0.0; 3],
+            teeth: true,
+            scene: None,
+            texture: None,
+            drawn: None,
+            fit: None,
+            gpu: None,
+            no_gpu: None,
+            layout: None,
+            shown: None,
+            picked: None,
+            last_turned: 0.0,
+            work: Work::default(),
+        }
     }
 }
 
@@ -933,11 +1115,29 @@ fn hash_of(parts: &[u64]) -> u64 {
     h.finish()
 }
 
+/// Gamma RGB (0..1) and alpha of a colour.
+fn rgba(c: Color32, alpha: f32) -> [f32; 4] {
+    [f32::from(c.r()) / 255.0, f32::from(c.g()) / 255.0, f32::from(c.b()) / 255.0, alpha]
+}
+
 impl View3d {
     /// Back to the iso view, fitted.
     pub fn reset(&mut self) {
-        let teeth = self.teeth;
-        *self = View3d { teeth, scene: self.scene.take(), texture: self.texture.take(), ..View3d::default() };
+        self.zoom = 1.0;
+        self.pan = [0.0; 3];
+        self.yaw = -45f64.to_radians();
+        self.pitch = 35.264f64.to_radians();
+    }
+
+    /// Draws with `gpu` instead of the installed device (tests).
+    #[cfg(test)]
+    pub(crate) fn with_gpu(gpu: crate::gear_view3d_gpu::Gpu) -> View3d {
+        View3d { gpu: Some(gpu), ..View3d::default() }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gpu(&self) -> Option<&crate::gear_view3d_gpu::Gpu> {
+        self.gpu.as_ref()
     }
 
     /// Triangles drawn and the scene's build time (ms), for the cost line.
@@ -950,8 +1150,16 @@ impl View3d {
         let (rect, resp) = ui.allocate_exact_size(inp.size, Sense::click_and_drag());
         let key = hash_of(&[inp.key, u64::from(self.teeth)]);
         if self.scene.as_ref().is_none_or(|(k, _)| *k != key) {
+            let _perf = perf::span("scene_build");
             self.scene = Some((key, build_scene(inp.sch, inp.plan, self.teeth, inp.clear)));
             self.drawn = None;
+            self.work.builds += 1;
+        }
+        if self.gpu.is_none() && self.no_gpu != Some(key) {
+            match crate::gear_view3d_gpu::shared() {
+                Some(s) => self.gpu = Some(crate::gear_view3d_gpu::Gpu::new(s)),
+                None => self.no_gpu = Some(key),
+            }
         }
         // Orbit, pan, zoom, fit.
         if resp.dragged_by(egui::PointerButton::Primary) {
@@ -999,71 +1207,129 @@ impl View3d {
             }
         }
         if resp.double_clicked() {
-            self.zoom = 1.0;
-            self.pan = [0.0; 3];
-            self.yaw = -45f64.to_radians();
-            self.pitch = 35.264f64.to_radians();
+            (self.zoom, self.pan, self.yaw, self.pitch) = (1.0, [0.0; 3], -45f64.to_radians(), 35.264f64.to_radians());
         }
         let target = add(fit.0, self.pan);
         let painter = ui.painter_at(rect);
         let visuals = ui.visuals();
         let bg = visuals.extreme_bg_color;
         let ink = visuals.text_color();
-        // The image, at up to two pixels per point and 0.9 megapixels.
+        // Turning or dragged: the CPU rasteriser draws a coarser picture until it stands still.
+        let moving = inp.turned != self.last_turned || resp.dragged();
+        self.last_turned = inp.turned;
         let ppp = ui.ctx().pixels_per_point().min(2.0);
         let mut res = ppp;
-        while (rect.width() * res) * (rect.height() * res) > 900_000.0 && res > 0.5 {
+        // The GPU draws at up to two pixels per point and 4 megapixels; the CPU at up to 0.9
+        // megapixels, a quarter of that while moving.
+        let cap = if self.gpu.is_some() { 4_000_000.0 } else if moving { 225_000.0 } else { 900_000.0 };
+        while (rect.width() * res) * (rect.height() * res) > cap && res > 0.25 {
             res *= 0.8;
         }
         let (w, h) = ((rect.width() * res).max(1.0) as usize, (rect.height() * res).max(1.0) as usize);
         let lit_bits = inp.lit.iter().fold(0u64, |a, m| a | (1 << (m % 60)));
-        let still = hash_of(&[key, self.yaw.to_bits(), self.pitch.to_bits(), self.zoom.to_bits(), target[0].to_bits(), target[1].to_bits(), target[2].to_bits(), inp.turned.to_bits(), w as u64, h as u64, lit_bits, u64::from(visuals.dark_mode)]);
+        let still = hash_of(&[key, self.yaw.to_bits(), self.pitch.to_bits(), self.zoom.to_bits(), target[0].to_bits(), target[1].to_bits(), target[2].to_bits(), inp.turned.to_bits(), w as u64, h as u64, lit_bits, u64::from(visuals.dark_mode), u64::from(bg.to_srgba_unmultiplied()[0])]);
         let s = scale * f64::from(res);
-        let (cxp, cyp) = (w as f64 / 2.0, h as f64 / 2.0);
-        let project = |p: P3| -> [f32; 3] {
-            let d = sub(p, target);
-            [(cxp + dot(d, right) * s) as f32, (cyp - dot(d, up) * s) as f32, dot(d, view) as f32]
-        };
         let pose = poses(inp.sch, inp.turned);
         let world = |b: usize, v: [f32; 3]| -> P3 {
             let (o, ex, ey, ez) = pose[b];
             add(o, add(add(mul(ex, f64::from(v[0])), mul(ey, f64::from(v[1]))), mul(ez, f64::from(v[2]))))
         };
-        if self.drawn != Some(still) || self.texture.is_none() {
-            let mut r = Raster::new(w, h, bg);
-            let light = unit(add(add(mul(right, -0.35), mul(up, 0.55)), mul(view, 0.75)));
-            let dim = !inp.lit.is_empty();
-            let mut order: Vec<&Part> = scene.parts.iter().collect();
-            order.sort_by(|a, b| b.alpha.total_cmp(&a.alpha));
-            for part in order {
-                let base = if part.fixed { ink.lerp_to_gamma(bg, 0.35) } else { crate::gear_window::member_color(part.member) };
-                let lit = inp.lit.contains(&part.member);
-                let base = if dim && !lit && !part.fixed { base.gamma_multiply(0.55) } else { base };
-                let (_, ex, ey, ez) = if part.fixed { ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]) } else { pose[part.body] };
-                let id = if part.fixed { 0 } else { (part.member + 1).min(250) as u8 };
-                let place = |v: [f32; 3]| if part.fixed { [f64::from(v[0]), f64::from(v[1]), f64::from(v[2])] } else { world(part.body, v) };
-                for (t, n) in part.tris.iter().zip(&part.normals) {
-                    let nw = add(add(mul(ex, f64::from(n[0])), mul(ey, f64::from(n[1]))), mul(ez, f64::from(n[2])));
-                    let shade = (0.3 + 0.7 * dot(nw, light).abs()) as f32;
-                    let col = Color32::from_rgb((f32::from(base.r()) * shade) as u8, (f32::from(base.g()) * shade) as u8, (f32::from(base.b()) * shade) as u8);
-                    r.tri(project(place(t[0])), project(place(t[1])), project(place(t[2])), col, id, part.alpha);
+        let light = unit(add(add(mul(right, -0.35), mul(up, 0.55)), mul(view, 0.75)));
+        let dim = !inp.lit.is_empty();
+        let base_of = |part: &Part| {
+            let base = if part.fixed { ink.lerp_to_gamma(bg, 0.35) } else { crate::gear_window::member_color(part.member) };
+            let lit = inp.lit.contains(&part.member);
+            if dim && !lit && !part.fixed { base.gamma_multiply(0.55) } else { base }
+        };
+        let line_color = |member: usize| crate::gear_window::member_color(member).lerp_to_gamma(ink, 0.55);
+        let bias = fit.1 * 0.004;
+        if let Some(gpu) = &mut self.gpu {
+            if self.drawn != Some(still) || self.shown.is_none() {
+                let _perf = perf::span("gpu");
+                if !gpu.has_scene(key) || self.layout.as_ref().is_none_or(|(k, _)| *k != key) {
+                    let (bytes, layout) = vertex_bytes(scene);
+                    gpu.upload(key, &bytes);
+                    self.layout = Some((key, layout));
+                    self.work.uploads += 1;
                 }
+                let layout = &self.layout.as_ref().expect("uploaded above").1;
+                // Pixel-space clip rows from a body-frame point; depth 0.5 at the target, larger nearer.
+                let zk = 0.5 / (4.0 * fit.1 + len(self.pan) + 1.0);
+                let (kx, ky) = (s / (w as f64 / 2.0), s / (h as f64 / 2.0));
+                let frame_of = |part_fixed: bool, body: usize| if part_fixed { ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]) } else { pose[body] };
+                let rows = |(o, ex, ey, ez): (P3, P3, P3, P3), extra: f64| {
+                    let row = |a: P3, k: f64, c: f64| [(k * dot(a, ex)) as f32, (k * dot(a, ey)) as f32, (k * dot(a, ez)) as f32, (k * dot(a, sub(o, target)) + c) as f32];
+                    [row(right, kx, 0.0), row(up, ky, 0.0), row(view, zk, 0.5 + extra * zk)]
+                };
+                let mut draws = Vec::with_capacity(scene.parts.len() + layout.lines.len());
+                for pass in [crate::gear_view3d_gpu::Pass::Solid, crate::gear_view3d_gpu::Pass::Glass] {
+                    for (part, verts) in scene.parts.iter().zip(&layout.parts) {
+                        if (part.alpha >= 1.0) != (pass == crate::gear_view3d_gpu::Pass::Solid) || verts.is_empty() {
+                            continue;
+                        }
+                        let f = frame_of(part.fixed, part.body);
+                        let (_, ex, ey, ez) = f;
+                        draws.push(crate::gear_view3d_gpu::Draw {
+                            pass,
+                            verts: verts.clone(),
+                            rows: rows(f, 0.0),
+                            light: [dot(light, ex) as f32, dot(light, ey) as f32, dot(light, ez) as f32, 1.0],
+                            color: rgba(base_of(part), part.alpha.min(1.0)),
+                        });
+                    }
+                }
+                for (body, member, verts) in &layout.lines {
+                    draws.push(crate::gear_view3d_gpu::Draw { pass: crate::gear_view3d_gpu::Pass::Line, verts: verts.clone(), rows: rows(pose[*body], bias), light: [0.0; 4], color: rgba(line_color(*member), 1.0) });
+                }
+                self.shown = gpu.render(w as u32, h as u32, bg, &draws);
+                self.drawn = Some(still);
+                self.work = Work { renders: self.work.renders + 1, raster_tris: 0, pixels: w * h, gpu: true, ..self.work };
             }
-            let bias = (fit.1 * 0.004) as f32;
-            for sg in &scene.segs {
-                let col = crate::gear_window::member_color(sg.member).lerp_to_gamma(ink, 0.55);
-                r.line(project(world(sg.body, sg.a)), project(world(sg.body, sg.b)), col, bias);
+            if let Some(id) = self.shown {
+                painter.image(id, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
-            let image = egui::ColorImage::new([w, h], r.color);
-            match &mut self.texture {
-                Some(t) => t.set(image, egui::TextureOptions::LINEAR),
-                None => self.texture = Some(ui.ctx().load_texture("gear_view3d", image, egui::TextureOptions::LINEAR)),
+        } else {
+            if self.drawn != Some(still) || self.texture.is_none() {
+                let _perf = perf::span("raster");
+                let (cxp, cyp) = (w as f64 / 2.0, h as f64 / 2.0);
+                let project = |p: P3| -> [f32; 3] {
+                    let d = sub(p, target);
+                    [(cxp + dot(d, right) * s) as f32, (cyp - dot(d, up) * s) as f32, dot(d, view) as f32]
+                };
+                let mut r = Raster::new(w, h, bg);
+                let mut order: Vec<&Part> = scene.parts.iter().collect();
+                order.sort_by(|a, b| b.alpha.total_cmp(&a.alpha));
+                let mut filled = 0;
+                for part in order {
+                    let base = base_of(part);
+                    let (_, ex, ey, ez) = if part.fixed { ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]) } else { pose[part.body] };
+                    let place = |v: [f32; 3]| if part.fixed { [f64::from(v[0]), f64::from(v[1]), f64::from(v[2])] } else { world(part.body, v) };
+                    for (t, n) in part.tris.iter().zip(&part.normals) {
+                        let nw = add(add(mul(ex, f64::from(n[0])), mul(ey, f64::from(n[1]))), mul(ez, f64::from(n[2])));
+                        let shade = (0.3 + 0.7 * dot(nw, light).abs()) as f32;
+                        let col = Color32::from_rgb((f32::from(base.r()) * shade) as u8, (f32::from(base.g()) * shade) as u8, (f32::from(base.b()) * shade) as u8);
+                        r.tri(project(place(t[0])), project(place(t[1])), project(place(t[2])), col, part.alpha);
+                    }
+                    filled += part.tris.len();
+                }
+                for sg in &scene.segs {
+                    r.line(project(world(sg.body, sg.a)), project(world(sg.body, sg.b)), line_color(sg.member), bias as f32);
+                }
+                let image = egui::ColorImage::new([w, h], r.color);
+                match &mut self.texture {
+                    Some(t) => t.set(image, egui::TextureOptions::LINEAR),
+                    None => self.texture = Some(ui.ctx().load_texture("gear_view3d", image, egui::TextureOptions::LINEAR)),
+                }
+                self.drawn = Some(still);
+                self.work = Work { renders: self.work.renders + 1, raster_tris: filled, pixels: w * h, gpu: false, ..self.work };
             }
-            self.ids = (w, h, r.id, res);
-            self.drawn = Some(still);
-        }
-        if let Some(t) = &self.texture {
-            painter.image(t.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            if let Some(t) = &self.texture {
+                painter.image(t.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            }
+            if moving {
+                // Drawn coarse: once it stands still, a full picture.
+                ui.ctx().request_repaint();
+            }
         }
         // The overlay: shafts, the angle between them, the offset or centre distance, names.
         let to_screen = |p: P3| -> Pos2 {
@@ -1072,11 +1338,20 @@ impl View3d {
         };
         let overlay = Overlay { painter: &painter, to_screen: &to_screen, ink, bg };
         overlay.draw(inp.sch, &pose, fit.1);
-        // The member under the pointer.
+        // The member under the pointer: picked again only when the pointer or the picture moved.
         let hovered = resp.hover_pos().and_then(|p| {
-            let (w, h, ids, res) = (&self.ids.0, &self.ids.1, &self.ids.2, self.ids.3);
-            let (x, y) = (((p.x - rect.left()) * res) as usize, ((p.y - rect.top()) * res) as usize);
-            (x < *w && y < *h).then(|| ids[y * w + x]).filter(|i| *i > 0).map(|i| usize::from(i) - 1)
+            let px = (p.x.round() as i32, p.y.round() as i32);
+            if let Some((at, pic, m)) = self.picked
+                && at == px
+                && pic == still
+            {
+                return m;
+            }
+            let (dx, dy) = (f64::from(p.x - rect.center().x) / scale, f64::from(p.y - rect.center().y) / scale);
+            let at = add(target, add(mul(right, dx), mul(up, -dy)));
+            let m = pick(scene, &pose, at, view);
+            self.picked = Some((px, still, m));
+            m
         });
         hovered
     }
@@ -1228,4 +1503,180 @@ mod tests {
             }
         }
     }
+    fn frame(ctx: &egui::Context, v: &mut View3d, p: &Plan, sch: &Schematic, turned: f64, size: egui::Vec2) -> egui::FullOutput {
+        let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 800.0))), ..Default::default() };
+        ctx.run_ui(raw, |ui| {
+            v.show(ui, Inputs { key: 1, sch, plan: p, turned, lit: &[], size, clear: None });
+        })
+    }
+
+    /// The view's work per frame is bounded: the scene is meshed once, a still view is not drawn
+    /// again, and while it turns the CPU rasteriser fills a coarse picture (a full one once it
+    /// stands still).
+    #[test]
+    fn a_turning_view_draws_again_without_meshing_again() {
+        let spec = Spec::defaults_for(Kind::BevelPlanetary);
+        let p = plan(&spec).unwrap();
+        let sch = schematic_of(&spec, &p);
+        let ctx = egui::Context::default();
+        let mut v = View3d::default();
+        let size = vec2(600.0, 450.0);
+        frame(&ctx, &mut v, &p, &sch, 0.0, size);
+        frame(&ctx, &mut v, &p, &sch, 0.0, size);
+        assert_eq!((v.work.builds, v.work.renders), (1, 1), "a still view is drawn once");
+        assert_eq!(v.work.pixels, 600 * 450);
+        for i in 1..=10 {
+            frame(&ctx, &mut v, &p, &sch, f64::from(i) * 0.05, size);
+            assert!(v.work.gpu || v.work.pixels <= 225_000, "turning, the CPU picture is coarse: {} pixels", v.work.pixels);
+        }
+        assert_eq!((v.work.builds, v.work.renders), (1, 11), "turning draws once a frame and never meshes again");
+        frame(&ctx, &mut v, &p, &sch, 0.5, size);
+        assert_eq!((v.work.renders, v.work.pixels), (12, 600 * 450), "standing still, one full picture");
+        frame(&ctx, &mut v, &p, &sch, 0.5, size);
+        assert_eq!(v.work.renders, 12, "and then none");
+        // Without teeth the scene is meshed once more.
+        v.teeth = false;
+        frame(&ctx, &mut v, &p, &sch, 0.5, size);
+        assert_eq!(v.work.builds, 2);
+    }
+
+    /// The pick finds the member under the pointer: a point on each gear of a pair picks that
+    /// gear, a point far outside the set picks nothing.
+    #[test]
+    fn the_pointer_picks_the_member_under_it() {
+        let spec = Spec::defaults_for(Kind::Pair);
+        let p = plan(&spec).unwrap();
+        let sch = schematic_of(&spec, &p);
+        let mut v = View3d::default();
+        let size = vec2(600.0, 450.0);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut v, &p, &sch, 0.0, size);
+        let scene = &v.scene.as_ref().unwrap().1;
+        let pose = poses(&sch, 0.0);
+        let fit = v.fit.unwrap();
+        let (yaw, pitch) = (-45f64.to_radians(), 35.264f64.to_radians());
+        let view = [pitch.cos() * yaw.cos(), pitch.cos() * yaw.sin(), pitch.sin()];
+        for m in 0..2 {
+            let b = sch.bodies.iter().find(|b| b.member == m).unwrap();
+            let (o, ex, _, z) = pose[b.body];
+            let r = b.pitch.first().map_or(1.0, |q| q[1]);
+            // Between the bore and the teeth, seen along the gear's own shaft: only it is there.
+            let at = add(add(o, mul(z, (b.z.0 + b.z.1) / 2.0)), mul(ex, r * 0.75));
+            assert_eq!(pick(scene, &pose, at, z), Some(m), "gear {m}");
+        }
+        let away = cross(view, [0.0, 0.0, 1.0]);
+        assert_eq!(pick(scene, &pose, add(fit.1, mul(unit(away), fit.2 * 50.0)), view), None);
+    }
+
+    /// On the GPU the view draws what the CPU rasteriser draws (same colours, shading and depth
+    /// order; edges may differ by a pixel), uploads its scene once and only redraws per frame.
+    #[test]
+    fn the_gpu_draws_the_picture_the_rasteriser_does() {
+        use egui_wgpu::wgpu;
+        let Some((_, device, queue)) = crate::gpu::offscreen_device() else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        let renderer = std::sync::Arc::new(egui::epaint::mutex::RwLock::new(egui_wgpu::Renderer::new(&device, wgpu::TextureFormat::Rgba8UnormSrgb, Default::default())));
+        let shared = crate::gear_view3d_gpu::Shared::new(device.clone(), queue.clone(), renderer);
+        for k in [Kind::Pair, Kind::SpiralBevel, Kind::BevelPlanetary] {
+            let spec = Spec::defaults_for(k);
+            let p = plan(&spec).unwrap();
+            let sch = schematic_of(&spec, &p);
+            let size = vec2(400.0, 300.0);
+            let ctx = egui::Context::default();
+            let mut g = View3d::with_gpu(crate::gear_view3d_gpu::Gpu::new(shared.clone()));
+            let mut c = View3d::default();
+            frame(&ctx, &mut g, &p, &sch, 0.0, size);
+            let out = frame(&ctx, &mut c, &p, &sch, 0.0, size);
+            assert!(g.work.gpu && !c.work.gpu);
+            let cpu = out
+                .textures_delta
+                .set
+                .iter()
+                .flat_map(|(_, ds)| ds.iter())
+                .find_map(|d| match &d.image {
+                    egui::ImageData::Color(i) if i.size == [400, 300] => Some(i.clone()),
+                    _ => None,
+                })
+                .expect("the CPU picture");
+            let tex = g.gpu().unwrap().texture().unwrap();
+            let (device, queue) = g.gpu().unwrap().device();
+            let stride = (tex.width() * 4).div_ceil(256) * 256;
+            let read = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: u64::from(stride) * u64::from(tex.height()),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut enc = device.create_command_encoder(&Default::default());
+            enc.copy_texture_to_buffer(
+                tex.as_image_copy(),
+                wgpu::TexelCopyBufferInfo { buffer: &read, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(stride), rows_per_image: Some(tex.height()) } },
+                tex.size(),
+            );
+            queue.submit([enc.finish()]);
+            let slice = read.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |_| {});
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            let bytes = slice.get_mapped_range().unwrap();
+            assert_eq!([tex.width(), tex.height()], [400, 300]);
+            let (mut sum, mut far, mut n) = (0u64, 0usize, 0usize);
+            for y in 0..300usize {
+                for x in 0..400usize {
+                    let gp = &bytes[y * stride as usize + x * 4..][..3];
+                    let cp = cpu.pixels[y * 400 + x];
+                    let dmax = gp[0].abs_diff(cp.r()).max(gp[1].abs_diff(cp.g())).max(gp[2].abs_diff(cp.b()));
+                    sum += u64::from(dmax);
+                    far += usize::from(dmax > 40);
+                    n += 1;
+                }
+            }
+            drop(bytes);
+            let mean = sum as f64 / n as f64;
+            eprintln!("{k:?}: mean difference {mean:.2}, {far} pixels far apart of {n}");
+            assert!(mean < 3.0 && far * 100 < n * 3, "{k:?}: the GPU picture differs: mean {mean:.2}, {far} of {n} pixels far apart");
+            for i in 1..=5 {
+                frame(&ctx, &mut g, &p, &sch, f64::from(i) * 0.05, size);
+            }
+            assert_eq!((g.work.builds, g.work.uploads, g.work.renders), (1, 1, 6), "{k:?}: uploaded once, drawn once a frame");
+            assert!(g.gpu().unwrap().last_draws <= sch.bodies.len() * 2 + 2, "{k:?}: a few draws a frame");
+        }
+    }
 }
+
+
+/// The view's frame-time breakdown for the window's frame-time harness (`gear_perf_tests`):
+/// spans record only in tests; in the app they cost nothing.
+pub(crate) mod perf {
+    #[cfg(test)]
+    thread_local! {
+        static T: std::cell::RefCell<Vec<(&'static str, f64)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    pub(crate) struct Span {
+        #[cfg(test)]
+        at: (&'static str, std::time::Instant),
+    }
+    #[allow(unused_variables)]
+    pub(crate) fn span(n: &'static str) -> Span {
+        Span {
+            #[cfg(test)]
+            at: (n, std::time::Instant::now()),
+        }
+    }
+    #[cfg(test)]
+    impl Drop for Span {
+        fn drop(&mut self) {
+            let ms = self.at.1.elapsed().as_secs_f64() * 1e3;
+            T.with(|t| t.borrow_mut().push((self.at.0, ms)));
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn take() -> Vec<(&'static str, f64)> {
+        T.with(|t| std::mem::take(&mut *t.borrow_mut()))
+    }
+}
+
+#[cfg(test)]
+#[path = "gear_perf_tests.rs"]
+mod perf_tests;

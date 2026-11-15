@@ -313,6 +313,7 @@ mod gear_drawing;
 mod gear_simple;
 mod gear_simple_state;
 mod gear_view3d;
+mod gear_view3d_gpu;
 pub mod gear_window;
 #[cfg(test)]
 mod sketch_side_ui_tests;
@@ -1204,6 +1205,8 @@ impl SolveApp {
     /// Draw the viewport with pipelines [`Self::build_wgpu_split`] made, perhaps on another thread.
     pub fn adopt_wgpu(&mut self, rs: &egui_wgpu::RenderState, built: WgpuBuilt) {
         self.blur.install(rs, built.blur);
+        // The Gear Generator's 3D view draws on the same device.
+        crate::gear_view3d_gpu::install(rs);
         if built.msaa_fallback {
             self.msaa_compatibility = true;
         }

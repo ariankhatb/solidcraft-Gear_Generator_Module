@@ -397,13 +397,15 @@ fn ring_member(s: &Spec, g: &Geometry, spiral: f64, phase: f64, p: &mut Plan) ->
     let (ha, hf) = (s.rack.addendum * mn, s.rack.dedendum * mn);
     let r_tip = hr * (dr - (ha / re).atan()).tan();
     let r_root = hr * (dr + (hf / re).atan()).tan();
-    let bins = 320usize;
+    let bins = 600usize;
     let r_at = |j: usize| r_tip + (r_root - r_tip) * j as f64 / bins as f64;
     let mut widest: Vec<Option<f64>> = vec![None; bins + 1];
     let pitch_r = PI / f64::from(zr);
-    let turns = 3000;
+    // The tooth is in the ring's teeth only within a few pitches of the mesh: half a turn
+    // each way covers it.
+    let turns = 6000;
     for i in 0..=turns {
-        let psi = -PI + TAU * i as f64 / turns as f64;
+        let psi = -0.5 * PI + PI * i as f64 / turns as f64;
         let chi = psi * f64::from(zp) / f64::from(zr);
         let mut prev: Option<(f64, f64)> = None;
         for (rr, a) in &tooth {
@@ -642,7 +644,9 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
                 bodies: Some([pb.clone(), fb.clone()]),
                 ratio: if mode == BevelPlanetMode::Ring { fp / ff } else { -fp / ff },
                 period: TAU / fp,
-                gap: (gap_lo, gap_hi),
+                // The ring cut by the planet keeps its play only near mid face: towards its ends
+                // the flanks close up (to touching at the least).
+                gap: (if mode == BevelPlanetMode::Ring { 0.0 } else { gap_lo }, gap_hi),
                 scale: s.module,
                 labels: Some([format!("planet {}", k + 1), far_name.into()]),
             });

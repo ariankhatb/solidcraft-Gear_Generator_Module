@@ -2639,6 +2639,14 @@ impl SolveApp {
             self.edit_sketch(id);
             return;
         }
+        // A gear set's own feature (the Gears feature: its id is the set's): the Gears dialog on
+        // the set.
+        if dialogs_gear::is_set(self, id) {
+            if let Err(why) = dialogs_gear::open_set(self, id) {
+                self.set_status(why, true);
+            }
+            return;
+        }
         // Nothing here knows what it holds: it says so, and waits for the build that does.
         if let FeatureKind::NewerFileFeature { raw } = &f.kind {
             let why = raw.why();

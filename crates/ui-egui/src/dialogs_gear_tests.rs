@@ -154,7 +154,9 @@ fn picks_are_rows_with_roles_sent_as_the_selection() {
     let p = &c[0].1;
     let sel = p["selection"].as_array().unwrap_or_else(|| panic!("{p}"));
     let roles: Vec<&str> = sel.iter().map(|i| i["role"].as_str().unwrap()).collect();
-    assert_eq!(roles, ["spur", "spur", "shaft", "bearing"], "{p}");
+    // Circles are Auto until given a type: the engine works out what each is.
+    assert_eq!(roles, ["auto", "auto", "shaft", "bearing"], "{p}");
+    assert_eq!(p["shafts"]["generate"], true, "shafts on every gear axis by default: {p}");
     assert_eq!((sel[0]["curve"].as_str(), sel[0]["index"].as_u64()), (Some("c1"), Some(0)));
     assert_eq!((sel[3]["point"].as_str(), sel[3]["bearing"].as_str()), (Some("b1"), Some("608")));
     assert!(p.get("sketch").is_none(), "each entry names its own sketch: {p}");
@@ -198,16 +200,61 @@ fn rows_show_what_the_engine_worked_out_for_them() {
     assert!(bad && line.contains("circle c3 touches no other gear"), "{line}");
 }
 
-/// The preview is the abstract set (shafts and pitch surfaces) drawn in the viewport; the
-/// teeth are only previewed when asked for.
+/// An Auto row says what the engine made of it and its hand; a generated shaft is a row with
+/// its gears; a contact is a point or a line.
 #[test]
-fn the_preview_is_the_abstract_shape_unless_teeth_are_asked_for() {
+fn auto_rows_generated_shafts_and_contacts_from_the_engine() {
+    let fixture = json!({
+        "members": [{"index": 0, "role": "bevel", "inferred": true, "shaft_angle": 90.0, "hand": "LH", "module": 2.0, "teeth": 20, "shaft": 1}],
+        "shafts": [{"index": 1, "name": "input", "diameter": null, "gears": [0, 2, 3], "length": 120.0, "line": 4}],
+        "contacts": [{"a": [1.0, 2.0, 3.0], "b": [1.0, 2.0, 13.0]}, {"a": [0.0, 0.0, 0.0]}]
+    });
+    let (line, bad) = member_line(&members_of(&fixture)[&0]);
+    assert!(!bad);
+    assert!(line.starts_with("Auto → Bevel 90° · LH · m 2 · z 20"), "{line}");
+    assert!(line.ends_with("one body with shaft 2"), "{line}");
+    let shafts = shafts_of(&fixture);
+    assert_eq!(shaft_line(&shafts[0]), "Shaft 2: input, Ø auto, 3 gears, 120 long (row 5)");
+    let c = contacts_of(&fixture);
+    assert_eq!(c.len(), 2);
+    assert_eq!(c[1][0], c[1][1], "a point contact");
+}
+
+/// Parallel-axis rows take a helix angle and V; bevel rows a spiral angle and V.
+#[test]
+fn rows_send_their_helix_or_spiral_and_v() {
+    let mut app = app();
+    let sk = app.session.execute("sketch.create", &json!({"plane": "XY"})).unwrap()["sketch"].as_u64().unwrap();
+    for (id, x, r) in [("c1", 0.0, 20.0), ("c2", 30.0, 10.0)] {
+        app.session.execute("sketch.circle.center", &json!({"center": [x, 0], "radius": r, "id": id})).unwrap();
+    }
+    app.session.execute("sketch.finish", &json!({})).unwrap();
+    app.start("gear.create");
+    let mut d = app.dialog.clone().unwrap();
+    d.inputs[0].items = vec![Sel::SketchCurve { id: "c1".into(), sketch: Some(sk) }, Sel::SketchCurve { id: "c2".into(), sketch: Some(sk) }];
+    let Kind::Gear(g) = &mut d.kind else { panic!() };
+    g.picks = rows_now(&app, g, &d.inputs).into_iter().map(|(p, _)| p).collect();
+    g.picks[0].angle = "25 deg".into();
+    g.picks[0].v = true;
+    g.picks[1].role = ROLES.iter().position(|r| r.0 == "bevel").unwrap();
+    g.picks[1].angle = "35".into();
+    let c = apply_commands(&app, &d).unwrap();
+    let sel = c[0].1["selection"].as_array().unwrap().clone();
+    assert_eq!((sel[0]["helix_angle"].as_f64(), sel[0]["herringbone"].as_bool()), (Some(25.0), Some(true)), "{sel:?}");
+    assert_eq!(sel[1]["spiral_angle"].as_f64(), Some(35.0), "{sel:?}");
+    assert!(sel[1].get("helix_angle").is_none());
+}
+
+/// The preview is the set's outline (pitch, tip and root circles, shafts) drawn in the
+/// viewport; the kernel never builds teeth before OK.
+#[test]
+fn the_preview_is_the_outline_and_no_teeth_before_ok() {
     let mut app = app();
     let made = app.session.execute("gear.sketch", &json!({"type": "pair", "gear": {"module": 2, "teeth": 20, "teeth2": 40}})).unwrap();
     app.start("gear.create");
     let Some(Kind::Gear(g)) = app.dialog.as_mut().map(|d| &mut d.kind) else { panic!() };
     g.sketch = made["sketch"].as_u64();
-    assert!(!g.previews(), "no teeth preview by default");
+    assert!(!g.previews(), "no kernel preview");
     let mut d = app.dialog.take().unwrap();
     let Kind::Gear(g) = &mut d.kind else { panic!() };
     let mut hover = None;
@@ -216,8 +263,6 @@ fn the_preview_is_the_abstract_shape_unless_teeth_are_asked_for() {
         rows(&mut app, ui, g, &mut d.inputs, &mut hover, &[]);
     });
     assert!(!g.shape.is_empty(), "the shape to draw: {:?}", g.calc);
-    g.teeth = true;
-    assert!(g.previews());
 }
 
 /// A set drawn across several sketches on different planes: each row's entry names its sketch.
@@ -240,4 +285,39 @@ fn rows_may_come_from_several_sketches() {
     let sel = c[0].1["selection"].as_array().unwrap().clone();
     assert_eq!((sel[0]["sketch"].as_u64(), sel[1]["sketch"].as_u64()), (Some(a), Some(b)), "{sel:?}");
     assert_eq!((sel[0]["role"].as_str(), sel[1]["role"].as_str()), (Some("bevel"), Some("bevel")));
+}
+
+/// Operation and Targets: the set joined to or cut from bodies, its keep-out cut from a
+/// housing; the driver is a row; Join without targets says what to pick.
+#[test]
+fn operation_targets_keep_out_and_driver() {
+    let mut app = app();
+    app.session.execute("solid.box", &json!({"length": 80, "width": 60, "height": 20})).unwrap();
+    let body = solidcraft_engine::Sel::Body { name: crate::open_meshing::session_world(&app.session).bodies[0].name.clone() };
+    let sk = app.session.execute("sketch.create", &json!({"plane": "XY"})).unwrap()["sketch"].as_u64().unwrap();
+    for (id, x, r) in [("c1", 0.0, 20.0), ("c2", 30.0, 10.0)] {
+        app.session.execute("sketch.circle.center", &json!({"center": [x, 0], "radius": r, "id": id})).unwrap();
+    }
+    app.session.execute("sketch.finish", &json!({})).unwrap();
+    app.start("gear.create");
+    let mut d = app.dialog.clone().unwrap();
+    d.inputs[0].items = vec![Sel::SketchCurve { id: "c1".into(), sketch: Some(sk) }, Sel::SketchCurve { id: "c2".into(), sketch: Some(sk) }];
+    let Kind::Gear(g) = &mut d.kind else { panic!() };
+    g.operation = 2;
+    let e = apply_commands(&app, &d).unwrap_err();
+    assert!(e.contains("pick the bodies"), "{e}");
+    d.inputs[1].items = vec![body.clone()];
+    let Kind::Gear(g) = &mut d.kind else { panic!() };
+    g.cut_keep_out = true;
+    g.driver = 1;
+    let c = apply_commands(&app, &d).unwrap();
+    let p = &c[0].1;
+    assert_eq!(p["operation"], "cut");
+    let name = match &body {
+        Sel::Body { name } => name.clone(),
+        _ => unreachable!(),
+    };
+    assert_eq!(p["targets"], json!([name]));
+    assert_eq!(p["keep_out_cuts"], json!([name]));
+    assert_eq!(p["driver"], json!(1));
 }

@@ -96,8 +96,8 @@ only flank contact, at its defaults and at harder settings (bevels at 60–120°
 - The window's mesh check can show a red *Interferes* on the default face gear, which the kernel
   check doesn't confirm (under investigation).
 - Bevels whose larger gear's pitch cone goes past about 80° (for example a spiral bevel at a 110°
-  shaft angle) build with thin, feathered teeth on that gear. The window warns about it; keep the
-  shaft angle such that both cones stay under 80° for now.
+  shaft angle) build with thin, feathered teeth on that gear. The window warns about it. Being fixed so
+  bevels work at 100–110° and beyond; until then keep both cones under 80°.
 - Body names keep their tooth counts after an edit (for example "Gear z20" after changing to 24
   teeth), on purpose so features that reference them don't break.
 - The kernel's interference check itself fails on some lofted sets (hypoid, worm) with "proto edge is

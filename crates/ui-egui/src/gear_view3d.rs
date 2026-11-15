@@ -201,7 +201,10 @@ fn toothed(step: &Step, tol: f64) -> Option<(usize, Toothed)> {
 /// The z range a step fills (New and Join only).
 fn reach(step: &Step) -> Option<(f64, f64)> {
     match step {
-        Step::Prism { z0, height, op: Op::New | Op::Join, .. } | Step::Taper { z0, height, op: Op::New | Op::Join, .. } | Step::Coil { z0, height, op: Op::New | Op::Join, .. } => {
+        Step::Prism { z0, height, op: Op::New | Op::Join, .. }
+        | Step::Taper { z0, height, op: Op::New | Op::Join, .. }
+        | Step::RingTaper { z0, height, op: Op::New | Op::Join, .. }
+        | Step::Coil { z0, height, op: Op::New | Op::Join, .. } => {
             Some((z0.min(z0 + height), z0.max(z0 + height)))
         }
         Step::Loft { sections, op: Op::New | Op::Join } => sections.iter().map(|(_, h)| *h).fold(None, |r: Option<(f64, f64)>, h| Some(r.map_or((h, h), |(a, b)| (a.min(h), b.max(h))))),
@@ -547,6 +550,12 @@ fn step_mesh(b: &mut Builder, st: &Step, tol: f64, cap_pts: usize, bores: &[(Vec
                     local.tri(place(tri[0], t), place(tri[1], t), place(tri[2], t));
                 }
             }
+        }
+        // An internal bevel (a bevel ring): drawn as its rim, from the teeth's tips out.
+        Step::RingTaper { outline, rim, z0, height, op: Op::New | Op::Join, .. } => {
+            let r = outline.max_radius();
+            let blank = Step::Revolve { profile: vec![V2::new(r, *z0), V2::new(*rim, *z0), V2::new(*rim, z0 + height), V2::new(r, z0 + height)], op: Op::New };
+            step_mesh(&mut local, &blank, tol, cap_pts, bores, None);
         }
         Step::Placed { frame: f, step } => {
             step_mesh(&mut local, step, tol, cap_pts, &[], Some(f));

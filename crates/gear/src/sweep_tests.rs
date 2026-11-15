@@ -589,6 +589,16 @@ pub(crate) fn check_plan(p: &Plan) -> Result<(), String> {
                     }
                     base = Some(check_outline(outline).map_err(|e| format!("{at}: {e}"))?);
                 }
+                Step::RingTaper { outline, rim, z0, height, twist, scale, .. } => {
+                    if !(z0.is_finite() && height.is_finite() && *height > 0.0 && twist.is_finite() && scale.is_finite() && *scale > 0.0 && rim.is_finite()) {
+                        return Err(format!("{at}: ring taper z0 {z0} height {height} twist {twist} scale {scale} rim {rim}"));
+                    }
+                    check_outline(outline).map_err(|e| format!("{at}: {e}"))?;
+                    // The rim clears the teeth all the way up.
+                    if *rim <= outline.max_radius() * scale.max(1.0) {
+                        return Err(format!("{at}: the rim (r {rim}) doesn't clear the teeth (r {})", outline.max_radius()));
+                    }
+                }
                 Step::Revolve { profile, op } => {
                     check_polygon(profile, &at, false)?;
                     // A chamfer's triangle stays on its side of the axis.

@@ -1579,7 +1579,7 @@ fn mirror_step(st: &mut Step) {
             *region = mirror_region(region, &my);
             *twist = -*twist;
         }
-        Step::Taper { outline, twist, .. } => {
+        Step::Taper { outline, twist, .. } | Step::RingTaper { outline, twist, .. } => {
             *outline = outline.map(&my, true);
             *twist = -*twist;
         }

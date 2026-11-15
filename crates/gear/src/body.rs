@@ -469,6 +469,7 @@ pub(crate) fn shift_z(step: Step, dz: f64) -> Step {
         Step::Prism { region, z0, height, twist, op } => Step::Prism { region, z0: z0 + dz, height, twist, op },
         Step::Loft { sections, op } => Step::Loft { sections: sections.into_iter().map(|(o, h)| (o, h + dz)).collect(), op },
         Step::Taper { outline, z0, height, twist, scale, op } => Step::Taper { outline, z0: z0 + dz, height, twist, scale, op },
+        Step::RingTaper { outline, rim, z0, height, twist, scale, op } => Step::RingTaper { outline, rim, z0: z0 + dz, height, twist, scale, op },
         Step::Revolve { profile, op } => Step::Revolve { profile: profile.into_iter().map(|q| V2::new(q.x, q.y + dz)).collect(), op },
         Step::Coil { section, pitch, z0, height, left, op } => {
             Step::Coil { section: section.into_iter().map(|q| V2::new(q.x, q.y + dz)).collect(), pitch, z0: z0 + dz, height, left, op }

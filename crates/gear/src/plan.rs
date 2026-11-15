@@ -614,6 +614,12 @@ pub enum Step {
     /// one scaled and turned, the surface a cone's teeth, straight or on a logarithmic spiral
     /// (constant spiral angle).
     Taper { outline: Outline, z0: f64, height: f64, twist: f64, scale: f64, op: Op },
+    /// An internal gear's teeth on a cone: the region between the circle of radius `rim` about
+    /// the axis (the same at every height: a cylinder) and `outline` (inside it), the outline
+    /// tapered and turned as a [`Step::Taper`]'s. Built as one loft of sections that each hold
+    /// both loops, so no boolean takes a toothed cutter out of a blank (the kernel's cut of a
+    /// bevel ring's spaces from its blank came out open).
+    RingTaper { outline: Outline, rim: f64, z0: f64, height: f64, twist: f64, scale: f64, op: Op },
     /// A closed polygon in the (radius, z) half plane, turned a full turn about z.
     Revolve { profile: Vec<V2>, op: Op },
     /// A closed polygon in the (x, z) plane (x radial) swept round z as a helix of `pitch`, from

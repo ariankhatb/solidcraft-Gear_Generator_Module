@@ -624,6 +624,27 @@ fn sketch_picks_must_be_in_the_sketch() {
     assert!(e.contains("one sketch"), "{e}");
 }
 
+/// Three circles touching in a chain, typed only by their teeth: a three-gear train on the
+/// drawn centres, its ratio from gear 1, and an assembly linked along it.
+#[test]
+fn sketch_three_touching_circles_are_a_gear_train() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 20.0, "g1"), circle(50.0, 0.0, 30.0, "g2"), circle(50.0, 45.0, 15.0, "g3")]);
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "spur"}));
+    assert!((fact_opt(&r, "train ratio gear 1 → gear 3").unwrap() - 0.75).abs() < 1e-9, "{r}");
+    let r = run(&mut s, "gear.create", json!({"sketch": sk, "type": "helical", "assembly": true}));
+    assert_eq!(r["bodies"].as_array().unwrap().len(), 3, "{r}");
+    assert_eq!(r["assembly"]["links"].as_array().map(Vec::len), Some(2), "{r}");
+    // Picked: only gears 1 and 2 (a pair).
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "spur", "picks": ["g1", "g2"]}));
+    assert!((fact_opt(&r, "axis distance").unwrap() - 50.0).abs() < 1e-6, "{r}");
+    // A ring and the gear inside it, with a tooth style: both built.
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 60.0, "ring"), circle(40.0, 0.0, 20.0, "pinion")]);
+    let r = run(&mut s, "gear.create", json!({"sketch": sk, "type": "spur"}));
+    assert_eq!(r["bodies"].as_array().unwrap().len(), 2, "{r}");
+}
+
 /// A sketch point stands for the shaft through it, normal to its sketch.
 #[test]
 fn a_sketch_point_is_a_shaft_normal_to_its_sketch() {

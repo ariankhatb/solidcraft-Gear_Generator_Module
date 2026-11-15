@@ -190,6 +190,13 @@ pub fn why_left_out(s: &Spec, o: Opt) -> Option<Why> {
     // Involute teeth cut from the spec's own rack: the clearance, the tip shortening and the
     // horizontal-expansion compensation (`Spec::involute`) reach them, nothing else.
     let rack_only = matches!(o, Clearance | TipShortening | XyCompensation);
+    if s.train.is_some() {
+        // Gear 1 takes gear 1's options, every other gear gear 2's.
+        return match o {
+            TipDiameter | TipDiameter2 | Face2 => body("a gear train keeps the rack's tips and one face width"),
+            _ => None,
+        };
+    }
     match s.kind {
         Kind::Spur | Kind::Helical | Kind::Herringbone => {
             if o.second() {
@@ -282,7 +289,7 @@ pub fn uses(s: &Spec, o: Opt) -> bool {
 
 /// Warns once a group (one reason) about the options that are set and left out.
 pub(crate) fn left_out(s: &Spec, p: &mut Plan) {
-    let what = s.kind.label().to_lowercase();
+    let what = if s.train.is_some() { "gear train".to_string() } else { s.kind.label().to_lowercase() };
     // A spline's two members are its shaft and its hub: their options aren't told apart.
     let qualify = s.kind != Kind::Spline;
     let mut groups: Vec<(Why, Vec<String>)> = Vec::new();

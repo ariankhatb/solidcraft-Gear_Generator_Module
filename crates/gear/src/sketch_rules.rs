@@ -30,6 +30,11 @@
 //!
 //! The solver agent's `simple.rs` may take over `spec_for`; the rules and the measuring stay
 //! here, shared by the window's drawing and the engine's `gear.create {sketch}`.
+//!
+//! [`read`] is the one reader of a whole drawing: with a tooth style (spur, helical,
+//! herringbone) the drawing decides the set, one of the modes above or a gear train of any
+//! number of circles (touching outside: a mesh; inside: a gear in a ring; concentric: gears on
+//! one shaft), sized by [`train_spec`] and planned by [`crate::plan::train`].
 
 use std::f64::consts::PI;
 
@@ -783,6 +788,452 @@ pub fn simple_of(m: &Measured, settings: &crate::simple::Simple) -> crate::simpl
         _ => s.pitch_diameter = d(m.d1),
     }
     s
+}
+
+// =============================================================================================
+// One reader for every drawing: the set the whole sketch describes.
+
+/// The tooth styles of parallel-axis gears: a drawing of circles in one of them is a gear set
+/// (a single gear, a pair, a planetary set or a train), whatever its count.
+pub fn is_style(k: Kind) -> bool {
+    matches!(k, Kind::Spur | Kind::Helical | Kind::Herringbone)
+}
+
+/// What a whole drawing makes ([`read`]).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Reading {
+    /// One of the modes of the table at the top, measured from these picks (what [`measure`]
+    /// gives): a single gear, a pair, a planetary set, a rack, a worm, a bevel...
+    Mode { kind: Kind, picks: Picks, measured: Measured },
+    /// A gear train of these circles (indices into `Drawn::circles`, gear 1 first), sized by
+    /// [`train_spec`] and planned with the tooth style.
+    Train { circles: Vec<usize> },
+}
+
+/// How two circles of a drawing lie.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Touch {
+    /// Touching outside: an external mesh.
+    External,
+    /// The smaller touching the bigger inside: a gear in a ring.
+    Internal,
+    /// The same centre: gears on one shaft.
+    Concentric,
+    Apart,
+    /// The smaller inside the bigger, not touching.
+    Inside,
+    /// Crossing each other.
+    Crossing,
+}
+
+/// How circles `a` and `b` lie (within [`TOLERANCE`]).
+pub fn touch(a: &Circle, b: &Circle) -> Touch {
+    let d = a.c.dist(b.c);
+    let size = a.r.min(b.r);
+    if near(d, 0.0, size) {
+        Touch::Concentric
+    } else if near(d, a.r + b.r, size) {
+        Touch::External
+    } else if near(d, (a.r - b.r).abs(), size) {
+        Touch::Internal
+    } else if d > a.r + b.r {
+        Touch::Apart
+    } else if d < (a.r - b.r).abs() {
+        Touch::Inside
+    } else {
+        Touch::Crossing
+    }
+}
+
+/// Reads the whole drawing as the set it describes. `style` is what the user chose: a tooth
+/// style (spur, helical, herringbone; `None` reads circles as spur and lines as [`recognize`]
+/// does) lets the drawing decide the set, while a family (pair, planetary, internal, rack, worm,
+/// bevel, hypoid, cycloidal, sprocket...) is measured by its own rule, as before.
+///
+/// With a tooth style:
+/// - circles only: one is a single gear; two touching outside a pair; a sun, a planet touching
+///   it and a ring round the sun a planetary set (the planets are a count); anything else a
+///   [`Reading::Train`] (meshes outside and inside rings, gears sharing a shaft, gears on their
+///   own);
+/// - one circle and a line: tangent a rack, through the centre a face gear, crossing it a hypoid,
+///   missing it crossed helicals;
+/// - lines meeting at a point (no circle): a bevel pair at the drawn angle (spiral for helical
+///   and herringbone teeth).
+pub fn read(style: Option<Kind>, d: &Drawn) -> Result<Reading, String> {
+    let mode = |k: Kind| -> Result<Reading, String> {
+        let picks = auto_picks(k, d);
+        let measured = measure(k, d, &picks)?;
+        Ok(Reading::Mode { kind: k, picks, measured })
+    };
+    if let Some(k) = style.filter(|k| !is_style(*k)) {
+        if !sketched(k) {
+            return Err(format!("a {} is not drawn from a sketch: give its numbers instead", k.label()));
+        }
+        return mode(k);
+    }
+    let (nc, nl) = (d.circles.len(), d.lines.len());
+    let spiral = matches!(style, Some(Kind::Helical | Kind::Herringbone));
+    if nl > 0 {
+        if nc >= 2 {
+            return Err("a train with a rack or a shaft line is not made yet: draw the gears' circles alone, or one circle with its line".into());
+        }
+        let k = match (nc, style) {
+            // No style: what the drawing looks like, as before (a tangent line is a worm).
+            (_, None) => recognize(d).ok_or(
+                "these lines make no set: draw a circle and a line touching it (a rack or worm), two shaft lines meeting at a dot (bevels), or a circle with a line crossing or missing it (hypoid, crossed helicals)",
+            )?,
+            (0, _) if nl >= 2 => {
+                if spiral {
+                    Kind::SpiralBevel
+                } else {
+                    Kind::Bevel
+                }
+            }
+            (0, _) => return Err("one line makes no set: draw a second shaft line from the same dot for bevels, or a pitch circle".into()),
+            _ => {
+                let (c, l) = (d.circles[0], d.lines[0]);
+                let e = l.distance(c.c);
+                if near(e, c.r, c.r) {
+                    Kind::Rack
+                } else if e < 1e-6 + TOLERANCE * c.r {
+                    Kind::FaceGear
+                } else if e < c.r {
+                    Kind::Hypoid
+                } else {
+                    Kind::CrossedHelical
+                }
+            }
+        };
+        return mode(k);
+    }
+    let style = style.unwrap_or(Kind::Spur);
+    match nc {
+        0 => Err("draw the gears' pitch circles (or shaft lines)".into()),
+        1 => mode(style),
+        2 if touch(&d.circles[0], &d.circles[1]) == Touch::External => mode(Kind::Pair),
+        3 if measure(Kind::Planetary, d, &auto_picks(Kind::Planetary, d)).is_ok() => mode(Kind::Planetary),
+        _ => Ok(Reading::Train { circles: (0..nc).collect() }),
+    }
+}
+
+/// The drawing with only the picked points, circles and lines (indices into `d`'s), in the
+/// order given: what [`read`] reads when only some of the sketch is picked.
+pub fn subset(d: &Drawn, points: &[usize], circles: &[usize], lines: &[usize]) -> Drawn {
+    Drawn {
+        points: points.iter().filter_map(|i| d.points.get(*i).copied()).collect(),
+        circles: circles.iter().filter_map(|i| d.circles.get(*i).copied()).collect(),
+        lines: lines.iter().filter_map(|i| d.lines.get(*i).copied()).collect(),
+    }
+}
+
+/// Where a train drawn in the sketch goes (`Spec::placement`): `frame` (the sketch's plane) with
+/// the set turned by `turn` (as [`axes_for`] turns shafts) about `origin` (the origin dot, or
+/// gear 1's centre). The train's gear centres are the circles' own coordinates.
+pub fn train_placement(origin: V2, frame: &Frame, turn: [f64; 3]) -> Frame {
+    let o = [origin.x, origin.y, 0.0];
+    let r = |v: [f64; 3]| rotate(v, turn);
+    frame.compose(&Frame { origin: sub3(o, r(o)), x: r([1.0, 0.0, 0.0]), z: r([0.0, 0.0, 1.0]) })
+}
+
+/// Sizes the train drawn as `circles` (gear 1 first: the driver) with tooth style `style`:
+/// - the circles' links: touching outside an external mesh, touching inside a gear in a ring,
+///   the same centre gears on one shaft (each meshing group on its own layer along the shafts);
+///   circles that cross must be on different layers, circles apart are gears that don't mesh;
+/// - one module per meshing group: the largest standard (ISO 54) module that gives every
+///   diameter within half a percent ([`fit_module`]), the module asked (`settings.module`; a
+///   diameter that isn't whole teeth at it is refused) or, with `settings.exact`, the module that
+///   draws the group exactly; at least 8 teeth;
+/// - the drawn centre distances kept exactly by profile shift along each group from its first
+///   gear; helix hands opposite across outside meshes, the same inside rings and on a shaft.
+///
+/// What the drawing doesn't give stays `base`'s (pressure angle, rack, backlash, bores...);
+/// `settings` gives the face width (default 10 modules), helix angle (default `base`'s, or
+/// 20° for helical teeth), gear 1's hand (`left_hand`), the module and `exact`.
+pub fn train_spec(circles: &[Circle], style: Kind, settings: &crate::simple::Simple, base: &Spec) -> Result<(Spec, Vec<String>), String> {
+    use crate::plan::{LinkKind, Train, TrainGear, TrainLink};
+    let n = circles.len();
+    if n == 0 {
+        return Err("draw the gears' pitch circles".into());
+    }
+    if n > crate::plan::train::MAX_GEARS {
+        return Err(format!("a gear train takes {} gears at most", crate::plan::train::MAX_GEARS));
+    }
+    if !is_style(style) {
+        return Err(format!("a gear train's teeth are spur, helical or herringbone, not {}", style.label().to_lowercase()));
+    }
+    for (i, c) in circles.iter().enumerate() {
+        if !(c.r > 0.0 && c.r.is_finite() && c.c.is_finite()) {
+            return Err(format!("gear {}: its circle needs a radius greater than 0", i + 1));
+        }
+    }
+    let mut notes = Vec::new();
+    // How the circles lie.
+    let mut links: Vec<TrainLink> = Vec::new();
+    let mut crossing = Vec::new();
+    for i in 0..n {
+        for j in i + 1..n {
+            let (a, b) = (&circles[i], &circles[j]);
+            match touch(a, b) {
+                Touch::External => links.push(TrainLink { a: i, b: j, kind: LinkKind::External }),
+                Touch::Internal => {
+                    let (inner, ring) = if a.r < b.r { (i, j) } else { (j, i) };
+                    links.push(TrainLink { a: inner, b: ring, kind: LinkKind::Internal });
+                }
+                Touch::Concentric if near(a.r, b.r, a.r.min(b.r)) => return Err(format!("gears {} and {}: their circles are the same circle", i + 1, j + 1)),
+                Touch::Concentric => links.push(TrainLink { a: i, b: j, kind: LinkKind::Compound }),
+                Touch::Crossing => crossing.push((i, j)),
+                Touch::Apart | Touch::Inside => {}
+            }
+        }
+    }
+    // Ring gears: the outer circle of a gear touching inside. Nothing meshes on their outside.
+    let ring: Vec<bool> = (0..n).map(|i| links.iter().any(|l| l.kind == LinkKind::Internal && l.b == i)).collect();
+    for l in &links {
+        match l.kind {
+            LinkKind::External if ring[l.a] || ring[l.b] => {
+                let (r, other) = if ring[l.a] { (l.a, l.b) } else { (l.b, l.a) };
+                let inside = links.iter().find(|k| k.kind == LinkKind::Internal && k.b == r).map_or(0, |k| k.a);
+                return Err(format!(
+                    "gear {} is a ring gear (gear {} meshes inside it), but gear {} touches its outside: gears mesh only inside a ring",
+                    r + 1,
+                    inside + 1,
+                    other + 1
+                ));
+            }
+            LinkKind::Internal if ring[l.a] => return Err(format!("gear {} is a ring gear inside ring gear {}: a ring can't mesh inside another", l.a + 1, l.b + 1)),
+            _ => {}
+        }
+    }
+    // Meshing groups (one module each): each gear's group is its lowest-numbered gear.
+    let mut group: Vec<usize> = (0..n).collect();
+    loop {
+        let mut changed = false;
+        for l in links.iter().filter(|l| l.kind != LinkKind::Compound) {
+            let low = group[l.a].min(group[l.b]);
+            for i in [l.a, l.b] {
+                if group[i] != low {
+                    group[i] = low;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    // Their layers along the shafts: a group on a shaft shared with another sits one layer on.
+    let mut layer: Vec<Option<i32>> = vec![None; n];
+    for start in 0..n {
+        if layer[group[start]].is_some() {
+            continue;
+        }
+        layer[group[start]] = Some(0);
+        let mut queue = vec![group[start]];
+        while let Some(g) = queue.pop() {
+            let here = layer[g].unwrap_or(0);
+            for l in links.iter().filter(|l| l.kind == LinkKind::Compound) {
+                let (ga, gb) = (group[l.a], group[l.b]);
+                if ga == gb {
+                    return Err(format!("gears {} and {} share a shaft (their circles are concentric) but also mesh through the train: they would lock", l.a + 1, l.b + 1));
+                }
+                let other = if ga == g {
+                    gb
+                } else if gb == g {
+                    ga
+                } else {
+                    continue;
+                };
+                match layer[other] {
+                    None => {
+                        layer[other] = Some(here + 1);
+                        queue.push(other);
+                    }
+                    Some(v) if v == here => {
+                        return Err(format!("gears {} and {} share a shaft and would sit on the same layer: their groups are tied in a loop of shared shafts", l.a + 1, l.b + 1));
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+    }
+    let layer_of = |i: usize| layer[group[i]].unwrap_or(0);
+    for (i, j) in crossing {
+        if layer_of(i) == layer_of(j) {
+            let (a, b) = (circles[i], circles[j]);
+            return Err(format!(
+                "gears {} and {}: their pitch circles cross (centres {} mm apart, radii {} and {} mm): make them touch to mesh, or move them apart",
+                i + 1,
+                j + 1,
+                num(a.c.dist(b.c)),
+                num(a.r),
+                num(b.r)
+            ));
+        }
+    }
+    // The helix: its size from the settings, its hand alternating across outside meshes.
+    let helix = match style {
+        Kind::Spur => 0.0,
+        _ => settings.helix.filter(|h| *h != 0.0).map(f64::abs).unwrap_or(if base.helix != 0.0 { base.helix.abs() } else { 20.0 }),
+    };
+    if !(helix < 80.0) {
+        return Err("helix angle must be under 80°".into());
+    }
+    let first_hand = if settings.left_hand == Some(true) { -1.0 } else { 1.0 };
+    let mut hand = vec![0.0f64; n];
+    for start in 0..n {
+        if hand[start] != 0.0 {
+            continue;
+        }
+        hand[start] = first_hand;
+        let mut queue = vec![start];
+        while let Some(i) = queue.pop() {
+            for l in &links {
+                let j = if l.a == i {
+                    l.b
+                } else if l.b == i {
+                    l.a
+                } else {
+                    continue;
+                };
+                if hand[j] == 0.0 {
+                    hand[j] = if l.kind == LinkKind::External { -hand[i] } else { hand[i] };
+                    queue.push(j);
+                }
+            }
+        }
+    }
+    // One module per meshing group, and the teeth.
+    let f = 1.0 / helix.to_radians().cos();
+    let mut module = vec![0.0f64; n];
+    let mut teeth = vec![0u32; n];
+    let roots: Vec<usize> = (0..n).filter(|i| group[*i] == *i).collect();
+    for &g in &roots {
+        let members: Vec<usize> = (0..n).filter(|i| group[*i] == g).collect();
+        let ds: Vec<(f64, f64)> = members.iter().map(|i| (2.0 * circles[*i].r, f)).collect();
+        let (m, zs) = match settings.module.filter(|m| *m > 0.0) {
+            Some(m) => {
+                let mut zs = Vec::new();
+                for (k, (d, f)) in members.iter().zip(&ds) {
+                    let zf = d / (m * f);
+                    let z = zf.round().max(1.0);
+                    if (m * f * z - d).abs() > TOLERANCE * d {
+                        let (lo, hi) = (m * f * zf.floor().max(1.0), m * f * zf.ceil());
+                        let with = members.iter().find(|j| *j != k).map(|j| format!(" with gear {}", j + 1)).unwrap_or_default();
+                        return Err(format!(
+                            "gear {} (Ø{}) is {:.2} teeth at module {}: not whole teeth, so it can't mesh{with} at one module. Draw it Ø{} or Ø{}, or leave the module free",
+                            k + 1,
+                            num(*d),
+                            zf,
+                            num(m),
+                            num(lo),
+                            num(hi)
+                        ));
+                    }
+                    zs.push(z as u32);
+                }
+                (m, zs)
+            }
+            None => {
+                let (m, zs, standard) = fit_module(&ds, 8);
+                let (sd, sz): (f64, f64) = ds.iter().zip(&zs).fold((0.0, 0.0), |(a, b), ((d, f), z)| (a + d, b + f * f64::from(*z)));
+                let m = if settings.exact && standard && sz > 0.0 { sd / sz } else { m };
+                if !standard || settings.exact {
+                    let names: Vec<String> = members.iter().map(|i| (i + 1).to_string()).collect();
+                    notes.push(format!("gear{} {}: module {} (not a standard one) gives the drawn diameters", if names.len() > 1 { "s" } else { "" }, names.join(", "), num(m)));
+                }
+                (m, zs)
+            }
+        };
+        for (k, (i, z)) in members.iter().zip(zs).enumerate() {
+            module[*i] = m;
+            teeth[*i] = z;
+            let (d, built) = (ds[k].0, m * f * f64::from(z));
+            // Diameters that can't share one module (far off even at the best fit).
+            if (built - d).abs() > 4.0 * TOLERANCE * d {
+                return Err(format!(
+                    "gear {} (Ø{}) can't share a module with the gears it meshes with: the nearest is Ø{} ({} teeth at module {}); meshing gears need one module",
+                    i + 1,
+                    num(d),
+                    num(built),
+                    z,
+                    num(m)
+                ));
+            }
+            if (built - d).abs() > 1e-6 {
+                notes.push(format!("gear {}: Ø{} drawn, Ø{} built ({} teeth at module {}); the drawn centre distances are kept by profile shift", i + 1, num(d), num(built), z, num(m)));
+            }
+        }
+    }
+    // Shifts that keep every drawn centre distance, from each group's first gear along its tree.
+    let face = settings.face_width.filter(|f| *f > 0.0).unwrap_or(10.0 * module.iter().copied().fold(0.0, f64::max));
+    let probe = Spec { kind: style, helix, face_width: face, train: None, ..base.clone() };
+    let inv = |i: usize, x: f64| Spec { module: module[i], ..probe.clone() }.involute(teeth[i], x, hand[i] * helix);
+    let mut shift: Vec<Option<f64>> = vec![None; n];
+    for &g in &roots {
+        shift[g] = Some(0.0);
+        let mut queue = vec![g];
+        while let Some(i) = queue.pop() {
+            for l in links.iter().filter(|l| l.kind != LinkKind::Compound) {
+                let j = if l.a == i {
+                    l.b
+                } else if l.b == i {
+                    l.a
+                } else {
+                    continue;
+                };
+                if shift[j].is_some() {
+                    continue;
+                }
+                let dist = circles[i].c.dist(circles[j].c);
+                let (gi, gj) = (inv(i, shift[i].unwrap_or(0.0)), inv(j, 0.0));
+                let x = crate::plan::train::shift_to_reach(&gi, &gj, l.kind, ring[i], dist)
+                    .ok_or_else(|| format!("gears {} and {}: no profile shift puts their centres {} mm apart; draw the circles touching", i + 1, j + 1, num(dist)))?;
+                if x.abs() > 1.0 {
+                    notes.push(format!("gear {}: profile shift {:.2} keeps the drawn centre distance to gear {}: draw the circles nearer touching", j + 1, x, i + 1));
+                }
+                shift[j] = Some(x);
+                queue.push(j);
+            }
+        }
+    }
+    // Gears on their own: say how far they are from touching.
+    for i in 0..n {
+        if n == 1 || links.iter().any(|l| l.a == i || l.b == i) {
+            continue;
+        }
+        let gap = |j: usize| (circles[i].c.dist(circles[j].c) - circles[i].r - circles[j].r).abs();
+        if let Some(j) = (0..n).filter(|j| *j != i).min_by(|a, b| gap(*a).total_cmp(&gap(*b))) {
+            notes.push(format!("gear {} touches no other circle ({} mm from gear {}'s): it is built on its own, not driven", i + 1, num(gap(j)), j + 1));
+        }
+    }
+    let step = face + (0.1 * face).max(1.0);
+    let gears: Vec<TrainGear> = (0..n)
+        .map(|i| TrainGear {
+            center: circles[i].c,
+            teeth: teeth[i],
+            module: module[i],
+            shift: shift[i].unwrap_or(0.0),
+            helix: hand[i] * helix,
+            ring: ring[i],
+            z: f64::from(layer_of(i)) * step,
+        })
+        .collect();
+    let spec = Spec {
+        kind: style,
+        module: module[0],
+        teeth: teeth[0],
+        teeth2: teeth.get(1).copied().unwrap_or(teeth[0]),
+        helix,
+        shift: 0.0,
+        shift2: 0.0,
+        center_distance: 0.0,
+        face_width: face,
+        herringbone: style == Kind::Herringbone,
+        coupon: false,
+        train: Some(Train { gears, links }),
+        ..base.clone()
+    };
+    Ok((spec, notes))
 }
 
 fn add3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {

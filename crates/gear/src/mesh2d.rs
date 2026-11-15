@@ -427,6 +427,9 @@ pub struct MeshPair {
 /// Which preview members mesh, for a parallel-axis set (none for the others: their preview is
 /// not the plane the teeth mesh in).
 pub fn topology(s: &Spec, preview: &[PreviewGear]) -> Vec<MeshPair> {
+    if let Some(t) = &s.train {
+        return crate::plan::train::mesh_pairs(s, t, preview);
+    }
     let n = preview.len();
     let pair = |a: usize, b: usize, internal: bool, teeth: u32| MeshPair { a, b, internal, period: TAU / f64::from(teeth.max(1)), slack: s.backlash, scale: s.module };
     match s.kind {

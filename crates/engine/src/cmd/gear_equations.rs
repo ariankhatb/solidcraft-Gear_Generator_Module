@@ -159,6 +159,10 @@ impl Mode {
             }
             return Ok((Mode::default(), warnings));
         }
+        if spec.train.is_some() {
+            warnings.push("gear trains: tooth curves from equations are not made yet; the teeth are fitted splines".into());
+            return Ok((Mode::default(), warnings));
+        }
         if !in_scope(spec.kind) || spec.coupon {
             warnings.push(format!("{}: tooth curves from equations are made for spur, helical, herringbone, internal, rack, pair and planetary sets; the teeth are fitted splines", spec.kind.label()));
             return Ok((Mode::default(), warnings));

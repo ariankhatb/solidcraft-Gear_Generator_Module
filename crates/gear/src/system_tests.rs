@@ -187,3 +187,60 @@ fn one_keep_out_holds_the_whole_ten_gear_system() {
     let revolves = keep.steps.len();
     assert!(revolves < p.bodies.len(), "{revolves} steps for {} gears", p.bodies.len());
 }
+
+/// A plan as a sketch reader leaves it: bodies placed on their shafts, and the members' mesh
+/// graph and clusters ([`Plan::members`], [`Plan::clusters`]).
+fn read_set(frames: &[crate::plan::Frame], teeth: &[u32], rings: &[usize], meshes: &[(usize, usize)], clusters: Vec<Vec<usize>>) -> Plan {
+    let mut p = Plan::default();
+    for (i, f) in frames.iter().enumerate() {
+        p.bodies.push(crate::plan::Body { name: format!("g{}", i + 1), frame: *f, steps: Vec::new() });
+        let mut m = crate::plan::SetMember { source: i, module: 2.0, teeth: teeth[i], ring: rings.contains(&i), body: Some(i), ..Default::default() };
+        m.meshes_with = meshes.iter().filter_map(|&(a, b)| if a == i { Some(b) } else if b == i { Some(a) } else { None }).collect();
+        m.cluster = clusters.iter().position(|c| c.contains(&i));
+        p.members.push(m);
+    }
+    p.clusters = clusters;
+    p
+}
+
+fn frame(origin: [f64; 3], z: [f64; 3]) -> crate::plan::Frame {
+    let x = if z[2].abs() > 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 0.0, 1.0] };
+    crate::plan::Frame { origin, x, z }
+}
+
+#[test]
+fn a_3d_sketch_system_of_bevels_compounds_and_a_ring_turns_by_its_graph() {
+    // g1 on +Z at the origin meshes g2, a bevel on −X at (20, 0, 30): both point at the apex
+    // (0, 0, 30). g3 shares g2's shaft further out; g4 meshes g3 on a parallel shaft; g5 is a
+    // ring round g4 (same direction), and g6 a bevel whose shaft points away from its apex with
+    // g1 (it turns the same way: the face-gear case).
+    let frames = [
+        frame([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+        frame([20.0, 0.0, 30.0], [-1.0, 0.0, 0.0]),
+        frame([40.0, 0.0, 30.0], [-1.0, 0.0, 0.0]),
+        frame([40.0, 25.0, 30.0], [-1.0, 0.0, 0.0]),
+        frame([40.0, 25.0, 30.0], [-1.0, 0.0, 0.0]),
+        frame([0.0, 40.0, 20.0], [0.0, 1.0, 0.0]),
+    ];
+    let teeth = [20, 30, 15, 10, 40, 16];
+    let p = read_set(&frames, &teeth, &[4], &[(0, 1), (2, 3), (3, 4), (0, 5)], vec![vec![1, 2]]);
+    let (a, issues) = crate::plan::assembly::from_members(&p).expect("a graph");
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(a.links.len(), 5);
+    let w = |i: usize| a.ratio(0, i).unwrap();
+    assert!(close(w(1), -20.0 / 30.0), "bevel: {}", w(1));
+    assert!(close(w(2), w(1)), "compound: {}", w(2));
+    assert!(close(w(3), -w(2) * 15.0 / 10.0), "parallel: {}", w(3));
+    assert!(close(w(4), w(3) * 10.0 / 40.0), "ring: {}", w(4));
+    // g6's axis from (0, 40, 20) along +Y points away from where it meets g1's (0, 0, 20).
+    assert!(close(w(5), 20.0 / 16.0), "away from the apex: {}", w(5));
+    // Every gear of a cluster is rigid on the cluster's first.
+    assert!(a.links.contains(&AssemblyLink::Rigid { a: 1, b: 2 }));
+    // A loop that can't turn: g4 also meshing g2 (outside), against g3's path.
+    let p = read_set(&frames, &teeth, &[4], &[(0, 1), (2, 3), (3, 4), (0, 5), (1, 3)], vec![vec![1, 2]]);
+    let (_, issues) = crate::plan::assembly::from_members(&p).unwrap();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    let mut round = issues[0].members.clone();
+    round.sort_unstable();
+    assert_eq!(round, vec![1, 2, 3], "{:?}", issues[0]);
+}

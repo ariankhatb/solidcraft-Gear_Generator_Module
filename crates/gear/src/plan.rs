@@ -19,7 +19,7 @@ pub(crate) mod extras;
 pub mod left_out;
 pub mod bevel_planet;
 pub mod train;
-mod assembly;
+pub(crate) mod assembly;
 
 pub use bevel_planet::BevelPlanetMode;
 pub use train::{LinkKind, Train, TrainGear, TrainLink};

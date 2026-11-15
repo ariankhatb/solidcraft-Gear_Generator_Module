@@ -56,6 +56,7 @@ pub mod involute;
 pub mod mesh2d;
 pub mod mesh3d;
 pub mod octoid;
+mod par;
 pub mod plan;
 pub mod pulley;
 pub mod spline;

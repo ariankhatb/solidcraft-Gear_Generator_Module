@@ -834,6 +834,16 @@ pub struct GearParams {
     /// the tip clearance coefficient c*.)
     #[serde(default)]
     pub clearance_body: Option<ClearanceParams>,
+    /// Make the set a complete assembly: every gear a component of its own (named after its
+    /// body), a revolute joint per gear on its shaft (a slider for a rack; held members such as
+    /// a cycloidal drive's pin ring grounded; a planet on its carrier), and a gear,
+    /// rack-and-pinion or rigid motion link per mesh with the set's ratio and direction, so
+    /// driving one gear (`joint.drive`) turns the others. With `clearance_body` the keep-out
+    /// body goes in too, as a grounded see-through component "<set name> keep-out", to cut a
+    /// housing with. All in the set's undo step and timeline folder; `gear.update` makes them
+    /// again for the new set (one set of components and joints at any time). Default false.
+    #[serde(default)]
+    pub assembly: Option<bool>,
     /// `gear.update` and `gear.inspect` only: the set, by the timeline folder `gear.create`
     /// made for it.
     #[serde(default)]
@@ -921,6 +931,36 @@ pub struct GearFact {
     pub unit: String,
 }
 
+/// One member of a gear set made an assembly: its component and the joint it turns on.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct GearAssemblyMember {
+    /// The body it holds.
+    pub body: String,
+    /// Its component, by id.
+    pub component: u64,
+    /// Its component's occurrence, by id.
+    pub occurrence: u64,
+    /// The joint it turns (or slides) on, by id; none for a grounded member.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joint: Option<u64>,
+    /// Held fixed (grounded).
+    pub grounded: bool,
+}
+
+/// What `assembly: true` made of a gear set.
+#[derive(Debug, Clone, Default, Serialize, JsonSchema)]
+pub struct GearAssembly {
+    /// The members, in the order of the set's bodies.
+    pub members: Vec<GearAssemblyMember>,
+    /// The keep-out component (the clearance body, grounded), by id, when there is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_out: Option<u64>,
+    /// The joints made, by id.
+    pub joints: Vec<u64>,
+    /// The motion links made (gears, rack and pinion), by their index in `joint.list`'s `links`.
+    pub links: Vec<usize>,
+}
+
 /// What `gear.create` or `gear.update` made, or what `gear.calculate` worked out.
 #[derive(Debug, Default, Serialize, JsonSchema)]
 pub struct GearResult {
@@ -936,6 +976,9 @@ pub struct GearResult {
     /// `bodies`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clearance: Option<String>,
+    /// With `assembly: true`: the components, joints and motion links made for the set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assembly: Option<GearAssembly>,
     /// Problems worth knowing: undercut, pointed teeth, low contact ratio, interference.
     pub warnings: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

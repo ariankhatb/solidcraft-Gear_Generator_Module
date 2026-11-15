@@ -70,7 +70,7 @@ pub mod wrap;
 
 pub use geom::{Outline, Region, Seg, V2};
 pub use mesh2d::{MeshPair, MeshResult, Verdict, check_mesh};
-pub use plan::{Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit, plan};
+pub use plan::{Assembly, AssemblyLink, AssemblyMember, Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit, plan};
 
 #[cfg(test)]
 mod bevel_planet_tests;
@@ -86,6 +86,8 @@ mod clearance_tests;
 mod sweep_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod assembly_tests;
 
 #[cfg(test)]
 mod coupon_tests;

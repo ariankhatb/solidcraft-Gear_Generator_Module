@@ -185,6 +185,9 @@ pub(crate) struct Opts {
     /// parameters (`parametric`).
     equations: bool,
     parametric: bool,
+    /// Make the set a complete assembly (`assembly: true`): components, joints on the shafts,
+    /// gear links, and the keep-out body as a grounded component.
+    assembly: bool,
 }
 
 /// The set being edited (the window's main button is then Update).
@@ -435,7 +438,7 @@ impl GearWindow {
             paused: false,
             turned: 0.0,
             speed: 0.4,
-            opts: Opts { inch: false, advanced: false, printing: false, nozzle: 0.4, layer: 0.2, dual: [false; 2], load_open: false, equations: false, parametric: false },
+            opts: Opts { inch: false, advanced: false, printing: false, nozzle: 0.4, layer: 0.2, dual: [false; 2], load_open: false, equations: false, parametric: false, assembly: false },
             hover_section: None,
             hover_preview: None,
             edited: None,
@@ -498,6 +501,7 @@ impl GearWindow {
         // How the teeth were drawn: as the set was asked for.
         w.opts.equations = request.get("tooth_curves").and_then(Value::as_str) == Some("equations");
         w.opts.parametric = w.opts.equations && request.get("parametric").and_then(Value::as_bool) == Some(true);
+        w.opts.assembly = request.get("assembly").and_then(Value::as_bool) == Some(true);
         w.editing = Some(Editing { group, name: name.to_string(), bodies: bodies.to_vec() });
         // A set made elsewhere is regenerated from its numbers: Advanced shows them all.
         w.mode = Mode::Advanced;
@@ -519,6 +523,7 @@ impl GearWindow {
             "layer": self.opts.layer,
             "equations": self.opts.equations,
             "parametric": self.opts.parametric,
+            "assembly": self.opts.assembly,
         })
     }
 
@@ -607,6 +612,9 @@ impl GearWindow {
                 // (An update keeps the set's parameter prefix by itself.)
                 params["parametric"] = json!(true);
             }
+        }
+        if self.opts.assembly {
+            params["assembly"] = json!(true);
         }
         match &self.editing {
             Some(e) => {
@@ -1085,6 +1093,20 @@ fn body(ui: &mut Ui, w: &mut GearWindow, view: ViewState, view_error: Option<&st
         Mode::Simple => simple_body(ui, w, view, view_error),
         Mode::Advanced => advanced_body(ui, w, view, view_error),
     }
+    assembly_row(ui, w);
+}
+
+/// Next to Create: make the set a complete assembly package (both modes).
+fn assembly_row(ui: &mut Ui, w: &mut GearWindow) {
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.checkbox(&mut w.opts.assembly, "Assembly (components + joints)").on_hover_text(
+            "Make the set a complete assembly: each gear a component of its own, a revolute joint on its shaft (a slider for a rack), and gear links with the set's ratio and direction, so dragging or driving one gear turns the others. With a clearance body, the keep-out goes in too as a grounded, see-through component to cut a housing with. Update makes them again for the new set.",
+        );
+        if w.opts.assembly && w.spec.clearance_body.is_none() {
+            ui.label(egui::RichText::new("tick Make a clearance body to add the keep-out (empty space) component").small().weak());
+        }
+    });
 }
 
 /// Simple mode: the mode, its picks and a short form on the left; the drawing and the 3D view

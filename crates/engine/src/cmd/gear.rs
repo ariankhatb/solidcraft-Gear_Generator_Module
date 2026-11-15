@@ -1479,7 +1479,11 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
         // Kept with the set, so an update names the same parameters.
         request["parameter_prefix"] = json!(prefix);
     }
-    let bodies = build_set(s, &plan, &[], &mut warnings, &mode)?;
+    let mut bodies = build_set(s, &plan, &[], &mut warnings, &mode)?;
+    // Every body has the generator's own name.
+    for b in &mut bodies {
+        b.auto = Some(b.name.clone());
+    }
     let features: Vec<u64> = bodies.iter().flat_map(BodyRecord::features).collect();
     let group = if features.is_empty() {
         None
@@ -1539,6 +1543,11 @@ struct BodyRecord {
     /// The body's name when it was made (it may have been renamed since: [`current_names`]).
     name: String,
     steps: Vec<StepRecord>,
+    /// The name the generator gave it (from its tooth count and type, "Gear z32"), when it was
+    /// last made or updated: a body still called that was not renamed by the user, so an update
+    /// renames it to the new set's name ("Gear z40"). `None` in records from before: `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auto: Option<String>,
 }
 
 impl BodyRecord {
@@ -1816,7 +1825,7 @@ fn in_place_steps(s: &mut Session, rec: &Record, plan: &Plan, names: &[String], 
             let sketches = ids.iter().zip(held).map(|(id, (plane, geometry))| SketchRecord { id: *id, plane, geometry }).collect();
             steps.push(StepRecord { shape: def.shape, command: def.command.into(), feature: Some(feature), params, sketches });
         }
-        bodies.push(BodyRecord { name: name.clone(), steps });
+        bodies.push(BodyRecord { name: name.clone(), steps, auto: None });
     }
     Ok(bodies)
 }
@@ -1915,6 +1924,9 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     let own: std::collections::BTreeSet<u64> = rec.features().into_iter().collect();
     let worked: std::collections::BTreeSet<u64> = s.model.results.iter().filter(|r| r.error.is_none() && !r.skipped && !own.contains(&r.id)).map(|r| r.id).collect();
     let names = current_names(s, &rec);
+    // The names the generator gave the bodies last time: a body still called that has its name
+    // from the generator, not from the user.
+    let auto_before: Vec<String> = rec.bodies.iter().map(|b| b.auto.clone().unwrap_or_else(|| b.name.clone())).collect();
     let before = s.doc.clone();
     let mut why = must_rebuild(s, &rec, &plan, &mode);
     if why.is_none() {
@@ -1943,6 +1955,9 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     {
         equations::prune(s, old);
     }
+    // Bodies (and their components) still called what the generator named them take the new
+    // set's names ("Gear z32" that now has 40 teeth becomes "Gear z40"); names the user gave stay.
+    follow_auto_names(s, &mut rec, &plan, &names, &auto_before, &mut warnings);
     // The set's components, joints and links, brought up to date where they stand: the bodies
     // were regenerated inside their components (same names), the joints are moved onto the new
     // shafts and the links given the new ratios; what users built on them stays. Switched off,
@@ -1998,6 +2013,82 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
             ..GearResult::default()
         },
     )
+}
+
+/// Renames the set's bodies that still have the generator's name (`auto_before[i]`, the name
+/// before the update was `names[i]`) to the generator's name for the new set, with `body.rename`
+/// so every feature that names the body follows (the set's own steps, a component's Body
+/// Transfer, the user's features); a member's component named after its body follows too, and
+/// so does the set's record. Each body's generator name is kept for the next update.
+fn follow_auto_names(s: &mut Session, rec: &mut Record, plan: &Plan, names: &[String], auto_before: &[String], warnings: &mut Vec<String>) {
+    let all = built_bodies(plan);
+    if s.model.is_stale() {
+        s.refresh();
+    }
+    // The generator names a body after the plan ("Gear z40"), or "Gear z40 (2)" where that is
+    // taken (two equal gears, a second set), as `build_set` does.
+    let mut taken: std::collections::BTreeSet<String> = s.model.state().bodies.iter().map(|b| b.name.clone()).collect();
+    for (i, b) in rec.bodies.iter_mut().enumerate() {
+        let old = b.name.clone();
+        // A body still called what the generator named it last time (or one named afresh now).
+        let generated = match (names.get(i), auto_before.get(i)) {
+            (Some(now), Some(auto)) => now == auto,
+            _ => true,
+        };
+        let Some(base) = all.get(i).map(|p| p.name.clone()) else { continue };
+        if !generated {
+            b.auto = auto_before.get(i).cloned();
+            continue;
+        }
+        let fits = old == base
+            || old.strip_prefix(base.as_str()).and_then(|r| r.strip_prefix(" (")).and_then(|r| r.strip_suffix(')')).is_some_and(|k| k.parse::<u32>().is_ok());
+        if !fits {
+            let mut new = base.clone();
+            let mut k = 2;
+            while taken.contains(&new) {
+                new = format!("{base} ({k})");
+                k += 1;
+            }
+            if s.model.is_stale() {
+                s.refresh();
+            }
+            match s.execute("body.rename", &json!({"body": old, "name": new})) {
+                Ok(_) => {
+                    taken.remove(&old);
+                    taken.insert(new.clone());
+                    b.name = new.clone();
+                    for step in &mut b.steps {
+                        rename_in(&mut step.params, &old, &new);
+                    }
+                    if let Some(a) = rec.assembly.as_mut() {
+                        for m in a.members.iter_mut().filter(|m| m.body == old) {
+                            m.body = new.clone();
+                            // A component still named after its body follows it.
+                            let named = s.doc.components.iter().any(|c| c.id == m.component && c.name == old);
+                            if named && let Err(e) = s.execute("component.rename", &json!({"component": m.component, "name": new})) {
+                                warnings.push(format!("{old}'s component keeps its name ({e})"));
+                            }
+                        }
+                        if let Some(k) = a.keep_out.as_mut().filter(|k| k.0 == old) {
+                            k.0 = new.clone();
+                        }
+                    }
+                }
+                Err(e) => warnings.push(format!("{old} keeps its name: it can't be renamed {new} ({e})")),
+            }
+        }
+        b.auto = Some(b.name.clone());
+    }
+}
+
+/// Every string in `v` that is `old`, made `new` (a body named in a step's parameters).
+fn rename_in(v: &mut Value, old: &str, new: &str) {
+    match v {
+        Value::String(t) if t == old => *t = new.to_string(),
+        Value::Array(a) => a.iter_mut().for_each(|x| rename_in(x, old, new)),
+        Value::Object(o) => o.values_mut().for_each(|x| rename_in(x, old, new)),
+        _ => {}
+    }
 }
 
 /// The prefix of the design parameters a set's request draws its teeth with, when parametric.
@@ -2649,7 +2740,7 @@ fn build_body(s: &mut Session, body: &Body, warnings: &mut Vec<String>, mode: &e
         let sketches = def.sketches.iter().zip(&ids).map(|(d, id)| SketchRecord { id: *id, plane: d.plane_key(), geometry: d.geometry_key() }).collect();
         steps.push(StepRecord { shape: def.shape, command: def.command.into(), feature: feature_id(&reply), params, sketches });
     }
-    Ok(BodyRecord { name, steps })
+    Ok(BodyRecord { name, steps, auto: None })
 }
 
 /// Teeth drawn from formulas change their curves (and the curves' ids) when a parameter

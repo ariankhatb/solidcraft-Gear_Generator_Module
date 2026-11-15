@@ -330,11 +330,12 @@ fn an_update_changes_the_set_in_place() {
     let before = volume(&mut s, &body);
     let u = run(&mut s, "gear.update", json!({"group": group, "face_width": 20, "teeth": 24}));
     assert_eq!(u["updated"], "in_place", "{u}");
-    assert_eq!(u["bodies"][0], body.as_str(), "the body keeps its name");
+    assert_eq!(body, "Gear z20");
+    assert_eq!(u["bodies"][0], "Gear z24", "the generator's name follows the tooth count");
     assert_eq!(u["group"].as_u64(), Some(group));
-    let after = volume(&mut s, &body);
+    let after = volume(&mut s, "Gear z24");
     assert!(after > before * 2.5, "{before} -> {after}");
-    let set = run(&mut s, "gear.inspect", json!({"body": body}))["sets"][0].clone();
+    let set = run(&mut s, "gear.inspect", json!({"body": "Gear z24"}))["sets"][0].clone();
     assert_eq!(set["features"], features, "the sketches and features keep their ids");
     assert_eq!((set["request"]["teeth"].as_u64(), set["request"]["face_width"].as_f64()), (Some(24), Some(20.0)));
     run(&mut s, "edit.undo", json!({}));
@@ -1197,4 +1198,89 @@ fn a_users_joint_to_an_assembled_gear_survives_an_update() {
     let jj = member_joints(&u);
     let got = drive_and_read(&mut s, jj[0].unwrap(), 32.0, jj[1].unwrap());
     assert!((got + 24.0).abs() < 1e-6, "{got}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Names after an update: the generator's follow the set, the user's stay
+// ---------------------------------------------------------------------------------------------
+
+/// A gear still called what the generator named it takes the new tooth count's name, and what
+/// names it follows: a user's cut through it, and (as an assembly) its component and the
+/// component's placement. One undo step takes the names back with the rest.
+#[test]
+fn an_update_renames_generated_bodies_and_what_names_them() {
+    // Without the user's hole, for comparison.
+    let mut plain = Session::default();
+    run(&mut plain, "gear.create", json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 40, "face_width": 8}));
+    let uncut = volume(&mut plain, "Gear z40");
+
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 32, "face_width": 8}));
+    let group = r["group"].as_u64().unwrap();
+    assert_eq!(r["bodies"], json!(["Gear z20", "Gear z32"]));
+    // The user's feature on gear 2, by its name: a hole through its centre (x = 52, then 60).
+    run(&mut s, "solid.cylinder", json!({"base": [0, 0, -1], "axis": [0, 0, 1], "radius": 3, "height": 10, "operation": "cut", "targets": ["Gear z20"]}));
+    no_errors(&s);
+    let u = run(&mut s, "gear.update", json!({"group": group, "teeth2": 40}));
+    no_errors(&s);
+    assert_eq!(u["bodies"], json!(["Gear z20", "Gear z40"]), "{u}");
+    assert!(s.model.state().body("Gear z40").is_some() && s.model.state().body("Gear z32").is_none());
+    assert!((volume(&mut s, "Gear z40") / uncut - 1.0).abs() < 1e-3);
+    // Gear 1 more teeth: the cut on it follows the rename.
+    let u = run(&mut s, "gear.update", json!({"group": group, "teeth": 24}));
+    no_errors(&s);
+    assert_eq!(u["bodies"], json!(["Gear z24", "Gear z40"]), "{u}");
+    let cut = volume(&mut s, "Gear z24");
+    let mut plain = Session::default();
+    run(&mut plain, "gear.create", json!({"type": "pair", "module": 2, "teeth": 24, "teeth2": 40, "face_width": 8}));
+    let whole = volume(&mut plain, "Gear z24");
+    assert!((whole - cut - std::f64::consts::PI * 9.0 * 8.0).abs() < 1.0, "the hole is still cut: {whole} vs {cut}");
+    // A second update finds the set by the new name, and keeps it.
+    let u = run(&mut s, "gear.update", json!({"body": "Gear z24", "face_width": 8}));
+    assert_eq!(u["bodies"], json!(["Gear z24", "Gear z40"]), "{u}");
+    // One undo takes a rename back with its update.
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.model.state().body("Gear z20").is_some() && s.model.state().body("Gear z24").is_none());
+
+    // As an assembly: the component and its placement follow, joints stay.
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 32, "face_width": 8, "assembly": true}));
+    let group = r["group"].as_u64().unwrap();
+    let c2 = r["assembly"]["members"][1]["component"].as_u64().unwrap();
+    let joints = r["assembly"]["joints"].clone();
+    let u = run(&mut s, "gear.update", json!({"group": group, "teeth2": 40}));
+    no_errors(&s);
+    assert_eq!(u["bodies"], json!(["Gear z20", "Gear z40"]), "{u}");
+    assert_eq!(s.doc.components.iter().find(|c| c.id == c2).unwrap().name, "Gear z40");
+    assert_eq!(s.doc.occurrence_of(c2).unwrap().name, "Gear z40:1");
+    assert_eq!(u["assembly"]["joints"], joints);
+    assert_eq!(u["assembly"]["members"][1]["component"].as_u64(), Some(c2));
+    // A component the user renamed keeps its name.
+    run(&mut s, "component.rename", json!({"component": c2, "name": "Output"}));
+    let u = run(&mut s, "gear.update", json!({"group": group, "teeth2": 36}));
+    assert_eq!(u["bodies"][1], "Gear z36", "{u}");
+    assert_eq!(s.doc.components.iter().find(|c| c.id == c2).unwrap().name, "Output");
+}
+
+/// A body the user renamed keeps its name through updates; its mate, still the generator's,
+/// follows its tooth count.
+#[test]
+fn a_users_body_name_stays_through_an_update() {
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 32, "face_width": 8}));
+    let group = r["group"].as_u64().unwrap();
+    run(&mut s, "body.rename", json!({"body": "Gear z20", "name": "Drive gear"}));
+    let u = run(&mut s, "gear.update", json!({"group": group, "teeth": 24, "teeth2": 40}));
+    no_errors(&s);
+    assert_eq!(u["bodies"], json!(["Drive gear", "Gear z40"]), "{u}");
+    let u = run(&mut s, "gear.update", json!({"group": group, "teeth": 18}));
+    assert_eq!(u["bodies"], json!(["Drive gear", "Gear z40"]), "{u}");
+    // Two equal gears: the second stays "(2)" when its count is unchanged.
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "pair", "teeth": 20, "teeth2": 20}));
+    let group = r["group"].as_u64().unwrap();
+    let u = run(&mut s, "gear.update", json!({"group": group, "teeth": 24}));
+    assert_eq!(u["bodies"], json!(["Gear z24", "Gear z20 (2)"]), "{u}");
+    assert!(!u["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap_or_default().contains("keeps its name")), "{u}");
 }

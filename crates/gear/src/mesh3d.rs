@@ -630,7 +630,7 @@ impl Solid {
     /// turns about its axis lies within these points' radii, row by row.
     pub fn material_points(&self, hz: f64) -> Vec<P3> {
         let mut out = Vec::new();
-        for (part, op) in &self.parts {
+        for (part, op) in self.parts.iter() {
             if matches!(op, Op::New | Op::Join) {
                 for sheet in part.sheets(self.h, hz, (f64::MIN, f64::MAX)) {
                     for row in sheet {

@@ -216,7 +216,7 @@ pub(crate) fn apply(w: &mut GearWindow) {
     }
     let (a1, a2) = sketch_rules::axes_for(&m, &sol.spec, &s.frame, s.turn);
     s.measured = Some(m);
-    w.spec = Spec { placement: None, ..sol.spec };
+    w.spec = Spec { placement: None, clearance_body: w.spec.clearance_body.clone(), ..sol.spec };
     w.axes = AxesStep::sketched(a1, a2);
     w.planned = None;
 }
@@ -477,6 +477,8 @@ pub(crate) fn panel(ui: &mut Ui, w: &mut GearWindow) {
         ui.note(n, ui.visuals().weak_text_color());
     }
     settings_ui(ui, w);
+    let (names, warnings, facts) = w.clearance_inputs();
+    crate::gear_clearance_ui::section(ui, &mut w.spec, false, &names, &warnings, &facts);
     ui.add_space(4.0);
     turn_ui(ui, w);
 }

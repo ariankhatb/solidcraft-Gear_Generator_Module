@@ -19,6 +19,7 @@
 //! behind) for the clearance envelope and bearing seats still to come.
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
+use solidcraft_gear::clearance::{Clearance, Seat};
 use solidcraft_gear::axes::{self, Axis, Relation};
 use solidcraft_gear::geom::{Outline, Region, V2};
 use solidcraft_gear::plan::{Body, Frame, Kind, Op, Plan, Spec, Step, taper_turn};
@@ -300,6 +301,8 @@ struct Part {
     normals: Vec<[f32; 3]>,
     /// 1 solid; under 1 translucent (drawn after the solids, hiding nothing).
     alpha: f32,
+    /// In world coordinates and never moved (the clearance body), not in a body's frame.
+    fixed: bool,
 }
 
 /// A line segment of one body, in its own frame, depth tested.
@@ -613,7 +616,46 @@ fn normals(tris: &[Tri]) -> Vec<[f32; 3]> {
         .collect()
 }
 
-fn build_scene(sch: &Schematic, plan: &Plan, teeth: bool) -> Scene {
+/// The clearance body (world coordinates, translucent) and its bearing seats: a ring at each
+/// end of every seat, on its member's shaft, in the member's colour.
+fn clearance_parts(sch: &Schematic, plan: &Plan, clear: Option<&Clearance>, parts: &mut Vec<Part>, segs: &mut Vec<Seg3>) {
+    let Some(body) = &plan.clearance else { return };
+    let f = &body.frame;
+    let (o, ex, ey, ez) = (f.origin, f.x, f.y(), f.z);
+    let tris: Vec<Tri> = body_mesh(body, sch.tol.max(0.05), 400)
+        .into_iter()
+        .map(|t| {
+            t.map(|v| {
+                let w = add(o, add(add(mul(ex, f64::from(v[0])), mul(ey, f64::from(v[1]))), mul(ez, f64::from(v[2]))));
+                [w[0] as f32, w[1] as f32, w[2] as f32]
+            })
+        })
+        .collect();
+    let normals = normals(&tris);
+    parts.push(Part { body: 0, member: usize::MAX, tris, normals, alpha: 0.22, fixed: true });
+    let Some(c) = clear else { return };
+    let size = c.bearing.as_deref().and_then(solidcraft_gear::hub::bearing).map(|(_, od, w)| (od, w)).or(c.bearing_size.map(|b| (b.od, b.width)));
+    let Some((od, width)) = size else { return };
+    let r = (od + c.bearing_fit) / 2.0;
+    for seat in &c.seats {
+        let Seat::Along { member, along } = *seat else { continue };
+        let Some(sb) = sch.bodies.iter().find(|b| b.body + 1 == member as usize) else { continue };
+        let mid = match (sb.pitch.first(), sb.pitch.last()) {
+            (Some(a), Some(b)) => (a[0] + b[0]) / 2.0,
+            _ => (sb.z.0 + sb.z.1) / 2.0,
+        };
+        let n = 48;
+        for z in [mid + along - width / 2.0, mid + along + width / 2.0] {
+            for j in 0..n {
+                let (a0, a1) = (j as f64 / n as f64 * std::f64::consts::TAU, (j + 1) as f64 / n as f64 * std::f64::consts::TAU);
+                let p = |a: f64| [(r * a.cos()) as f32, (r * a.sin()) as f32, z as f32];
+                segs.push(Seg3 { body: sb.body, member: sb.member, a: p(a0), b: p(a1) });
+            }
+        }
+    }
+}
+
+fn build_scene(sch: &Schematic, plan: &Plan, teeth: bool, clear: Option<&Clearance>) -> Scene {
     let started = crate::now_ms();
     let mut parts = Vec::new();
     let mut segs = Vec::new();
@@ -666,8 +708,9 @@ fn build_scene(sch: &Schematic, plan: &Plan, teeth: bool) -> Scene {
             }
         }
         let n = normals(&tris);
-        parts.push(Part { body: sb.body, member: sb.member, tris, normals: n, alpha: 1.0 });
+        parts.push(Part { body: sb.body, member: sb.member, tris, normals: n, alpha: 1.0, fixed: false });
     }
+    clearance_parts(sch, plan, clear, &mut parts, &mut segs);
     let triangles = parts.iter().map(|p| p.tris.len()).sum();
     Scene { parts, segs, dropped, triangles, built_ms: crate::now_ms() - started }
 }
@@ -808,6 +851,8 @@ pub(crate) struct Inputs<'a> {
     pub turned: f64,
     pub lit: &'a [usize],
     pub size: egui::Vec2,
+    /// The clearance body's settings, for its seats (the body itself is the plan's).
+    pub clear: Option<&'a Clearance>,
 }
 
 fn hash_of(parts: &[u64]) -> u64 {
@@ -834,7 +879,7 @@ impl View3d {
         let (rect, resp) = ui.allocate_exact_size(inp.size, Sense::click_and_drag());
         let key = hash_of(&[inp.key, u64::from(self.teeth)]);
         if self.scene.as_ref().is_none_or(|(k, _)| *k != key) {
-            self.scene = Some((key, build_scene(inp.sch, inp.plan, self.teeth)));
+            self.scene = Some((key, build_scene(inp.sch, inp.plan, self.teeth, inp.clear)));
             self.drawn = None;
         }
         // Orbit, pan, zoom, fit.
@@ -849,7 +894,7 @@ impl View3d {
             _ => {
                 let p0 = poses(inp.sch, 0.0);
                 let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
-                for part in &scene.parts {
+                for part in scene.parts.iter().filter(|p| !p.fixed) {
                     let (o, ex, ey, ez) = p0[part.body];
                     for t in part.tris.iter().step_by(7) {
                         for v in t {
@@ -920,16 +965,17 @@ impl View3d {
             let mut order: Vec<&Part> = scene.parts.iter().collect();
             order.sort_by(|a, b| b.alpha.total_cmp(&a.alpha));
             for part in order {
-                let base = crate::gear_window::member_color(part.member);
+                let base = if part.fixed { ink.lerp_to_gamma(bg, 0.35) } else { crate::gear_window::member_color(part.member) };
                 let lit = inp.lit.contains(&part.member);
-                let base = if dim && !lit { base.gamma_multiply(0.55) } else { base };
-                let (_, ex, ey, ez) = pose[part.body];
-                let id = (part.member + 1).min(250) as u8;
+                let base = if dim && !lit && !part.fixed { base.gamma_multiply(0.55) } else { base };
+                let (_, ex, ey, ez) = if part.fixed { ([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]) } else { pose[part.body] };
+                let id = if part.fixed { 0 } else { (part.member + 1).min(250) as u8 };
+                let place = |v: [f32; 3]| if part.fixed { [f64::from(v[0]), f64::from(v[1]), f64::from(v[2])] } else { world(part.body, v) };
                 for (t, n) in part.tris.iter().zip(&part.normals) {
                     let nw = add(add(mul(ex, f64::from(n[0])), mul(ey, f64::from(n[1]))), mul(ez, f64::from(n[2])));
                     let shade = (0.3 + 0.7 * dot(nw, light).abs()) as f32;
                     let col = Color32::from_rgb((f32::from(base.r()) * shade) as u8, (f32::from(base.g()) * shade) as u8, (f32::from(base.b()) * shade) as u8);
-                    r.tri(project(world(part.body, t[0])), project(world(part.body, t[1])), project(world(part.body, t[2])), col, id, part.alpha);
+                    r.tri(project(place(t[0])), project(place(t[1])), project(place(t[2])), col, id, part.alpha);
                 }
             }
             let bias = (fit.1 * 0.004) as f32;

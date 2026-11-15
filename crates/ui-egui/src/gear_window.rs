@@ -515,6 +515,14 @@ impl GearWindow {
         })
     }
 
+    /// The set's body names, warnings and facts, for the clearance section.
+    pub(crate) fn clearance_inputs(&self) -> (Vec<String>, Vec<String>, Vec<solidcraft_gear::Fact>) {
+        match &self.plan {
+            Ok(p) => (p.bodies.iter().map(|b| b.name.clone()).collect(), p.warnings.clone(), p.facts.clone()),
+            Err(_) => (Vec::new(), Vec::new(), Vec::new()),
+        }
+    }
+
     pub(crate) fn replan(&mut self) {
         if self.mode == Mode::Simple {
             // The mode is the user's pick there; the axes follow the drawing.
@@ -642,6 +650,7 @@ impl GearWindow {
         s.origin = keep.origin;
         s.name = keep.name;
         s.load = keep.load;
+        s.clearance_body = keep.clearance_body;
         self.spec = s;
         self.turned = 0.0;
     }
@@ -1147,7 +1156,7 @@ fn view3d_ui(ui: &mut Ui, w: &mut GearWindow, size: Vec2) {
         return;
     };
     let lit: Vec<usize> = w.lit().into_iter().collect();
-    let inputs = crate::gear_view3d::Inputs { key: w.plan_gen, sch, plan, turned: w.pose(), lit: &lit, size };
+    let inputs = crate::gear_view3d::Inputs { key: w.plan_gen, sch, plan, turned: w.pose(), lit: &lit, size, clear: w.built.clearance_body.as_ref() };
     let hovered = w.view3d.show(ui, inputs);
     w.hover_preview = hovered;
     ui.horizontal_wrapped(|ui| {
@@ -1187,7 +1196,7 @@ fn simple_facts(ui: &mut Ui, w: &GearWindow) {
     egui::CollapsingHeader::new(egui::RichText::new("All numbers").small()).id_salt("gear_simple_all").show(ui, |ui| facts(ui, w));
 }
 
-fn fact_value(f: &solidcraft_gear::Fact) -> String {
+pub(crate) fn fact_value(f: &solidcraft_gear::Fact) -> String {
     match f.unit {
         Unit::Mm => format!("{:.3} mm", f.value),
         Unit::Deg => format!("{:.3}°", f.value),
@@ -1514,6 +1523,7 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
     let lit = w.lit();
     let k = w.spec.kind;
     let on_axes = w.axes.slots[0].is_some();
+    let (names, warnings, facts) = w.clearance_inputs();
     let axis_distance = match w.axes.relation() {
         Some(Relation::Parallel { distance, .. }) => Some(distance),
         _ => None,
@@ -1557,6 +1567,7 @@ fn params(ui: &mut Ui, w: &mut GearWindow) {
         section_tooth_form(ui, &mut cx);
         section_print(ui, &mut cx);
         section_body(ui, &mut cx);
+        crate::gear_clearance_ui::section(ui, cx.s, true, &names, &warnings, &facts);
         section_load(ui, &mut cx);
         section_output(ui, &mut cx);
     });

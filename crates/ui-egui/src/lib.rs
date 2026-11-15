@@ -303,6 +303,7 @@ mod sketch_moving_click_tests;
 pub mod sketch_palette;
 mod sketch_pattern_tree;
 pub mod sketch_report;
+mod gear_clearance_ui;
 mod gear_drawing;
 mod gear_simple;
 mod gear_view3d;

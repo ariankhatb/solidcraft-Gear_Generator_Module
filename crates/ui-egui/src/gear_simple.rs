@@ -522,17 +522,31 @@ pub(crate) fn drawing(ui: &mut Ui, w: &mut GearWindow, size: egui::Vec2) {
         // An edit in the drawing no longer matches the model's sketch.
         s.dirty = true;
     }
+    if changed.face {
+        // A bevel's face typed or dragged in the drawing: gear 1's width is the form's own
+        // setting (the solver keeps it); gear 2's width and heel offset ride on the spec.
+        s.settings.face_width = Some(w.spec.face_width);
+    }
     if changed.picked || changed.spec {
         s.dirty = true;
     }
     if side {
-        // The shaft angle is a setting here: the side view edits it.
+        // The shaft angle is a setting here: the side view edits it (and a hypoid's faces).
         let mut spec = Spec { shaft_angle: s.settings.shaft_angle.unwrap_or(w.spec.shaft_angle), helix: s.settings.helix_split.unwrap_or(w.spec.helix), ..w.spec.clone() };
+        let before = spec.clone();
         if crate::gear_drawing::side_view(ui, &mut s.canvas, &mut spec, egui::vec2(size.x, size.y * 0.34)) {
-            s.settings.shaft_angle = Some(spec.shaft_angle);
-            if k == Kind::CrossedHelical {
+            if spec.shaft_angle != before.shaft_angle {
+                s.settings.shaft_angle = Some(spec.shaft_angle);
+            }
+            if k == Kind::CrossedHelical && (spec.helix != before.helix || spec.shaft_angle != before.shaft_angle) {
                 s.settings.helix_split = Some(spec.helix);
             }
+            if spec.face_width != before.face_width {
+                s.settings.face_width = Some(spec.face_width);
+                w.spec.face_width = spec.face_width;
+            }
+            w.spec.face_width2 = spec.face_width2;
+            w.spec.face_offset2 = spec.face_offset2;
             s.dirty = true;
         }
     }

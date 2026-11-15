@@ -2977,22 +2977,27 @@ fn bevel_schematic(b: &mut Build) {
     let (r1, r2) = (m * z1 / 2.0, m * z2 / 2.0);
     let re = r1 / d1.sin();
     let (h1, h2) = (re * d1.cos(), re * d2.cos());
-    let bw = s.face_width.min(re * 0.45);
-    let scale = (re - bw) / re;
+    // Each member's teeth run from its toe to its heel along the pitch cone (gear 2's own face
+    // width and heel offset, as the plan builds them).
+    let faces = crate::plan::faces_of(s, re);
+    let scale = faces[0].toe() / re;
     let spiral = if s.kind == Kind::SpiralBevel { s.spiral_angle.to_radians() } else { 0.0 };
     let mn = m * spiral.cos();
-    let member = |r: f64, h: f64, delta: f64, sign: f64| -> Vec<Part> {
+    let member = |r: f64, h: f64, delta: f64, sign: f64, face: crate::plan::ConeFace| -> Vec<Part> {
         let shift = sign * s.shift;
         let (ha, hf) = ((s.rack.addendum + shift) * mn, (s.rack.dedendum - shift) * mn);
-        let z1 = h * (1.0 - scale);
+        // The heel and the toe along the axis (the large end's pitch circle, at the cone
+        // distance, on z = 0).
+        let (z0, z1) = (h * (1.0 - face.heel / re), h * (1.0 - face.toe() / re));
         let cone = |rr: f64, role: Role| {
             let apex = rr / delta.tan();
-            Part { role, shape: Shape::Cone { r0: rr, z0: 0.0, r1: rr * scale, z1, apex_z: apex.min(1e9), half_angle: delta.to_degrees() } }
+            let at = |z: f64| (rr - z * delta.tan()).max(0.0);
+            Part { role, shape: Shape::Cone { r0: at(z0), z0, r1: at(z1), z1, apex_z: apex.min(1e9), half_angle: delta.to_degrees() } }
         };
         vec![cone(r, Role::Pitch), cone(r + ha.max(0.0) * delta.cos(), Role::Tip), cone((r - hf * delta.cos()).max(0.0), Role::Root)]
     };
-    let mut p1 = member(r1, h1, d1, 1.0);
-    let mut p2 = member(r2, h2, d2, -1.0);
+    let mut p1 = member(r1, h1, d1, 1.0, faces[0]);
+    let mut p2 = member(r2, h2, d2, -1.0, faces[1]);
     extras(s, false, 0.0, 0.0, &mut p1);
     extras(s, true, 0.0, 0.0, &mut p2);
     for p in p1.iter_mut().chain(p2.iter_mut()) {
@@ -3040,14 +3045,21 @@ fn bevel_planet_schematic(b: &mut Build) {
     let (ha, hf) = (s.rack.addendum * mn, s.rack.dedendum * mn);
     // Pitch, tip and root cones from the large end (z = 0) towards the apex (+z); a ring's tip
     // is inside its pitch cone and its root outside.
-    let cones = |delta: f64, internal: bool| -> Vec<Part> {
+    // The sun, sun 2 and the ring share gear 1's face; the planets have their own (face_width2,
+    // heel face_offset2 in from the cone distance).
+    let faces = crate::plan::faces_of(s, re);
+    let cones_on = |delta: f64, internal: bool, face: crate::plan::ConeFace| -> Vec<Part> {
         let h = re * delta.cos();
         let r = re * delta.sin();
-        let z1 = h * (1.0 - scale);
-        let cone = |rr: f64, role: Role| Part { role, shape: Shape::Cone { r0: rr, z0: 0.0, r1: rr * scale, z1, apex_z: (rr / delta.tan()).min(1e9), half_angle: delta.to_degrees() } };
+        let (z0, z1) = (h * (1.0 - face.heel / re), h * (1.0 - face.toe() / re));
+        let cone = |rr: f64, role: Role| {
+            let at = |z: f64| rr - z * delta.tan();
+            Part { role, shape: Shape::Cone { r0: at(z0), z0, r1: at(z1), z1, apex_z: (rr / delta.tan()).min(1e9), half_angle: delta.to_degrees() } }
+        };
         let (tip, root) = if internal { (r - ha * delta.cos(), r + hf * delta.cos()) } else { (r + ha * delta.cos(), (r - hf * delta.cos()).max(0.0)) };
         vec![cone(r, Role::Pitch), cone(tip.max(0.0), Role::Tip), cone(root, Role::Root)]
     };
+    let cones = |delta: f64, internal: bool| cones_on(delta, internal, faces[0]);
     let bored = |parts: &mut Vec<Part>, bore: &Bore, delta: f64| {
         if bore.kind != BoreKind::None && bore.diameter > 0.0 {
             parts.push(cyl(Role::Bore, bore.diameter / 2.0, 0.0, re * delta.cos() * (1.0 - scale)));
@@ -3065,7 +3077,7 @@ fn bevel_planet_schematic(b: &mut Build) {
     for (k, th) in g.azimuths.iter().enumerate() {
         let ax = rot([-sigma.sin(), 0.0, sigma.cos()], *th);
         let frame = Frame { origin: [0, 1, 2].map(|i| o[i] - ax[i] * h_planet), x: rot([sigma.cos(), 0.0, sigma.sin()], *th), z: ax };
-        let mut pp = cones(g.delta_planet, false);
+        let mut pp = cones_on(g.delta_planet, false, faces[1]);
         bored(&mut pp, &s.bore2, g.delta_planet);
         let j = b.add(&format!("planet {}", k + 1), 2, frame, m * f64::from(g.z_planet), pp);
         // The colour (and preview place) of the one planet the preview shows.

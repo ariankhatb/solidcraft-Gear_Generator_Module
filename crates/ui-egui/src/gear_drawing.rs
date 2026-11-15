@@ -11,8 +11,13 @@
 //! grow, the ratio stays), a line's distance from gear 1's centre, the angle between a bevel's
 //! two shafts. Radii edited keep what touched touching.
 //!
+//! A bevel's pitch cones show each member's face: the toe and heel lines, square to the pitch
+//! cone where its teeth start and end, with the face width (and gear 2's heel offset in from
+//! the cone distance) as dimensions to type into and handles on the lines to drag.
+//!
 //! The side view shows the shaft angle a single sketch can't (hypoid, crossed helicals) with
-//! its value as a dimension and a handle to drag.
+//! its value as a dimension and a handle to drag; a hypoid's face widths and pinion offset are
+//! dimensions there too.
 
 use egui::{Color32, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use solidcraft_gear::geom::V2;
@@ -50,6 +55,9 @@ enum Grab {
     NewLine(V2),
     /// The side view's shaft-angle handle.
     SideAngle,
+    /// A bevel member's (0: gear 1 or the sun, 1: gear 2 or the planets) heel (true) or toe
+    /// line.
+    Face(usize, bool),
 }
 
 /// An editable dimension.
@@ -63,6 +71,11 @@ pub(crate) enum Dim {
     Helix,
     /// The `i`-th clearance seat's distance along its member's shaft.
     SeatAlong(usize),
+    /// A face width: `face_width` (false) or `face_width2` (true; 0: auto).
+    Face(bool),
+    /// `face_offset2`: a bevel's gear 2 (planets) heel in from the cone distance; a hypoid
+    /// pinion's face moved towards its heel.
+    FaceOffset,
 }
 
 /// Screen ↔ sketch.
@@ -91,6 +104,9 @@ pub(crate) struct Changed {
     pub spec: bool,
     /// A slot filled by a click in the drawing.
     pub picked: bool,
+    /// A face width or offset typed or dragged (also `spec`): Simple mode keeps `face_width`
+    /// as asked.
+    pub face: bool,
 }
 
 /// Which member a slot's entity stands for, for its colour.
@@ -394,6 +410,16 @@ pub(crate) fn sketch(ui: &mut Ui, cv: &mut Canvas, d: &mut Drawn, cx: Ctx<'_>, s
     let mut hits: Vec<Hit> = Vec::new();
     let dim_ink = ink.gamma_multiply(0.85);
     let pick = |i: usize| cx.picks.get(i).copied().flatten();
+    // A bevel's cones (its toe and heel handles are dragged below).
+    let bevel = if matches!(k, Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary) {
+        match (pick(1).filter(|i| *i < d.lines.len()), pick(2).filter(|i| *i < d.lines.len())) {
+            (Some(l1), Some(l2)) => bevel_side(d.lines[l1], d.lines[l2], pick(0).and_then(|i| d.points.get(i).copied()), cx.spec).map(|g| (g, l1, l2)),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let mut face_handles: Vec<(Pos2, Grab)> = Vec::new();
     for (i, cc) in d.circles.iter().enumerate() {
         let a = std::f64::consts::FRAC_PI_4 + 0.35 * i as f64;
         let edge = to_screen(cc.c + V2::polar(cc.r, a));
@@ -426,11 +452,10 @@ pub(crate) fn sketch(ui: &mut Ui, cv: &mut Canvas, d: &mut Drawn, cx: Ctx<'_>, s
             }
         }
         Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary => {
-            if let (Some(l1), Some(l2)) = (pick(1).filter(|i| *i < d.lines.len()), pick(2).filter(|i| *i < d.lines.len())) {
-                let dot = pick(0).and_then(|i| d.points.get(i).copied());
-                if let Some(h) = bevel_dims(&painter, &to_screen, d.lines[l1], d.lines[l2], dot, cx.spec, view.scale, ink, bg, (l1, l2)) {
-                    hits.push(h);
-                }
+            if let Some((g, l1, l2)) = bevel {
+                let (h, handles) = bevel_dims(&painter, &to_screen, &g, cx.spec, view.scale, ink, bg, (l1, l2), cv.grab);
+                hits.extend(h);
+                face_handles = handles;
             }
         }
         _ => {}
@@ -537,7 +562,8 @@ pub(crate) fn sketch(ui: &mut Ui, cv: &mut Canvas, d: &mut Drawn, cx: Ctx<'_>, s
             Tool::Circle => Some(Grab::NewCircle(snap_point(d, q, None, tol, grid))),
             Tool::Line => Some(Grab::NewLine(snap_point(d, q, None, tol, grid))),
             Tool::Dot => None,
-            Tool::Select => grab_at(d, q, tol),
+            // A bevel's toe and heel handles first: they sit on the pitch cones' lines.
+            Tool::Select => face_handles.iter().filter(|(h, _)| h.distance(p) < 9.0).min_by(|a, b| a.0.distance(p).total_cmp(&b.0.distance(p))).map(|(_, g)| *g).or_else(|| grab_at(d, q, tol)),
         };
     }
     if let (Some(g), Some(p)) = (cv.grab, resp.interact_pointer_pos().filter(|_| resp.dragged())) {
@@ -575,11 +601,18 @@ pub(crate) fn sketch(ui: &mut Ui, cv: &mut Canvas, d: &mut Drawn, cx: Ctx<'_>, s
                 painter.line_segment([to_screen(a), to_screen(b)], Stroke::new(1.2, ink.gamma_multiply(0.7)));
             }
             Grab::SideAngle => {}
+            Grab::Face(i, heel) => {
+                if let Some((g, _, _)) = bevel {
+                    drag_face(cx.spec, &g, i, heel, (q - g.apex).dot(g.outer(i)), grid);
+                    out.spec = true;
+                    out.face = true;
+                }
+            }
         }
         if let Some((_, snapped)) = preview {
             painter.line_segment([to_screen(snapped.a), to_screen(snapped.b)], Stroke::new(1.0, ink.gamma_multiply(0.5)));
         }
-        if !matches!(g, Grab::NewCircle(_) | Grab::NewLine(_)) {
+        if !matches!(g, Grab::NewCircle(_) | Grab::NewLine(_) | Grab::Face(..)) {
             out.drawing = true;
         }
     }
@@ -769,10 +802,37 @@ fn linear_dim(p: &egui::Painter, a: Pos2, b: Pos2, off: f32, text: &str, dim: Di
     text_dim(p, a2.lerp(b2, 0.5) + n * 10.0f32.copysign(if off == 0.0 { 1.0 } else { off }), text, dim, value, ink, bg, egui::Align2::CENTER_CENTER)
 }
 
-/// A bevel's side view: the angle between its shafts at the apex (editable), the pitch cones
-/// as their sizes give them, and the cone angles.
-#[allow(clippy::too_many_arguments)]
-fn bevel_dims(p: &egui::Painter, to_screen: &dyn Fn(V2) -> Pos2, l1: Line, l2: Line, dot: Option<V2>, spec: &Spec, scale: f64, ink: Color32, bg: Color32, ids: (usize, usize)) -> Option<Hit> {
+/// A bevel's side view as drawn: the apex, each member's shaft ray and the way its pitch cone
+/// turns from it onto the element both cones share, the cone angles, the shaft angle and the
+/// cone distance (from the sizes).
+#[derive(Clone, Copy, Debug)]
+struct BevelSide {
+    apex: V2,
+    ray: [V2; 2],
+    toward: [f64; 2],
+    delta: [f64; 2],
+    sigma: f64,
+    side: f64,
+    re: f64,
+}
+
+impl BevelSide {
+    /// Member `i`'s pitch element on the far side from the other member.
+    fn outer(&self, i: usize) -> V2 {
+        self.ray[i].rot(-self.toward[i] * self.delta[i])
+    }
+    /// The pitch element the two members share.
+    fn shared(&self, i: usize) -> V2 {
+        self.ray[i].rot(self.toward[i] * self.delta[i])
+    }
+    /// Square to element `e` of member `i`'s cone, away from its axis (along its back cone).
+    fn out_of(&self, i: usize, e: V2) -> V2 {
+        let n = V2::new(-e.y, e.x);
+        if n.dot(self.ray[i]) > 0.0 { n * -1.0 } else { n }
+    }
+}
+
+fn bevel_side(l1: Line, l2: Line, dot: Option<V2>, spec: &Spec) -> Option<BevelSide> {
     let apex = dot.or_else(|| {
         let (u, v) = (l1.dir(), l2.dir());
         let den = u.cross(v);
@@ -794,19 +854,109 @@ fn bevel_dims(p: &egui::Painter, to_screen: &dyn Fn(V2) -> Pos2, l1: Line, l2: L
         return None;
     }
     let re = spec.module * z1 / 2.0 / d1.sin();
-    let b = spec.face_width.min(0.45 * re);
+    if !(re.is_finite() && re > 0.0 && re < 1e5) {
+        return None;
+    }
     let side = if r1.cross(r2) >= 0.0 { 1.0 } else { -1.0 };
-    for (r, delta, member, toward) in [(r1, d1, 0usize, side), (r2, d2, 1usize, -side)] {
-        let rim = r.rot(toward * delta);
-        let other = r.rot(-toward * delta);
+    Some(BevelSide { apex, ray: [r1, r2], toward: [side, -side], delta: [d1, d2], sigma, side, re })
+}
+
+/// Each bevel member's heel (its distance from the apex along the pitch cone) and face width,
+/// as the plan builds them: gear 1's (the sun's) heel at the cone distance; gear 2's (the
+/// planets') own width (`face_width2`, 0: gear 1's) with its heel `face_offset2` in from it.
+fn cone_faces(spec: &Spec, re: f64) -> [(f64, f64); 2] {
+    let b1 = spec.face_width.min(0.45 * re);
+    let heel2 = re - spec.face_offset2;
+    let b2 = spec.face_width_of2().min(0.45 * heel2.max(0.0));
+    [(re, b1), (heel2, b2)]
+}
+
+/// A toe or heel handle dragged to `t` from the apex along member `i`'s pitch cone: gear 1's
+/// toe sets its face width; gear 2's toe its own width, its heel its heel offset (the toe
+/// stays).
+fn drag_face(spec: &mut Spec, g: &BevelSide, i: usize, heel: bool, t: f64, grid: f64) {
+    let re = g.re;
+    let t = round_to(t, grid).clamp(0.3 * re, 1.4 * re);
+    let [_, (h2, b2)] = cone_faces(spec, re);
+    match (i, heel) {
+        (0, _) => spec.face_width = (re - t).clamp(0.1, 0.45 * re),
+        (_, false) => spec.face_width2 = (h2 - t).max(0.1),
+        (_, true) => {
+            let toe = h2 - b2;
+            if t - toe >= 0.1 {
+                spec.face_offset2 = round_to(re - t, grid);
+                spec.face_width2 = t - toe;
+            }
+        }
+    }
+}
+
+/// A bevel's side view: the angle between its shafts at the apex (editable), the pitch cones
+/// as their sizes give them, the cone angles, and each member's face between its toe and heel
+/// lines (square to the pitch cone where the teeth start and end): its face width and gear 2's
+/// heel offset as dimensions, the lines' handles to drag. Returns the dimensions and the
+/// handles.
+#[allow(clippy::too_many_arguments)]
+fn bevel_dims(p: &egui::Painter, to_screen: &dyn Fn(V2) -> Pos2, g: &BevelSide, spec: &Spec, scale: f64, ink: Color32, bg: Color32, ids: (usize, usize), grab: Option<Grab>) -> (Vec<Hit>, Vec<(Pos2, Grab)>) {
+    let (apex, re) = (g.apex, g.re);
+    let mut hits = Vec::new();
+    let mut handles = Vec::new();
+    let faces = cone_faces(spec, re);
+    let m = spec.module.max(1e-6);
+    for member in 0..2usize {
+        let (r, delta) = (g.ray[member], g.delta[member]);
+        let (rim, other) = (g.shared(member), g.outer(member));
         let c = crate::gear_window::member_color(member);
-        let outer = [apex + rim * re, apex + other * re];
-        let inner = [apex + rim * (re - b), apex + other * (re - b)];
+        let (heel, b) = faces[member];
+        let toe = heel - b;
         let fill = c.gamma_multiply(0.22);
-        p.add(egui::Shape::convex_polygon(vec![to_screen(inner[0]), to_screen(outer[0]), to_screen(outer[1]), to_screen(inner[1])], fill, Stroke::new(1.0, c)));
-        crate::gear_drawing::dashed(&p, &[to_screen(apex), to_screen(outer[0])], Stroke::new(0.7, c.gamma_multiply(0.7)), 4.0, 3.0);
-        crate::gear_drawing::dashed(&p, &[to_screen(apex), to_screen(outer[1])], Stroke::new(0.7, c.gamma_multiply(0.7)), 4.0, 3.0);
-        let label = apex + r.rot(-toward * delta * 0.5) * (re * 0.55);
+        p.add(egui::Shape::convex_polygon(vec![to_screen(apex + rim * toe), to_screen(apex + rim * heel), to_screen(apex + other * heel), to_screen(apex + other * toe)], fill, Stroke::new(1.0, c)));
+        crate::gear_drawing::dashed(p, &[to_screen(apex), to_screen(apex + rim * re.max(heel))], Stroke::new(0.7, c.gamma_multiply(0.7)), 4.0, 3.0);
+        crate::gear_drawing::dashed(p, &[to_screen(apex), to_screen(apex + other * re.max(heel))], Stroke::new(0.7, c.gamma_multiply(0.7)), 4.0, 3.0);
+        // The toe and heel lines, square to the pitch cone: a tooth's depth (addendum out,
+        // dedendum in) at each end, at least a few points long.
+        for e in [rim, other] {
+            let n = g.out_of(member, e);
+            for (t, at_heel) in [(toe, false), (heel, true)] {
+                let k = (t / re).max(0.05);
+                let (up, down) = ((m * k).max(5.0 / scale), (1.25 * m * k).max(6.0 / scale));
+                let q = apex + e * t;
+                let lit = grab == Some(Grab::Face(member, at_heel));
+                p.line_segment([to_screen(q - n * down), to_screen(q + n * up)], Stroke::new(if lit { 2.4 } else { 1.6 }, c));
+            }
+        }
+        // The handles on the far element: gear 1's toe (its heel is the cone distance), gear
+        // 2's toe and heel.
+        let n = g.out_of(member, other);
+        for (t, at_heel) in [(toe, false), (heel, true)] {
+            if member == 0 && at_heel {
+                continue;
+            }
+            let at = to_screen(apex + other * t);
+            p.circle_filled(at, 4.0, bg);
+            p.circle_stroke(at, 4.0, Stroke::new(1.4, c));
+            handles.push((at, Grab::Face(member, at_heel)));
+        }
+        // The face width along the far element, outside the heel and toe lines.
+        let (a, bpt) = (to_screen(apex + other * toe), to_screen(apex + other * heel));
+        let out = to_screen(apex + other * heel + n) - to_screen(apex + other * heel);
+        let u = bpt - a;
+        let side_n = vec2(-u.y, u.x);
+        let off = 26.0f32.copysign(side_n.dot(out));
+        let sub = if member == 0 { "₁" } else { "₂" };
+        let own = member == 0 || spec.face_width2 > 0.0;
+        let text = if own { format!("b{sub} {}", fmt(b)) } else { format!("b{sub} {} (auto)", fmt(b)) };
+        let (dim, value) = if member == 0 { (Dim::Face(false), spec.face_width) } else { (Dim::Face(true), b) };
+        hits.push(linear_dim(p, a, bpt, off, &text, dim, value, ink, bg));
+        // Gear 2's heel offset, beyond its heel line.
+        if member == 1 {
+            let tip = to_screen(apex + other * heel + n * (m * heel / re).max(5.0 / scale));
+            let dir = if out.length() > 1e-6 { out / out.length() } else { vec2(0.0, -1.0) };
+            let far_dir = to_screen(apex + other * (heel + 1.0)) - to_screen(apex + other * heel);
+            let far_dir = if far_dir.length() > 1e-6 { far_dir / far_dir.length() } else { vec2(1.0, 0.0) };
+            hits.push(text_dim(p, tip + dir * 12.0 + far_dir * 18.0, &format!("heel in {}", fmt(spec.face_offset2)), Dim::FaceOffset, spec.face_offset2, ink, bg, egui::Align2::CENTER_CENTER));
+        }
+        let label = apex + r.rot(-g.toward[member] * delta * 0.5) * (re * 0.55);
         let name = if member == 0 { "δ₁" } else { "δ₂" };
         p.text(to_screen(label), egui::Align2::CENTER_CENTER, format!("{name} {}°", fmt(delta.to_degrees())), egui::FontId::proportional(10.5), c.lerp_to_gamma(ink, 0.4));
     }
@@ -814,14 +964,15 @@ fn bevel_dims(p: &egui::Painter, to_screen: &dyn Fn(V2) -> Pos2, l1: Line, l2: L
     // The shaft angle's arc.
     let rad = (re * 0.35).max(24.0 / scale);
     let n = 28;
-    let start = r1.angle();
-    let sweep = side * sigma;
+    let start = g.ray[0].angle();
+    let sweep = g.side * g.sigma;
     let pts: Vec<Pos2> = (0..=n).map(|i| to_screen(apex + V2::polar(rad, start + sweep * i as f64 / n as f64))).collect();
     p.add(egui::Shape::line(pts.clone(), Stroke::new(1.2, ink)));
     arrowhead(p, pts[n], pts[n - 2], ink);
     arrowhead(p, pts[0], pts[2], ink);
     let at = to_screen(apex + V2::polar(rad * 1.35, start + sweep * 0.5));
-    Some(text_dim(p, at, &format!("Σ {}°", fmt(sigma.to_degrees())), Dim::Angle(ids.0, ids.1), sigma.to_degrees(), ink, bg, egui::Align2::CENTER_CENTER))
+    hits.push(text_dim(p, at, &format!("Σ {}°", fmt(g.sigma.to_degrees())), Dim::Angle(ids.0, ids.1), g.sigma.to_degrees(), ink, bg, egui::Align2::CENTER_CENTER));
+    (hits, handles)
 }
 
 /// Applies a typed dimension.
@@ -885,6 +1036,22 @@ fn apply_dim(d: &mut Drawn, spec: &mut Spec, k: Kind, picks: &Picks, dim: Dim, v
             spec.helix = v;
             out.spec = true;
         }
+        Dim::Face(false) if v > 0.0 && v < 1e5 => {
+            spec.face_width = v;
+            out.spec = true;
+            out.face = true;
+        }
+        // 0: auto (gear 1's; a hypoid pinion's covering the ring gear's face).
+        Dim::Face(true) if (0.0..1e5).contains(&v) => {
+            spec.face_width2 = v;
+            out.spec = true;
+            out.face = true;
+        }
+        Dim::FaceOffset if v.abs() < 1e5 => {
+            spec.face_offset2 = v;
+            out.spec = true;
+            out.face = true;
+        }
         _ => {}
     }
 }
@@ -917,6 +1084,24 @@ pub(crate) fn side_view(ui: &mut Ui, cv: &mut Canvas, spec: &mut Spec, size: egu
     painter.add(egui::Shape::line(pts, Stroke::new(1.2, ink)));
     let mid = c + vec2((sigma / 2.0).sin(), -(sigma / 2.0).cos()) * (arc_r + 16.0);
     let mut hits = vec![text_dim(&painter, mid, &format!("Σ {}°", fmt(spec.shaft_angle)), Dim::ShaftAngle, spec.shaft_angle, ink, bg, egui::Align2::CENTER_CENTER)];
+    if spec.kind == Kind::Hypoid {
+        // The ring gear's face width, the pinion's (0: auto, covering the ring gear's face) and
+        // the pinion's face moved towards its heel, each between its toe and heel cones.
+        let (c1, c2) = (crate::gear_window::member_color(1), crate::gear_window::member_color(0));
+        let x = rect.right() - 8.0;
+        let pinion = if spec.face_width2 > 0.0 { format!("pinion b {}", fmt(spec.face_width2)) } else { "pinion b auto".to_string() };
+        for (i, (text, dim, value, col)) in [
+            (format!("ring gear b {}", fmt(spec.face_width)), Dim::Face(false), spec.face_width, c1),
+            (pinion, Dim::Face(true), spec.face_width2, c2),
+            (format!("pinion offset {}", fmt(spec.face_offset2)), Dim::FaceOffset, spec.face_offset2, c2),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let at = pos2(x, rect.bottom() - 12.0 - 20.0 * (2 - i) as f32);
+            hits.push(text_dim(&painter, at, &text, dim, value, col.lerp_to_gamma(ink, 0.35), bg, egui::Align2::RIGHT_CENTER));
+        }
+    }
     if spec.kind == Kind::CrossedHelical {
         let b2 = spec.shaft_angle - spec.helix;
         hits.push(text_dim(&painter, rect.left_bottom() + vec2(8.0, -10.0), &format!("β₁ {}°", fmt(spec.helix)), Dim::Helix, spec.helix, ink, bg, egui::Align2::LEFT_CENTER));
@@ -924,7 +1109,7 @@ pub(crate) fn side_view(ui: &mut Ui, cv: &mut Canvas, spec: &mut Spec, size: egu
     }
     let mut changed = false;
     if let Some((dim, text, focus)) = &mut cv.edit
-        && matches!(dim, Dim::ShaftAngle | Dim::Helix)
+        && matches!(dim, Dim::ShaftAngle | Dim::Helix | Dim::Face(_) | Dim::FaceOffset)
     {
         let at = hits.iter().find(|h| h.dim == *dim).map(|h| h.rect).unwrap_or(rect);
         let field = ui.put(Rect::from_center_size(at.center(), vec2(64.0, 20.0)), egui::TextEdit::singleline(text).desired_width(64.0));

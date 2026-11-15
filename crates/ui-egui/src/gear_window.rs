@@ -1721,6 +1721,10 @@ fn section_set(ui: &mut Ui, cx: &mut Cx<'_>) {
             num(ui, "Backlash", "Taken off each tooth at the pitch circle", &mut s.backlash, 0.0..=5.0, 0.005, " mm");
             num(ui, "Tooth length", "Along the face gear's radius, from the inner end", &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
         }
+        // A bevel's face widths are each member's (in its own section).
+        Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary => {
+            num(ui, "Backlash", "Taken off each tooth at the pitch circle", &mut s.backlash, 0.0..=5.0, 0.005, " mm");
+        }
         _ => {
             num(ui, "Backlash", "Taken off each tooth at the pitch circle", &mut s.backlash, 0.0..=5.0, 0.005, " mm");
             num(ui, "Face width", "", &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
@@ -1745,9 +1749,6 @@ fn hypoid_size(ui: &mut Ui, s: &mut Spec, b: &Spec, d: Derived) {
         num(ui, "Shaft angle", "Angle between the axes; 90° in car axles", &mut s.shaft_angle, 5.0..=175.0, 0.5, "°");
     }
     num(ui, "Pressure angle", "Normal pressure angle; 20° is usual", &mut s.pressure_angle, 5.0..=45.0, 0.1, "°");
-    num(ui, "Ring gear face width", "Along the ring gear's teeth, between its toe and heel cones; over a third of the cone distance is warned about", &mut s.face_width, 0.1..=5000.0, 0.5, " mm");
-    num(ui, "Pinion face width", "Along the pinion's pitch cone, between its toe and heel cones; 0: covers the ring gear's face with a tenth of its width more at each end", &mut s.face_width2, 0.0..=5000.0, 0.5, " mm");
-    num(ui, "Pinion face offset", "Moves the pinion's teeth along its cone, towards the heel (positive) or the toe", &mut s.face_offset2, -5000.0..=5000.0, 0.1, " mm");
     num(ui, "Backlash", "Taken off each tooth at the pitch circle", &mut s.backlash, 0.0..=5.0, 0.005, " mm");
 }
 
@@ -2031,6 +2032,7 @@ fn section_member(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
             } else {
                 count(ui, "Teeth", "Car axles: 9–13", &mut s.teeth, 3..=s.teeth2.saturating_sub(1).max(3));
             }
+            face_rows(ui, s, k, 0);
             num(ui, "Shank Ø", "The pinion's shank; 0: auto", &mut s.hub_diameter, 0.0..=5000.0, 0.2, " mm");
             num(ui, "Shank length", "0: auto", &mut s.hub_length, 0.0..=5000.0, 0.2, " mm");
             bore(ui, "Pinion bore", "bore1", &mut s.bore);
@@ -2041,6 +2043,7 @@ fn section_member(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
             } else {
                 count(ui, "Teeth", "41 in many car axles", &mut s.teeth2, 4..=2000);
             }
+            face_rows(ui, s, k, 1);
             num(ui, "Ring gear web", "Thickness behind the teeth; 0: 6% of its Ø", &mut s.rim, 0.0..=1000.0, 0.1, " mm");
             bore(ui, "Ring gear bore", "bore2", &mut s.bore2);
         }
@@ -2099,6 +2102,7 @@ fn section_member(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
             count(ui, "Teeth", "", &mut s.teeth2, 6..=2000);
             count(ui, "Planets", "Patterned round the sun's shaft; with a second sun or ring, (sun + its teeth) ÷ planets whole spaces them evenly", &mut s.planets, 1..=24);
             num(ui, "First planet at", "The first planet's azimuth about the sun's shaft", &mut s.first_azimuth, -360.0..=360.0, 0.5, "°");
+            face_rows(ui, s, k, 1);
             row(ui, "Mode", "What meshes the planets besides the sun", |ui| {
                 use solidcraft_gear::plan::BevelPlanetMode;
                 let before = s.bevel_planet_mode;
@@ -2176,6 +2180,7 @@ fn section_member(ui: &mut Ui, cx: &mut Cx<'_>, m: usize) {
             if cyl(k) || k == Kind::Pair {
                 num(ui, "Tip Ø", "The finished tip diameter; 0: from the rack. Only lowers the tips: a larger value, or one leaving under ¼ module of addendum, is ignored with a warning", &mut s.tip_diameter, 0.0..=1e5, 0.1, " mm");
             }
+            face_rows(ui, s, k, 0);
             bore(ui, "Bore", "bore1", &mut s.bore);
             if rated {
                 material(ui, "Material", "gear_mat1", &mut s.load.material);
@@ -2226,11 +2231,64 @@ fn gear2_rows(ui: &mut Ui, s: &mut Spec, k: Kind) {
         num(ui, "Face width", "Gear 2's own face width; 0: the same as gear 1's", &mut s.face_width2, 0.0..=5000.0, 0.1, " mm");
         num(ui, "Face offset", "How far gear 2's mid plane sits from gear 1's along the axis; faces that don't overlap are refused", &mut s.face_offset2, -5000.0..=5000.0, 0.1, " mm");
     }
-    if matches!(k, Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary) {
-        let (whose, faces) = if k == Kind::BevelPlanetary { ("The planets'", "the sun's") } else { ("Gear 2's", "gear 1's") };
-        num(ui, "Face width", &format!("{whose} own face width along the cone (toe to heel); 0: the same as {faces}"), &mut s.face_width2, 0.0..=5000.0, 0.1, " mm");
-        num(ui, "Heel offset", &format!("How far {} heel (outer end of the teeth) sits in from the cone distance, towards the apex; faces that don't overlap {faces} are refused", whose.to_lowercase()), &mut s.face_offset2, -5000.0..=5000.0, 0.1, " mm");
+    if matches!(k, Kind::Bevel | Kind::SpiralBevel) {
+        face_rows(ui, s, k, 1);
     }
+}
+
+/// A bevel's or hypoid's member face: its width along the pitch cone (between its toe and heel
+/// cones, where the teeth start and end) and, for the second member, where its heel sits.
+/// Gear 1 (the sun; the hypoid's ring gear) has its heel at the cone distance; gear 2 (the
+/// planets; the hypoid's pinion) has its own width (auto: gear 1's; the pinion's covers the
+/// ring gear's face) and heel offset.
+fn face_rows(ui: &mut Ui, s: &mut Spec, k: Kind, m: usize) {
+    let hypoid = k == Kind::Hypoid;
+    if !(hypoid || matches!(k, Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary)) {
+        return;
+    }
+    // The member with `face_width` (bevels: gear 1, the sun; hypoid: the ring gear).
+    let first = if hypoid { m == 1 } else { m == 0 };
+    if first {
+        let tip = if hypoid {
+            "The ring gear's face width along its teeth, between its toe and heel cones (square to the pitch cone where the teeth start and end); over a third of the cone distance is warned about"
+        } else if k == Kind::BevelPlanetary {
+            "The sun's face width along the pitch cone, from its heel at the cone distance to its toe (the teeth end square to the pitch cone, on the back and front cones); over a third of the cone distance is warned about"
+        } else {
+            "Gear 1's face width along the pitch cone, from its heel at the cone distance to its toe (the teeth end square to the pitch cone, on the back and front cones); over a third of the cone distance is warned about"
+        };
+        num(ui, "Face width", tip, &mut s.face_width, 0.1..=5000.0, 0.1, " mm");
+        return;
+    }
+    let (tip_w, tip_o) = if hypoid {
+        (
+            "The pinion's own face width along its pitch cone, between its toe and heel cones; auto: it covers the ring gear's face with a tenth of the ring gear's face width more at each end".to_string(),
+            "Moves the pinion's face along its cone from where auto puts it: towards its heel (positive) or its toe (negative)".to_string(),
+        )
+    } else {
+        let (whose, faces) = if k == Kind::BevelPlanetary { ("The planets'", "the sun's") } else { ("Gear 2's", "gear 1's") };
+        (
+            format!("{whose} own face width along the pitch cone (toe to heel); auto: the same as {faces}"),
+            format!("How far {} heel (the teeth's outer end) sits in from the cone distance towards the apex; 0: at the cone distance, as {faces}. Faces that don't overlap {faces} are refused", whose.to_lowercase()),
+        )
+    };
+    row(ui, "Face width", &tip_w, |ui| {
+        let own = s.face_width2 > 0.0;
+        // Auto shows the other member's width for a bevel (a hypoid pinion's comes from the
+        // ring gear's face and the offset; its value is in the facts).
+        let mut v = if own { s.face_width2 } else { s.face_width };
+        let r = ui.add(egui::DragValue::new(&mut v).range(0.1..=5000.0).speed(0.1).max_decimals(4).suffix(" mm"));
+        if r.changed() {
+            s.face_width2 = v.max(0.1);
+        }
+        if own {
+            if ui.small_button("auto").on_hover_text(if hypoid { "Cover the ring gear's face again" } else { "The same as the other member's again" }).clicked() {
+                s.face_width2 = 0.0;
+            }
+        } else {
+            ui.label(egui::RichText::new("auto").small().weak());
+        }
+    });
+    num(ui, if hypoid { "Face offset" } else { "Heel offset" }, &tip_o, &mut s.face_offset2, -5000.0..=5000.0, 0.1, " mm");
 }
 
 /// A member's integral shafts: one from the front face (through the hub) and, with Dual shaft

@@ -16,7 +16,7 @@ use egui::{Color32, RichText, Ui};
 use solidcraft_gear::geom::V2;
 use solidcraft_gear::plan::{Axes, Frame, Kind, Spec, Unit};
 use solidcraft_gear::simple::{self, Field, Simple};
-use solidcraft_gear::sketch_rules::{self, Circle, Drawn, Line, Measured, Picks, Role};
+use solidcraft_gear::sketch_rules::{self, Drawn, Measured, Picks, Role};
 
 use crate::SolveApp;
 use crate::gear_drawing::Canvas;

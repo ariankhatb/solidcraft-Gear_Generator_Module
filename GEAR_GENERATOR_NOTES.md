@@ -376,8 +376,13 @@ rings overlap the housing by design when `ring_as_housing`). Scripts come from t
 - Engine: `assembly: true` on gear.create/gear.update (`cmd/gear_assembly.rs`): from_bodies,
   grounding, keep-out component "<set> keep-out" (grounded, 25 % opacity), revolute/slider/rigid
   joints to the world (or carrier), joint.gear/joint.rack_pinion links, moved into the set's
-  folder; the record keeps component and joint ids; update removes them first (warning names
-  hand-made joints to them) and makes them again. NOT COMPILED: tests in `cmd/gear_tests.rs`.
+  folder; the record keeps each member's body, component, joint and the joint sides' world →
+  component matrices. An update keeps everything in place (`sync`): members matched by body
+  name (then by position for bodies named afresh, moved into the old component), joints keep
+  ids/values with their Point frames rewritten onto the new shafts, links re-coupled through
+  their `link` index; only members that appear or go are added or removed; user joints to the
+  components survive. Switching `assembly` off dissolves it. NOT COMPILED: tests in
+  `cmd/gear_tests.rs` (incl. a user's joint surviving an update).
 - Window: "Assembly (components + joints)" checkbox under the body (next to Create), kept in `ui`.
 
 ## Bevel ends on the back and front cones; flat cones; own face per member (`gear-flatbevel`, 2026-11-15)
@@ -404,3 +409,7 @@ rings overlap the housing by design when `ring_as_housing`). Scripts come from t
 - Tests: `flat_bevel_tests.rs` (flat sets at Σ 100–150°, own faces, bevel planetary flat
   planets/ring, end-on-cones geometry, refusals); loft-slip variants. Engine test
   `bevel_teeth_are_trimmed_by_their_cones` (ignored, uncompiled) checks the kernel takes the trim.
+
+  Reopening: the Gears button with a set's body/face/component selected, or double-clicking the
+  set's folder (history list or timeline chip), opens it in edit mode; the window keeps and
+  restores its mode and the Simple-mode drawing and form (`gear_simple_state.rs`).

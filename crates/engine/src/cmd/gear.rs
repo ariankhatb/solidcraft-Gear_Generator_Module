@@ -84,7 +84,7 @@ pub static COMMANDS: &[CommandSpec] = &[
              ring_as_housing? (default true: an internal ring or pin ring is part of the housing and left out), bearing?: name (608, 6001, 6902, MR105, ...) | {od, width, bore?}, \
              bearing_fit? (on the diameter), seats?: [{member: 1|2|..., along: mm from the middle of its teeth} | {point: [x,y,z]} (onto the nearest member's axis)], \
              travel? (rack: its slide, default its length)} (one more body, \"<name> clearance\": every member's swept tooth envelope, shafts and bearing seats \
-             in one solid, to cut a housing with; facts: envelope sizes, the bearing; warnings: seats past a shaft or on the teeth, bearing bore ≠ shaft);              assembly?: bool (a complete assembly package: each gear a component of its own, a revolute joint per gear on its shaft (a slider for a rack,              held members such as a cycloidal drive's pin ring grounded), a joint.gear / joint.rack_pinion motion link per mesh with the set's ratio and              direction (a chain or belt turns both wheels the same way, a worm drives its wheel by starts/teeth, a spline's hub is rigid on its shaft), so              joint.drive on one gear turns the others; with clearance_body the keep-out body too, as a grounded see-through component \"<name> keep-out\";              all in the set's undo step and folder; gear.update makes them again, one set at a time). Returns bodies (and clearance: the clearance body's name;              assembly: {members: [{body, component, occurrence, joint?, grounded}], keep_out?, joints, links}), group, facts (diameters, ratio, centre distance, contact ratio, span and over-pins \
+             in one solid, to cut a housing with; facts: envelope sizes, the bearing; warnings: seats past a shaft or on the teeth, bearing bore ≠ shaft);              assembly?: bool (a complete assembly package: each gear a component of its own, a revolute joint per gear on its shaft (a slider for a rack,              held members such as a cycloidal drive's pin ring grounded), a joint.gear / joint.rack_pinion motion link per mesh with the set's ratio and              direction (a chain or belt turns both wheels the same way, a worm drives its wheel by starts/teeth, a spline's hub is rigid on its shaft), so              joint.drive on one gear turns the others; with clearance_body the keep-out body too, as a grounded see-through component \"<name> keep-out\";              all in the set's undo step and folder; gear.update keeps them in place: same components, joints moved onto the new shafts, links given the new ratios, user joints to them kept). Returns bodies (and clearance: the clearance body's name;              assembly: {members: [{body, component, occurrence, joint?, grounded}], keep_out?, joints, links}), group, facts (diameters, ratio, centre distance, contact ratio, span and over-pins \
              measurements; with a load: forces, stresses, safety factors SF and SH) and warnings (undercut, pointed teeth, low contact ratio, interference, SF < 1.4, SH < 1)",
         ),
     CommandSpec::new("gear.calculate", "Gear Calculator", crate::checked!("gear.calculate", calculate))
@@ -1310,7 +1310,7 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let mut built = None;
     if assembly::wanted(&request) && group.is_some() {
         let names: Vec<String> = bodies.iter().take(plan.bodies.len()).map(|b| b.name.clone()).collect();
-        built = Some(assembly::make(s, &plan, spec.kind, &group_name, &names, clearance.as_deref(), group, &mut warnings)?);
+        built = Some(assembly::sync(s, &plan, spec.kind, &group_name, &names, clearance.as_deref(), group, None, &mut warnings)?);
     }
     let (assembly_record, assembly_made) = built.map_or((None, None), |(r, m)| (Some(r), Some(m)));
     if let Some(group) = group {
@@ -1454,17 +1454,27 @@ pub fn sets(s: &Session) -> Vec<GearSet> {
     records(&s.doc).iter().map(|r| set_of(s, r)).collect()
 }
 
-/// The gear set something selected belongs to (a body, a face or edge of one, or one of its
-/// sketches and features), for front ends: what "edit this gear" means.
+/// The gear set something selected belongs to (a body, a face, edge or vertex of one, one of its
+/// sketches and features, or a component of its assembly), for front ends: what "edit this
+/// gear" means.
 pub fn selected_set(s: &Session) -> Option<GearSet> {
     use crate::Sel;
-    let all = sets(s);
+    let kept = records(&s.doc);
+    let all: Vec<GearSet> = kept.iter().map(|r| set_of(s, r)).collect();
+    // The set whose assembly holds a component, or whose features its components' transfers are.
+    let of_component = |component: u64| {
+        kept.iter().position(|r| r.assembly.as_ref().is_some_and(|a| a.holds(component))).map(|i| all[i].clone())
+    };
     s.selection.iter().find_map(|sel| match sel {
-        Sel::Body { name } | Sel::Face { body: name, .. } | Sel::Edge { body: name, .. } => all.iter().find(|set| set.bodies.contains(name)).cloned(),
+        Sel::Body { name } | Sel::Face { body: name, .. } | Sel::Edge { body: name, .. } | Sel::Vertex { body: name, .. } => {
+            all.iter().find(|set| set.bodies.contains(name)).cloned()
+        }
         Sel::Feature { id } => all.iter().find(|set| set.features.contains(id)).cloned(),
+        Sel::Occurrence { path } => path.iter().rev().find_map(|o| s.doc.occurrences.iter().find(|k| k.id == *o).and_then(|k| of_component(k.component))),
         _ => None,
     })
 }
+
 
 fn find(s: &Session, cmd: &str, group: Option<u64>, body: Option<&str>) -> Result<Record> {
     let all = records(&s.doc);
@@ -1719,11 +1729,6 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     let mut warnings = plan.warnings.clone();
     let (mode, notes_eq) = equations::Mode::of(s, cmd, &request, &asked.spec, &plan, &rec.name, false)?;
     warnings.extend(notes_eq);
-    // The set's components and joints come down first, its bodies back where its features make
-    // them; they are made again for the new set below.
-    if let Some(old) = rec.assembly.take() {
-        assembly::remove(s, &old, &mut warnings)?;
-    }
     let own: std::collections::BTreeSet<u64> = rec.features().into_iter().collect();
     let worked: std::collections::BTreeSet<u64> = s.model.results.iter().filter(|r| r.error.is_none() && !r.skipped && !own.contains(&r.id)).map(|r| r.id).collect();
     let names = current_names(s, &rec);
@@ -1755,13 +1760,20 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     {
         equations::prune(s, old);
     }
+    // The set's components, joints and links, brought up to date where they stand: the bodies
+    // were regenerated inside their components (same names), the joints are moved onto the new
+    // shafts and the links given the new ratios; what users built on them stays. Switched off,
+    // the assembly comes down.
     let mut assembly_made = None;
+    let old_assembly = rec.assembly.take();
     if assembly::wanted(&request) && group.is_some() {
         let names: Vec<String> = rec.bodies.iter().take(plan.bodies.len()).map(|b| b.name.clone()).collect();
         let clearance = clearance_name(&plan, &rec.bodies);
-        let (made, out) = assembly::make(s, &plan, asked.spec.kind, &rec.name, &names, clearance.as_deref(), group, &mut warnings)?;
+        let (made, out) = assembly::sync(s, &plan, asked.spec.kind, &rec.name, &names, clearance.as_deref(), group, old_assembly, &mut warnings)?;
         rec.assembly = Some(made);
         assembly_made = Some(out);
+    } else if let Some(old) = old_assembly {
+        assembly::remove(s, &old, &mut warnings)?;
     }
     let old_key = record_key(rec.group);
     rec.request = request;

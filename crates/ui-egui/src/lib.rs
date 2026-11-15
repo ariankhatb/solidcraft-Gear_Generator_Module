@@ -310,6 +310,7 @@ mod gear_clearance_ui;
 pub mod gear_icons;
 mod gear_drawing;
 mod gear_simple;
+mod gear_simple_state;
 mod gear_view3d;
 pub mod gear_window;
 #[cfg(test)]

@@ -471,6 +471,8 @@ impl GearWindow {
     fn on_set(group: u64, name: &str, bodies: &[String], request: &Value, params: &Value) -> Self {
         let mut w = GearWindow::new();
         let kept = request.get("ui").filter(|ui| ui.get("window").is_some());
+        // Designed in Simple mode: its drawing and form, as they were.
+        let simple = kept.filter(|ui| ui.get("mode").and_then(Value::as_str) == Some("simple")).and_then(|ui| ui.get("simple")).cloned();
         match kept.and_then(|ui| Some((spec_from(ui.get("typed")?)?, AxesStep::from_json(ui.get("axes")?)?, ui))) {
             Some((spec, axes, ui)) => {
                 w.spec = spec;
@@ -503,8 +505,15 @@ impl GearWindow {
         w.opts.parametric = w.opts.equations && request.get("parametric").and_then(Value::as_bool) == Some(true);
         w.opts.assembly = request.get("assembly").and_then(Value::as_bool) == Some(true);
         w.editing = Some(Editing { group, name: name.to_string(), bodies: bodies.to_vec() });
-        // A set made elsewhere is regenerated from its numbers: Advanced shows them all.
-        w.mode = Mode::Advanced;
+        // A set designed in Simple mode opens on its drawing; one made in Advanced mode or
+        // elsewhere is regenerated from its numbers, which Advanced shows all of.
+        match simple.and_then(|v| crate::gear_simple_state::from_json(&v, &w.spec)) {
+            Some(st) => {
+                w.simple = st;
+                w.mode = Mode::Simple;
+            }
+            None => w.mode = Mode::Advanced,
+        }
         w.planned = None;
         w.replan();
         w.changed_ms = 0.0;
@@ -524,6 +533,8 @@ impl GearWindow {
             "equations": self.opts.equations,
             "parametric": self.opts.parametric,
             "assembly": self.opts.assembly,
+            "mode": if self.mode == Mode::Simple { "simple" } else { "advanced" },
+            "simple": crate::gear_simple_state::to_json(&self.simple),
         })
     }
 

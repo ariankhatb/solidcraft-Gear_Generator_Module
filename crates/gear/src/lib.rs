@@ -118,3 +118,5 @@ mod system_tests;
 mod select_tests;
 #[cfg(test)]
 mod drivetrain_tests;
+#[cfg(test)]
+mod solid_tests;

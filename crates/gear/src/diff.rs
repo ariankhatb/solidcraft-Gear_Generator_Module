@@ -508,8 +508,15 @@ fn stadium(a: f64, b: f64) -> Outline {
 }
 
 /// The surface points of a body's first step (its teeth), in world coordinates.
+/// A body's teeth: its first step, with the trim that follows it (a bevel's back and front
+/// cones: its taper alone runs past them).
+fn teeth_steps(b: &Body) -> Vec<Step> {
+    let trims = b.steps.iter().skip(1).take_while(|st| matches!(st, Step::Revolve { op: Op::Intersect, .. })).count();
+    b.steps.iter().take(1 + trims).cloned().collect()
+}
+
 fn teeth_points(b: &Body, h: f64) -> Vec<V3> {
-    let first = Body { name: String::new(), frame: b.frame, steps: b.steps.iter().take(1).cloned().collect() };
+    let first = Body { name: String::new(), frame: b.frame, steps: teeth_steps(b) };
     let solid = Solid::new(&first, h);
     solid.material_points(4.0 * h).into_iter().map(|q| b.frame.world(q)).collect()
 }
@@ -517,14 +524,14 @@ fn teeth_points(b: &Body, h: f64) -> Vec<V3> {
 /// The least radius about its own axis of a body's first step (its tooth roots at their
 /// smallest).
 fn least_root(b: &Body, h: f64) -> f64 {
-    let first = Body { name: String::new(), frame: b.frame, steps: b.steps.iter().take(1).cloned().collect() };
+    let first = Body { name: String::new(), frame: b.frame, steps: teeth_steps(b) };
     Solid::new(&first, h).material_points(4.0 * h).iter().map(|q| q[0].hypot(q[1])).fold(f64::INFINITY, f64::min)
 }
 
 /// A body's teeth (its first step) swept a full turn about its own axis: `n` places round, in
 /// world coordinates.
 fn swept_points(b: &Body, h: f64, n: u32) -> Vec<V3> {
-    let first = Body { name: String::new(), frame: b.frame, steps: b.steps.iter().take(1).cloned().collect() };
+    let first = Body { name: String::new(), frame: b.frame, steps: teeth_steps(b) };
     let pts = Solid::new(&first, h).material_points(4.0 * h);
     let mut out = Vec::with_capacity(pts.len() * n as usize);
     for q in pts {
@@ -698,14 +705,18 @@ fn bevel_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     let mut roles = vec![Role::Side, Role::Side];
     roles.extend(std::iter::repeat_n(Role::Carried, nb - 2));
     let h = 0.05 * m;
-    // The side gears' back faces (their frames' origins) and tips there.
-    let h_a = -bodies[0].frame.origin[2];
-    let h_b = bodies[1].frame.origin[2];
-    let back_tip = |b: &Body| teeth_points(b, h).iter().map(|q| local_of(&b.frame, *q)).filter(|l| l[2].abs() < 0.3 * m).map(|l| l[0].hypot(l[1])).fold(0.0, f64::max);
-    let (ra_a, ra_b) = (back_tip(&bodies[0]), back_tip(&bodies[1]));
+    // The side gears' back faces and their tips at the heel. A bevel's teeth end on its back
+    // cone, its body on a flat back face a little under the roots there (local z = the taper's
+    // start, below the frame's origin on the large end's pitch plane).
+    let back_of = |b: &Body| b.steps.iter().find_map(|st| if let Step::Taper { z0, .. } = st { Some(*z0) } else { None }).unwrap_or(0.0);
+    let (back_a, back_b) = (back_of(&bodies[0]), back_of(&bodies[1]));
+    let h_a = -(bodies[0].frame.origin[2] + back_a);
+    let h_b = bodies[1].frame.origin[2] - back_b;
+    let heel_tip = |b: &Body| teeth_points(b, h).iter().map(|q| local_of(&b.frame, *q)).map(|l| l[0].hypot(l[1])).fold(0.0, f64::max);
+    let (ra_a, ra_b) = (heel_tip(&bodies[0]), heel_tip(&bodies[1]));
     let r_hub = r_hub.min(0.9 * (ra_a.min(ra_b) - 2.25 * m));
-    for i in 0..2 {
-        side_hub(&mut bodies[i].steps, 0.0, r_hub, l_hub, axle);
+    for (i, back) in [back_a, back_b].into_iter().enumerate() {
+        side_hub(&mut bodies[i].steps, back, r_hub, l_hub, axle);
     }
     // The sphere round the apex that holds every member's teeth.
     let mut reach = 0.0f64;

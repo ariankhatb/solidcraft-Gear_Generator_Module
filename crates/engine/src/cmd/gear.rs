@@ -48,7 +48,7 @@ const INSPECT_CONTRACT: TypedContract<GearInspectParams> = TypedContract::new();
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("gear.create", "Gear Generator", crate::checked!("gear.create", create))
         .at("SOLID", "CREATE")
-        .icon("gear")
+        .icon("gear_generator")
         .contract(&GEAR_CONTRACT)
         .output(output_schema_for::<GearResult>)
         .params(
@@ -103,7 +103,7 @@ pub static COMMANDS: &[CommandSpec] = &[
              asked for can't be solved on these axes",
         ),
     CommandSpec::new("gear.update", "Update Gears", crate::checked!("gear.update", update))
-        .icon("gear")
+        .icon("gear_generator")
         .contract(&GEAR_CONTRACT)
         .output(output_schema_for::<GearResult>)
         .params(

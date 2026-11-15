@@ -4058,10 +4058,11 @@ mod dropdown_tests {
             assert!(all.iter().any(|id| id == "dropdown:solid.extrude"), "grid {grid}: listed by default: {all:?}");
             h.call("ui.prefs", json!({"ribbon_menus_skip_pinned": true}));
             let rest = rows(&mut h, "panel:MODEL:CREATE");
-            for pinned in ["solid.extrude", "solid.revolve", "solid.hole"] {
+            let pinned = ["solid.extrude", "solid.revolve", "solid.hole", "gear.create"];
+            for pinned in pinned {
                 assert!(!rest.iter().any(|id| *id == format!("dropdown:{pinned}")), "grid {grid}: {pinned} is on the ribbon: {rest:?}");
             }
-            assert_eq!(rest.len() + 3, all.len(), "grid {grid}: only the ribbon's buttons are left out");
+            assert_eq!(rest.len() + pinned.len(), all.len(), "grid {grid}: only the ribbon's buttons are left out");
             // In a window too narrow for the Extrude button, MODEL CREATE's menu lists it again.
             let narrow = (3..=16).rev().map(|w| w as f32 * 100.0).find(|w| {
                 h.call("ui.resize", json!({"width": w, "height": 1000}));

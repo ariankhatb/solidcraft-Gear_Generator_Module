@@ -211,7 +211,9 @@ pub const SECTIONS: &[Section] = &[
         promoted: 1,
         ids: &["sketch.create", "sketch.edit", "sketch.line3d", "sketch.arc3d", "sketch.spline3d", "sketch.point3d"],
     },
-    Section { tab: "MODEL", panel: "CREATE", promoted: 3, ids: &["solid.extrude", "solid.revolve", "solid.hole"] },
+    // The Gear Generator is the one generator on the Model tab: a button of its own beside Hole
+    // instead of a row at the bottom of the Create menu.
+    Section { tab: "MODEL", panel: "CREATE", promoted: 4, ids: &["solid.extrude", "solid.revolve", "solid.hole", "gear.create"] },
     Section {
         tab: "MODEL",
         panel: "MODIFY",
@@ -524,6 +526,7 @@ pub const RIBBON_LABELS: &[(&str, &str)] = &[
     ("contact.enable_sets", "Contact Sets"),
     ("document.inspect", "Inspect"),
     ("document.units", "Units"),
+    ("gear.create", "Gears"),
     ("inspect.accessibility", "Access"),
     ("inspect.center_of_mass", "Mass Center"),
     ("inspect.curvature_comb", "Curv. Comb"),
@@ -1095,7 +1098,7 @@ mod tests {
         let specs = solidcraft_engine::command_specs();
         for (panel, expected) in [
             ("SKETCH", vec!["sketch.create"]),
-            ("CREATE", vec!["solid.extrude", "solid.revolve", "solid.hole"]),
+            ("CREATE", vec!["solid.extrude", "solid.revolve", "solid.hole", "gear.create"]),
             ("MODIFY", vec!["solid.fillet", "solid.chamfer", "solid.shell", "solid.press_pull"]),
             ("ARRANGE", vec!["solid.move", "solid.mirror", "solid.pattern.rectangular"]),
             ("CONSTRUCT", vec!["construct.plane", "construct.axis", "construct.point"]),

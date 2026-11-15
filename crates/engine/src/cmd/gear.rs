@@ -35,7 +35,7 @@ use super::sketch::{Left, edit_solved};
 use super::sketch_import::add_geometry;
 use crate::params::bad;
 use crate::schema::gear::{
-    BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, DiffDrive, DifferentialGoalParams, DifferentialParams, DiffMount, DiffPartsParams, DiffStyle, GearAxesResult, GearAxis, GearAxisLine, GearBevelPlanetMode, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult, GearMember, GearShaftInfo, GearContact, GearMaterial, GearParams, GearRelation, GearResult, GearSelection, GearSet, GearSketchParams, GearSketchResult, GearType, HardwareParams, PlacementParams, RackStandard, SeatAlongParams, SeatPointParams, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
+    BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, DiffDrive, DifferentialGoalParams, DifferentialParams, DiffMount, DiffPartsParams, DiffStyle, GearAxesResult, GearAxis, GearAxisLine, GearBevelPlanetMode, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult, GearMember, GearShaftInfo, GearContact, GearOutline, GearMaterial, GearParams, GearRelation, GearResult, GearSelection, GearSet, GearSketchParams, GearSketchResult, GearType, HardwareParams, PlacementParams, RackStandard, SeatAlongParams, SeatPointParams, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
 };
 use solidcraft_gear::spline::SplineStandard;
 use solidcraft_gear::strength::Material;
@@ -1951,8 +1951,9 @@ fn by_row(mut m: GearMember, row: &dyn Fn(usize) -> usize) -> GearMember {
     m
 }
 
-/// The shafts built with the set, and where its gears touch, for the reply (members by row).
-fn shafts_and_contacts(asked: &Asked, plan: &Plan) -> (Vec<GearShaftInfo>, Vec<GearContact>) {
+/// The shafts built with the set, where its gears touch, and each gear's shape without teeth,
+/// for the reply (members by row).
+fn shafts_and_contacts(asked: &Asked, plan: &Plan) -> (Vec<GearShaftInfo>, Vec<GearContact>, Vec<GearOutline>) {
     let row = |g: usize| asked.rows.get(g).copied().unwrap_or(g);
     let shafts = plan
         .shafts
@@ -1965,7 +1966,22 @@ fn shafts_and_contacts(asked: &Asked, plan: &Plan) -> (Vec<GearShaftInfo>, Vec<G
         })
         .collect();
     let contacts = plan.contacts.iter().map(|c| GearContact { a: c.from, b: (c.from != c.to).then_some(c.to) }).collect();
-    (shafts, contacts)
+    let outlines = plan
+        .shapes
+        .iter()
+        .map(|sh| GearOutline {
+            index: row(sh.member),
+            center: sh.center,
+            axis: sh.axis,
+            face_width: sh.face,
+            pitch_diameter: sh.pitch_diameter,
+            tip_diameter: sh.tip_diameter,
+            root_diameter: sh.root_diameter,
+            apex: sh.apex,
+            toe_pitch_diameter: sh.toe_pitch_diameter,
+        })
+        .collect();
+    (shafts, contacts, outlines)
 }
 
 /// What a request asks for: the set and its plan, or (read from a sketch or a selection) why
@@ -2041,10 +2057,20 @@ fn calculate(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "gear.calculate";
     match ask_read(s, cmd, p)? {
         Read::Set(asked, plan) => {
-            let (shafts, contacts) = shafts_and_contacts(&asked, &plan);
+            let (shafts, contacts, outlines) = shafts_and_contacts(&asked, &plan);
             reply(
                 cmd,
-                GearResult { facts: facts(&asked, &plan), warnings: plan.warnings.clone(), notes: notes(&asked), params: Some(params_of(&asked.spec)), members: asked.members.clone(), shafts, contacts, ..GearResult::default() },
+                GearResult {
+                    facts: facts(&asked, &plan),
+                    warnings: plan.warnings.clone(),
+                    notes: notes(&asked),
+                    params: Some(params_of(&asked.spec)),
+                    members: asked.members.clone(),
+                    shafts,
+                    contacts,
+                    outlines,
+                    ..GearResult::default()
+                },
             )
         }
         // What each member became and what is wrong with it, for a front end to show.
@@ -2181,8 +2207,8 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(group) = group {
         keep(s, &Record { version: RECORD_VERSION, group, name: group_name, request, params: params_of(spec), bodies, assembly: assembly_record, sketch_print }, &mut warnings);
     }
-    let (shafts, contacts) = shafts_and_contacts(&asked, &plan);
-    reply(cmd, GearResult { bodies: made, group, clearance, assembly: assembly_made, facts: facts(&asked, &plan), warnings, notes: notes(&asked), members: asked.members.clone(), shafts, contacts, ..GearResult::default() })
+    let (shafts, contacts, outlines) = shafts_and_contacts(&asked, &plan);
+    reply(cmd, GearResult { bodies: made, group, clearance, assembly: assembly_made, facts: facts(&asked, &plan), warnings, notes: notes(&asked), members: asked.members.clone(), shafts, contacts, outlines, ..GearResult::default() })
 }
 
 // ---------------------------------------------------------------------------------------------

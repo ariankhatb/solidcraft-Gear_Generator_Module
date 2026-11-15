@@ -508,6 +508,7 @@ fn crossed(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], st
     if role[g1.0] == Some(Role::Gear(Kind::Worm)) || role[g2.0] == Some(Role::Wheel) {
         std::mem::swap(&mut g1, &mut g2);
     }
+    out.gears = vec![g1.0, g2.0];
     if let (Some(a), Some(b)) = (kind_of(g1.0), kind_of(g2.0))
         && a != b
     {

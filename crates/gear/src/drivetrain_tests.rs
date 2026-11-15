@@ -313,3 +313,22 @@ fn the_rc_gearbox_power_split_with_clusters() {
 fn up_dir() -> [f64; 3] {
     [0.0, 1.0, 0.0]
 }
+
+/// V (chevron) spiral bevels: each member two spiral halves of opposite hand joined at
+/// mid-face, the mate mirrored; checked in 3D (no flank crossing, contact all round, and a
+/// collision half a pitch out of phase) at 90° and at 60°.
+#[test]
+fn chevron_bevels_mesh_at_90_and_60_degrees() {
+    for (label, s) in [
+        ("chevron 90deg 17:34 35deg", Spec { herringbone: true, ..Spec::defaults_for(Kind::SpiralBevel) }),
+        ("chevron 60deg 19:28 30deg", Spec { herringbone: true, shaft_angle: 60.0, teeth: 19, teeth2: 28, spiral_angle: 30.0, ..Spec::defaults_for(Kind::SpiralBevel) }),
+    ] {
+        let p = crate::plan(&s).unwrap_or_else(|e| panic!("{label}: {e}"));
+        // Each member's teeth are two tapers (one per half), the second joined to the first.
+        for b in &p.bodies {
+            let tapers = b.steps.iter().filter(|st| matches!(st, crate::plan::Step::Taper { .. } | crate::plan::Step::RingTaper { .. })).count();
+            assert!(tapers >= 2, "{label}: {} has {tapers} tapers", b.name);
+        }
+        crate::mesh3d_tests::measure(label, &s).check();
+    }
+}

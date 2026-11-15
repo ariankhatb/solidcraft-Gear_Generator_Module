@@ -97,8 +97,8 @@ built and meshed with no overlap, or only flank contact, at its defaults and at 
 where the kernel's check itself fails (last item below). Known issues in the current build:
 
 - Picking **Bevel planetary right after Face gear in Simple mode** can freeze the window and use a lot
-  of memory. A fix (the drawing's dashed lines are now clipped to the view) is on this branch for
-  the next build but not yet confirmed in the app; use Advanced mode for bevel planetary meanwhile.
+  of memory. A fix (the drawing's dashed lines clipped to the view) comes with the next update of
+  this branch; use Advanced mode for bevel planetary meanwhile.
 - The window's mesh check can show a red *Interferes* on the default face gear, which the kernel
   check doesn't confirm (under investigation).
 - Bevels whose larger gear's pitch cone goes past about 80° (for example a spiral bevel at a 110°

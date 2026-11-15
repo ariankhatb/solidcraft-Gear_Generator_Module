@@ -9,7 +9,21 @@ This branch (`gear-generator` on [ariankhatb/solidcraft](https://github.com/aria
 is a work in progress shared for testing and feedback. It tracks SolidCraft `main` (currently
 **v0.42.0** plus later fixes).
 
-## What's new in this build (2026-11-15)
+## What's new in test build 2 (2026-11-15, later)
+
+- **Smoother window:** the 3D preview draws on the GPU instead of the CPU (before: 15–57 ms a frame
+  while turning big sets, more on high-DPI screens).
+- **Differential, simpler case:** the case is plain stock that keeps its material: only the gears'
+  clearance, the axle bore and the pin bores are cut. No windows, bolt or tapped holes by default
+  (ring bolts are an option). The case no longer overlaps the side gears.
+- **Fixes:** the face gear's false red *Interferes* is gone; setting labels show in full; the turn
+  buttons read "X +90°" etc.; the window stays put when you switch types and fits narrow screens;
+  bodies and components the generator named follow the new tooth counts after an edit (names you
+  gave stay); keep-out bodies cover hubs and shafts on trimmed bevels and hypoids.
+- **Bevel ends:** ordinary bevels (pitch cones up to 70°) end on planes again, which the kernel's own
+  check accepts; flatter members keep the cone trim (see known issues).
+
+## What's new in test build 1 (2026-11-15)
 
 - **Assembly.** Tick *Assembly (components + joints)* next to **Create** (or pass `assembly: true`):
   each gear becomes a component on a revolute joint (a slider for a rack), with a gear or
@@ -139,15 +153,10 @@ Checked in the app and the CLI on this build:
 
 Known issues in this build (being worked on):
 
-- The differential's case overlaps its side gears (about 900 mm³ each), and the default ring gear
-  has no room for its bolts (the bolts are left out, with a warning).
-- The face gear still shows a red *Interferes* in the window's 2D mesh check, which the kernel check
-  doesn't confirm.
-- Simple mode's settings labels are cut off ("Face …", "3D p…"), and the turn buttons show a
-  missing-glyph box.
-- The Gear Generator window jumps to another position when you switch types.
-- Body and component names keep their old tooth counts after an update (for example "Gear z20"
-  after changing to 24 teeth), so features that reference them don't break.
+- Bevel members with a pitch cone over 70° (for example the large gear at a 110° shaft angle) are
+  trimmed by their back and front cones; the kernel's check flags those trims for tiny 2D curve
+  kinks ("Bad CurveCusp", a warning-level test), so its own interference check can't run on them.
+  The gears themselves are correct.
 - The kernel's own interference check fails on spiral bevel, hypoid and some differential pairs
   ("proto edge is not listed", "not a closed solid", "Bad Infinite Region"): a kernel Boolean
   issue, not the gears. The gear crate's mesh checker covers those sets.

@@ -18,7 +18,21 @@ and it can make any set an assembly whose gears turn each other.
 <tr><td align="center"><img src="crates/look/icons/design/svg/model/gear_bevel_planetary.svg" width="44" height="44" alt="Bevel planetary"/><br/><sub>Bevel planetary</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_hypoid.svg" width="44" height="44" alt="Hypoid"/><br/><sub>Hypoid</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_crossed_helical.svg" width="44" height="44" alt="Crossed helical"/><br/><sub>Crossed helical</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_worm.svg" width="44" height="44" alt="Worm"/><br/><sub>Worm</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_cycloidal.svg" width="44" height="44" alt="Cycloidal"/><br/><sub>Cycloidal</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_cycloidal_drive.svg" width="44" height="44" alt="Cycloidal drive"/><br/><sub>Cycloidal drive</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_sprocket.svg" width="44" height="44" alt="Sprocket"/><br/><sub>Sprocket</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_pulley.svg" width="44" height="44" alt="Pulley"/><br/><sub>Pulley</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_spline.svg" width="44" height="44" alt="Spline"/><br/><sub>Spline</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_elliptical.svg" width="44" height="44" alt="Elliptical"/><br/><sub>Elliptical</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_differential.svg" width="44" height="44" alt="Differential"/><br/><sub>Differential</sub></td></tr>
 </table>
 
-### What's new in this build (2026-11-15)
+### What's new in test build 2 (2026-11-15, later)
+
+- **Smoother window:** the 3D preview draws on the GPU instead of the CPU (before: 15–57 ms a frame
+  while turning big sets, more on high-DPI screens).
+- **Differential, simpler case:** the case is plain stock that keeps its material: only the gears'
+  clearance, the axle bore and the pin bores are cut. No windows, bolt or tapped holes by default
+  (ring bolts are an option). The case no longer overlaps the side gears.
+- **Fixes:** the face gear's false red *Interferes* is gone; setting labels show in full; the turn
+  buttons read "X +90°" etc.; the window stays put when you switch types and fits narrow screens;
+  bodies and components the generator named follow the new tooth counts after an edit (names you
+  gave stay); keep-out bodies cover hubs and shafts on trimmed bevels and hypoids.
+- **Bevel ends:** ordinary bevels (pitch cones up to 70°) end on planes again, which the kernel's own
+  check accepts; flatter members keep the cone trim (see known issues).
+
+### What's new in test build 1 (2026-11-15)
 
 - **Assembly:** tick *Assembly (components + joints)* and the set becomes components on revolute
   joints (a slider for a rack), tied by gear and rack-and-pinion links, so driving one gear turns

@@ -820,6 +820,21 @@ pub struct GearParams {
     /// engine.
     #[serde(default)]
     pub ui: Option<Value>,
+    /// Drawn in one sketch (id or name): circles are pitch circles, lines shafts (see
+    /// `solidcraft_gear::sketch_rules`). `type` is the mode (left out: what the drawing looks
+    /// like); the sizes the drawing gives (diameters, centre distance, offset, a bevel's shaft
+    /// angle between its two lines) replace module and teeth. Not with `axis1` or `placement`.
+    #[serde(default)]
+    pub sketch: Option<Value>,
+    /// With `sketch`: the mode's slots in order (the origin point first, then its circles and
+    /// lines), as the sketch's point and curve ids; null or "" leaves a slot to be filled in
+    /// drawing order. Left out: every slot in drawing order.
+    #[serde(default)]
+    pub picks: Option<Vec<Option<String>>>,
+    /// With `sketch`: the set turned about the origin point by these angles (degrees about the
+    /// sketch's x, then y, then its normal).
+    #[serde(default)]
+    pub sketch_turn: Option<[f64; 3]>,
 }
 
 /// `gear.inspect`: which set (neither: every set in the design).

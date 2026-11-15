@@ -25,6 +25,7 @@ use solidcraft_gear::involute::BasicRack;
 use solidcraft_gear::axes::{self, Axis, Drive, Relation, Solved};
 use solidcraft_gear::clearance::{BearingSize, Clearance, Seat};
 use solidcraft_gear::plan::{Body, Fact, Frame, Kind, Op, Plan, Spec, Step, Unit};
+use solidcraft_gear::sketch_rules;
 use solidcraft_io::Geom2;
 use solidcraft_sketch::Analysis;
 
@@ -62,7 +63,8 @@ pub static COMMANDS: &[CommandSpec] = &[
              flanges?, face_width = belt width; spline: spline_standard?: din5480|ansi_b92, spline_diameter? (DIN reference Ø; default module × (teeth + 1.1)), fillet_root?, backlash = flank clearance, face_width = length; \
              face_gear: teeth (pinion), teeth2 (face gear), inner_diameter? (default: the undercut limit), face_width = tooth length; elliptical: ellipse_eccentricity? (0…0.7), teeth on each gear; \
              only?: 1|2|3 (one member); origin?: [x,y,z]; coupon?: bool, coupon_teeth? (pair, planetary: a print test coupon instead of the set); name?. Axis-first: axis1?, axis2?: X|Y|Z | construction axis name | {origin?, dir} | {edge|face: [x,y,z]} | \
-             {sketch, curve} (the shafts: the set is sized and placed on them, type? defaults to what fits, module/teeth/teeth2/starts not given are chosen), \
+             {sketch, curve} | {sketch, point} (a sketch point: the shaft through it normal to the sketch) (the shafts: the set is sized and placed on them, type? defaults to what fits, module/teeth/teeth2/starts not given are chosen), \
+             Drawn in one sketch: sketch?: id|name (circles = pitch circles, lines = shafts; type = the mode or what the drawing looks like), picks?: [point/curve ids per slot, origin point first], sketch_turn?: [x°, y°, normal°] about the origin point, \
              ratio? (teeth2 ÷ teeth), cone_distance? (bevels, mm), flip1?, flip2?, swap_axes?, along? (mm along axis1); placement?: {origin, x, z}; \
              strength rating: torque? (N·m) | power? (kW), speed? (rpm) on the driver, \
              material?, material2?, material3?: steel_normalized|steel_through_hardened|steel_case_hardened|steel_nitrided|cast_iron|bronze|pom|pa66|pla|petg, \
@@ -825,7 +827,14 @@ fn gear_type(k: Kind) -> GearType {
 /// A shaft axis from its parameter, where it is now.
 fn axis_of(s: &Session, v: &GearAxis, cmd: &str, what: &str) -> Result<Axis> {
     let v = &v.0;
-    let (o, d) = if v.get("curve").is_some() {
+    let (o, d) = if let Some(point) = v.get("point").filter(|_| v.get("sketch").is_some()) {
+        // A sketch point: the shaft through it, normal to its sketch.
+        let id = super::features::sketch_id(s, v.get("sketch"), cmd, what)?;
+        let point = point.as_str().unwrap_or_default();
+        let st = s.world_state()?;
+        let found = st.sketch(id).and_then(|ss| Some((ss.plane.to_world(ss.sketch.point(ss.sketch.point_index(point)?)?), ss.plane.normal())));
+        found.ok_or_else(|| bad(cmd, format!("`{what}`: sketch {id} has no point `{point}`")))?
+    } else if v.get("curve").is_some() {
         let id = super::features::sketch_id(s, v.get("sketch"), cmd, what)?;
         let curve = v.get("curve").and_then(Value::as_str).unwrap_or_default();
         let st = s.world_state()?;
@@ -914,8 +923,161 @@ fn read(cmd: &str, p: &Value) -> Result<GearParams> {
     Ok(params)
 }
 
+/// A sketch's standalone points (not a curve's ends or centre), circles and lines, in its plane:
+/// what a gear set drawn in one sketch is read from (`gear.create {sketch}` and the Gear
+/// Generator window's picks). `frame` is the sketch's plane in the world (its z the normal), in
+/// which the 2D coordinates are given.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GearSketch {
+    pub sketch: u64,
+    pub frame: Frame,
+    pub points: Vec<(String, solidcraft_gear::V2)>,
+    pub circles: Vec<(String, sketch_rules::Circle)>,
+    pub lines: Vec<(String, sketch_rules::Line)>,
+}
+
+impl GearSketch {
+    pub fn drawn(&self) -> sketch_rules::Drawn {
+        sketch_rules::Drawn {
+            points: self.points.iter().map(|(_, p)| *p).collect(),
+            circles: self.circles.iter().map(|(_, c)| *c).collect(),
+            lines: self.lines.iter().map(|(_, l)| *l).collect(),
+        }
+    }
+    /// Where the entity `id` is among the slots' role (points, circles or lines).
+    pub fn index(&self, role: sketch_rules::Role, id: &str) -> Option<usize> {
+        match role {
+            sketch_rules::Role::Point => self.points.iter().position(|(k, _)| k == id),
+            sketch_rules::Role::Circle => self.circles.iter().position(|(k, _)| k == id),
+            sketch_rules::Role::Line => self.lines.iter().position(|(k, _)| k == id),
+        }
+    }
+}
+
+/// Reads sketch `sketch`'s standalone points, circles and lines (see [`GearSketch`]).
+pub fn sketch_entities(s: &Session, sketch: u64) -> std::result::Result<GearSketch, String> {
+    let st = s.world_state().map_err(|e| e.to_string())?;
+    let ss = st.sketch(sketch).ok_or_else(|| format!("no sketch {sketch}"))?;
+    let o = ss.plane.to_world(Vec2::new(0.0, 0.0));
+    let ex = ss.plane.to_world(Vec2::new(1.0, 0.0)) - o;
+    let n = ss.plane.normal();
+    let unit = |v: [f64; 3]| {
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if l > 1e-12 { v.map(|c| c / l) } else { [0.0, 0.0, 1.0] }
+    };
+    let z = unit([n.x, n.y, n.z]);
+    let x = [ex.x, ex.y, ex.z];
+    let along: f64 = (0..3).map(|i| x[i] * z[i]).sum();
+    let x = unit([0, 1, 2].map(|i| x[i] - along * z[i]));
+    let frame = Frame { origin: [o.x, o.y, o.z], x, z };
+    let sk = &ss.sketch;
+    let at = |i: usize| sk.point(i).map(|p| solidcraft_gear::V2::new(p.x, p.y));
+    let mut used = vec![false; sk.points.len()];
+    let (mut circles, mut lines) = (Vec::new(), Vec::new());
+    for c in &sk.curves {
+        match c.kind {
+            crate::sketch::CurveKind::Line { a, b } => {
+                if let (Some(pa), Some(pb)) = (at(a), at(b)) {
+                    lines.push((c.id.clone(), sketch_rules::Line { a: pa, b: pb }));
+                }
+                for i in [a, b] {
+                    if let Some(u) = used.get_mut(i) {
+                        *u = true;
+                    }
+                }
+            }
+            crate::sketch::CurveKind::Circle { c: ci, r } => {
+                if let Some(pc) = at(ci) {
+                    circles.push((c.id.clone(), sketch_rules::Circle { c: pc, r }));
+                }
+                if let Some(u) = used.get_mut(ci) {
+                    *u = true;
+                }
+            }
+            crate::sketch::CurveKind::Arc { c: ci, a, b } => {
+                for i in [ci, a, b] {
+                    if let Some(u) = used.get_mut(i) {
+                        *u = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let points = sk.points.iter().enumerate().filter(|(i, _)| !used[*i]).map(|(_, p)| (p.id.clone(), solidcraft_gear::V2::new(p.pos.x, p.pos.y))).collect();
+    Ok(GearSketch { sketch, frame, points, circles, lines })
+}
+
+/// A set drawn in one sketch (`sketch`, with `type` the mode and `picks` the slots' entity
+/// ids, or what the drawing looks like and its entities in order): measured by the sketch rules,
+/// sized, and solved on the shafts they give.
+fn from_sketch(s: &Session, cmd: &str, p: &GearParams) -> Result<Solved> {
+    if p.axis1.is_some() || p.axis2.is_some() || p.placement.is_some() {
+        return Err(bad(cmd, "give `sketch`, or `axis1` (`axis2`) or `placement`: not both"));
+    }
+    let id = super::features::sketch_id(s, p.sketch.as_ref(), cmd, "sketch")?;
+    let sk = sketch_entities(s, id).map_err(|e| bad(cmd, e))?;
+    let drawn = sk.drawn();
+    let kind = match p.kind {
+        Some(t) => KINDS.iter().find(|(x, _)| *x == t).map(|(_, k)| *k).unwrap_or(Kind::Spur),
+        None => sketch_rules::recognize(&drawn).ok_or_else(|| {
+            bad(cmd, "the sketch's circles and lines don't make a set: draw a pitch circle (and a second touching it, or a shaft line), two shaft lines meeting at a dot for bevels, or give `type`")
+        })?,
+    };
+    if !sketch_rules::sketched(kind) {
+        return Err(bad(cmd, format!("a {} is not drawn from a sketch: give its numbers instead", kind.label())));
+    }
+    let slots = sketch_rules::slots(kind);
+    let picks = match &p.picks {
+        None => sketch_rules::auto_picks(kind, &drawn),
+        Some(ids) => {
+            if ids.len() > slots.len() {
+                return Err(bad(cmd, format!("`picks`: a {} takes {} ({}), not {}", kind.label(), slots.len(), slots.iter().map(|s| s.label).collect::<Vec<_>>().join(", "), ids.len())));
+            }
+            let mut out = vec![None; slots.len()];
+            for (i, want) in ids.iter().enumerate() {
+                let Some(want) = want.as_deref().filter(|w| !w.is_empty()) else { continue };
+                let role = slots[i].role;
+                out[i] = Some(sk.index(role, want).ok_or_else(|| {
+                    let what = match role {
+                        sketch_rules::Role::Point => "point",
+                        sketch_rules::Role::Circle => "circle",
+                        sketch_rules::Role::Line => "line",
+                    };
+                    bad(cmd, format!("`picks`: {} must be a {what} of sketch {id}: there is none `{want}` (picks come from the one sketch)", slots[i].label))
+                })?);
+            }
+            out
+        }
+    };
+    let m = sketch_rules::measure(kind, &drawn, &picks).map_err(|e| bad(cmd, e))?;
+    let base = spec_of(&GearParams { kind: Some(gear_type(kind)), ..p.clone() }).map_err(|e| bad(cmd, e))?;
+    // Sized as the window's Simple mode sizes it: what the drawing gives, and what the
+    // parameters say besides (the shaft angle a single sketch can't show, a ratio).
+    let settings = solidcraft_gear::simple::Simple { shaft_angle: p.shaft_angle, ratio: p.ratio, ..Default::default() };
+    let sized = solidcraft_gear::simple::solve(&sketch_rules::simple_of(&m, &settings), &base);
+    if let Some(e) = sized.error {
+        return Err(bad(cmd, e));
+    }
+    let (spec, notes) = (sized.spec, sized.notes);
+    let turn = p.sketch_turn.unwrap_or([0.0; 3]);
+    if turn.iter().any(|t| !t.is_finite()) {
+        return Err(bad(cmd, "`sketch_turn` must be three finite angles"));
+    }
+    let (a1, a2) = sketch_rules::axes_for(&m, &spec, &sk.frame, turn);
+    let mut solved = axes::solve(&a1, a2.as_ref(), Some(kind), &spec, &Drive::default()).map_err(|e| bad(cmd, e))?;
+    solved.notes.extend(notes);
+    Ok(solved)
+}
+
 fn ask(s: &Session, cmd: &str, p: &Value) -> Result<(Asked, Plan)> {
     let params = read(cmd, p)?;
+    if params.sketch.is_some() {
+        let solved = from_sketch(s, cmd, &params)?;
+        let asked = Asked { spec: solved.spec.clone(), solved: Some(solved) };
+        let plan = solidcraft_gear::plan(&asked.spec).map_err(|e| bad(cmd, e))?;
+        return Ok((asked, plan));
+    }
     let asked = match axes_of(s, cmd, &params)? {
         None => Asked { spec: spec_of(&params).map_err(|e| bad(cmd, e))?, solved: None },
         Some((a1, a2)) => {

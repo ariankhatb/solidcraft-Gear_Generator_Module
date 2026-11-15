@@ -489,6 +489,113 @@ fn a_parametric_ring_keeps_its_rim_profile_through_a_tooth_count_change() {
     assert!(v50 < v && v50 > 0.5 * v, "{v} then {v50}");
 }
 
+// ---- Sets drawn in one sketch: circles are pitch circles, lines are shafts (one per row of the
+// sketch rules table). Not compiled by the window agent; run with the engine tests.
+
+fn sketch_with(s: &mut Session, draw: &[(&str, Value)]) -> u64 {
+    let sk = run(s, "sketch.create", json!({"plane": "XY"}))["sketch"].as_u64().unwrap();
+    for (cmd, p) in draw {
+        run(s, cmd, p.clone());
+    }
+    run(s, "sketch.finish", json!({}));
+    sk
+}
+
+fn fact_opt(r: &Value, label: &str) -> Option<f64> {
+    r["facts"].as_array()?.iter().find(|f| f["label"] == label)?["value"].as_f64()
+}
+
+fn circle(x: f64, y: f64, r: f64, id: &str) -> (&'static str, Value) {
+    ("sketch.circle.center", json!({"center": [x, y], "radius": r, "id": id}))
+}
+
+fn line(a: [f64; 2], b: [f64; 2], id: &str) -> (&'static str, Value) {
+    ("sketch.line", json!({"points": [a, b], "ids": [id]}))
+}
+
+#[test]
+fn sketch_one_circle_is_a_single_gear() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 20.0, "g")]);
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk}));
+    assert!(fact_opt(&r, "pitch diameter").is_none_or(|d| (d - 40.0).abs() < 0.3), "{r}");
+}
+
+#[test]
+fn sketch_touching_circles_are_a_pair_on_their_centres() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 20.0, "g1"), circle(50.0, 0.0, 30.0, "g2")]);
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "pair", "picks": [null, "g1", "g2"]}));
+    assert!((fact_opt(&r, "axis distance").unwrap() - 50.0).abs() < 1e-6, "{r}");
+    // Apart circles are refused, saying why.
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 20.0, "g1"), circle(70.0, 0.0, 30.0, "g2")]);
+    let e = s.execute("gear.calculate", &json!({"sketch": sk, "type": "pair"})).unwrap_err().to_string();
+    assert!(e.contains("must touch outside"), "{e}");
+}
+
+#[test]
+fn sketch_internal_and_planetary() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 60.0, "ring"), circle(40.0, 0.0, 20.0, "pinion")]);
+    run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "internal"}));
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 18.0, "sun"), circle(36.0, 0.0, 18.0, "planet"), circle(0.0, 0.0, 54.0, "ring")]);
+    run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "planetary", "planets": 3}));
+}
+
+#[test]
+fn sketch_tangent_line_is_a_worm_or_a_rack() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 30.0, "wheel"), line([-40.0, 30.0], [40.0, 30.0], "worm")]);
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "worm"}));
+    assert!(fact_opt(&r, "offset (from the axes)").is_some(), "{r}");
+    run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "rack"}));
+}
+
+#[test]
+fn sketch_bevel_side_view_at_80_degrees() {
+    let a = 80f64.to_radians();
+    let mut s = Session::default();
+    let sk = sketch_with(
+        &mut s,
+        &[("sketch.point", json!({"point": [0, 0], "id": "apex"})), line([0.0, 0.0], [0.0, -50.0], "s1"), line([0.0, 0.0], [50.0 * a.sin(), -50.0 * a.cos()], "s2")],
+    );
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "bevel", "picks": ["apex", "s1", "s2"]}));
+    assert!((fact_opt(&r, "shaft angle (from the axes)").unwrap() - 80.0).abs() < 1e-6, "{r}");
+}
+
+#[test]
+fn sketch_hypoid_and_crossed_helical_offsets() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 100.0, "ring"), line([-120.0, -25.0], [120.0, -25.0], "pinion")]);
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "hypoid"}));
+    assert!((fact_opt(&r, "offset (from the axes)").unwrap() - 25.0).abs() < 1e-6, "{r}");
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 20.0, "g1"), line([-60.0, 45.0], [60.0, 45.0], "s2")]);
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "crossed_helical"}));
+    assert!((fact_opt(&r, "offset (from the axes)").unwrap() - 45.0).abs() < 1e-6, "{r}");
+    // Without a type, the drawing's look decides.
+    let r = run(&mut s, "gear.calculate", json!({"sketch": sk}));
+    assert!(fact_opt(&r, "offset (from the axes)").is_some(), "{r}");
+}
+
+#[test]
+fn sketch_picks_must_be_in_the_sketch() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 20.0, "g1")]);
+    let e = s.execute("gear.calculate", &json!({"sketch": sk, "type": "spur", "picks": [null, "nope"]})).unwrap_err().to_string();
+    assert!(e.contains("one sketch"), "{e}");
+}
+
+/// A sketch point stands for the shaft through it, normal to its sketch.
+#[test]
+fn a_sketch_point_is_a_shaft_normal_to_its_sketch() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[("sketch.point", json!({"point": [30, 0], "id": "c"}))]);
+    let r = run(&mut s, "gear.from_axes", json!({"axis1": {"sketch": sk, "point": "c"}, "axis2": "Z"}));
+    assert_eq!(r["relation"]["kind"], "parallel", "{r}");
+    assert!((r["relation"]["distance"].as_f64().unwrap() - 30.0).abs() < 1e-9);
 // ---------------------------------------------------------------------------------------------
 // The clearance body (keep-out volume for a housing)
 // ---------------------------------------------------------------------------------------------

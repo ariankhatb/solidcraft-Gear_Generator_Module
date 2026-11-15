@@ -39,6 +39,14 @@ fn check(s: &Spec, label: &str, bad: &mut Vec<String>) {
     let Ok(p) = plan(s) else { return };
     for b in p.bodies.iter().chain(p.clearance.iter()) {
         for (i, st) in b.steps.iter().enumerate() {
+            // The kernel's loft limit, counted as its spans (checked for bevel planetary sets:
+            // a 4-start worm wheel's 15-section loft comes to 19200 here).
+            if s.kind == Kind::BevelPlanetary
+                && let Some(sections) = lofted(st)
+                && sections.iter().map(|o| crate::hypoid::corners(o).len()).sum::<usize>() > 16_384
+            {
+                bad.push(format!("{label}: {} step {} has {} curves in {} sections: over the kernel's loft limit of 16384", b.name, i + 1, sections.iter().map(|o| crate::hypoid::corners(o).len()).sum::<usize>(), sections.len()));
+            }
             if let Some(sections) = lofted(st)
                 && sections.len() >= 2
                 && sections.iter().all(|o| o.segs.len() == sections[0].segs.len())
@@ -66,6 +74,24 @@ fn no_kernel_loft_slips_in_any_kind() {
     }
     for angle in [60.0, 75.0, 90.0] {
         variants.push((format!("hypoid {angle}°"), Spec { shaft_angle: angle, ..Spec::defaults_for(Kind::Hypoid) }));
+    }
+    // Bevel planetary sets: sun, planets, second sun and the hobbed ring, straight and spiral.
+    {
+        use crate::plan::BevelPlanetMode::{Differential, Ring, Single};
+        let bp = Spec::defaults_for(Kind::BevelPlanetary);
+        let set = |mode, angle: f64, zs: u32, zp: u32, n: u32, spiral: f64| Spec { bevel_planet_mode: mode, shaft_angle: angle, teeth: zs, teeth2: zp, planets: n, spiral_angle: spiral, ..bp.clone() };
+        for (label, s) in [
+            ("bevel planetary diff 90 16:10 x4 spiral 30", set(Differential, 90.0, 16, 10, 4, 30.0)),
+            ("bevel planetary diff 90 16:10 x4 spiral 45", set(Differential, 90.0, 16, 10, 4, 45.0)),
+            ("bevel planetary diff 80 16:23 x2 spiral -25", set(Differential, 80.0, 16, 23, 2, -25.0)),
+            ("bevel planetary single 60 20:12 x3 spiral 35", set(Single, 60.0, 20, 12, 3, 35.0)),
+            ("bevel planetary ring 45 20:10 x3", set(Ring, 45.0, 20, 10, 3, 0.0)),
+            ("bevel planetary ring 60 24:12 x3 spiral 25", set(Ring, 60.0, 24, 12, 3, 25.0)),
+            ("bevel planetary ring 30 20:10 x3 spiral -35", set(Ring, 30.0, 20, 10, 3, -35.0)),
+        ] {
+            assert!(plan(&s).is_ok(), "{label}: {:?}", plan(&s).err());
+            variants.push((label.to_string(), s));
+        }
     }
     for (label, s) in &variants {
         check(s, label, &mut bad);

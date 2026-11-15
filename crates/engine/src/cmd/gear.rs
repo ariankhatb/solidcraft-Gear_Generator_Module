@@ -1868,7 +1868,12 @@ fn build_body(s: &mut Session, body: &Body, warnings: &mut Vec<String>, mode: &e
         let trims = matches!(step, Step::Revolve { op, .. } if *op != Op::New);
         let optional = !matches!(step_op(step), Op::New);
         let mut attempts: Vec<(Step, f64)> = if trims { NUDGES.iter().map(|n| (step.clone(), *n)).collect() } else { vec![(step.clone(), 0.0)] };
-        if let Step::Loft { sections, op } = step {
+        // (Not a loft of many sections, as a hypoid's: they are as many as the kernel needs to
+        // line them up tooth to tooth, and through fewer it would pair the wrong segments and cut
+        // across the flanks.)
+        if let Step::Loft { sections, op } = step
+            && sections.len() <= 12
+        {
             let n = sections.len();
             if n > 3 {
                 let mut every_other: Vec<usize> = (0..n).step_by(2).collect();

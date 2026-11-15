@@ -35,7 +35,7 @@ use super::sketch_import::add_geometry;
 use crate::params::bad;
 use crate::schema::gear::{
     BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, SeatAlongParams, SeatPointParams, GearAxesResult, GearAxis, GearAxisLine, GearBevelPlanetMode, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult,
-    DiffDrive, DiffMount, DiffStyle, DifferentialGoalParams, DifferentialParams, GearMaterial, GearParams, GearRelation, GearResult, GearSet, GearType, HardwareParams, PlacementParams, RackStandard, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
+    DiffDrive, DiffMount, DiffPartsParams, DiffStyle, DifferentialGoalParams, DifferentialParams, GearMaterial, GearParams, GearRelation, GearResult, GearSet, GearType, HardwareParams, PlacementParams, RackStandard, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
 };
 use solidcraft_gear::spline::SplineStandard;
 use solidcraft_gear::strength::Material;
@@ -64,7 +64,7 @@ pub static COMMANDS: &[CommandSpec] = &[
              face_gear: teeth (pinion), teeth2 (face gear), inner_diameter? (default: the undercut limit), face_width = tooth length; elliptical: ellipse_eccentricity? (0…0.7), teeth on each gear; \
              differential: differential?: {style?: open|biased|torsen_b|torsen_a, module?, side_teeth?, side_teeth2?, pinion_teeth?, pinions?, face_width?, spiral_angle?, helix_angle?, pressure_angle?, backlash?, friction?, \
              axle_diameter?, pin_diameter?, wall?, washer?, clearance?, bearing? (30207, 32008, 6006...), windows?, drive?: none|spiral_bevel|bevel|hypoid|helical, mount?: bolted|integral, ring_teeth?, drive_pinion_teeth?, \
-             drive_module?, drive_face_width?, drive_spiral_angle?, drive_helix_angle?, drive_offset?, drive_position?, ring_bolts? (default false), bolts?, bolt_diameter?, keep_out? (default true: the housing's keep-out body)} \
+             drive_module?, drive_face_width?, drive_spiral_angle?, drive_helix_angle?, drive_offset?, drive_position?, ring_bolts? (default false), bolts?, bolt_diameter?, keep_out? (the housing's keep-out body), parts?: {side_a?, side_b?, pinions?, which_pinions?: [n, ...], pins?, case?, ring?, drive_pinion?} (each built unless false; designed whole either way)} \
              or differential_goal?: {style?, drive?, mount?, axle_diameter?, ring_diameter?, ratio?, torque?, pinions?, bias?} (Simple mode: the solver picks teeth and modules); \
              only?: 1|2|3 (one member; differential: 1 the gears, 2 the case, 3 the drive); origin?: [x,y,z]; coupon?: bool, coupon_teeth? (pair, planetary: a print test coupon instead of the set); name?. Axis-first: axis1?, axis2?: X|Y|Z | construction axis name | {origin?, dir} | {edge|face: [x,y,z]} | \
              {sketch, curve} | {sketch, point} (a sketch point: the shaft through it normal to the sketch) (the shafts: the set is sized and placed on them, type? defaults to what fits, module/teeth/teeth2/starts not given are chosen), \
@@ -952,6 +952,17 @@ fn diff_apply(d: &mut solidcraft_gear::diff::Diff, p: &DifferentialParams) {
     put!(bolts, p.bolts);
     put!(bolt_diameter, p.bolt_diameter);
     put!(keep_out, p.keep_out);
+    if let Some(q) = &p.parts {
+        let t = &mut d.parts;
+        for (v, src) in [(&mut t.side_a, q.side_a), (&mut t.side_b, q.side_b), (&mut t.pinions, q.pinions), (&mut t.pins, q.pins), (&mut t.case, q.case), (&mut t.ring, q.ring), (&mut t.drive_pinion, q.drive_pinion)] {
+            if let Some(b) = src {
+                *v = b;
+            }
+        }
+        if let Some(w) = &q.which_pinions {
+            t.which_pinions = w.clone();
+        }
+    }
 }
 
 /// Every differential setting, explicit.
@@ -990,6 +1001,16 @@ fn diff_params(d: &solidcraft_gear::diff::Diff) -> DifferentialParams {
         bolts: Some(d.bolts),
         bolt_diameter: Some(d.bolt_diameter),
         keep_out: Some(d.keep_out),
+        parts: Some(DiffPartsParams {
+            side_a: Some(d.parts.side_a),
+            side_b: Some(d.parts.side_b),
+            pinions: Some(d.parts.pinions),
+            which_pinions: Some(d.parts.which_pinions.clone()),
+            pins: Some(d.parts.pins),
+            case: Some(d.parts.case),
+            ring: Some(d.parts.ring),
+            drive_pinion: Some(d.parts.drive_pinion),
+        }),
     }
 }
 

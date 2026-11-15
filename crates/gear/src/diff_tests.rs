@@ -249,3 +249,64 @@ fn simple_mode_designs_by_outputs() {
         assert_eq!(crate::diff::goal_of(&sol.spec).style, goal.style);
     }
 }
+
+/// Each part on its own builds just its bodies, the design staying the whole differential's;
+/// the meshes and the assembly are those of what is built.
+#[test]
+fn each_part_alone_builds_its_bodies() {
+    use crate::diff::Parts;
+    let none = Parts { side_a: false, side_b: false, pinions: false, which_pinions: vec![], pins: false, case: false, ring: false, drive_pinion: false };
+    let full = plan(&spec(Diff::defaults_for(Style::Open))).unwrap();
+    let names = |p: &Plan| p.bodies.iter().map(|b| b.name.clone()).collect::<Vec<_>>();
+    for (label, parts, want) in [
+        ("case", Parts { case: true, ..none.clone() }, vec!["Differential case"]),
+        ("ring", Parts { ring: true, ..none.clone() }, vec!["Ring gear z41"]),
+        ("drive pinion", Parts { drive_pinion: true, ..none.clone() }, vec!["Drive pinion z11"]),
+        ("side A", Parts { side_a: true, ..none.clone() }, vec!["Side gear A z16"]),
+        ("side B", Parts { side_b: true, ..none.clone() }, vec!["Side gear B z16"]),
+        ("pinions", Parts { pinions: true, ..none.clone() }, vec!["Pinion 1 z10", "Pinion 2 z10"]),
+        ("pinion 2", Parts { pinions: true, which_pinions: vec![2], ..none.clone() }, vec!["Pinion 2 z10"]),
+        ("pins", Parts { pins: true, ..none.clone() }, vec!["Pinion pins"]),
+        ("gears only", Parts::gears_only(), vec!["Side gear A z16", "Side gear B z16", "Pinion 1 z10", "Pinion 2 z10"]),
+        ("ring and drive pinion", Parts { ring: true, drive_pinion: true, ..none.clone() }, vec!["Ring gear z41", "Drive pinion z11"]),
+    ] {
+        let p = plan(&spec(Diff { parts, ..Diff::defaults_for(Style::Open) })).unwrap_or_else(|e| panic!("{label}: {e}"));
+        assert_eq!(names(&p), want, "{label}");
+        // Designed as the whole differential.
+        for f in ["final drive ratio", "case outside diameter", "pinion pin diameter"] {
+            assert_eq!(fact(&p, f), fact(&full, f), "{label}: {f}");
+        }
+        // The assembly is the bodies built; its links only join built members, as a tree.
+        assert_eq!(p.assembly.members.len(), p.bodies.len(), "{label}");
+        let mut driven = vec![0; p.bodies.len()];
+        for l in &p.assembly.links {
+            let (a, b) = l.members();
+            assert!(a < p.bodies.len() && b < p.bodies.len(), "{label}: {l:?}");
+            driven[b] += 1;
+        }
+        assert!(driven.iter().all(|n| *n <= 1), "{label}");
+        // What is built still meshes.
+        for mp in &p.meshes3d {
+            let r = crate::mesh3d::check(&p, mp);
+            assert_eq!(r.verdict, Verdict::Ok, "{label}: {}", r.message);
+        }
+    }
+    // The gear set alone: its four meshes, side A driving the pinions and side B by pinion 1,
+    // the pinions on fixed axes (no case built).
+    let g = plan(&spec(Diff { parts: Parts::gears_only(), ..Diff::defaults_for(Style::Open) })).unwrap();
+    assert_eq!(g.meshes3d.len(), 4);
+    assert_eq!(g.assembly.links.len(), 3);
+    assert!(g.assembly.members.iter().all(|m| m.carrier.is_none()));
+    assert!(g.clearance.is_none());
+    // Torsen B: elements by number (1a and 1b), with the sides they mesh.
+    let t = plan(&spec(Diff { drive: DriveKind::None, parts: Parts { which_pinions: vec![1, 2], ..Parts::gears_only() }, ..Diff::defaults_for(Style::TorsenB) })).unwrap();
+    assert_eq!(names(&t), vec!["Side gear A z18", "Side gear B z18", "Element 1a z11", "Element 1b z11"]);
+    assert_eq!(t.meshes3d.len(), 3);
+    // An integral ring without its case is built as a separate ring.
+    let r = plan(&spec(Diff { mount: Mount::Integral, parts: Parts { ring: true, ..none.clone() }, ..Diff::defaults_for(Style::Open) })).unwrap();
+    assert_eq!(names(&r), vec!["Ring gear z41"]);
+    // Nothing at all is refused; the keep-out body comes whatever is built.
+    assert!(plan(&spec(Diff { parts: none.clone(), ..Diff::defaults_for(Style::Open) })).is_err());
+    let k = plan(&spec(Diff { keep_out: true, parts: Parts { case: true, ..none }, ..Diff::defaults_for(Style::Open) })).unwrap();
+    assert!(k.clearance.is_some());
+}

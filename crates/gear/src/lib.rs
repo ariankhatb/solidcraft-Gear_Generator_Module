@@ -8,6 +8,8 @@
 //! - [`body`]: integral shafts, chamfers, hub hardware and bearing pockets; tooth tuning for
 //!   printing (tip rounding, horizontal-expansion compensation, elephant-foot relief), tip relief
 //!   and crowning.
+//! - [`clearance`]: the clearance body (keep-out volume) of a set, for cutting a housing: turning
+//!   envelopes, shafts and bearing seats in one solid.
 //! - [`plan`]: a gear set ([`plan::Spec`]: spur, helical, herringbone, internal, rack, pair,
 //!   planetary, straight and spiral bevel, hypoid, crossed helical, worm, cycloidal, cycloidal
 //!   drive, chain sprocket, timing pulley, involute spline, face gear) as bodies of solid steps,
@@ -40,6 +42,7 @@
 
 pub mod axes;
 pub mod body;
+pub mod clearance;
 pub mod coupon;
 pub mod cycloid;
 pub mod elliptic;
@@ -53,11 +56,14 @@ pub mod involute;
 pub mod mesh2d;
 pub mod mesh3d;
 pub mod octoid;
+mod par;
 pub mod plan;
 pub mod pulley;
 pub mod spline;
 pub mod sprocket;
 pub mod sheet;
+pub mod simple;
+pub mod sketch_rules;
 pub mod strength;
 pub mod worm;
 pub mod wrap;
@@ -74,6 +80,8 @@ mod axes_tests;
 mod accuracy_tests;
 #[cfg(test)]
 mod body_tests;
+#[cfg(test)]
+mod clearance_tests;
 #[cfg(test)]
 mod sweep_tests;
 #[cfg(test)]

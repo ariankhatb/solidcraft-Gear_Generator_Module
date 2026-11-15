@@ -53,6 +53,11 @@ pub struct Member {
     cells: Vec<Vec<u32>>,
     solid: Vec<bool>,
     rows: Vec<Vec<u32>>,
+    /// Every edge lies within `rmax` of the local origin, and none within `hollow` of it when
+    /// the origin is not in the material (0 otherwise): a point further than a few cells out of
+    /// that band is plainly outside and far from the boundary ([`Member::far`]).
+    rmax: f64,
+    hollow: f64,
     pub motion: Motion,
 }
 
@@ -161,7 +166,7 @@ impl Member {
         lo = lo - V2::new(2.137 * c, 2.291 * c);
         let nx = ((hi.x - lo.x) / c).ceil() as usize + 3;
         let ny = ((hi.y - lo.y) / c).ceil() as usize + 3;
-        let mut m = Member { loops, edges, lo, c, nx, ny, cells: vec![Vec::new(); nx * ny], solid: vec![false; nx * ny], rows: vec![Vec::new(); ny], motion };
+        let mut m = Member { loops, edges, lo, c, nx, ny, cells: vec![Vec::new(); nx * ny], solid: vec![false; nx * ny], rows: vec![Vec::new(); ny], rmax: 0.0, hollow: 0.0, motion };
         for (k, e) in m.edges.iter().enumerate() {
             let (i0, j0) = m.cell(V2::new(e.a.x.min(e.b.x), e.a.y.min(e.b.y))).unwrap();
             let (i1, j1) = m.cell(V2::new(e.a.x.max(e.b.x), e.a.y.max(e.b.y))).unwrap();
@@ -172,14 +177,52 @@ impl Member {
                 }
             }
         }
+        // The empty cells' material, a row at a time: the crossings of the row's middle line
+        // (as `raycast` finds them, the same test and the same arithmetic) counted from the
+        // right, instead of a ray cast from every cell.
+        let mut xs: Vec<(f64, bool)> = Vec::new();
         for j in 0..ny {
-            for i in 0..nx {
+            let y = m.lo.y + (j as f64 + 0.5) * c;
+            xs.clear();
+            for &k in &m.rows[j] {
+                let e = &m.edges[k as usize];
+                if (e.a.y > y) != (e.b.y > y) {
+                    xs.push((e.a.x + (y - e.a.y) / (e.b.y - e.a.y) * (e.b.x - e.a.x), e.hole));
+                }
+            }
+            xs.sort_by(|a, b| b.0.total_cmp(&a.0));
+            let (mut next, mut outer, mut hole) = (0, false, false);
+            for i in (0..nx).rev() {
+                let x = m.lo.x + (i as f64 + 0.5) * c;
+                // Crossings strictly right of the cell's middle.
+                while next < xs.len() && xs[next].0 > x {
+                    if xs[next].1 {
+                        hole = !hole;
+                    } else {
+                        outer = !outer;
+                    }
+                    next += 1;
+                }
                 if m.cells[j * nx + i].is_empty() {
-                    m.solid[j * nx + i] = m.raycast(m.lo + V2::new((i as f64 + 0.5) * c, (j as f64 + 0.5) * c));
+                    m.solid[j * nx + i] = outer && !hole;
                 }
             }
         }
+        m.rmax = m.edges.iter().map(|e| e.a.len().max(e.b.len())).fold(0.0, f64::max);
+        if !m.inside(V2::ZERO) {
+            m.hollow = m.edges.iter().map(|e| seg_dist(V2::ZERO, e.a, e.b)).fold(f64::INFINITY, f64::min);
+        }
         m
+    }
+
+    /// Is the local point so far out of the band the edges lie in that it is outside the
+    /// material and [`Member::dist`] finds no edge near it? (Then `inside` is false and `dist`
+    /// infinite for it, exactly: `dist` looks at edges listed in the neighbouring cells, which
+    /// are under four cells away.)
+    fn far(&self, p: V2) -> bool {
+        let r = p.len();
+        let reach = 4.0 * self.c;
+        r > self.rmax + reach || r < self.hollow - reach
     }
 
     pub fn of(g: &PreviewGear, cell: f64, tol: f64) -> Member {
@@ -284,15 +327,25 @@ fn pass(a: &Member, b: &Member, t: f64, o: V2) -> (f64, f64, f64) {
     for lp in &a.loops {
         // The loop's last point repeats its first.
         let n = lp.len() - 1;
-        let pts: Vec<(V2, bool)> = lp[..n].iter().map(|q| (*q, b.inside(local(*q)))).collect();
-        for (q, inside) in &pts {
-            let dist = b.dist(local(*q));
-            if *inside {
-                depth = depth.max(dist.min(b.c));
-            } else {
-                gap = gap.min(dist);
-            }
-        }
+        // Most of `a`'s boundary is nowhere near `b`: those points are outside and far, and cost
+        // only their distance from `b`'s middle.
+        let pts: Vec<(V2, bool)> = lp[..n]
+            .iter()
+            .map(|q| {
+                let l = local(*q);
+                if b.far(l) {
+                    return (*q, false);
+                }
+                let inside = b.inside(l);
+                let dist = b.dist(l);
+                if inside {
+                    depth = depth.max(dist.min(b.c));
+                } else {
+                    gap = gap.min(dist);
+                }
+                (*q, inside)
+            })
+            .collect();
         let Some(start) = pts.iter().position(|(_, inside)| !inside) else {
             // Wholly inside: the loop's own area.
             area += (0..n).map(|k| 0.5 * (world(pts[k].0) - o).cross(world(pts[(k + 1) % n].0) - o)).sum::<f64>();
@@ -439,27 +492,44 @@ pub fn check_mesh(plan: &Plan) -> Vec<MeshResult> {
 fn check_mesh_2d(plan: &Plan) -> Vec<MeshResult> {
     let n = plan.preview.len();
     let pairs: Vec<&MeshPair> = plan.meshes.iter().filter(|m| m.a < n && m.b < n && m.a != m.b && m.scale > 0.0 && m.period > 0.0).collect();
-    let mut members: Vec<Option<Member>> = (0..n).map(|_| None).collect();
+    // Each member once, at the scale of the first pair it is in; all at once.
+    let mut wanted: Vec<(usize, f64)> = Vec::new();
     for m in &pairs {
         for i in [m.a, m.b] {
-            if members[i].is_none() {
-                let g = &plan.preview[i];
-                // Bores and lightening holes play no part, and cost time: only a member that
-                // surrounds another keeps its holes (a ring's teeth are one).
-                let surrounds = pairs.iter().any(|q| q.internal && q.b == i);
-                let region = if surrounds { g.region.clone() } else { Region { outer: g.region.outer.clone(), holes: Vec::new() } };
-                members[i] = Some(Member::build(&region, Motion::of(g), 0.25 * m.scale, 1e-4 * m.scale, 8));
+            if !wanted.iter().any(|w| w.0 == i) {
+                wanted.push((i, m.scale));
             }
         }
     }
+    let built = crate::par::map(wanted.len(), |k| {
+        let (i, scale) = wanted[k];
+        let g = &plan.preview[i];
+        // Bores and lightening holes play no part, and cost time: only a member that
+        // surrounds another keeps its holes (a ring's teeth are one).
+        let surrounds = pairs.iter().any(|q| q.internal && q.b == i);
+        let region = if surrounds { g.region.clone() } else { Region { outer: g.region.outer.clone(), holes: Vec::new() } };
+        Member::build(&region, Motion::of(g), 0.25 * scale, 1e-4 * scale, 8)
+    });
+    let mut members: Vec<Option<Member>> = (0..n).map(|_| None).collect();
+    for ((i, _), m) in wanted.iter().zip(built) {
+        members[*i] = Some(m);
+    }
+    // Every pair's probes at once, merged afterwards in the order one thread would.
+    let probes = crate::par::map(pairs.len() * CHECK_STEPS, |k| {
+        let (m, i) = (pairs[k / CHECK_STEPS], k % CHECK_STEPS);
+        let (a, b) = (members[m.a].as_ref().unwrap(), members[m.b].as_ref().unwrap());
+        // Either side of the drawn position: a coupon's few teeth are centred on it.
+        let t = if i == 0 { -0.5 * m.period } else { m.period * (i as f64 / CHECK_STEPS as f64 - 0.5) };
+        probe(a, b, t)
+    });
     pairs
         .iter()
-        .map(|m| {
-            let (a, b) = (members[m.a].as_ref().unwrap(), members[m.b].as_ref().unwrap());
-            // Either side of the drawn position: a coupon's few teeth are centred on it.
-            let mut s = probe(a, b, -0.5 * m.period);
-            for i in 1..CHECK_STEPS {
-                s.merge(&probe(a, b, m.period * (i as f64 / CHECK_STEPS as f64 - 0.5)));
+        .enumerate()
+        .map(|(k, m)| {
+            let mine = &probes[k * CHECK_STEPS..(k + 1) * CHECK_STEPS];
+            let mut s = mine[0];
+            for p in &mine[1..] {
+                s.merge(p);
             }
             let (na, nb) = (&plan.preview[m.a].name, &plan.preview[m.b].name);
             let depth = if s.depth.is_finite() { s.depth } else { 0.0 };

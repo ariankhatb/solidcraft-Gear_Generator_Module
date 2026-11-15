@@ -461,55 +461,26 @@ fn ring_member(s: &Spec, g: &Geometry, spiral: f64, phase: f64, p: &mut Plan) ->
         p.refuse("ring: its tooth spaces couldn't be traced");
         return None;
     }
+    let small = (re - b) / re;
+    // The ring's large end: the plane square to the axis where its roots meet the back cone
+    // (on the large end's plane its teeth run on past the back cone by their roots, where the
+    // planets' tips, which end on their own back cones, can touch them).
+    let rho_root = re / ((r_root.atan2(h)) - dr).cos();
+    let z0 = (h - rho_root * r_root.atan2(h).cos()).clamp(0.0, 0.5 * h * (1.0 - small));
+    let k0 = (h - z0) / h;
+    let scale = small / k0;
+    let height = h * (1.0 - small) - z0;
     // The ring in one: the region between its rim's outside and the spaces' outline (the
     // planets' cut, an external bevel), tapered as the planets' teeth are. Not a blank with
     // that bevel cut out of it: the kernel's cut came out an open shell and the build kept the
-    // whole blank (173 to 175 mm³ in each planet of the 45° default).
-    //
-    // As an external member's (`cone_teeth`), the taper runs long enough to hold the whole face
-    // (the tips past the back cone at its start, the roots inside the front cone at its end) and
-    // is intersected with a revolved blank: the teeth end on the back and front cones; a little
-    // past the roots the rim has flat faces square to the axis, out to the rim's outside.
-    let (heel, toe) = (re, re - b);
-    let (sd, cd) = dr.sin_cos();
-    let (phi_t, phi_r) = (r_tip.atan2(h), r_root.atan2(h));
-    let on = |phi: f64, along: f64| -> (f64, f64) {
-        let rho = along / (phi - dr).cos();
-        (rho * phi.sin(), h - rho * phi.cos())
-    };
-    let cone_r = |along: f64, z: f64| (along + (z - h) * cd) / sd;
-    let (r_root_heel, z_root_heel) = on(phi_r, heel);
-    let (_, z_root_toe) = on(phi_r, toe);
-    let (_, z_tip_heel) = on(phi_t, heel);
-    // The back cone runs on a little past the roots before the rim's flat back face (behind
-    // the roots it would leave a sliver of tooth past the back cone, which the planets' tips
-    // reach at their heels), the front cone likewise before its front face.
-    let z_front = z_root_toe + 0.25 * m * sd;
-    let z_back = z_root_heel + (0.25 * m * sd).min(0.3 * (z_front - z_root_heel));
-    let z_lo = z_tip_heel - 0.5 * m;
-    let z_hi = z_front + (0.5 * m).min(0.5 * (h - z_front));
-    let (k0, k1) = ((h - z_lo) / h, (h - z_hi) / h);
-    let scale = k1 / k0;
+    // whole blank (173 to 175 mm³ in each planet of the 45° default). Its ends are still flat,
+    // square to the axis (not trimmed to the back and front cones as the other members are:
+    // tried, the hobbed ring's flanks close up at the heel and the planets' tips then touched
+    // it by about 0.003 modules).
     let rim = if s.rim > 0.0 { s.rim } else { 3.0 * m };
-    let outside = r_root_heel + rim;
-    // The taper's own rim clears its roots all the way (they are furthest out at its start) and
-    // the blank's.
-    let rim_taper = outside.max(r_root * k0) + m;
-    let e = m;
-    let blank = vec![
-        V2::new(cone_r(toe, z_lo - e).max(0.0), z_lo - e),
-        V2::new(cone_r(heel, z_lo - e).max(0.0), z_lo - e),
-        V2::new(cone_r(heel, z_back), z_back),
-        V2::new(outside, z_back),
-        V2::new(outside, z_front),
-        V2::new(cone_r(toe, z_front), z_front),
-    ];
-    let base = sided_outline(&sides, zr, phase).scaled(k0).rotated(wind * k0.ln());
-    let steps = vec![
-        Step::RingTaper { outline: base, rim: rim_taper, z0: z_lo, height: z_hi - z_lo, twist: wind * scale.ln(), scale, op: Op::New },
-        Step::Revolve { profile: blank, op: Op::Intersect },
-    ];
-    Some(Member { steps, ra: r_root, zv: f64::from(zr) / dr.cos(), ends: ConeEnds { back: z_back, front: z_front, small_root: on(phi_t, toe).0 } })
+    let outline = sided_outline(&sides, zr, phase).scaled(k0).rotated(wind * k0.ln());
+    let steps = vec![Step::RingTaper { outline, rim: r_root + rim, z0, height, twist: wind * scale.ln(), scale, op: Op::New }];
+    Some(Member { steps, ra: r_root, zv: f64::from(zr) / dr.cos(), ends: ConeEnds { back: z0, front: z0 + height, small_root: r_tip * small } })
 }
 
 fn rot(v: [f64; 3], t: f64) -> [f64; 3] {

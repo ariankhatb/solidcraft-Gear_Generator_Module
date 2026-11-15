@@ -292,8 +292,7 @@ fn bevel_ring_is_one_solid_without_a_cut() {
     ] {
         let p = prove(label, &s);
         let ring = p.bodies.last().unwrap();
-        // (Trimmed by its back and front cones: a revolved blank intersected, no cut.)
-        let [Step::RingTaper { op: crate::plan::Op::New, .. }, Step::Revolve { op: crate::plan::Op::Intersect, .. }] = ring.steps.as_slice() else { panic!("{label}: {:?}", ring.steps) };
+        let [Step::RingTaper { op: crate::plan::Op::New, .. }] = ring.steps.as_slice() else { panic!("{label}: {:?}", ring.steps) };
         assert!(p.bodies.iter().all(|b| b.steps.iter().all(|st| !matches!(st, Step::Taper { op: crate::plan::Op::Cut, .. }))), "{label}");
         let n = p.bodies.len();
         let cut = Solid::new(ring, 0.05);

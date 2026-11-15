@@ -387,12 +387,12 @@ rings overlap the housing by design when `ring_as_housing`). Scripts come from t
 
 ## Bevel ends on the back and front cones; flat cones; own face per member (`gear-flatbevel`, 2026-11-15)
 
-- Every bevel member (bevel, spiral bevel, bevel planetary sun / planets / second sun / ring)
-  is now one long `Step::Taper` (from just under the roots at the heel to just past the tips at
-  the toe: the plane chart scaled about the apex is exact) intersected with a revolved blank
-  (`Step::Revolve { op: Intersect }`) bounded by the back cone at the heel and the front cone at
-  the toe (`plan::cone_teeth`; the ring: the same with a `RingTaper`, flat rim faces beyond the
-  roots). Nothing in the blank lies on a taper face, so no grazing of the root fillets. If the
+- Every bevel member (bevel, spiral bevel, bevel planetary sun / planets / second sun) is now one long `Step::Taper` (from just under the roots at the heel to
+  just past the tips at the toe: the plane chart scaled about the apex is exact) intersected with
+  a revolved blank (`Step::Revolve { op: Intersect }`) bounded by the back cone at the heel and
+  the front cone at the toe (`plan::cone_teeth`). OPEN: the bevel planetary ring keeps flat
+  ends (now starting where its roots meet the back cone) (a trimmed `RingTaper` was tried: the hobbed ring's flanks close up at the heel and the
+  planets' tips touched it by ~0.003 m), so a ring flatter than ~70° still has long tips. Nothing in the blank lies on a taper face, so no grazing of the root fillets. If the
   kernel still refuses the trim the engine's nudges/fallback keep the taper (teeth run a little
   past the cones; on a flat cone more than a little).
 - Fixes the nearly flat cones (δ > ~70°, e.g. 17:34 at Σ 100–110°): their teeth were long thin
@@ -405,7 +405,11 @@ rings overlap the housing by design when `ring_as_housing`). Scripts come from t
   (uncompiled); engine fields already existed (doc strings updated, uncompiled).
 - mesh3d: taper rows are spaced along the taper's lines (flat cones' straight teeth were
   sampled 2 mm apart and read as 0.27 m deep); trim faces are not sampled (like taper caps);
-  `material_points` keeps only what the trim keeps (clearance body).
+  a point inside past a patch's
+  border counts its depth behind the patch's plane, not along the surface; `material_points`
+  keeps only what the trim keeps (clearance body). Spiral tapers whose loft would slip are
+  refitted with fewer points (`plan::lined_up_cone_teeth`); the loft-slip test reads a body's
+  own tooth count from its name.
 - Tests: `flat_bevel_tests.rs` (flat sets at Σ 100–150°, own faces, bevel planetary flat
   planets/ring, end-on-cones geometry, refusals); loft-slip variants. Engine test
   `bevel_teeth_are_trimmed_by_their_cones` (ignored, uncompiled) checks the kernel takes the trim.

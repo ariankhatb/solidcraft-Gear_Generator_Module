@@ -691,12 +691,6 @@ impl Solid {
         }
         out
     }
-    /// Which of the body's parts hold the world point (debugging).
-    #[cfg(test)]
-    pub(crate) fn parts_holding(&self, p: P3) -> Vec<(usize, Op, bool)> {
-        let l = self.local(p);
-        self.parts.iter().enumerate().map(|(i, (part, op))| (i, *op, part.contains(l))).collect()
-    }
     /// Is the world point inside the body?
     pub fn contains(&self, p: P3) -> bool {
         self.contains_local(self.local(p))
@@ -827,11 +821,6 @@ impl Surface {
             ir >= 0.0 && iz >= 0.0 && (ir as usize) < nr && (iz as usize) < nz && ring[iz as usize * nr + ir as usize] || ir >= nr as f64
         };
         let eps = 0.02 * h;
-        // A trimmed body's sheets run on past the trim, which ends them across their patches:
-        // a patch there is taken in pieces, each kept only if on the body, so the sampled
-        // surface reaches the trimmed edge (a gap there reads as depth where the mate's flank
-        // touches the edge).
-        let trimmed = solid.parts.iter().any(|(_, op)| *op == Op::Intersect);
         let mut samples = Vec::new();
         for (part, op) in solid.parts.iter() {
             // A trim's faces (a bevel's back and front cones) are the body's ends, where its
@@ -867,20 +856,6 @@ impl Surface {
                             let outer = solid.contains_local([0, 1, 2].map(|k| p[k] + eps * nn[k]));
                             (inner != outer).then(|| if outer { nn.map(|v| -v) } else { nn })
                         };
-                        if trimmed && !(on(p).is_some() && [a, b, c, d].iter().all(|q| on(*q).is_some())) {
-                            const K: usize = 4;
-                            for iu in 0..K {
-                                for iv in 0..K {
-                                    let (fu, fv) = ((iu as f64 + 0.5) / K as f64 - 0.5, (iv as f64 + 0.5) / K as f64 - 0.5);
-                                    let q = [0, 1, 2].map(|k| p[k] + fu * du[k] + fv * dv[k]);
-                                    if let Some(n) = on(q) {
-                                        let f = 0.5 / K as f64;
-                                        samples.push(Sample { p: q, n, hu: du.map(|v| f * v), hv: dv.map(|v| f * v), area: area / (K * K) as f64 });
-                                    }
-                                }
-                            }
-                            continue;
-                        }
                         if let Some(n) = on(p) {
                             samples.push(Sample { p, n, hu: du.map(|v| 0.5 * v), hv: dv.map(|v| 0.5 * v), area });
                             continue;

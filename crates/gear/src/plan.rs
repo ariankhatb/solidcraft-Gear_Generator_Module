@@ -753,8 +753,117 @@ pub struct Plan {
     /// How each step's profile of the clearance body follows a parametric set's formulas (one
     /// entry per vertex of a revolved profile; empty where it stays as numbers).
     pub clearance_follow: Vec<Vec<crate::clearance::VertexFollow>>,
+    /// How the set goes together as an assembly: which bodies turn about which shafts, which are
+    /// held, and how their motions are tied ([`Assembly`]). Filled by every kind's planner; the
+    /// engine makes components and joints of it (`gear.create` with `assembly: true`).
+    pub assembly: Assembly,
     /// Why the set can't be built, found while planning it ([`plan`] returns it as the error).
     refused: Option<String>,
+}
+
+/// A planned set as an assembly: its moving members (each one of [`Plan::bodies`]) and the links
+/// that tie their motions together, enough to make one component per member, a revolute joint per
+/// member on its shaft, and a gear, rack-and-pinion or rigid link per mesh.
+///
+/// Sign conventions (the same as SolidCraft's `joint.gear`): a member's turn is measured
+/// counter-clockwise about its [`AssemblyMember::axis`] direction (right hand). For
+/// [`AssemblyLink::Gear`] member `b` turns `-ra / rb` radians per radian of `a`, the other sign
+/// when `internal` is set, and the sign flipped again when `reverse` is set. With the members'
+/// axes these reproduce [`crate::mesh3d::motion`] and the 2D preview's speeds
+/// ([`Assembly::ratio`]).
+///
+/// The clearance body is never a member: the engine adds it as a grounded component of its own.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Assembly {
+    pub members: Vec<AssemblyMember>,
+    pub links: Vec<AssemblyLink>,
+}
+
+/// One moving (or held) member of an [`Assembly`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct AssemblyMember {
+    /// The body it is: an index into [`Plan::bodies`].
+    pub body: usize,
+    /// The shaft it turns about, in world coordinates (after `Spec::placement`); for a rack, the
+    /// line it slides along (positive travel along the direction).
+    pub axis: crate::axes::Axis,
+    /// Held fixed (a housing, a fixed ring gear, a cycloidal drive's pin ring): grounded, on no
+    /// joint.
+    pub grounded: bool,
+    /// The member (index into [`Assembly::members`]) it rides on: a planet on its carrier or a
+    /// differential's case. `None`: it turns about a shaft fixed in the world.
+    pub carrier: Option<usize>,
+}
+
+/// How two members' motions are tied. Indices are into [`Assembly::members`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum AssemblyLink {
+    /// Two gears: `b` turns `-ra / rb` per radian of `a` (each about its own axis), the same way
+    /// round when `internal`, and the other way again when `reverse`. A chain or belt is a gear
+    /// link with `internal` set (both wheels turn the same way). `ra` and `rb` are pitch radii
+    /// (mm), or tooth counts where pitch radii don't apply. For a planet on a carrier the turns are
+    /// relative to the carrier.
+    Gear { a: usize, b: usize, ra: f64, rb: f64, internal: bool, reverse: bool },
+    /// A rack slides `pitch_radius` mm along its axis per radian the pinion turns about its own.
+    RackPinion { pinion: usize, rack: usize, pitch_radius: f64 },
+    /// A worm and its wheel: the wheel turns `-starts / wheel_teeth` radians about its axis per
+    /// radian of the worm about its own, as a [`AssemblyLink::Gear`] with `ra = starts` and
+    /// `rb = wheel_teeth` (the planner points the worm's axis so that this holds for either
+    /// hand).
+    Worm { worm: usize, wheel: usize, starts: u32, wheel_teeth: u32 },
+    /// Joined as one (a spline shaft in its hub).
+    Rigid { a: usize, b: usize },
+}
+
+impl AssemblyLink {
+    /// The two members it ties: the driving one first.
+    pub fn members(&self) -> (usize, usize) {
+        match *self {
+            AssemblyLink::Gear { a, b, .. } | AssemblyLink::Rigid { a, b } => (a, b),
+            AssemblyLink::RackPinion { pinion, rack, .. } => (pinion, rack),
+            AssemblyLink::Worm { worm, wheel, .. } => (worm, wheel),
+        }
+    }
+
+    /// The driven member's motion per radian of the driving one ([`AssemblyLink::members`]):
+    /// radians, or mm for a rack; 1 for a rigid link.
+    pub fn ratio(&self) -> f64 {
+        match *self {
+            AssemblyLink::Gear { ra, rb, internal, reverse, .. } => {
+                let s = if internal { 1.0 } else { -1.0 } * if reverse { -1.0 } else { 1.0 };
+                s * ra / rb
+            }
+            AssemblyLink::RackPinion { pitch_radius, .. } => pitch_radius,
+            AssemblyLink::Worm { starts, wheel_teeth, .. } => -f64::from(starts) / f64::from(wheel_teeth.max(1)),
+            AssemblyLink::Rigid { .. } => 1.0,
+        }
+    }
+}
+
+impl Assembly {
+    /// Member `to`'s turn per radian of member `from`'s through the links between them (each
+    /// about its own axis; the carrier held), or `None` when no chain of links joins them.
+    pub fn ratio(&self, from: usize, to: usize) -> Option<f64> {
+        let mut seen = vec![None; self.members.len()];
+        *seen.get_mut(from)? = Some(1.0);
+        let mut queue = vec![from];
+        while let Some(m) = queue.pop() {
+            let here = seen[m]?;
+            for l in &self.links {
+                let (a, b) = l.members();
+                let r = l.ratio();
+                let next = if a == m { Some((b, here * r)) } else if b == m && r != 0.0 { Some((a, here / r)) } else { None };
+                if let Some((n, v)) = next
+                    && n < seen.len()
+                    && seen[n].is_none()
+                {
+                    seen[n] = Some(v);
+                    queue.push(n);
+                }
+            }
+        }
+        seen.get(to).copied().flatten()
+    }
 }
 
 impl Plan {

@@ -1,0 +1,47 @@
+{"commands": [
+ {"command": "sketch.create", "params": {"plane": "XY", "name": "S1 spur pair + compound gear 1", "project_edges": false}},
+ {"command": "sketch.circle.center", "params": {"center": [0, 0], "radius": 20, "id": "a"}},
+ {"command": "sketch.circle.center", "params": {"center": [50, 0], "radius": 30, "id": "b"}},
+ {"command": "sketch.circle.center", "params": {"center": [-50, 0], "radius": 30, "id": "e1"}},
+ {"command": "sketch.finish", "params": {}},
+ {"command": "sketch.create", "params": {"plane": {"origin": [0, 0, -25], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}, "name": "S2 compound gear 2", "project_edges": false}},
+ {"command": "sketch.circle.center", "params": {"center": [-50, 0], "radius": 15, "id": "e2"}},
+ {"command": "sketch.dimension", "params": {"entities": ["e2"], "type": "diameter", "value": "d_e2 = 30 mm", "scale_sketch": false}},
+ {"command": "sketch.finish", "params": {}},
+ {"command": "sketch.create", "params": {"plane": {"origin": [0, 0, 0], "x_dir": [1, 0, 0], "y_dir": [0, 0, 1]}, "name": "S3 compound shaft", "project_edges": false}},
+ {"command": "sketch.line", "params": {"points": [[-50, -35], [-50, 10]], "ids": ["shaft_e"]}},
+ {"command": "sketch.finish", "params": {}},
+ {"command": "sketch.create", "params": {"plane": {"origin": [0, 0, 40], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}, "name": "S4 bevel pinion", "project_edges": false}},
+ {"command": "sketch.circle.center", "params": {"center": [50, 0], "radius": 15, "id": "c1"}},
+ {"command": "sketch.finish", "params": {}},
+ {"command": "sketch.create", "params": {"plane": {"origin": [65, 0, 0], "x_dir": [0, 1, 0], "y_dir": [0, 0, 1]}, "name": "S5 bevel gear", "project_edges": false}},
+ {"command": "sketch.circle.center", "params": {"center": [0, 60], "radius": 20, "id": "c2"}},
+ {"command": "sketch.finish", "params": {}},
+ {"command": "sketch.create", "params": {"plane": {"origin": [110, 0, 0], "x_dir": [0, 1, 0], "y_dir": [0, 0, 1]}, "name": "S6 worm stage", "project_edges": false}},
+ {"command": "sketch.circle.center", "params": {"center": [0, 60], "radius": 30, "id": "d1"}},
+ {"command": "sketch.line", "params": {"points": [[-40, 98], [40, 98]], "ids": ["worm"]}},
+ {"command": "sketch.finish", "params": {}},
+ {"command": "gear.create", "params": {
+   "name": "Drivetrain",
+   "items": [
+     {"id": "A", "type": "spur", "components": [{"sketch": "S1 spur pair + compound gear 1", "curve": "a", "slot": "pitch"}], "module_block": "M1",
+      "gears": [{"gear": 0, "size_by": "module", "face": {"preset": "symmetric", "a": null, "b": null}, "profile_shift": "auto", "bore": "auto"}]},
+     {"id": "B", "type": "spur", "components": [{"sketch": "S1 spur pair + compound gear 1", "curve": "b", "slot": "pitch"}], "module_block": "M1"},
+     {"id": "C", "type": "bevel", "components": [{"sketch": "S4 bevel pinion", "curve": "c1", "slot": "pitch"}, {"sketch": "S5 bevel gear", "curve": "c2", "slot": "pitch2"}], "bevel_style": "straight"},
+     {"id": "D", "type": "worm", "components": [{"sketch": "S6 worm stage", "curve": "d1", "slot": "pitch"}, {"sketch": "S6 worm stage", "curve": "worm", "slot": "axis"}], "starts": 1},
+     {"id": "E", "type": "compound", "components": [{"sketch": "S3 compound shaft", "curve": "shaft_e", "slot": "axis"}, {"sketch": "S1 spur pair + compound gear 1", "curve": "e1", "slot": "pitch"}, {"sketch": "S2 compound gear 2", "curve": "e2", "slot": "pitch2"}], "module_block": "M1"}
+   ],
+   "links": [
+     {"a": {"item": "A", "port": 0}, "b": {"item": "B", "port": 0}, "kind": "mesh"},
+     {"a": {"item": "B", "gear": 0}, "b": {"item": "C", "gear": 0}, "kind": "shaft"},
+     {"a": {"item": "C", "gear": 1}, "b": {"item": "D", "gear": 0}, "kind": "shaft"},
+     {"a": {"item": "A", "port": 0}, "b": {"item": "E", "port": 0}, "kind": "mesh"}
+   ],
+   "module_blocks": [{"id": "M1", "module": 2}],
+   "drive": {"item": "A", "gear": 0, "rpm": 1000, "torque": 2},
+   "assembly": true
+ }},
+ {"command": "gear.ratio", "params": {"a": {"item": "A", "gear": 0}, "b": {"item": "D", "gear": 1}}},
+ {"command": "gear.ratio", "params": {"a": {"item": "A", "gear": 0}, "b": {"item": "E", "gear": 1}}},
+ {"command": "inspect.interference", "params": {}}
+]}

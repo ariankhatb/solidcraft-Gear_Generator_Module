@@ -1,0 +1,9 @@
+{"commands": [
+ {"command": "parameters.change", "params": {"name": "d_e2", "expression": "34 mm"}},
+ {"command": "gear.inspect", "params": {"group": 8}},
+ {"command": "gear.update", "params": {"group": 8}},
+ {"command": "gear.update", "params": {"group": 8, "module_blocks": [{"id": "M1", "module": 2.5}]}},
+ {"command": "gear.ratio", "params": {"a": {"item": "A", "gear": 0}, "b": {"item": "D", "gear": 1}}},
+ {"command": "gear.ratio", "params": {"a": {"item": "A", "gear": 0}, "b": {"item": "E", "gear": 1}}},
+ {"command": "inspect.interference", "params": {}}
+]}

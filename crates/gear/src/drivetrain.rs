@@ -438,6 +438,7 @@ fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], styl
                 module: a.module,
                 teeth: a.teeth,
                 face_width: a.face_width,
+                sides: None,
                 ring: (role[*i] == Some(Role::Internal)).then_some(true),
                 shaft: on,
                 shaft_span: span,

@@ -23,7 +23,7 @@ pub(crate) mod assembly;
 pub mod solid;
 
 pub use bevel_planet::BevelPlanetMode;
-pub use train::{LinkKind, Train, TrainGear, TrainLink, TrainShaft};
+pub use train::{LinkKind, SidePreset, Train, TrainGear, TrainLink, TrainShaft};
 
 /// Gear set types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Hash)]
@@ -863,6 +863,11 @@ pub struct SetMember {
     pub teeth: u32,
     pub pitch_diameter: f64,
     pub face_width: f64,
+    /// How far its face reaches each side of its sketch plane along its axis (mm): side A along
+    /// the axis, side B against it (`face_a + face_b = face_width`; [`train::SidePreset`]). A
+    /// gear read before sides existed has all its face on side A.
+    pub face_a: f64,
+    pub face_b: f64,
     /// A ring gear (teeth inside).
     pub ring: bool,
     /// The gears (indices into `Plan::members`) it meshes with.

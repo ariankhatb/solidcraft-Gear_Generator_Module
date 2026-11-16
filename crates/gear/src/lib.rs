@@ -40,6 +40,7 @@
 //! Pure math with no dependencies: the engine turns a plan into sketches and features, the
 //! window draws its preview from the same plan.
 
+pub mod analysis;
 pub mod axes;
 pub mod body;
 pub mod clearance;
@@ -78,6 +79,8 @@ pub use plan::{Assembly, AssemblyIssue, AssemblyLink, AssemblyMember, Body, Fact
 
 #[cfg(test)]
 mod bevel_planet_tests;
+#[cfg(test)]
+mod analysis_tests;
 #[cfg(test)]
 mod diff_tests;
 #[cfg(test)]

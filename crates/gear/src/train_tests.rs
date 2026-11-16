@@ -59,9 +59,10 @@ fn three() -> Vec<Circle> {
 fn three_tangent_circles_make_a_three_gear_train() {
     let (spec, p, _) = train(Kind::Spur, three(), Simple::default()).unwrap();
     let t = spec.train.as_ref().unwrap();
-    // One standard module for the group: 2.5 gives 16, 24 and 12 teeth exactly.
-    assert!(t.gears.iter().all(|g| g.module == 2.5), "{:?}", t.gears);
-    assert_eq!(t.gears.iter().map(|g| g.teeth).collect::<Vec<_>>(), vec![16, 24, 12]);
+    // One standard module for the group: the largest with 17 teeth or more on every gear and a
+    // contact ratio of 1.2 or more, 1.25 (32, 48 and 24 teeth exactly).
+    assert!(t.gears.iter().all(|g| g.module == 1.25), "{:?}", t.gears);
+    assert_eq!(t.gears.iter().map(|g| g.teeth).collect::<Vec<_>>(), vec![32, 48, 24]);
     assert_eq!(t.links.len(), 2);
     assert_eq!(p.bodies.len(), 3);
     // Gear 3 at its drawn centre.
@@ -103,7 +104,7 @@ fn a_gear_inside_a_ring_with_an_idler() {
     let (spec, p, _) = train(Kind::Spur, c, Simple::default()).unwrap();
     let t = spec.train.as_ref().unwrap();
     assert!(t.gears[0].ring && !t.gears[1].ring && !t.gears[2].ring);
-    assert_eq!(t.gears.iter().map(|g| g.teeth).collect::<Vec<_>>(), vec![40, 16, 8]);
+    assert_eq!(t.gears.iter().map(|g| g.teeth).collect::<Vec<_>>(), vec![120, 48, 24]);
     assert!(t.links.contains(&crate::plan::TrainLink { a: 1, b: 0, kind: LinkKind::Internal }));
     meshes_clean(&p, 2);
     assert!(p.meshes.iter().any(|m| m.internal && m.b == 0 && m.a == 1));
@@ -126,7 +127,7 @@ fn a_gear_touching_nothing_is_an_error_naming_it() {
     assert!(sized.spec.is_none());
     assert!(sized.errors[..3].iter().all(Option::is_none) && sized.errors[3].is_some(), "{:?}", sized.errors);
     assert_eq!(sized.members[1].meshes_with, vec![0, 2]);
-    assert_eq!(sized.members[1].teeth, 24);
+    assert_eq!(sized.members[1].teeth, 48);
 }
 
 #[test]
@@ -159,7 +160,7 @@ fn drawn_centres_are_kept_by_profile_shift() {
     let c = vec![circle(0.0, 0.0, 20.06), circle(50.12, 0.0, 30.06), circle(50.12, 45.1, 15.04)];
     let (spec, p, notes) = train(Kind::Spur, c, Simple::default()).unwrap();
     let t = spec.train.as_ref().unwrap();
-    assert_eq!(t.gears.iter().map(|g| g.teeth).collect::<Vec<_>>(), vec![16, 24, 12]);
+    assert_eq!(t.gears.iter().map(|g| g.teeth).collect::<Vec<_>>(), vec![32, 48, 24]);
     assert!(t.gears[1].shift.abs() > 1e-6, "{:?}", t.gears);
     assert!(notes.iter().any(|n| n.contains("drawn, Ø")), "{notes:?}");
     assert!((fact(&p, "gears 1–2 centre distance") - 50.12).abs() < 1e-6);
@@ -284,4 +285,27 @@ fn a_train_placed_by_its_sketch_turns_with_it() {
     assert!((o[0] - 60.0).abs() < 1e-9 && o[1].abs() < 1e-9 && (o[2] + 45.0).abs() < 1e-9, "{o:?}");
     assert!((p.bodies[2].frame.z[1] - 1.0).abs() < 1e-12);
     assembly_matches_preview(&p);
+}
+
+/// Auto module: the largest standard module with every gear at 17 teeth or more (no undercut
+/// unshifted); a lone Ø40 gear is module 2 with 20 teeth and a face of 20 mm, not module 5 with
+/// 8 undercut teeth and 50 mm.
+#[test]
+fn auto_module_keeps_every_gear_free_of_undercut_and_the_face_near_ten_modules() {
+    let tc = vec![TrainCircle::of(circle(0.0, 0.0, 20.0))];
+    let sized = size_train(&tc, Kind::Spur, &Simple::default(), &Spec::default());
+    let t = sized.spec.as_ref().unwrap().train.as_ref().unwrap();
+    assert_eq!((t.gears[0].module, t.gears[0].teeth), (2.0, 20));
+    assert_eq!(t.gears[0].face, 20.0);
+    let p = crate::plan(sized.spec.as_ref().unwrap()).unwrap();
+    assert!(!p.warnings.iter().any(|w| w.contains("undercut")), "{:?}", p.warnings);
+    // A drawn pair whose diameters only fit few teeth (Ø6 and Ø9 at no standard module with 17
+    // teeth or more): the pinion is shifted against undercut, and that is said.
+    let tc = vec![TrainCircle::of(circle(0.0, 0.0, 3.0)), TrainCircle::of(circle(7.5, 0.0, 4.5))];
+    let sized = size_train(&tc, Kind::Spur, &Simple::default(), &Spec::default());
+    let spec = sized.spec.unwrap();
+    let t = spec.train.as_ref().unwrap();
+    if t.gears[0].teeth < 17 {
+        assert!(t.gears[0].shift > 0.0 && sized.notes.iter().any(|n| n.contains("would undercut")), "{:?} {:?}", t.gears, sized.notes);
+    }
 }

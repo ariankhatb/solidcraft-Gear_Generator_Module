@@ -1055,6 +1055,21 @@ pub fn rename_gears(text: &str, name: &dyn Fn(usize) -> String) -> String {
     out.join(" ")
 }
 
+/// The fewest teeth that don't undercut unshifted with `base`'s tooth form at helix `helix`
+/// (degrees): 17 for 20° spur teeth.
+fn undercut_free(base: &Spec, helix: f64) -> u32 {
+    let g = crate::involute::Involute { module: 1.0, pressure_angle: base.pressure_angle.to_radians(), helix: helix.to_radians(), rack: base.rack_eff(), shift: 0.0, ..crate::involute::Involute::default() };
+    (g.min_teeth_no_undercut() - 1e-9).ceil().max(4.0) as u32
+}
+
+/// The profile shift that just clears undercut on `z` teeth (0 when none is needed).
+fn anti_undercut(base: &Spec, z: u32, helix: f64) -> f64 {
+    let g = crate::involute::Involute { module: 1.0, pressure_angle: base.pressure_angle.to_radians(), helix: helix.to_radians(), rack: base.rack_eff(), ..crate::involute::Involute::default() };
+    let least = g.min_teeth_no_undercut();
+    let x = g.rack.addendum * (least - f64::from(z)) / least;
+    if x <= 0.0 { 0.0 } else { (x * 100.0).ceil() / 100.0 }
+}
+
 /// One circle of a train to size ([`size_train`]), with what is asked of its gear.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TrainCircle {
@@ -1443,7 +1458,49 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
                 (m, zs)
             }
             None => {
-                let (m, zs, standard) = fit_module(&ds, 8);
+                // The largest standard module (series I, then II) at which every gear has teeth
+                // enough not to undercut unshifted and every mesh of the group a contact ratio of
+                // 1.2 or more; else the coarsest fit with fewer teeth, its pinions shifted.
+                let zlo = undercut_free(base, gh[g]);
+                let meshes: Vec<(usize, usize, bool)> = links.iter().filter(|l| group[l.a] == g && l.kind != LinkKind::Compound).map(|l| (l.a, l.b, l.kind == LinkKind::Internal)).collect();
+                let fits = |m: f64| -> Option<Vec<u32>> {
+                    let mut zs = Vec::new();
+                    for (dd, ff) in &ds {
+                        let z = (dd / (m * ff)).round();
+                        if z < f64::from(zlo) || z > 1000.0 || (m * ff * z - dd).abs() > TOLERANCE * dd {
+                            return None;
+                        }
+                        zs.push(z as u32);
+                    }
+                    let gear = |i: usize| {
+                        let k = members.iter().position(|j| *j == i).unwrap_or(0);
+                        Spec { module: m, helix: gh[i], ..base.clone() }.involute(zs[k], 0.0, hand[i] * gh[i])
+                    };
+                    let face = settings.face_width.unwrap_or(10.0 * m);
+                    for &(a, b, internal) in &meshes {
+                        let cr = if internal {
+                            crate::involute::mesh_internal(&gear(a), &crate::involute::Internal { gear: gear(b) }, face).contact_ratio
+                        } else {
+                            crate::involute::mesh_external(&gear(a), &gear(b), face).contact_ratio
+                        };
+                        if !(cr >= 1.2) {
+                            return None;
+                        }
+                    }
+                    Some(zs)
+                };
+                let found = [&crate::axes::MODULES[..], &crate::axes::MODULES_2[..]].iter().find_map(|series| series.iter().rev().find_map(|&m| fits(m).map(|zs| (m, zs))));
+                let (m, zs, standard) = match found {
+                    Some((m, zs)) => (m, zs, true),
+                    None => {
+                        let (m, zs, standard) = fit_module(&ds, zlo);
+                        if zs.iter().any(|z| *z < zlo) || !standard {
+                            fit_module(&ds, 8)
+                        } else {
+                            (m, zs, standard)
+                        }
+                    }
+                };
                 let (sd, sz): (f64, f64) = ds.iter().zip(&zs).fold((0.0, 0.0), |(a, b), ((d, f), z)| (a + d, b + f * f64::from(*z)));
                 let m = if settings.exact && standard && sz > 0.0 { sd / sz } else { m };
                 if !standard || settings.exact {
@@ -1485,12 +1542,16 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
         }
     }
     // Shifts that keep every drawn centre distance, from each group's first gear along its tree.
-    let face = settings.face_width.filter(|f| *f > 0.0).unwrap_or(10.0 * module.iter().copied().fold(0.0, f64::max));
+    let face = settings.face_width.filter(|f| *f > 0.0).unwrap_or(10.0 * module.first().copied().unwrap_or(1.0));
     let probe = Spec { kind: style, helix, face_width: face, train: None, ..base.clone() };
     let inv = |i: usize, x: f64| Spec { module: module[i].max(1e-6), helix: gh[i], ..probe.clone() }.involute(teeth[i].max(3), x, hand[i] * gh[i]);
     let mut shift: Vec<Option<f64>> = vec![None; n];
     for &g in &roots {
-        shift[g] = Some(0.0);
+        let lift = if module[g] > 0.0 && teeth[g] > 0 { anti_undercut(base, teeth[g], gh[g]) } else { 0.0 };
+        if lift > 0.0 {
+            notes.push(format!("gear {}: {} teeth would undercut: profile shift {} clears it (its mates' shifts keep the drawn centres)", g + 1, teeth[g], num(lift)));
+        }
+        shift[g] = Some(lift);
         let mut queue = vec![g];
         while let Some(i) = queue.pop() {
             for l in links.iter().filter(|l| l.kind != LinkKind::Compound) {
@@ -1540,11 +1601,13 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
         if settings.face_width.is_some_and(|f| f > 0.0) {
             return face;
         }
-        // A whole meshing group alike: the tightest of its gears' spacings.
+        // About ten of its own module (a meshing group alike), capped by the tightest spacing
+        // of its group's gears to the next gear on their shafts.
+        let own = 10.0 * module[group[i]].max(module[i]);
         let tight = (0..n).filter(|j| group[*j] == group[i]).filter_map(spacing).reduce(f64::min);
         match tight {
-            Some(d) if 0.9 * d < face => 0.9 * d,
-            _ => face,
+            Some(d) if 0.9 * d < own => 0.9 * d,
+            _ => own,
         }
     };
     let faces: Vec<f64> = (0..n).map(|i| circles[i].face_width.filter(|f| *f > 0.0).unwrap_or_else(|| auto(i))).collect();

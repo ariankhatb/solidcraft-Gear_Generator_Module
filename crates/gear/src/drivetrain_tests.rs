@@ -281,10 +281,16 @@ fn the_rc_gearbox_power_split_with_clusters() {
     clean(&p, 4);
     let m = &o.members;
     assert!(m.iter().all(|m| m.error.is_none()), "{:?}", m);
-    // Stage 1 module 1.5 (20 and 10 teeth, 22.5 apart), stage 2 module 1.25 (20 and 12, 20 apart).
-    assert_eq!((m[0].teeth, m[1].teeth, m[2].teeth), (Some(20), Some(10), Some(10)));
-    assert_eq!((m[3].teeth, m[4].teeth, m[5].teeth), (Some(20), Some(20), Some(12)));
-    assert_eq!((m[0].module, m[3].module), (Some(1.5), Some(1.25)));
+    // The largest standard modules with 17 teeth or more on every gear (no undercut) and a
+    // contact ratio of 1.2 or more: stage 1 module 0.6 (50 and 25 teeth, 22.5 apart), stage 2
+    // module 0.5 (50 and 30, 20 apart).
+    assert_eq!((m[0].teeth, m[1].teeth, m[2].teeth), (Some(50), Some(25), Some(25)));
+    assert_eq!((m[3].teeth, m[4].teeth, m[5].teeth), (Some(50), Some(50), Some(30)));
+    assert_eq!((m[0].module, m[3].module), (Some(0.6), Some(0.5)));
+    assert!(m.iter().filter_map(|m| m.teeth).all(|z| z >= 17));
+    assert!(p.facts.iter().filter(|f| f.label.ends_with("contact ratio")).all(|f| f.value >= 1.2), "{:?}", p.facts.iter().filter(|f| f.label.ends_with("contact ratio")).collect::<Vec<_>>());
+    // Faces about ten modules (6 and 5 mm), inside the 15 mm on each countershaft.
+    assert_eq!((m[0].face_width, m[3].face_width), (Some(6.0), Some(5.0)));
     assert!(m[1].cluster.is_some() && m[1].cluster == m[3].cluster && m[2].cluster == m[4].cluster && m[1].cluster != m[2].cluster);
     assert_eq!((m[1].shaft, m[3].shaft, m[2].shaft, m[4].shaft), (Some(6), Some(6), Some(7), Some(7)));
     assert_eq!(m[5].meshes_with, vec![3, 4]);

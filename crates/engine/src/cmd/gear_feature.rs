@@ -197,7 +197,9 @@ fn fresh(s: &Session, bases: &[String], own: Option<u64>) -> Vec<String> {
 /// The set's assembly as its bodies stand: one member per rigid member.
 fn rigid_plan(plan: &Plan) -> Plan {
     let rigid = solid::members(plan);
-    Plan { assembly: solid::assembly(plan, &rigid), ..plan.clone() }
+    let mut out = plan.clone();
+    out.assembly = solid::assembly(plan, &rigid);
+    out
 }
 
 /// The folder an assembled set's feature, component transfers and joints go in (one entry in

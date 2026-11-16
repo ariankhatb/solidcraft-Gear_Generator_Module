@@ -819,7 +819,7 @@ pub fn for_set(set: &solidcraft_engine::schema::gear::GearSet) -> Gear {
     }
     g.operation = r.get("operation").and_then(Value::as_str).and_then(|o| OPS.iter().position(|x| *x == o)).unwrap_or(0);
     g.cut_keep_out = r.get("keep_out_cuts").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
-    g.driver = r.get("driver").and_then(Value::as_u64).map_or(0, |d| d as usize);
+    g.driver = r.get("assembly_driver").and_then(Value::as_u64).map_or(0, |d| (d as usize).saturating_sub(1));
     g.generate_shafts = r.get("shafts").and_then(|v| v.get("generate")).and_then(Value::as_bool).unwrap_or(true);
     for o in r.get("shafts").and_then(|v| v.get("overrides")).and_then(Value::as_array).into_iter().flatten() {
         if let Some(i) = o.get("index").and_then(Value::as_u64) {
@@ -941,7 +941,7 @@ fn settings(app: &SolveApp, k: &Gear) -> Result<Map<String, Value>, String> {
 /// The keys the dialog's rows own: on an update, one left empty is taken away (back to auto).
 fn owned(k: &Gear) -> Vec<&'static str> {
     let mut keys: Vec<&'static str> = fields(k.gear_kind(), true).iter().chain(ADVANCED.iter()).map(|f| f.key).filter(|key| !key.contains('.')).collect();
-    keys.extend(["assembly", "tooth_curves", "clearance_body", "herringbone", "bore", "bore2", "differential", "shafts", "operation", "targets", "keep_out_cuts", "driver"]);
+    keys.extend(["assembly", "tooth_curves", "clearance_body", "herringbone", "bore", "bore2", "differential", "shafts", "operation", "targets", "keep_out_cuts", "assembly_driver"]);
     keys
 }
 
@@ -1062,8 +1062,9 @@ fn request(app: &SolveApp, k: &Gear, inputs: &[SelInput]) -> Result<Value, Strin
             p.insert("keep_out_cuts".into(), json!(targets));
         }
     }
-    if by_rows(k.gear_kind()) && k.driver > 0 {
-        p.insert("driver".into(), json!(k.driver));
+    // The gear turned (the rest follow it), by its place among the gears (1-based).
+    if by_rows(k.gear_kind()) && k.assembly && k.driver > 0 {
+        p.insert("assembly_driver".into(), json!(k.driver + 1));
     }
     if k.group.is_none() {
         p.retain(|_, v| !v.is_null());
@@ -1332,7 +1333,12 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
             let key = format!("{}@{}", p, app.session.revision);
             if k.calc.as_ref().is_none_or(|(c, _)| *c != key) {
                 let r = app.session.execute("gear.calculate", &p);
-                k.shape = r.as_ref().ok().and_then(|r| r.get("params")).map(shape_of).unwrap_or_default();
+                // The engine's outlines of each gear; the gear crate's schematic of the set where
+                // it gives none (a set read as one drawing).
+                k.shape = match r.as_ref().map(outlines_of) {
+                    Ok(o) if !o.is_empty() => o,
+                    _ => r.as_ref().ok().and_then(|r| r.get("params")).map(shape_of).unwrap_or_default(),
+                };
                 k.members = r.as_ref().map(members_of).unwrap_or_default();
                 k.shafts = r.as_ref().map(shafts_of).unwrap_or_default();
                 k.contacts = r.as_ref().map(contacts_of).unwrap_or_default();
@@ -1394,6 +1400,61 @@ fn flagged(app: &SolveApp, k: &Gear, inputs: &[SelInput], refused: bool) -> Vec<
 
 fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+/// Each gear's outline `gear.calculate` gives (`outlines`): pitch, tip and root circles at its
+/// back and front faces with four lines between the pitch circles; a bevel's pitch cone from
+/// its heel to its toe (towards its apex).
+fn outlines_of(r: &Value) -> Vec<(usize, Vec<[f64; 3]>)> {
+    let p3 = |v: Option<&Value>| -> Option<[f64; 3]> {
+        let a = v?.as_array()?;
+        Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2)?.as_f64()?])
+    };
+    let mut out = Vec::new();
+    for o in r.get("outlines").and_then(Value::as_array).into_iter().flatten() {
+        let (Some(c), Some(ax)) = (p3(o.get("center")), p3(o.get("axis"))) else { continue };
+        let num = |k: &str| o.get(k).and_then(Value::as_f64);
+        let member = o.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let len = (ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2]).sqrt().max(1e-12);
+        let z = ax.map(|v| v / len);
+        let x0 = if z[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+        let x = {
+            let y = cross(z, x0);
+            cross(y, z)
+        };
+        let xl = (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt().max(1e-12);
+        let x = x.map(|v| v / xl);
+        let y = cross(z, x);
+        let at = |r: f64, a: f64, h: f64| [0, 1, 2].map(|i| c[i] + r * (a.cos() * x[i] + a.sin() * y[i]) + h * z[i]);
+        let ring = |r: f64, h: f64| (0..=48).map(|i| at(r, std::f64::consts::TAU * f64::from(i) / 48.0, h)).collect::<Vec<_>>();
+        let fw = num("face_width").unwrap_or(0.0);
+        let pitch = num("pitch_diameter").unwrap_or(0.0) / 2.0;
+        // A bevel: the heel's circles, then the pitch cone to the toe's pitch circle.
+        let toe = num("toe_pitch_diameter").map(|d| d / 2.0);
+        let apex = p3(o.get("apex"));
+        let (h1, r1) = match (toe, apex) {
+            (Some(t), Some(a)) => {
+                let along = [0, 1, 2].map(|i| a[i] - c[i]).iter().zip(z).map(|(d, zz)| d * zz).sum::<f64>();
+                (along * (1.0 - t / pitch.max(1e-9)), t)
+            }
+            _ => (fw, pitch),
+        };
+        for key in ["tip_diameter", "root_diameter"] {
+            if let Some(d) = num(key) {
+                out.push((member, ring(d / 2.0, 0.0)));
+                if toe.is_none() {
+                    out.push((member, ring(d / 2.0, fw)));
+                }
+            }
+        }
+        out.push((member, ring(pitch, 0.0)));
+        out.push((member, ring(r1, h1)));
+        for q in 0..4 {
+            let a = std::f64::consts::FRAC_PI_2 * f64::from(q);
+            out.push((member, vec![at(pitch, a, 0.0), at(r1, a, h1)]));
+        }
+    }
+    out
 }
 
 /// Each mesh's contact `gear.calculate` gives (`contacts`: {a, b} in the world; a point when they

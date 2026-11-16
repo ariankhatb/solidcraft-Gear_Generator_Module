@@ -309,6 +309,7 @@ fn operation_targets_keep_out_and_driver() {
     d.inputs[1].items = vec![body.clone()];
     let Kind::Gear(g) = &mut d.kind else { panic!() };
     g.cut_keep_out = true;
+    g.assembly = true;
     g.driver = 1;
     let c = apply_commands(&app, &d).unwrap();
     let p = &c[0].1;
@@ -319,5 +320,70 @@ fn operation_targets_keep_out_and_driver() {
     };
     assert_eq!(p["targets"], json!([name]));
     assert_eq!(p["keep_out_cuts"], json!([name]));
-    assert_eq!(p["driver"], json!(1));
+    assert_eq!(p["assembly_driver"], json!(2), "the second gear drives (1-based)");
+}
+
+/// The engine's outlines draw each gear without teeth: tip, pitch and root circles at both
+/// faces.
+#[test]
+fn outlines_are_drawn_from_the_engine() {
+    let r = json!({"outlines": [{"index": 0, "center": [0.0, 0.0, 0.0], "axis": [0.0, 0.0, 1.0], "face_width": 10.0, "pitch_diameter": 40.0, "tip_diameter": 44.0, "root_diameter": 35.0}]});
+    let o = outlines_of(&r);
+    // tip ×2, root ×2, pitch ×2, four lines between.
+    assert_eq!(o.len(), 10);
+    let front = &o[5].1;
+    assert!((front[0][2] - 10.0).abs() < 1e-9 && (front[0][0] - 20.0).abs() < 1e-9, "{front:?}");
+}
+
+/// The user's gearbox (a local copy in %TEMP%\geartest\u\GAERBOX.sc, not in the repository):
+/// the picks the dialog would send, read by the engine. Run by hand (`--ignored --nocapture`).
+#[test]
+#[ignore]
+fn the_users_gearbox_reads_sanely() {
+    let path = std::env::temp_dir().join("geartest").join("u").join("GAERBOX.sc");
+    if !path.exists() {
+        return;
+    }
+    let mut app = app();
+    app.session.execute("doc.open", &json!({"path": path})).unwrap();
+    let st = crate::open_meshing::session_world(&app.session);
+    let mut items = Vec::new();
+    for ss in &st.sketches {
+        let name = app.session.doc.feature(ss.feature).map(|f| f.name.clone()).unwrap_or_default();
+        let Ok(gs) = solidcraft_engine::gear_sketch(&app.session, ss.feature) else { continue };
+        for (id, c) in &gs.circles {
+            eprintln!("{name} circle {id} Ø{:.2} at ({:.2}, {:.2})", 2.0 * c.r, c.c.x, c.c.y);
+            let d = (2.0 * c.r * 100.0).round() / 100.0;
+            if [30.0, 15.0, 25.0].contains(&d) {
+                items.push(Sel::SketchCurve { id: id.clone(), sketch: Some(ss.feature) });
+            }
+        }
+        for (id, l) in &gs.lines {
+            eprintln!("{name} line {id} {:.2} long", l.len());
+            if gs.circles.is_empty() {
+                items.push(Sel::SketchCurve { id: id.clone(), sketch: Some(ss.feature) });
+            }
+        }
+    }
+    app.start("gear.create");
+    let mut d = app.dialog.clone().unwrap();
+    d.inputs[0].items = items;
+    let Kind::Gear(g) = &d.kind else { panic!() };
+    for (i, (p, geo)) in rows_now(&app, g, &d.inputs).iter().enumerate() {
+        eprintln!("row {}: {:?} as {}", i + 1, geo, ROLES[p.role].0);
+    }
+    let c = apply_commands(&app, &d).unwrap();
+    eprintln!("request: {}", c[0].1);
+    match app.session.execute("gear.calculate", &c[0].1) {
+        Ok(r) => {
+            for m in members_of(&r).values() {
+                eprintln!("member: {}", member_line(m).0);
+            }
+            for s in shafts_of(&r) {
+                eprintln!("{}", shaft_line(&s));
+            }
+            eprintln!("contacts: {}, outlines: {}", contacts_of(&r).len(), outlines_of(&r).len());
+        }
+        Err(e) => eprintln!("refused: {e}"),
+    }
 }

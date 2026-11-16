@@ -37,10 +37,19 @@ pub struct TrainGear {
     pub helix: f64,
     /// A ring gear (teeth inside, a plain rim outside).
     pub ring: bool,
-    /// Where its back face is along the shafts (mm): compound gears sit on different layers.
+    /// Its sketch plane's place along the shafts (mm): compound gears sit on different planes.
+    /// Its face reaches `face_a` from here along +z and `face_b` back along −z; with neither
+    /// set its back face sits here and its face runs `face` along +z (side A only).
     pub z: f64,
-    /// Its face width (mm; 0: the spec's `face_width`).
+    /// Its face width (mm; 0: the spec's `face_width`), used when `face_a` and `face_b` are
+    /// both 0.
     pub face: f64,
+    /// How far its face reaches each side of its sketch plane (`z`) along its axis (mm): side A
+    /// along the axis (+z: the sketch plane's normal, or a picked shaft line's direction from
+    /// its first point, which the caller turns to +z), side B against it. Both 0: side A only,
+    /// `face` wide, as before sides existed. See [`SidePreset`].
+    pub face_a: f64,
+    pub face_b: f64,
     /// V (herringbone) teeth: two opposite helical halves (needs a helix).
     pub herringbone: bool,
     /// Where it came from: its index in what was read (the drawing's circles, a selection).
@@ -48,9 +57,84 @@ pub struct TrainGear {
 }
 
 impl TrainGear {
-    /// Its face width: its own, or `spec`'s.
+    /// Whether its face sides are set (`face_a` or `face_b` over 0).
+    pub fn has_sides(&self) -> bool {
+        self.face_a > 0.0 || self.face_b > 0.0
+    }
+
+    /// Its face width: its sides' sum, else its own, else `spec`'s.
     pub fn face_of(&self, spec: &Spec) -> f64 {
-        if self.face > 0.0 { self.face } else { spec.face_width }
+        if self.has_sides() {
+            self.face_a + self.face_b
+        } else if self.face > 0.0 {
+            self.face
+        } else {
+            spec.face_width
+        }
+    }
+
+    /// How far its face reaches each side of its sketch plane: (side A along +z, side B along
+    /// −z). With no sides set: all on side A.
+    pub fn sides_of(&self, spec: &Spec) -> (f64, f64) {
+        if self.has_sides() { (self.face_a, self.face_b) } else { (self.face_of(spec), 0.0) }
+    }
+
+    /// Where its face runs along the shafts (mm): (back face, front face), `z − face_b` to
+    /// `z + face_a`.
+    pub fn span_of(&self, spec: &Spec) -> (f64, f64) {
+        let (a, b) = self.sides_of(spec);
+        (self.z - b, self.z + a)
+    }
+}
+
+/// Which side of its sketch plane a gear's face extends ([`TrainGear::face_a`] and `face_b`):
+/// side A is along the gear's axis (the sketch plane's normal for a circle, or a picked shaft
+/// line's direction from its first point), side B against it.
+///
+/// Bevel, hypoid and worm sets keep their own face rules (`Spec::face_width2` and
+/// `face_offset2` place the second member's face along its cone or axis); sides would map there
+/// as a shift of each member's face along its own axis by `(a − b) / 2` from where those
+/// planners put it, which they don't take yet.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SidePreset {
+    /// Half the face each side: a = b = width / 2.
+    Symmetric,
+    /// All on side A (the face starts on the sketch plane and runs along the axis): the default.
+    AOnly,
+    /// All on side B (the face ends on the sketch plane).
+    BOnly,
+    /// Its own reach each side (mm); the width is `a + b`.
+    Custom { a: f64, b: f64 },
+}
+
+impl SidePreset {
+    /// (side A, side B) for a face `width` wide (a custom split keeps its own).
+    pub fn sides(self, width: f64) -> (f64, f64) {
+        match self {
+            SidePreset::Symmetric => (width / 2.0, width / 2.0),
+            SidePreset::AOnly => (width, 0.0),
+            SidePreset::BOnly => (0.0, width),
+            SidePreset::Custom { a, b } => (a, b),
+        }
+    }
+
+    /// The face width it fixes: a custom split's `a + b`; the presets take the gear's width.
+    pub fn width(self) -> Option<f64> {
+        match self {
+            SidePreset::Custom { a, b } => Some(a + b),
+            _ => None,
+        }
+    }
+
+    /// The same sides seen from the other end of the axis (for a gear whose own axis points
+    /// along −z of the train's frame): A and B swapped.
+    pub fn swapped(self) -> SidePreset {
+        match self {
+            SidePreset::AOnly => SidePreset::BOnly,
+            SidePreset::BOnly => SidePreset::AOnly,
+            SidePreset::Custom { a, b } => SidePreset::Custom { a: b, b: a },
+            SidePreset::Symmetric => SidePreset::Symmetric,
+        }
     }
 }
 
@@ -195,6 +279,9 @@ pub fn check(t: &Train) -> Result<(), String> {
         if !(g.face.is_finite() && g.face >= 0.0) {
             return Err(format!("{w}: face width can't be negative"));
         }
+        if !(g.face_a.is_finite() && g.face_b.is_finite() && g.face_a >= 0.0 && g.face_b >= 0.0) {
+            return Err(format!("{w}: its face sides (how far the face reaches each side of its sketch plane) can't be negative"));
+        }
         if !g.center.is_finite() || !g.z.is_finite() {
             return Err(format!("{w}: its place must be numbers"));
         }
@@ -227,9 +314,6 @@ pub fn check(t: &Train) -> Result<(), String> {
                 if (ga.module - gb.module).abs() > 1e-9 * ga.module {
                     return Err(format!("{pair} mesh but have different modules ({} and {}): meshing gears share one module", mm(ga.module), mm(gb.module)));
                 }
-                if (ga.z - gb.z).abs() > 1e-9 {
-                    return Err(format!("{pair} mesh but sit on different layers"));
-                }
                 let same_hand = l.kind == LinkKind::Internal;
                 let want = if same_hand { ga.helix } else { -ga.helix };
                 if (gb.helix - want).abs() > 1e-9 {
@@ -243,9 +327,6 @@ pub fn check(t: &Train) -> Result<(), String> {
             LinkKind::Compound => {
                 if ga.center.dist(gb.center) > 1e-6 * ga.module.max(gb.module) {
                     return Err(format!("{pair} share a shaft: their centres must coincide"));
-                }
-                if (ga.z - gb.z).abs() < 1e-9 {
-                    return Err(format!("{pair} share a shaft on the same layer: one must sit beside the other along the shaft"));
                 }
             }
         }
@@ -299,12 +380,74 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
     }
     let n = t.gears.len();
     let faces: Vec<f64> = t.gears.iter().map(|g| g.face_of(s)).collect();
-    // A mesh's face: where both gears' faces overlap (they share their back face's place).
-    let mesh_face = |l: &TrainLink| faces[l.a].min(faces[l.b]);
+    // Where each face runs along the shafts: its back face (`lo`, where its body starts) and its
+    // front face (`hi`).
+    let spans: Vec<(f64, f64)> = t.gears.iter().map(|g| g.span_of(s)).collect();
+    let lo: Vec<f64> = spans.iter().map(|s| s.0).collect();
+    let shared = |i: usize, j: usize| spans[i].1.min(spans[j].1) - spans[i].0.max(spans[j].0);
+    let span_text = |i: usize| format!("gear {} runs {} to {} mm", i + 1, mm(spans[i].0), mm(spans[i].1));
+    // Meshing gears must share face along the shafts; gears on one shaft must not.
+    for l in &t.links {
+        let (a, b) = (l.a, l.b);
+        let both = shared(a, b);
+        match l.kind {
+            LinkKind::Compound if both > 1e-9 => {
+                p.refuse(format!(
+                    "gears {} and {} share a shaft but their faces overlap along it by {} mm ({}, {}): move one along the shaft, or put one's face on side A and the other's on side B",
+                    a + 1,
+                    b + 1,
+                    mm(both),
+                    span_text(a),
+                    span_text(b)
+                ));
+                return;
+            }
+            LinkKind::Compound => {}
+            _ if both <= 1e-9 => {
+                p.refuse(format!(
+                    "gears {} and {} mesh but their faces don't overlap along the shafts ({}, {}): put both on one sketch plane, or change their face sides (side A, side B, symmetric) so the faces meet",
+                    a + 1,
+                    b + 1,
+                    span_text(a),
+                    span_text(b)
+                ));
+                return;
+            }
+            _ => {
+                let narrow = faces[a].min(faces[b]);
+                if both < narrow - 1e-9 {
+                    p.warn(format!(
+                        "gears {} and {} share only {} mm of face, less than the narrower gear's {} mm: the mesh carries the load on {} mm; line their face sides up to use the whole face",
+                        a + 1,
+                        b + 1,
+                        mm(both),
+                        mm(narrow),
+                        mm(both)
+                    ));
+                }
+            }
+        }
+    }
+    // A mesh's face: where both gears' faces overlap.
+    let mesh_face = |l: &TrainLink| shared(l.a, l.b).max(0.0);
     let motion = t.motion();
     let herring = s.kind == Kind::Herringbone || s.herringbone;
     if (herring || t.gears.iter().any(|g| g.herringbone)) && t.gears.iter().all(|g| g.helix == 0.0) {
         p.warn("herringbone needs a helix angle: built with straight teeth");
+    }
+    // V teeth turn back at mid face: meshing V's must have their apexes level.
+    for l in t.links.iter().filter(|l| l.kind != LinkKind::Compound) {
+        let (ga, gb) = (&t.gears[l.a], &t.gears[l.b]);
+        let v = |g: &TrainGear| (herring || g.herringbone) && g.helix != 0.0;
+        let mid = |i: usize| (spans[i].0 + spans[i].1) / 2.0;
+        if (v(ga) || v(gb)) && (mid(l.a) - mid(l.b)).abs() > 1e-6 {
+            p.warn(format!(
+                "gears {} and {}: herringbone teeth mesh only with their V's apexes level, and their faces' mid planes are {} mm apart; give them the same face sides and width",
+                l.a + 1,
+                l.b + 1,
+                mm((mid(l.a) - mid(l.b)).abs())
+            ));
+        }
     }
     // Each gear's spec and involute; shifted meshes keep the basic rack's tip clearance (as a
     // pair's): every gear's tips are shortened by the most any of its meshes asks.
@@ -462,6 +605,10 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
     let mut flanks: Vec<Option<ToothFlank>> = vec![None; n];
     let mut rims = vec![(0.0f64, 0.0f64); n];
     let mut built = vec![None; n];
+    // Helical teeth turn along the shafts: a gear whose face starts elsewhere along them than its
+    // group's first gear's is turned by the lead over the difference, so the meshes worked out
+    // on one plane hold at every plane (the preview outlines stay on that plane).
+    let lead = |i: usize| gs[i].helix.tan() / gs[i].r() * (lo[i] - lo[motion.group[i]]);
     for i in 0..n {
         let w = who(i);
         let tg = &t.gears[i];
@@ -479,7 +626,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
             rims[i] = (sf.rf, outer_r);
             p.shapes.push(crate::plan::MemberShape {
                 member: i,
-                center: Frame::at(s.origin).world([tg.center.x, tg.center.y, tg.z]),
+                center: Frame::at(s.origin).world([tg.center.x, tg.center.y, lo[i]]),
                 axis: [0.0, 0.0, 1.0],
                 face: faces[i],
                 pitch_diameter: 2.0 * ring.gear.r(),
@@ -490,9 +637,14 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
             });
             if wanted(s, (i + 1).min(255) as u8) {
                 let face = faces[i];
-                let mut steps = super::tooth_steps(region.clone(), face, twist_for(&ring.gear, face), (herring || tg.herringbone) && tg.helix != 0.0, super::Op::New);
+                let region = if lead(i) == 0.0 {
+                    region.clone()
+                } else {
+                    Region { outer: region.outer.clone(), holes: vec![teeth_outline(&sf, tg.teeth, phase[i] + lead(i) + PI / f64::from(tg.teeth))] }
+                };
+                let mut steps = super::tooth_steps(region, face, twist_for(&ring.gear, face), (herring || tg.herringbone) && tg.helix != 0.0, super::Op::New);
                 crate::body::ring_chamfers(sg, sf.rf, outer_r, face, &mut steps, p, &w);
-                built[i] = Some(Body { name: name(s, &format!("Ring gear {} z{}", i + 1, tg.teeth)), frame: Frame::at(s.origin).shifted([tg.center.x, tg.center.y, tg.z]), steps });
+                built[i] = Some(Body { name: name(s, &format!("Ring gear {} z{}", i + 1, tg.teeth)), frame: Frame::at(s.origin).shifted([tg.center.x, tg.center.y, lo[i]]), steps });
             }
             outlines.push(region);
         } else {
@@ -507,7 +659,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
             flanks[i] = Some(f.clone());
             p.shapes.push(crate::plan::MemberShape {
                 member: i,
-                center: Frame::at(s.origin).world([tg.center.x, tg.center.y, tg.z]),
+                center: Frame::at(s.origin).world([tg.center.x, tg.center.y, lo[i]]),
                 axis: [0.0, 0.0, 1.0],
                 face: faces[i],
                 pitch_diameter: 2.0 * g.r(),
@@ -518,9 +670,9 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
             });
             if wanted(s, (i + 1).min(255) as u8) {
                 let face = faces[i];
-                let mut steps = crate::body::tooth_body(sg, g, &f, phase[i], face, (herring || tg.herringbone) && tg.helix != 0.0, p, &w);
+                let mut steps = crate::body::tooth_body(sg, g, &f, phase[i] + lead(i), face, (herring || tg.herringbone) && tg.helix != 0.0, p, &w);
                 hub_steps(sg, if i == 0 { &sg.bore } else { &sg.bore2 }, f.rf - s.elephant_foot, face, &mut steps, p, &w);
-                built[i] = Some(Body { name: name(s, &format!("Gear {} z{}", i + 1, tg.teeth)), frame: Frame::at(s.origin).shifted([tg.center.x, tg.center.y, tg.z]), steps });
+                built[i] = Some(Body { name: name(s, &format!("Gear {} z{}", i + 1, tg.teeth)), frame: Frame::at(s.origin).shifted([tg.center.x, tg.center.y, lo[i]]), steps });
             }
             outlines.push(with_bore(Region { outer: vec![o], holes: vec![] }, bore));
         }
@@ -529,8 +681,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
     let meshing = |i: usize, j: usize| t.links.iter().any(|l| (l.a == i && l.b == j) || (l.a == j && l.b == i));
     for i in 0..n {
         for j in i + 1..n {
-            let (zi, zj) = (t.gears[i].z, t.gears[j].z);
-            if meshing(i, j) || zi + faces[i] <= zj || zj + faces[j] <= zi {
+            if meshing(i, j) || shared(i, j) <= 1e-9 {
                 continue;
             }
             if let Some(by) = overlap(&t.gears[i], rims[i], &t.gears[j], rims[j]) {
@@ -583,7 +734,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
     // Shafts must clear the gears they don't carry.
     for (k, sh) in t.shafts.iter().enumerate() {
         for (i, g) in t.gears.iter().enumerate() {
-            if sh.gears.contains(&i) || g.z + faces[i] <= sh.from || sh.to <= g.z {
+            if sh.gears.contains(&i) || spans[i].1 <= sh.from || sh.to <= spans[i].0 {
                 continue;
             }
             let bar = TrainGear { center: sh.center, ring: false, ..g.clone() };
@@ -612,12 +763,12 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
             }
             continue;
         }
-        let base = shaft.map_or_else(|| gears.iter().map(|i| t.gears[*i].z).fold(f64::INFINITY, f64::min), |sh| sh.from);
+        let base = shaft.map_or_else(|| gears.iter().map(|i| lo[*i]).fold(f64::INFINITY, f64::min), |sh| sh.from);
         let c = t.gears[gears[0]].center;
         let mut steps = Vec::new();
         for &i in &gears {
             let b = built[i].take().unwrap_or_else(|| unreachable!());
-            let dz = t.gears[i].z - base;
+            let dz = lo[i] - base;
             for st in b.steps {
                 let mut st = shifted(st, dz);
                 if !steps.is_empty() {
@@ -659,12 +810,12 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
         // Outside: r_a from a towards b; inside a ring (a inside b): r_a from a, away from b.
         let u = d * (1.0 / len);
         let q = if l.kind == LinkKind::Internal { ga.center - u * ra } else { ga.center + u * ra };
-        let lo = ga.z.max(gb.z);
-        let hi = (ga.z + faces[l.a]).min(gb.z + faces[l.b]).max(lo);
+        let from = spans[l.a].0.max(spans[l.b].0);
+        let to = spans[l.a].1.min(spans[l.b].1).max(from);
         let at = |z: f64| Frame::at(s.origin).world([q.x, q.y, z]);
-        p.contacts.push(crate::plan::Contact { a: l.a, b: l.b, from: at(lo), to: at(hi) });
+        p.contacts.push(crate::plan::Contact { a: l.a, b: l.b, from: at(from), to: at(to) });
     }
-    let (members, clusters) = set_members(t, &faces, &body);
+    let (members, clusters) = set_members(t, s, &body);
     p.members = members;
     p.clusters = clusters;
     for (i, region) in outlines.into_iter().enumerate() {
@@ -847,7 +998,7 @@ pub(crate) fn set_new_to_join(st: &mut super::Step) {
 
 /// The train's members for [`Plan::members`] (one per gear: its numbers, meshes and cluster)
 /// and its clusters (gears on one shaft, joined as one part).
-fn set_members(t: &Train, faces: &[f64], body: &[Option<usize>]) -> (Vec<crate::plan::SetMember>, Vec<Vec<usize>>) {
+fn set_members(t: &Train, s: &Spec, body: &[Option<usize>]) -> (Vec<crate::plan::SetMember>, Vec<Vec<usize>>) {
     let n = t.gears.len();
     let mut cluster: Vec<Option<usize>> = vec![None; n];
     let mut clusters: Vec<Vec<usize>> = Vec::new();
@@ -880,7 +1031,9 @@ fn set_members(t: &Train, faces: &[f64], body: &[Option<usize>]) -> (Vec<crate::
             module: g.module,
             teeth: g.teeth,
             pitch_diameter: g.module * f64::from(g.teeth) / g.helix.to_radians().cos(),
-            face_width: faces[i],
+            face_width: g.face_of(s),
+            face_a: g.sides_of(s).0,
+            face_b: g.sides_of(s).1,
             ring: g.ring,
             meshes_with: t.links_of(i).filter(|(l, _)| t.links[*l].kind != LinkKind::Compound).map(|(_, j)| j).collect(),
             cluster: cluster[i],

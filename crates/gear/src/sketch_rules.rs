@@ -40,7 +40,7 @@ use std::f64::consts::PI;
 
 use crate::axes::{Axis, MODULES, MODULES_2};
 use crate::geom::V2;
-use crate::plan::{Frame, Kind, Spec};
+use crate::plan::{Frame, Kind, SidePreset, Spec};
 
 /// A circle of the sketch (its plane's coordinates, mm).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1079,12 +1079,17 @@ pub struct TrainCircle {
     /// and V (herringbone) teeth; `None`: the set's. Its meshing group shares them.
     pub helix: Option<f64>,
     pub herringbone: Option<bool>,
+    /// Which side of its sketch plane (`z`) its face extends along the shafts: side A along +z,
+    /// side B along −z (`None`: all on side A, its back face on `z`). A caller whose gear axis
+    /// points along −z turns it round first ([`SidePreset::swapped`]). A custom split fixes the
+    /// face width (`a + b`) over `face_width`.
+    pub sides: Option<SidePreset>,
 }
 
 impl TrainCircle {
     /// A circle with nothing asked of it.
     pub fn of(circle: Circle) -> TrainCircle {
-        TrainCircle { circle, z: None, module: None, teeth: None, face_width: None, ring: None, shaft: false, shaft_span: None, shaft_diameter: None, helix: None, herringbone: None }
+        TrainCircle { circle, z: None, module: None, teeth: None, face_width: None, ring: None, shaft: false, shaft_span: None, shaft_diameter: None, helix: None, herringbone: None, sides: None }
     }
 }
 
@@ -1547,8 +1552,14 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             _ => face,
         }
     };
-    let faces: Vec<f64> = (0..n).map(|i| circles[i].face_width.filter(|f| *f > 0.0).unwrap_or_else(|| auto(i))).collect();
-    let step = faces.iter().copied().fold(face, f64::max) * 1.1 + 1.0;
+    // A custom split of the face fixes its width; the presets take the width worked out here.
+    let faces: Vec<f64> = (0..n).map(|i| circles[i].sides.and_then(SidePreset::width).or(circles[i].face_width).filter(|f| *f > 0.0).unwrap_or_else(|| auto(i))).collect();
+    // Each face's reach (side A along +z, side B along −z) from its sketch plane; nothing asked:
+    // all on side A, as before sides existed.
+    let sides: Vec<(f64, f64)> = (0..n).map(|i| circles[i].sides.unwrap_or(SidePreset::AOnly).sides(faces[i])).collect();
+    // Layers of a flat drawing far enough apart for any gear's side A below any one's side B.
+    let reach = sides.iter().fold((0.0f64, 0.0f64), |m, s| (m.0.max(s.0), m.1.max(s.1)));
+    let step = faces.iter().copied().fold(face, f64::max).max(reach.0 + reach.1) * 1.1 + 1.0;
     let z_of = |i: usize| match circles[group[i]].z {
         Some(z) => z,
         None => f64::from(layer_of(i)) * step,
@@ -1590,6 +1601,8 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             teeth: teeth[i],
             pitch_diameter: module[i] * fs[i] * f64::from(teeth[i]),
             face_width: faces[i],
+            face_a: sides[i].0,
+            face_b: sides[i].1,
             ring: ring[i],
             meshes_with: links.iter().filter(|l| l.kind != LinkKind::Compound).filter_map(|l| if l.a == i { Some(l.b) } else if l.b == i { Some(l.a) } else { None }).collect(),
             cluster: cluster[i],
@@ -1629,7 +1642,7 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             .find_map(|j| circles[*j].shaft_diameter.filter(|d| *d > 0.0))
             .or((base.bore.diameter > 0.0).then_some(base.bore.diameter))
             .unwrap_or_else(|| (root.floor() / 2.0).max(1.0));
-        let (lo, hi) = on.iter().map(|&j| (z_of(j), z_of(j) + faces[j])).fold((f64::INFINITY, f64::NEG_INFINITY), |a, b| (a.0.min(b.0), a.1.max(b.1)));
+        let (lo, hi) = on.iter().map(|&j| (z_of(j) - sides[j].1, z_of(j) + sides[j].0)).fold((f64::INFINITY, f64::NEG_INFINITY), |a, b| (a.0.min(b.0), a.1.max(b.1)));
         let ext = (0.25 * d).max(2.0);
         let (from, to) = on.iter().filter_map(|j| circles[*j].shaft_span).reduce(|a, b| (a.0.min(b.0), a.1.max(b.1))).map(|(a, b)| (a.min(b), a.max(b))).unwrap_or((lo - ext, hi + ext));
         if to - from > 1e-6 {
@@ -1647,6 +1660,8 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             ring: ring[i],
             z: z_of(i),
             face: faces[i],
+            face_a: sides[i].0,
+            face_b: sides[i].1,
             source: i,
         })
         .collect();

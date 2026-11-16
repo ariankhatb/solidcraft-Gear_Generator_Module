@@ -195,7 +195,7 @@ fn rows_show_what_the_engine_worked_out_for_them() {
     let m = members_of(&fixture);
     let (line, bad) = member_line(&m[&0]);
     assert!(!bad);
-    assert_eq!(line, "m 2 · z 20 · Ø40 · b 10 · meshes 2 · on shaft 5 · compound A");
+    assert_eq!(line, "m 2 · z 20 · Ø40 · b 10 · meshes 2 · one body with shaft 5 · compound A");
     let (line, bad) = member_line(&m[&2]);
     assert!(bad && line.contains("circle c3 touches no other gear"), "{line}");
 }
@@ -386,4 +386,68 @@ fn the_users_gearbox_reads_sanely() {
         }
         Err(e) => eprintln!("refused: {e}"),
     }
+}
+
+/// Edit on the Gears feature (its id differs from the set's folder id) opens THAT set, and OK
+/// updates it in place: still one set, the same feature.
+#[test]
+fn editing_the_gears_feature_opens_that_set_and_updates_it_in_place() {
+    let mut app = app();
+    let made = app.session.execute("gear.sketch", &json!({"type": "pair", "gear": {"module": 2, "teeth": 20, "teeth2": 40}})).unwrap();
+    let sk = made["sketch"].as_u64().unwrap();
+    app.session.execute("gear.create", &json!({"type": "spur", "module": 2, "sketch": sk})).unwrap();
+    let set = solidcraft_engine::gear_sets(&app.session).into_iter().next().expect("a set");
+    let feature = set.feature.unwrap_or(set.group);
+    app.edit_feature(feature);
+    let g = gear(&app);
+    assert_eq!(g.group, Some(set.group), "the dialog is on that set");
+    let c = apply_commands(&app, app.dialog.as_ref().unwrap()).unwrap();
+    assert_eq!(c[0].0, "gear.update");
+    run_all(&mut app, c);
+    let after = solidcraft_engine::gear_sets(&app.session);
+    assert_eq!(after.len(), 1, "no new set");
+    assert_eq!(after[0].feature, set.feature, "updated in place");
+}
+
+/// Gear items: Create New makes one of the chosen type, the picks go to it, its checklist says
+/// what it still needs; the graph's wires are the links, a Module Block the shared module.
+#[test]
+fn items_and_the_graph_make_the_request() {
+    use crate::dialogs_gear_graph::{GNode, GearItem, ITEM_TYPES};
+    let mut app = app();
+    let sk = app.session.execute("sketch.create", &json!({"plane": "XY"})).unwrap()["sketch"].as_u64().unwrap();
+    for (id, x, r) in [("c1", 0.0, 20.0), ("c2", 30.0, 10.0), ("c3", 30.0, 5.0)] {
+        app.session.execute("sketch.circle.center", &json!({"center": [x, 0], "radius": r, "id": id})).unwrap();
+    }
+    app.session.execute("sketch.line", &json!({"points": [[30, 0], [30, 40]], "ids": ["s"]})).unwrap();
+    app.session.execute("sketch.finish", &json!({})).unwrap();
+    app.start("gear.create");
+    let mut d = app.dialog.clone().unwrap();
+    let curve = |id: &str| Sel::SketchCurve { id: id.into(), sketch: Some(sk) };
+    let Kind::Gear(g) = &mut d.kind else { panic!() };
+    let compound = ITEM_TYPES.iter().position(|t| t.0 == "compound").unwrap();
+    g.items = vec![GearItem { kind: 0, picks: vec![curve("c1")] }, GearItem { kind: compound, picks: vec![curve("c2")] }];
+    // The compound still needs its second circle and its shaft line.
+    let list = g.items[1].checklist(&app);
+    assert!(list.iter().any(|(_, done)| !done), "{list:?}");
+    g.items[1].picks.extend([curve("c3"), curve("s")]);
+    assert!(g.items[1].checklist(&app).iter().all(|(_, done)| *done));
+    g.graph.accept(0, 1, "mesh");
+    let block = g.graph.0.insert_node(egui::pos2(0.0, 0.0), GNode::Block { module: "2 mm".into() });
+    for i in 0..2 {
+        let n = g.graph.node_of(i);
+        g.graph.0.connect(egui_snarl::OutPinId { node: n, output: 2 }, egui_snarl::InPinId { node: block, input: 0 });
+    }
+    let c = apply_commands(&app, &d).unwrap();
+    let p = &c[0].1;
+    assert_eq!(p["items"][1]["type"], "compound", "{p}");
+    assert_eq!(p["items"][1]["components"].as_array().unwrap().len(), 3);
+    assert_eq!(p["links"], json!([{"a": 0, "b": 1, "kind": "mesh"}]));
+    assert_eq!(p["module_blocks"][0]["module"], json!(2.0));
+    assert_eq!(p["module_blocks"][0]["items"], json!([0, 1]));
+    assert!(p.get("selection").is_none() && p.get("sketch").is_none(), "{p}");
+    // What the engine says of the links, and what it suggests.
+    let (errors, suggested) = crate::dialogs_gear_graph::link_notes(&json!({"links": [{"a": 0, "b": 1, "error": "too far apart to mesh"}], "suggested_links": [{"a": 1, "b": 2, "kind": "mesh"}]}));
+    assert_eq!(errors, ["item 1 – item 2: too far apart to mesh"]);
+    assert_eq!(suggested, [(1, 2, "mesh".to_string())]);
 }

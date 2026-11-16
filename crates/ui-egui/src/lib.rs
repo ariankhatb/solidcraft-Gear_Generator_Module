@@ -54,6 +54,7 @@ pub mod dialogs_part_size;
 pub mod dialogs_parts;
 pub mod dialogs_plastic;
 pub mod dialogs_gear;
+pub mod dialogs_gear_graph;
 pub mod dialogs_save_mesh;
 pub mod dialogs_sheet;
 pub mod dialogs_surface;
@@ -3897,6 +3898,7 @@ impl SolveApp {
         design_properties::show(self, ui.ctx());
         sketch_report::show(self, ui.ctx());
         dialogs_gear::tick(self);
+        dialogs_gear_graph::show(self, ui.ctx());
         material_card_review::show(self, ui.ctx());
         recovery_ui::show(self, ui.ctx());
         mesh_units::show(self, ui.ctx());

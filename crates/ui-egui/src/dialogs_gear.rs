@@ -618,6 +618,15 @@ pub struct Gear {
     /// Circles the engine's refusal is about, in the world, to draw in the warning colour.
     pub flagged: Vec<Vec<[f64; 3]>>,
     pub action: Option<Action>,
+    /// Gear items (each one gear, compound gear or pair, from the geometry picked for it), the
+    /// one picks go to, the type the next one is made as, and the graph linking them.
+    pub items: Vec<crate::dialogs_gear_graph::GearItem>,
+    pub active: Option<usize>,
+    pub new_kind: usize,
+    pub graph: crate::dialogs_gear_graph::Graph,
+    /// What the engine says of the links, and the links the drawing suggests.
+    pub link_errors: Vec<String>,
+    pub suggested: Vec<(usize, usize, String)>,
 }
 
 impl Gear {
@@ -675,6 +684,12 @@ fn new(sketch: Option<u64>) -> Gear {
         shape: Vec::new(),
         flagged: Vec::new(),
         action: None,
+        items: Vec::new(),
+        active: None,
+        new_kind: 0,
+        graph: Default::default(),
+        link_errors: Vec::new(),
+        suggested: Vec::new(),
     }
 }
 
@@ -873,6 +888,8 @@ fn numbers(app: &SolveApp, k: &Gear, rows: &[Field], out: &mut Map<String, Value
             continue;
         }
         let v = app.session.doc.eval(text, fd.kind).map_err(|e| format!("{}: {e}", solidcraft_ui_text::tr_label(fd.label)))?;
+        // (An angle evaluates in radians; gear.create takes degrees.)
+        let v = if matches!(fd.kind, ValueKind::Angle) { v.to_degrees() } else { v };
         put_path(out, fd.key, if fd.whole { json!(v.round().max(0.0) as u64) } else { json!(v) });
     }
     Ok(())
@@ -880,6 +897,20 @@ fn numbers(app: &SolveApp, k: &Gear, rows: &[Field], out: &mut Map<String, Value
 
 /// A selection item's locator (`gear.create`'s `selection`), or `None` for a pick it can't name
 /// (a projected copy: its source's).
+/// `sel` as a `selection` locator (for the items' components).
+pub(crate) fn locate(app: &SolveApp, sel: &Sel) -> Option<Value> {
+    locator(app, sel)
+}
+
+/// Whether `sel` is a circle (true), a line or other curve (false), or neither.
+pub(crate) fn geo_kind(app: &SolveApp, sel: &Sel) -> Option<bool> {
+    match geo(app, sel) {
+        Geo::Circle { .. } => Some(true),
+        Geo::Line { .. } | Geo::Curve { .. } | Geo::Model => Some(false),
+        _ => None,
+    }
+}
+
 fn locator(app: &SolveApp, x: &Sel) -> Option<Value> {
     let src = source_of(app, x);
     let x = src.as_ref().unwrap_or(x);
@@ -985,7 +1016,7 @@ fn selection_of(app: &SolveApp, k: &Gear, rows: &[(Pick, Geo)], module: Option<f
             let a = pick.angle.trim();
             if !a.is_empty() && (helix_role(pick.role) || spiral_role(pick.role)) {
                 let v = app.session.doc.eval(a, ValueKind::Angle).map_err(|e| format!("row {}: angle: {e}", i + 1))?;
-                item[if spiral_role(pick.role) { "spiral_angle" } else { "helix_angle" }] = json!(v);
+                item[if spiral_role(pick.role) { "spiral_angle" } else { "helix_angle" }] = json!(v.to_degrees());
             }
             if pick.v && (helix_role(pick.role) || spiral_role(pick.role)) {
                 item["herringbone"] = json!(true);
@@ -1048,7 +1079,15 @@ fn placement(app: &SolveApp, k: &Gear, inputs: &[SelInput], p: &mut Map<String, 
 /// set's request with the rows laid over it).
 fn request(app: &SolveApp, k: &Gear, inputs: &[SelInput]) -> Result<Value, String> {
     let mut p = settings(app, k)?;
-    placement(app, k, inputs, &mut p)?;
+    if k.items.is_empty() {
+        placement(app, k, inputs, &mut p)?;
+    } else {
+        // Gear items and their links: each its own components.
+        p.extend(crate::dialogs_gear_graph::items_request(app, &k.items, &k.graph)?);
+        for key in ["sketch", "selection", "picks"] {
+            p.insert(key.into(), Value::Null);
+        }
+    }
     let targets: Vec<String> = inputs.get(1).map(|i| i.items.as_slice()).unwrap_or(&[]).iter().filter_map(|x| match x {
         Sel::Body { name } => Some(name.clone()),
         _ => None,
@@ -1167,6 +1206,61 @@ fn value_rows(ui: &mut egui::Ui, k: &mut Gear, rows: &[Field]) -> bool {
     enter
 }
 
+/// The gear items: a type and Create New make one, the picks then go to it (the active item);
+/// each row lists what its type still needs, and is made active or removed with its buttons.
+fn item_rows(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput]) {
+    use crate::dialogs_gear_graph::{GearItem, ITEM_TYPES};
+    let names: Vec<&str> = ITEM_TYPES.iter().map(|t| t.1).collect();
+    ui.horizontal(|ui| {
+        combo(ui, "gear_new_item", &names, &mut k.new_kind);
+        if ui_kit::button(ui, solidcraft_ui_text::tr_label("Create New"), ui_kit::Button::Normal).on_hover_text("A new gear item of this type: then pick what defines it").clicked() {
+            k.items.push(GearItem { kind: k.new_kind, picks: Vec::new() });
+            k.active = Some(k.items.len() - 1);
+            if let Some(input) = inputs.first_mut() {
+                input.items.clear();
+            }
+        }
+    });
+    // The picks made go to the active item.
+    if let (Some(a), Some(input)) = (k.active, inputs.first()) {
+        let taken: Vec<Sel> = k.items.iter().enumerate().filter(|(i, _)| *i != a).flat_map(|(_, it)| it.picks.clone()).collect();
+        if let Some(item) = k.items.get_mut(a) {
+            item.picks = input.items.iter().filter(|s| !taken.contains(s)).cloned().collect();
+        }
+    }
+    let (mut make_active, mut remove) = (None, None);
+    for (i, it) in k.items.iter().enumerate() {
+        let active = k.active == Some(i);
+        ui.horizontal_wrapped(|ui| {
+            let label = format!("Item {} · {}", i + 1, ITEM_TYPES.get(it.kind).map_or("", |t| t.1));
+            if ui.selectable_label(active, egui::RichText::new(label).strong()).on_hover_text("Make it the item picks go to").clicked() {
+                make_active = Some(i);
+            }
+            for (what, done) in it.checklist(app) {
+                let mark = if done { "✓" } else { "○" };
+                ui.label(egui::RichText::new(format!("{mark} {what}")).small().color(if done { ui.visuals().text_color() } else { ui.visuals().warn_fg_color }));
+            }
+            if ui_kit::button(ui, "×", ui_kit::Button::Normal).on_hover_text("Remove the item").clicked() {
+                remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = make_active {
+        k.active = Some(i);
+        if let Some(input) = inputs.first_mut() {
+            input.items = k.items[i].picks.clone();
+        }
+    }
+    if let Some(i) = remove {
+        k.items.remove(i);
+        k.graph.remove_item(i);
+        k.active = k.active.filter(|a| *a != i).map(|a| if a > i { a - 1 } else { a });
+        if let Some(input) = inputs.first_mut() {
+            input.items = k.active.map(|a| k.items[a].picks.clone()).unwrap_or_default();
+        }
+    }
+}
+
 /// The picked rows: number, icon and name (as the input's own chips name them), role, and what
 /// the engine worked out for it; hovering lights the geometry in the view; a row moves up or is
 /// taken out with its buttons.
@@ -1250,7 +1344,10 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
     let gk = k.gear_kind();
     let sketched = sketch_rules::sketched(gk);
     if sketched {
-        enter |= pick_rows(app, ui, k, inputs, hover, labels);
+        item_rows(app, ui, k, inputs);
+        if k.items.is_empty() {
+            enter |= pick_rows(app, ui, k, inputs, hover, labels);
+        }
         if by_rows(gk) {
             let mut size = usize::from(k.by_teeth);
             choice_row(ui, "Size By", "gear_size_by", &mut size, &["Module", "Teeth"]);
@@ -1345,6 +1442,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
                     _ => r.as_ref().ok().and_then(|r| r.get("params")).map(shape_of).unwrap_or_default(),
                 };
                 k.members = r.as_ref().map(members_of).unwrap_or_default();
+                (k.link_errors, k.suggested) = r.as_ref().map(crate::dialogs_gear_graph::link_notes).unwrap_or_default();
                 k.shafts = r.as_ref().map(shafts_of).unwrap_or_default();
                 k.contacts = r.as_ref().map(contacts_of).unwrap_or_default();
                 k.flagged = flagged(app, k, &*inputs, r.is_err());

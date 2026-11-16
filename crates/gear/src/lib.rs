@@ -53,6 +53,7 @@ pub mod drivetrain;
 pub mod equations;
 pub mod geom;
 pub mod hub;
+pub mod items;
 pub mod hypoid;
 pub mod involute;
 pub mod mesh2d;
@@ -118,5 +119,7 @@ mod system_tests;
 mod select_tests;
 #[cfg(test)]
 mod drivetrain_tests;
+#[cfg(test)]
+mod items_tests;
 #[cfg(test)]
 mod solid_tests;

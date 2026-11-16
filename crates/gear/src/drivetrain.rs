@@ -22,7 +22,7 @@ use crate::geom::V2;
 use crate::plan::{Frame, Kind, Spec};
 use crate::select::{Ask as ShaftAsk, Shaft, set_on_shafts};
 use crate::simple::Simple;
-use crate::sketch_rules::{Circle, TOLERANCE, TrainCircle, is_style, size_train};
+use crate::sketch_rules::{Circle, TOLERANCE, TrainCircle, is_style};
 
 type V = [f64; 3];
 
@@ -172,6 +172,17 @@ pub struct Ask {
     /// Its row in the dialog (a selection entry's `index`): it is named "member <row + 1>", and
     /// its gear and body by it. `None`: its place among the items.
     pub row: Option<usize>,
+    /// A gear: how far its face runs each side of its circle's plane (`a` along the axis, `b`
+    /// back; `None` each: half the worked-out width). `None`: all on side a.
+    pub sides: Option<(Option<f64>, Option<f64>)>,
+}
+
+/// Which members mesh and which share a shaft, as linked (indices into the items). Given, the
+/// members mesh and join only where linked (see [`crate::sketch_rules::TrainLinks`]).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Links {
+    pub mesh: Vec<(usize, usize)>,
+    pub shaft: Vec<(usize, usize)>,
 }
 
 /// One member read: its geometry and what is asked of it.
@@ -216,6 +227,10 @@ pub struct Outcome {
     pub error: Option<String>,
     /// The gears in the set's order (its train's gears, `Plan::members`): each one's item.
     pub gears: Vec<usize>,
+    /// With links: members touching or coaxial but not linked, as suggestions ("members 2 and 5
+    /// are tangent: link them?"), and each link's problem (mesh links first, then shaft links).
+    pub suggestions: Vec<String>,
+    pub link_errors: Vec<Option<String>>,
 }
 
 /// Lines this close to parallel (radians) are parallel.
@@ -240,6 +255,11 @@ pub fn read(items: &[Item], style: Option<Kind>, settings: &Simple, base: &Spec)
 /// [`read`], with shafts built on the gears' axes (`shafts`; each shaft or gear may still turn
 /// its own off) or not.
 pub fn read_with(items: &[Item], style: Option<Kind>, settings: &Simple, base: &Spec, shafts: bool) -> Outcome {
+    read_linked(items, None, style, settings, base, shafts)
+}
+
+/// [`read_with`], the meshes and shared shafts as `links` say (`None`: as the geometry touches).
+pub fn read_linked(items: &[Item], links: Option<&Links>, style: Option<Kind>, settings: &Simple, base: &Spec, shafts: bool) -> Outcome {
     let n = items.len();
     let style = style.unwrap_or(Kind::Spur);
     let mut out = Outcome { members: (0..n).map(|i| Member { index: i, ..Member::default() }).collect(), ..Outcome::default() };
@@ -371,7 +391,7 @@ pub fn read_with(items: &[Item], style: Option<Kind>, settings: &Simple, base: &
     let all_parallel = gears.iter().all(|(_, c)| parallel(c.n, n0));
     out.gears = gears.iter().map(|g| g.0).collect();
     if all_parallel {
-        train(items, &gears, &role, style, settings, base, shafts, &mut out, &mut err);
+        train(items, &gears, &role, style, settings, base, shafts, links, &mut out, &mut err);
     } else if gears.len() == 2 {
         crossed(items, &gears, &role, style, settings, base, &mut out, &mut err);
     } else {
@@ -388,7 +408,8 @@ pub fn read_with(items: &[Item], style: Option<Kind>, settings: &Simple, base: &
 
 /// Gears on parallel shafts: a train (see [`read`]).
 #[allow(clippy::too_many_arguments)]
-fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], style: Kind, settings: &Simple, base: &Spec, shafts: bool, out: &mut Outcome, err: &mut [Option<String>]) {
+#[allow(clippy::too_many_arguments)]
+fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], style: Kind, settings: &Simple, base: &Spec, shafts: bool, links: Option<&Links>, out: &mut Outcome, err: &mut [Option<String>]) {
     // One tooth style: the gears' own, all alike.
     let mut chosen: Option<(usize, Kind)> = None;
     for &(i, _) in gears {
@@ -454,10 +475,19 @@ fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], styl
                     _ => None,
                 }),
                 source: Some(a.row.unwrap_or(*i)),
+                sides: a.sides,
             }
         })
         .collect();
-    let sized = size_train(&circles, style, settings, base);
+    // Links between members, as links between the train's gears.
+    let gear_of = |i: usize| gears.iter().position(|g| g.0 == i);
+    let given = links.map(|l| {
+        let map = |list: &[(usize, usize)]| list.iter().map(|&(a, b)| (gear_of(a).unwrap_or(usize::MAX), gear_of(b).unwrap_or(usize::MAX))).collect::<Vec<_>>();
+        crate::sketch_rules::TrainLinks { mesh: map(&l.mesh), shaft: map(&l.shaft) }
+    });
+    let sized = crate::sketch_rules::size_train_linked(&circles, style, settings, base, given.as_ref());
+    out.suggestions = sized.suggestions.iter().map(|w| renamed(w, items, gears)).collect();
+    out.link_errors = sized.link_errors.iter().map(|e| e.as_ref().map(|e| renamed(e, items, gears))).collect();
     out.notes.extend(sized.notes.iter().map(|n| renamed(n, items, gears)));
     for (k, (i, _)) in gears.iter().enumerate() {
         let m = &sized.members[k];

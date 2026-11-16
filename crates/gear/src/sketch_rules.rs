@@ -1097,12 +1097,25 @@ pub struct TrainCircle {
     /// Its row where it came from (a selection's or a dialog's), naming its gear and body;
     /// `None`: its place here.
     pub source: Option<usize>,
+    /// How far its face runs each side of its circle's plane along the axis (`a` the way the
+    /// axis points, `b` back; each `None`: half the worked-out width). `None`: from the plane
+    /// the way the axis points (the face width all on side a).
+    pub sides: Option<(Option<f64>, Option<f64>)>,
+}
+
+/// Which gears mesh and which share a shaft, as linked (indices into the circles): with links
+/// given, circles mesh and join only where linked; touching or coaxial circles not linked are
+/// suggestions, links that don't touch are errors.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct TrainLinks {
+    pub mesh: Vec<(usize, usize)>,
+    pub shaft: Vec<(usize, usize)>,
 }
 
 impl TrainCircle {
     /// A circle with nothing asked of it.
     pub fn of(circle: Circle) -> TrainCircle {
-        TrainCircle { circle, z: None, module: None, teeth: None, face_width: None, ring: None, shaft: false, shaft_span: None, shaft_diameter: None, helix: None, herringbone: None, source: None }
+        TrainCircle { circle, z: None, module: None, teeth: None, face_width: None, ring: None, shaft: false, shaft_span: None, shaft_diameter: None, helix: None, herringbone: None, source: None, sides: None }
     }
 }
 
@@ -1121,6 +1134,11 @@ pub struct Sized {
     pub errors: Vec<Option<String>>,
     /// Why there is no spec: every member's error in one line, or one about the whole train.
     pub error: Option<String>,
+    /// With links given: circles that touch or share an axis but aren't linked ("gears 2 and 5
+    /// are tangent: link them?"), and each link's problem (`link_errors[k]` for the k-th mesh
+    /// link, then the shaft links).
+    pub suggestions: Vec<String>,
+    pub link_errors: Vec<Option<String>>,
 }
 
 /// Sizes the train drawn as `circles` (gear 1 first: the driver) with tooth style `style`
@@ -1141,6 +1159,12 @@ pub struct Sized {
 /// (default `base`'s, or 20° for helical teeth), gear 1's hand (`left_hand`), the module and
 /// `exact`.
 pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple::Simple, base: &Spec) -> Sized {
+    size_train_linked(circles, style, settings, base, None)
+}
+
+/// [`size_train`] with the meshes and shared shafts linked (`given`) instead of read from how
+/// the circles touch (see [`TrainLinks`]).
+pub fn size_train_linked(circles: &[TrainCircle], style: Kind, settings: &crate::simple::Simple, base: &Spec, given: Option<&TrainLinks>) -> Sized {
     use crate::plan::{LinkKind, SetMember, Train, TrainGear, TrainLink};
     let n = circles.len();
     let mut out = Sized { errors: vec![None; n], ..Sized::default() };
@@ -1180,12 +1204,62 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
     // How the circles lie.
     let mut links: Vec<TrainLink> = Vec::new();
     let mut crossing = Vec::new();
+    let mut suggestions = Vec::new();
+    let has = |list: &[(usize, usize)], i: usize, j: usize| list.iter().any(|&(a, b)| (a == i && b == j) || (a == j && b == i));
+    let mut link_errors: Vec<Option<String>> = given.map_or(Vec::new(), |g| vec![None; g.mesh.len() + g.shaft.len()]);
+    if let Some(g) = given {
+        // Each link where its circles are: a mesh must touch (in one plane), a shaft be coaxial.
+        for (k, &(i, j)) in g.mesh.iter().chain(&g.shaft).enumerate() {
+            let shaft = k >= g.mesh.len();
+            let why = if i >= n || j >= n || i == j {
+                Some("it doesn't join two gears of the set".to_string())
+            } else {
+                let (a, b) = (&c[i], &c[j]);
+                let d = a.c.dist(b.c);
+                match (shaft, touch(a, b)) {
+                    (true, Touch::Concentric) if !level(i, j) || !three_d => None,
+                    (true, Touch::Concentric) => Some("they lie in one plane: a shaft joins gears at different places along it".into()),
+                    (true, _) => Some(format!("not on one axis ({} mm apart)", num(d))),
+                    (false, Touch::External | Touch::Internal) if level(i, j) => None,
+                    (false, Touch::External | Touch::Internal) => Some("they aren't in one plane along their axes: a mesh needs them side by side".into()),
+                    (false, _) => Some(format!(
+                        "they don't touch: centres {} mm apart, their radii add up to {} mm (differ by {}); make them tangent, or move one",
+                        num(d),
+                        num(a.r + b.r),
+                        num((a.r - b.r).abs())
+                    )),
+                }
+            };
+            if let Some(w) = why {
+                link_errors[k] = Some(w);
+            }
+        }
+    }
     for i in 0..n {
         for j in i + 1..n {
             if err[i].is_some() || err[j].is_some() {
                 continue;
             }
             let (a, b) = (&c[i], &c[j]);
+            if let Some(g) = given {
+                // Linked: only what the links say.
+                match touch(a, b) {
+                    Touch::Concentric if has(&g.shaft, i, j) => links.push(TrainLink { a: i, b: j, kind: LinkKind::Compound }),
+                    Touch::Concentric if !level(i, j) => suggestions.push(format!("gears {} and {} share an axis: link them by a shaft?", i + 1, j + 1)),
+                    Touch::External | Touch::Internal if level(i, j) && has(&g.mesh, i, j) => {
+                        if touch(a, b) == Touch::External {
+                            links.push(TrainLink { a: i, b: j, kind: LinkKind::External });
+                        } else {
+                            let (inner, ring) = if a.r < b.r { (i, j) } else { (j, i) };
+                            links.push(TrainLink { a: inner, b: ring, kind: LinkKind::Internal });
+                        }
+                    }
+                    Touch::External | Touch::Internal if level(i, j) => suggestions.push(format!("gears {} and {} are tangent: link them?", i + 1, j + 1)),
+                    Touch::Crossing if level(i, j) => crossing.push((i, j)),
+                    _ => {}
+                }
+                continue;
+            }
             match touch(a, b) {
                 Touch::Concentric if level(i, j) && (three_d || near(a.r, b.r, a.r.min(b.r))) => {
                     let e = if near(a.r, b.r, a.r.min(b.r)) {
@@ -1307,8 +1381,8 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             fail(&mut err, j, e);
         }
     }
-    // A gear touching nothing touches no other gear.
-    if n > 1 {
+    // A gear touching nothing meshes with nothing (linked, a gear on its own is its own item).
+    if n > 1 && given.is_none() {
         for i in 0..n {
             if err[i].is_some() || links.iter().any(|l| l.a == i || l.b == i) {
                 continue;
@@ -1613,11 +1687,23 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             _ => own,
         }
     };
-    let faces: Vec<f64> = (0..n).map(|i| circles[i].face_width.filter(|f| *f > 0.0).unwrap_or_else(|| auto(i))).collect();
+    // Each side of its plane: as asked, half the worked-out width where not.
+    let side = |i: usize| -> (f64, f64) {
+        let whole = circles[i].face_width.filter(|f| *f > 0.0).unwrap_or_else(|| auto(i));
+        match circles[i].sides {
+            Some((a, b)) => (a.filter(|v| *v >= 0.0).unwrap_or(whole / 2.0), b.filter(|v| *v >= 0.0).unwrap_or(whole / 2.0)),
+            None => (whole, 0.0),
+        }
+    };
+    let faces: Vec<f64> = (0..n).map(|i| side(i).0 + side(i).1).collect();
+    let behind: Vec<f64> = (0..n).map(|i| side(i).1).collect();
     let step = faces.iter().copied().fold(face, f64::max) * 1.1 + 1.0;
-    let z_of = |i: usize| match circles[group[i]].z {
-        Some(z) => z,
-        None => f64::from(layer_of(i)) * step,
+    let z_of = |i: usize| {
+        let plane = match circles[group[i]].z {
+            Some(z) => z,
+            None => f64::from(layer_of(i)) * step,
+        };
+        plane - behind[i]
     };
     // Clusters: gears on one shaft (compound links), each with two or more.
     let mut cluster: Vec<Option<usize>> = vec![None; n];
@@ -1663,6 +1749,20 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
         })
         .collect();
     out.notes = notes;
+    out.suggestions = suggestions;
+    out.link_errors = link_errors.clone();
+    for (k, e) in link_errors.iter().enumerate() {
+        if let (Some(e), Some(g)) = (e, given) {
+            let (i, j) = g.mesh.iter().chain(&g.shaft).nth(k).copied().unwrap_or((0, 0));
+            let what = if k < g.mesh.len() { "mesh" } else { "shaft" };
+            let text = format!("gears {} and {} ({what} link): {e}", i + 1, j + 1);
+            for x in [i, j] {
+                if x < n {
+                    fail(&mut err, x, text.clone());
+                }
+            }
+        }
+    }
     if err.iter().any(Option::is_some) {
         let mut seen = Vec::new();
         for e in err.iter().flatten() {

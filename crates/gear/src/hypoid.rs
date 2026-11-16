@@ -1309,10 +1309,10 @@ pub(crate) struct PinionFace {
     /// Heights over the pitch cone: above every tip, about the tips at the toe, and under the
     /// roots at the toe and at the heel.
     above: f64,
-    toe_tip: f64,
+
     under: f64,
     heel_under: f64,
-    margin: f64,
+
 }
 
 impl PinionFace {
@@ -1350,10 +1350,8 @@ impl PinionFace {
             sd,
             cd,
             above: 2.0 * depth * scale + d.mmn,
-            toe_tip: 1.3 * (d.ha1 + d.clearance) * toe / d.cone_m1,
             under: under.max(-0.8 * toe * sd / cd),
             heel_under: heel_under.max(-0.8 * heel * sd / cd),
-            margin: 0.25 * d.mmn,
         })
     }
     /// The point `h` over the pitch cone at cone distance `cone`.

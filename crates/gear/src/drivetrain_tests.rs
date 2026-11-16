@@ -71,7 +71,7 @@ fn a_3d_compound_two_circles_on_one_shaft_meshing_two_others() {
     assert!((p.bodies[2].frame.origin[2] - 15.0).abs() < 1e-9 && (p.bodies[2].frame.origin[0] - 85.0).abs() < 1e-9, "{:?}", p.bodies[2].frame);
     assert!((p.shafts[2].length - 20.0).abs() < 1e-9);
     let (z1, z2, z3, z4) = (m[3].teeth.unwrap(), m[4].teeth.unwrap(), m[5].teeth.unwrap(), m[6].teeth.unwrap());
-    let ratio = p.facts.iter().find(|f| f.label == "train ratio gear 1 → gear 4").unwrap().value;
+    let ratio = p.facts.iter().find(|f| f.label == "train ratio gear 4 → gear 7").unwrap().value;
     assert!((ratio - f64::from(z2) / f64::from(z1) * f64::from(z4) / f64::from(z3)).abs() < 1e-12);
 }
 
@@ -337,4 +337,24 @@ fn chevron_bevels_mesh_at_90_and_60_degrees() {
         }
         crate::mesh3d_tests::measure(label, &s).check();
     }
+}
+
+/// Members, gears and bodies are named by the dialog's rows, not by their place in the train:
+/// rows 11 to 19 for the compound drivetrain's nine members.
+#[test]
+fn names_follow_the_rows() {
+    let mut items = compound();
+    for (k, it) in items.iter_mut().enumerate() {
+        it.ask.row = Some(10 + k);
+    }
+    let o = read(&items, None, &Simple { face_width: Some(8.0), ..Simple::default() }, &Spec::default());
+    let p = planned(&o);
+    // The cluster's body: circles at rows 15 and 16 (members 5 and 6 of the items).
+    let names: Vec<&String> = p.bodies.iter().map(|b| &b.name).collect();
+    assert!(names.iter().any(|n| n.starts_with("Gears 15 z") && n.contains(" + 16 z")), "{names:?}");
+    assert!(p.facts.iter().any(|f| f.label == "train ratio gear 14 → gear 17"), "{:?}", p.facts.iter().map(|f| &f.label).collect::<Vec<_>>());
+    // A member's error names its row.
+    items[8].ask.role = Some(Role::Bearing);
+    let o = read(&items, None, &Simple { face_width: Some(8.0), ..Simple::default() }, &Spec::default());
+    assert!(o.members[8].error.as_deref().unwrap_or_default().starts_with("member 19:"), "{:?}", o.members[8].error);
 }

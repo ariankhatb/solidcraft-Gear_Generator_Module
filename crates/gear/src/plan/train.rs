@@ -113,6 +113,10 @@ pub struct Motion {
 }
 
 impl Train {
+    /// Gear `i`'s number for people: its row where it came from (`TrainGear::source`, + 1).
+    pub fn label(&self, i: usize) -> usize {
+        self.gears.get(i).map_or(i, |g| g.source) + 1
+    }
     /// The links of gear `i`, with the gear at the other end.
     fn links_of(&self, i: usize) -> impl Iterator<Item = (usize, usize)> + '_ {
         self.links.iter().enumerate().filter_map(move |(k, l)| if l.a == i { Some((k, l.b)) } else if l.b == i { Some((k, l.a)) } else { None })
@@ -172,6 +176,7 @@ pub fn who(i: usize) -> String {
 /// Checks a train's numbers and structure; the error says which gear or link and why.
 pub fn check(t: &Train) -> Result<(), String> {
     let n = t.gears.len();
+    let lab = |i: usize| t.label(i);
     if n == 0 {
         return Err("a gear train needs at least one gear".into());
     }
@@ -179,7 +184,7 @@ pub fn check(t: &Train) -> Result<(), String> {
         return Err(format!("a gear train takes {MAX_GEARS} gears at most, not {n}"));
     }
     for (i, g) in t.gears.iter().enumerate() {
-        let w = who(i);
+        let w = format!("gear {}", lab(i));
         if !(g.module.is_finite() && g.module > 0.0) {
             return Err(format!("{w}: module must be greater than 0"));
         }
@@ -209,19 +214,19 @@ pub fn check(t: &Train) -> Result<(), String> {
         }
         for &g in &sh.gears {
             if t.gears[g].ring {
-                return Err(format!("{w}: gear {} is a ring gear, which has no shaft through it", g + 1));
+                return Err(format!("{w}: gear {} is a ring gear, which has no shaft through it", lab(g)));
             }
             if t.gears[g].center.dist(sh.center) > 1e-6 * t.gears[g].module.max(1.0) {
-                return Err(format!("{w}: gear {} is not on its axis", g + 1));
+                return Err(format!("{w}: gear {} is not on its axis", lab(g)));
             }
         }
     }
     for l in &t.links {
         if l.a >= n || l.b >= n || l.a == l.b {
-            return Err(format!("a link joins gear {} to gear {}: there are {n} gears", l.a + 1, l.b + 1));
+            return Err(format!("a link joins gear {} to gear {}: there are {n} gears", lab(l.a), lab(l.b)));
         }
         let (ga, gb) = (&t.gears[l.a], &t.gears[l.b]);
-        let pair = format!("gears {} and {}", l.a + 1, l.b + 1);
+        let pair = format!("gears {} and {}", lab(l.a), lab(l.b));
         match l.kind {
             LinkKind::External | LinkKind::Internal => {
                 if (ga.module - gb.module).abs() > 1e-9 * ga.module {
@@ -252,9 +257,9 @@ pub fn check(t: &Train) -> Result<(), String> {
         match l.kind {
             LinkKind::External if ga.ring || gb.ring => {
                 let r = if ga.ring { l.a } else { l.b };
-                return Err(format!("gear {} is a ring gear: gears mesh only inside it, not on its outside", r + 1));
+                return Err(format!("gear {} is a ring gear: gears mesh only inside it, not on its outside", lab(r)));
             }
-            LinkKind::Internal if ga.ring || !gb.ring => return Err(format!("{pair}: gear {} must be the ring and gear {} a gear inside it", l.b + 1, l.a + 1)),
+            LinkKind::Internal if ga.ring || !gb.ring => return Err(format!("{pair}: gear {} must be the ring and gear {} a gear inside it", lab(l.b), lab(l.a))),
             LinkKind::Internal if gb.teeth < ga.teeth + 3 => {
                 return Err(format!("{pair}: the ring needs at least 3 teeth more than the gear inside it ({} and {})", gb.teeth, ga.teeth));
             }
@@ -293,6 +298,8 @@ fn mesh_of(l: &TrainLink, gs: &[Involute], rings: &[Option<Internal>], face: f64
 
 /// Builds the train of `s` (`Spec::train`): bodies, facts, warnings and the preview.
 pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
+    let lab = |i: usize| t.label(i);
+    let who = |i: usize| format!("gear {}", lab(i));
     if let Err(e) = check(t) {
         p.refuse(e);
         return;
@@ -366,8 +373,8 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
         if (drawn - m.center_distance).abs() > 1e-3 * gs[l.a].module {
             p.refuse(format!(
                 "gears {} and {} mesh {} mm apart, but their centres are {} mm apart: move one, or change the teeth or profile shifts",
-                l.a + 1,
-                l.b + 1,
+                lab(l.a),
+                lab(l.b),
                 mm(m.center_distance),
                 mm(drawn)
             ));
@@ -439,8 +446,8 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
         if (want - motion.speed[l.b]).abs() > 1e-9 * want.abs().max(1.0) {
             p.refuse(format!(
                 "gears {} and {} close a loop of the train whose turns don't agree: the train locks (an odd number of outside meshes round a loop can't turn)",
-                l.a + 1,
-                l.b + 1
+                lab(l.a),
+                lab(l.b)
             ));
             return;
         }
@@ -450,8 +457,8 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
             if wrap_period(got - phase[l.b], pitch).abs() > 1e-3 * pitch {
                 p.refuse(format!(
                     "gears {} and {} close a loop of the train whose teeth can't all mesh: the turn round the loop isn't a whole number of teeth, and no shared shaft in the loop is free to turn; change a tooth count or a place",
-                    l.a + 1,
-                    l.b + 1
+                    lab(l.a),
+                    lab(l.b)
                 ));
                 return;
             }
@@ -492,7 +499,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
                 let face = faces[i];
                 let mut steps = super::tooth_steps(region.clone(), face, twist_for(&ring.gear, face), (herring || tg.herringbone) && tg.helix != 0.0, super::Op::New);
                 crate::body::ring_chamfers(sg, sf.rf, outer_r, face, &mut steps, p, &w);
-                built[i] = Some(Body { name: name(s, &format!("Ring gear {} z{}", i + 1, tg.teeth)), frame: Frame::at(s.origin).shifted([tg.center.x, tg.center.y, tg.z]), steps });
+                built[i] = Some(Body { name: name(s, &format!("Ring gear {} z{}", lab(i), tg.teeth)), frame: Frame::at(s.origin).shifted([tg.center.x, tg.center.y, tg.z]), steps });
             }
             outlines.push(region);
         } else {
@@ -520,7 +527,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
                 let face = faces[i];
                 let mut steps = crate::body::tooth_body(sg, g, &f, phase[i], face, (herring || tg.herringbone) && tg.helix != 0.0, p, &w);
                 hub_steps(sg, if i == 0 { &sg.bore } else { &sg.bore2 }, f.rf - s.elephant_foot, face, &mut steps, p, &w);
-                built[i] = Some(Body { name: name(s, &format!("Gear {} z{}", i + 1, tg.teeth)), frame: Frame::at(s.origin).shifted([tg.center.x, tg.center.y, tg.z]), steps });
+                built[i] = Some(Body { name: name(s, &format!("Gear {} z{}", lab(i), tg.teeth)), frame: Frame::at(s.origin).shifted([tg.center.x, tg.center.y, tg.z]), steps });
             }
             outlines.push(with_bore(Region { outer: vec![o], holes: vec![] }, bore));
         }
@@ -536,8 +543,8 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
             if let Some(by) = overlap(&t.gears[i], rims[i], &t.gears[j], rims[j]) {
                 p.refuse(format!(
                     "gears {} and {} overlap by {} mm: they don't mesh (their pitch circles don't touch) but their teeth or rims cross; move them apart or make them touch",
-                    i + 1,
-                    j + 1,
+                    lab(i),
+                    lab(j),
                     mm(by)
                 ));
                 return;
@@ -547,7 +554,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
     // Facts per mesh, then the train's ratios from gear 1.
     for (k, m) in &mut meshes {
         let l = t.links[*k];
-        let pair = format!("gears {}–{}", l.a + 1, l.b + 1);
+        let pair = format!("gears {}–{}", lab(l.a), lab(l.b));
         if l.kind == LinkKind::External {
             if let (Some(fa), Some(fb)) = (&flanks[l.a], &flanks[l.b]) {
                 m.contact_ratio = contact_ratio_external(&gs[l.a], fa, &gs[l.b], fb, m);
@@ -573,12 +580,12 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
     }
     for i in 1..n {
         if motion.group[i] == 0 {
-            p.fact(format!("train ratio gear 1 → gear {}", i + 1), 1.0 / motion.speed[i], Unit::None);
+            p.fact(format!("train ratio gear {} → gear {}", lab(0), lab(i)), 1.0 / motion.speed[i], Unit::None);
         }
     }
-    let loose: Vec<String> = (1..n).filter(|i| motion.group[*i] != 0).map(|i| (i + 1).to_string()).collect();
+    let loose: Vec<String> = (1..n).filter(|i| motion.group[*i] != 0).map(|i| lab(i).to_string()).collect();
     if !loose.is_empty() {
-        p.warn(format!("gear{} {} not driven by gear 1: nothing ties {} to it", if loose.len() > 1 { "s" } else { "" }, loose.join(", "), if loose.len() > 1 { "them" } else { "it" }));
+        p.warn(format!("gear{} {} not driven by gear {}: nothing ties {} to it", if loose.len() > 1 { "s" } else { "" }, loose.join(", "), lab(0), if loose.len() > 1 { "them" } else { "it" }));
     }
     // Shafts must clear the gears they don't carry.
     for (k, sh) in t.shafts.iter().enumerate() {
@@ -588,7 +595,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
             }
             let bar = TrainGear { center: sh.center, ring: false, ..g.clone() };
             if let Some(by) = overlap(&bar, (0.0, sh.diameter / 2.0), g, rims[i]) {
-                p.refuse(format!("shaft {} (Ø{}) runs into gear {} by {} mm: shorten it, or move the gear", k + 1, mm(sh.diameter), i + 1, mm(by)));
+                p.refuse(format!("shaft {} (Ø{}) runs into gear {} by {} mm: shorten it, or move the gear", k + 1, mm(sh.diameter), lab(i), mm(by)));
                 return;
             }
         }
@@ -632,9 +639,9 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
             steps.push(super::Step::Prism { region, z0: 0.0, height: sh.to - sh.from, twist: 0.0, op: super::Op::Join });
         }
         let label = if gears.len() == 1 {
-            format!("Gear {} z{}", gears[0] + 1, t.gears[gears[0]].teeth)
+            format!("Gear {} z{}", lab(gears[0]), t.gears[gears[0]].teeth)
         } else {
-            format!("Gears {}", gears.iter().map(|i| format!("{} z{}", i + 1, t.gears[*i].teeth)).collect::<Vec<_>>().join(" + "))
+            format!("Gears {}", gears.iter().map(|i| format!("{} z{}", lab(*i), t.gears[*i].teeth)).collect::<Vec<_>>().join(" + "))
         };
         let label = if let Some(sh) = shaft { format!("{label} on shaft Ø{}", mm(sh.diameter)) } else { label };
         let index = p.bodies.len();

@@ -1094,12 +1094,15 @@ pub struct TrainCircle {
     /// and V (herringbone) teeth; `None`: the set's. Its meshing group shares them.
     pub helix: Option<f64>,
     pub herringbone: Option<bool>,
+    /// Its row where it came from (a selection's or a dialog's), naming its gear and body;
+    /// `None`: its place here.
+    pub source: Option<usize>,
 }
 
 impl TrainCircle {
     /// A circle with nothing asked of it.
     pub fn of(circle: Circle) -> TrainCircle {
-        TrainCircle { circle, z: None, module: None, teeth: None, face_width: None, ring: None, shaft: false, shaft_span: None, shaft_diameter: None, helix: None, herringbone: None }
+        TrainCircle { circle, z: None, module: None, teeth: None, face_width: None, ring: None, shaft: false, shaft_span: None, shaft_diameter: None, helix: None, herringbone: None, source: None }
     }
 }
 
@@ -1710,7 +1713,7 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             ring: ring[i],
             z: z_of(i),
             face: faces[i],
-            source: i,
+            source: circles[i].source.unwrap_or(i),
         })
         .collect();
     out.spec = Some(Spec {

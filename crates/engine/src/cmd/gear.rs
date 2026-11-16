@@ -1894,6 +1894,7 @@ fn from_selection(s: &dyn Reads, cmd: &str, p: &GearParams, items: &[GearSelecti
                 herringbone: it.herringbone,
                 shaft_body: own.and_then(|o| o.enabled),
                 shaft_diameter: own.and_then(|o| o.diameter),
+                row: Some(it.index.unwrap_or(i)),
             },
         });
     }

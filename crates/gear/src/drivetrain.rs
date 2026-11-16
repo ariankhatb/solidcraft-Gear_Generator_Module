@@ -169,6 +169,9 @@ pub struct Ask {
     /// (default from the smallest gear's root).
     pub shaft_body: Option<bool>,
     pub shaft_diameter: Option<f64>,
+    /// Its row in the dialog (a selection entry's `index`): it is named "member <row + 1>", and
+    /// its gear and body by it. `None`: its place among the items.
+    pub row: Option<usize>,
 }
 
 /// One member read: its geometry and what is asked of it.
@@ -223,8 +226,8 @@ fn parallel(a: V, b: V) -> bool {
 }
 
 /// A member's name for people: its place in what was read.
-fn who(_items: &[Item], i: usize) -> String {
-    format!("member {}", i + 1)
+fn who(items: &[Item], i: usize) -> String {
+    format!("member {}", items.get(i).and_then(|it| it.ask.row).unwrap_or(i) + 1)
 }
 
 /// Reads the items as one drivetrain (see the module docs). `style` is the tooth style of gears
@@ -450,6 +453,7 @@ fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], styl
                     Some(Role::Gear(Kind::Herringbone)) if a.role.is_some() => Some(true),
                     _ => None,
                 }),
+                source: Some(a.row.unwrap_or(*i)),
             }
         })
         .collect();

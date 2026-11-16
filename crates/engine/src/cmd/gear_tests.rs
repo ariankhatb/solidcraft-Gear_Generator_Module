@@ -1179,9 +1179,12 @@ fn an_update_keeps_the_assemblys_components_joints_and_links_in_place() {
         no_errors(&s);
         assert_eq!(counts(&s), before, "{u}");
         assert_eq!(ids(&u["assembly"]), made, "{u}");
+        // Gear 1 turned on by 10° (the link keeps gear 2 where it was when it was redefined):
+        // gear 2 turns on by −10·20/teeth2.
         let j = member_joints(&u);
-        let got = drive_and_read(&mut s, j[0].unwrap(), 40.0, j[1].unwrap());
-        assert!((got + 40.0 * 20.0 / teeth2).abs() < 1e-6, "{got} for {teeth2} teeth: {u}");
+        let (a0, b0) = (joint_value(&mut s, j[0].unwrap()), joint_value(&mut s, j[1].unwrap()));
+        let got = drive_and_read(&mut s, j[0].unwrap(), a0 + 10.0, j[1].unwrap()) - b0;
+        assert!((got + 10.0 * 20.0 / teeth2).abs() < 1e-6, "{got} for {teeth2} teeth: {u}");
     }
     // Taking the assembly away leaves the gears as bodies again.
     run(&mut s, "gear.update", json!({"group": group, "assembly": null}));
@@ -1566,13 +1569,14 @@ fn an_internal_mesh_turns_the_ring_the_same_way() {
     let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 60.0, "ring"), circle(40.0, 0.0, 20.0, "pinion")]);
     let r = assembled(&mut s, json!({"sketch": sk, "type": "spur", "module": 2, "face_width": 6, "assembly": true}));
     let (ring, pinion) = (member_on(&r, 0.0, 0.0), member_on(&r, 40.0, 0.0));
-    eprintln!("GATE internal assembly: {}", r["assembly"]);
-    eprintln!("GATE internal members: {}", r["members"]);
+    // Gear 1 (the ring, the drawing's first) drives: by 10°, the pinion turns +30° with it.
     let j = member_joints(&r);
-    run(&mut s, "joint.drive", json!({"joint": j[pinion].unwrap(), "value": 30}));
-    let got = turned_about(&s, &r, ring);
-    eprintln!("GATE internal, pinion z20 by 30°: ring z60 expected +10°, measured {got:+.6}°");
-    assert!(same_angle(got, 10.0), "{got}");
+    assert_eq!(r["assembly"]["driver"], ring + 1);
+    run(&mut s, "joint.drive", json!({"joint": j[ring].unwrap(), "value": 10}));
+    let got = turned_about(&s, &r, pinion);
+    eprintln!("GATE internal, ring z60 by 10°: pinion z20 expected +30°, measured {got:+.6}°");
+    assert!(same_angle(got, 30.0), "{got}");
+    assert!(same_angle(turned_about(&s, &r, ring), 10.0));
 }
 
 /// Gate: bevels at 90° and 70°, gear 1 z20 by 30°: gear 2 z30 turns −20° about its own axis

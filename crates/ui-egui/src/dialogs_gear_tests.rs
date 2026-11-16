@@ -692,7 +692,11 @@ fn the_ratio_readout_from_two_gears() {
     pick_for_ratio(&mut k, (3, 0));
     assert_eq!(k.ratio_pick, [Some((3, 0)), None]);
     assert_eq!(gear_ref((1, 0)), json!({"item": "B", "gear": 0}));
-    let r = json!({"ratio": 3.5, "direction": "opposite", "path": [{"item": "A", "gear": 0}, {"item": "B", "gear": 0}, {"item": "B", "gear": 1}, {"item": "C", "gear": 0}], "efficiency": 0.9604, "rack_mm_per_rev": 62.832});
+    // As gear.ratio replies (schema GearRatioResult): steps with their end gears.
+    let step = |f: (&str, u64), t: (&str, u64), kind: &str| {
+        json!({"from": "x", "to": "y", "from_gear": {"item": f.0, "gear": f.1}, "to_gear": {"item": t.0, "gear": t.1}, "kind": kind, "ratio": 1.0, "efficiency": 0.98})
+    };
+    let r = json!({"ratio": 3.5, "direction": "opposite", "path": [step(("A", 0), ("B", 0), "spur"), step(("B", 0), ("B", 1), "shaft"), step(("B", 1), ("C", 0), "spur")], "efficiency": 0.9604, "mm_per_rev": 62.832});
     let lines = ratio_lines(&r, &|v: f64| fmt(v));
     assert_eq!(lines[0], ("Ratio".to_string(), "3.50 : 1, opposite direction".to_string()));
     assert_eq!(lines[1], ("Path".to_string(), "1·1 → 2·1 → 2·2 → 3·1".to_string()));
@@ -702,4 +706,52 @@ fn the_ratio_readout_from_two_gears() {
     let two = [Sel::Body { name: "A".into() }, Sel::Body { name: "B".into() }];
     assert_eq!(ratio_bodies(&app.session, &two), None);
     assert_eq!(ratio_bodies(&app.session, &two[..1]), None);
+}
+
+/// The contract between the dialog and the engine: what the dialog sends for its items, links,
+/// module blocks and drive reads as the engine's `GearParams` (every name known), `gear.calculate`
+/// answers it per gear and per link, and `gear.ratio` takes the same request with two {item, gear}
+/// ends and its reply is the readout.
+#[test]
+fn the_dialogs_request_is_the_engines_schema() {
+    use crate::dialogs_gear_graph::{GearItem, GearSettings, Suggested, gear_replies};
+    use solidcraft_gear::items::ItemKind;
+    let mut app = app();
+    let (s1, s2, s3) = items_drawing(&mut app);
+    let at = |sk: u64, id: &str| Sel::SketchCurve { id: id.into(), sketch: Some(sk) };
+    app.start("gear.create");
+    let mut d = app.dialog.clone().unwrap();
+    let Kind::Gear(g) = &mut d.kind else { panic!() };
+    g.items = vec![
+        GearItem { picks: vec![at(s1, "c1")], ..GearItem::new(ItemKind::Spur) },
+        GearItem { picks: vec![at(s1, "c2"), at(s3, "s"), at(s2, "c3")], ..GearItem::new(ItemKind::Compound) },
+    ];
+    g.items[0].gears = vec![GearSettings { face_preset: 1, face_a: "6 mm".into(), ..Default::default() }];
+    g.graph.accept(&Suggested { a: 0, a_gear: 0, b: 1, b_gear: 0, kind: "mesh".into() });
+    let block = g.graph.add_block("1 mm");
+    for i in [0usize, 1] {
+        g.graph.put_in_block(block, i);
+    }
+    g.drive_item = Some((0, 0));
+    g.rpm = "1000".into();
+    g.torque = "2".into();
+    g.ratio_pick = [Some((0, 0)), Some((1, 1))];
+    let p = apply_commands(&app, &d).unwrap()[0].1.clone();
+    let parsed: Result<solidcraft_engine::schema::gear::GearParams, _> = serde_json::from_value(p.clone());
+    assert!(parsed.is_ok(), "the engine reads every name the dialog sends: {:?}\n{p}", parsed.err());
+    let r = app.session.execute("gear.calculate", &p).unwrap();
+    assert!(r.get("error").is_none(), "{r}");
+    let replies = gear_replies(&r);
+    assert_eq!(replies.len(), 3, "{r}");
+    let a = replies.iter().find(|x| (x.item, x.gear) == (0, 0)).unwrap();
+    assert_eq!((a.teeth, a.module), (40, 1.0), "Ø40 at module 1 from the block: {r}");
+    assert!(a.rpm.is_some_and(|x| (x - 1000.0).abs() < 1e-6), "{a:?}");
+    let (lines, _) = crate::dialogs_gear_graph::link_notes(&r);
+    assert!(lines.iter().any(|(t, bad)| t.starts_with("1·1 – 2·1") && !bad), "{lines:?} {r}");
+    // gear.ratio on the dialog's request: A·1 (z40) → B·2, one body with B·1 (z20): 2 : 1, the sign said in words.
+    let q = json!({"request": p, "a": gear_ref((0, 0)), "b": gear_ref((1, 1))});
+    let ratio = app.session.execute("gear.ratio", &q).unwrap();
+    let lines = ratio_lines(&ratio, &|v: f64| fmt(v));
+    assert!(lines[0].1.starts_with("2.00 : 1, opposite"), "{lines:?} {ratio}");
+    assert_eq!(lines[1], ("Path".to_string(), "1·1 → 2·1".to_string()), "a compound is one body, named by its first gear: {ratio}");
 }

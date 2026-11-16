@@ -970,7 +970,7 @@ fn gear_ref(g: (usize, usize)) -> Value {
 /// `gear.ratio`'s reply as the readout's lines: the ratio (b's speed over a's) and the
 /// direction, the path of meshes and shared shafts, the efficiency, and a rack's travel per
 /// turn (`len` shows a length in the design's units). Read: `ratio`, `direction` ("same" |
-/// "opposite"), `path` (gears {item, gear} or texts), `efficiency` (0–1), `rack_mm_per_rev`.
+/// "opposite"), `path` (steps {from, to, from_gear?, to_gear?}), `efficiency` (0–1), `mm_per_rev`.
 pub(crate) fn ratio_lines(r: &Value, len: &dyn Fn(f64) -> String) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let tr = solidcraft_ui_text::tr_label;
@@ -980,40 +980,37 @@ pub(crate) fn ratio_lines(r: &Value, len: &dyn Fn(f64) -> String) -> Vec<(String
             Some("opposite") => format!(", {}", tr("opposite direction")),
             _ => String::new(),
         };
-        out.push((tr("Ratio").to_string(), format!("{} : 1{dir}", fmt_ratio(x))));
+        out.push((tr("Ratio").to_string(), format!("{} : 1{dir}", fmt_ratio(if dir.is_empty() { x } else { x.abs() }))));
     }
-    let path: Vec<String> = r
-        .get("path")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|p| match p {
-            Value::String(s) => Some(s.clone()),
-            Value::Object(_) => {
-                let item = p.get("item").and_then(crate::dialogs_gear_graph::item_index)?;
-                Some(format!("{}·{}", item + 1, p.get("gear").and_then(Value::as_u64).unwrap_or(0) + 1))
-            }
-            _ => None,
-        })
-        .collect();
+    // A gear {item, gear} as "2·1", else the body's name.
+    let gear_or = |g: Option<&Value>, body: Option<&Value>| -> Option<String> {
+        match g.and_then(|g| Some((g.get("item").and_then(crate::dialogs_gear_graph::item_index)?, g.get("gear").and_then(Value::as_u64).unwrap_or(0)))) {
+            Some((item, gear)) => Some(format!("{}·{}", item + 1, gear + 1)),
+            None => body.and_then(Value::as_str).map(str::to_string),
+        }
+    };
+    // The engine's steps ({from, to, from_gear?, to_gear?}): the first one's start, then each end.
+    let steps = r.get("path").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+    let mut path: Vec<String> = steps.first().and_then(|s| gear_or(s.get("from_gear"), s.get("from"))).into_iter().collect();
+    path.extend(steps.iter().filter_map(|s| gear_or(s.get("to_gear"), s.get("to"))));
     if !path.is_empty() {
         out.push((tr("Path").to_string(), path.join(" → ")));
     }
     if let Some(e) = r.get("efficiency").and_then(Value::as_f64) {
         out.push((tr("Efficiency").to_string(), format!("{} %", fmt((e * 1000.0).round() / 10.0))));
     }
-    if let Some(mm) = r.get("rack_mm_per_rev").and_then(Value::as_f64) {
+    if let Some(mm) = r.get("mm_per_rev").and_then(Value::as_f64) {
         out.push((tr("Rack travel").to_string(), format!("{} / rev", len(mm))));
     }
     out
 }
 
 /// `gear.ratio`'s parameters for two bodies selected in the model, when both are gears of one
-/// Gears feature: {group, a: {body}, b: {body}} (the quick readout shows the ratio for them).
+/// Gears feature: {group, a, b} with the two bodies' names (the quick readout shows the ratio).
 pub(crate) fn ratio_bodies(session: &solidcraft_engine::Session, selection: &[Sel]) -> Option<Value> {
     let [Sel::Body { name: a }, Sel::Body { name: b }] = selection else { return None };
     let set = solidcraft_engine::gear_sets(session).into_iter().find(|s| s.bodies.contains(a) && s.bodies.contains(b))?;
-    Some(json!({"group": set.feature.unwrap_or(set.group), "a": {"body": a}, "b": {"body": b}}))
+    Some(json!({"group": set.feature.unwrap_or(set.group), "a": a, "b": b}))
 }
 
 /// The items' outline drawn while the dialog is open, from their picked geometry and what the
@@ -2006,9 +2003,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
     // The ratio between the two gears picked (`gear.ratio`), once per change.
     match (&asked, k.ratio_pick) {
         (Ok(p), [Some(a), Some(b)]) if a != b => {
-            let mut q = p.clone();
-            q["a"] = gear_ref(a);
-            q["b"] = gear_ref(b);
+            let q = json!({"request": p, "a": gear_ref(a), "b": gear_ref(b)});
             let key = format!("{q}@{}", app.session.revision);
             if k.ratio.as_ref().is_none_or(|(c, _)| *c != key) {
                 let r = app.session.execute("gear.ratio", &q);

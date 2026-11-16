@@ -1919,6 +1919,10 @@ pub struct GearRatioParams {
     /// The set, by its timeline folder or Gears feature (left out: the set `a` belongs to).
     #[serde(default)]
     pub group: Option<u64>,
+    /// A set not made yet: its `gear.calculate` parameters (the Gears dialog's request); `a` and
+    /// `b` are then {item, gear}.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<Value>,
     /// From and to: a body's name, a component's id, or {item, gear} of the set's items.
     pub a: Value,
     pub b: Value,

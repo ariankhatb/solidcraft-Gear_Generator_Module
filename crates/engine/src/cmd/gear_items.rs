@@ -629,24 +629,31 @@ pub(super) fn ratio(s: &mut Session, p: &Value) -> Result<Value> {
         Value::Number(c) => c.as_u64().is_some_and(|c| r.assembly.as_ref().is_some_and(|a| a.holds(c))),
         _ => false,
     };
-    let rec = match q.group {
-        Some(g) => all.into_iter().find(|r| r.group == g || r.feature == Some(g)),
-        None => match all.iter().position(|r| holds(r, &q.a) || holds(r, &q.b)) {
-            Some(k) => Some(all.swap_remove(k)),
-            // Both {item, gear}: the design's one set made of items.
-            None => {
-                let mut of_items: Vec<super::Record> = all.into_iter().filter(|r| r.request.get("items").is_some_and(Value::is_array)).collect();
-                if of_items.len() == 1 { of_items.pop() } else { None }
+    // A set not made yet (the dialog's `request`) has no record: its bodies go by plan name.
+    let rec = match q.request {
+        Some(_) => None,
+        None => Some(
+            match q.group {
+                Some(g) => all.into_iter().find(|r| r.group == g || r.feature == Some(g)),
+                None => match all.iter().position(|r| holds(r, &q.a) || holds(r, &q.b)) {
+                    Some(k) => Some(all.swap_remove(k)),
+                    // Both {item, gear}: the design's one set made of items.
+                    None => {
+                        let mut of_items: Vec<super::Record> = all.into_iter().filter(|r| r.request.get("items").is_some_and(Value::is_array)).collect();
+                        if of_items.len() == 1 { of_items.pop() } else { None }
+                    }
+                },
             }
-        },
-    }
-    .ok_or_else(|| bad(cmd, "no gear set there: give `group` (the set's folder or Gears feature), or a body or component of one as `a`"))?;
-    let names = super::current_names(s, &rec);
-    let (asked, plan) = super::ask(s, cmd, &rec.request)?;
+            .ok_or_else(|| bad(cmd, "no gear set there: give `group` (the set's folder or Gears feature), or a body or component of one as `a`"))?,
+        ),
+    };
+    let names = rec.as_ref().map(|r| super::current_names(s, r)).unwrap_or_default();
+    let feature = rec.as_ref().is_some_and(|r| r.feature.is_some());
+    let (asked, plan) = super::ask(s, cmd, rec.as_ref().map_or(q.request.as_ref().unwrap_or(&Value::Null), |r| &r.request))?;
     let rigid = solid::members(&plan);
     // Body names by plan body: a Gears feature names its rigid members, a folder set its bodies.
     let name_of = |b: usize| -> String {
-        let k = if rec.feature.is_some() { rigid.iter().position(|r| r.bodies.contains(&b)) } else { Some(b) };
+        let k = if feature { rigid.iter().position(|r| r.bodies.contains(&b)) } else { Some(b) };
         k.and_then(|k| names.get(k).cloned()).unwrap_or_else(|| plan.bodies.get(b).map_or_else(String::new, |x| x.name.clone()))
     };
     let gear_at = |b: usize| -> Option<GearEndReply> {
@@ -657,13 +664,13 @@ pub(super) fn ratio(s: &mut Session, p: &Value) -> Result<Value> {
     let resolve = |which: &str, v: &Value| -> Result<usize> {
         let by_name = |name: &str| -> Option<usize> {
             let k = names.iter().position(|n| n == name)?;
-            if rec.feature.is_some() { rigid.get(k).and_then(|r| r.bodies.first().copied()) } else { Some(k).filter(|k| *k < plan.bodies.len()) }
+            if feature { rigid.get(k).and_then(|r| r.bodies.first().copied()) } else { Some(k).filter(|k| *k < plan.bodies.len()) }
         };
         let b = match v {
             Value::String(name) => by_name(name).ok_or_else(|| bad(cmd, format!("`{which}`: no body `{name}` in the set")))?,
             Value::Number(c) => {
                 let c = c.as_u64().unwrap_or(0);
-                let body = rec.assembly.as_ref().and_then(|a| a.members.iter().find(|m| m.component == c)).map(|m| m.body.clone());
+                let body = rec.as_ref().and_then(|r| r.assembly.as_ref()).and_then(|a| a.members.iter().find(|m| m.component == c)).map(|m| m.body.clone());
                 body.as_deref().and_then(by_name).ok_or_else(|| bad(cmd, format!("`{which}`: component {c} is none of the set's gears")))?
             }
             Value::Object(o) => {
@@ -702,7 +709,7 @@ pub(super) fn ratio(s: &mut Session, p: &Value) -> Result<Value> {
     super::reply(
         cmd,
         GearRatioResult {
-            group: rec.group,
+            group: rec.as_ref().map_or(0, |r| r.group),
             a: name_of(body(a)),
             b: name_of(body(b)),
             ratio: report.ratio,

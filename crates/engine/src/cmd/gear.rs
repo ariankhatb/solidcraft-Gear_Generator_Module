@@ -168,7 +168,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .output(output_schema_for::<GearRatioResult>)
         .params(
             "a, b: two gears of one set: a body's name, a component's id, or {item, gear} of a set made of items; group?: the set's folder or Gears feature (left out: the set a or b \
-             belongs to) → ratio (b's speed over a's, signed), direction (same|opposite), reduction, mm_per_rev? (b a rack), rev_per_mm? (a a rack), path: [{from, to, from_gear?, \
+             belongs to); request?: a set not made yet, as gear.calculate's parameters (a, b then {item, gear}) → ratio (b's speed over a's, signed), direction (same|opposite), reduction, mm_per_rev? (b a rack), rev_per_mm? (a a rack), path: [{from, to, from_gear?, \
              to_gear?, kind: shaft|spur|helical|herringbone|internal|rack|bevel|spiral_bevel|hypoid|crossed_helical|worm|wrap, teeth?, ratio, efficiency, self_locking?}], efficiency, notes",
         ),
 ];

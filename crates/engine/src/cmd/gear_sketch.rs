@@ -271,6 +271,11 @@ pub(super) fn sketches_of(s: &Session, request: &Value) -> Vec<u64> {
     if let Some(items) = request.get("selection").and_then(Value::as_array) {
         keys.extend(items.iter().filter_map(|item| item.get("sketch").filter(|v| !v.is_null())));
     }
+    // A drivetrain of items: every sketch its items' components are picked in.
+    for item in request.get("items").and_then(Value::as_array).into_iter().flatten() {
+        let components = item.get("components").and_then(Value::as_array).into_iter().flatten();
+        keys.extend(components.filter_map(|c| c.get("sketch").filter(|v| !v.is_null())));
+    }
     let mut ids = Vec::new();
     for k in keys {
         if let Ok(id) = super::super::features::sketch_id(s, Some(k), "gear.update", "sketch")

@@ -304,7 +304,8 @@ fn a_set_is_kept_and_inspected() {
 #[test]
 fn a_herringbone_is_one_sweep_mirrored_and_updates_in_place() {
     let mut s = Session::default();
-    let r = run(&mut s, "gear.create", json!({"type": "herringbone"}));
+    // (A folder of features: the default Gears feature has no sweep or mirror of its own.)
+    let r = run(&mut s, "gear.create", json!({"type": "herringbone", "build": "features"}));
     let group = r["group"].as_u64().unwrap();
     let body = r["bodies"][0].as_str().unwrap().to_string();
     let v = volume(&mut s, &body);
@@ -350,7 +351,8 @@ fn an_update_changes_the_set_in_place() {
 #[test]
 fn an_update_that_changes_the_steps_rebuilds_under_the_same_names() {
     let mut s = Session::default();
-    let r = run(&mut s, "gear.create", json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 10}));
+    // (A folder of features: a Gears feature is redefined in place whatever it becomes.)
+    let r = run(&mut s, "gear.create", json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 10, "build": "features"}));
     let group = r["group"].as_u64().unwrap();
     let body = r["bodies"][0].as_str().unwrap().to_string();
     let before = volume(&mut s, &body);
@@ -633,7 +635,9 @@ fn sketch_three_touching_circles_are_a_gear_train() {
     let mut s = Session::default();
     let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 20.0, "g1"), circle(50.0, 0.0, 30.0, "g2"), circle(50.0, 45.0, 15.0, "g3")]);
     let r = run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "spur"}));
-    assert!((fact_opt(&r, "train ratio gear 1 → gear 3").unwrap() - 0.75).abs() < 1e-9, "{r}");
+    // Decision 1: teeth closest to Ø / m at the auto module 1.5 (z27, z20), the drawn centres held
+    // by profile shift: the ratio is the teeth's, not the diameters' (0.75).
+    assert!((fact_opt(&r, "train ratio gear 1 → gear 3").unwrap() - 20.0 / 27.0).abs() < 1e-9, "{r}");
     let r = run(&mut s, "gear.create", json!({"sketch": sk, "type": "helical", "assembly": true}));
     assert_eq!(r["bodies"].as_array().unwrap().len(), 3, "{r}");
     assert_eq!(r["assembly"]["links"].as_array().map(Vec::len), Some(2), "{r}");
@@ -777,7 +781,8 @@ fn every_type_builds_its_clearance_body() {
 #[test]
 fn a_worm_sets_loft_sketches_are_hidden() {
     let mut s = Session::default();
-    run(&mut s, "gear.create", json!({"type": "worm"}));
+    // (A folder of features: a Gears feature makes no sketches.)
+    run(&mut s, "gear.create", json!({"type": "worm", "build": "features"}));
     // Every sketch the set made (the wheel's loft sections, the thread) is hidden: shown, they
     // draw their outlines over the teeth.
     let sketches: Vec<u64> = s.doc.features.iter().filter(|f| matches!(f.kind, solidcraft_doc::FeatureKind::Sketch { .. })).map(|f| f.id).collect();
@@ -1102,6 +1107,8 @@ fn an_assembled_pair_turns_gear_2_by_the_ratio_and_undoes_in_one_step() {
     assert!((p.x - (52.0 + 32.0 * t.cos())).abs() < 1e-6 && (p.y - 32.0 * t.sin()).abs() < 1e-6, "{p:?}");
     // One undo takes the gears, their components and joints away.
     let made: Vec<u64> = r["assembly"]["members"].as_array().unwrap().iter().filter_map(|m| m["component"].as_u64()).collect();
+    // (After the undo of the drive: joint.drive is a step of its own.)
+    run(&mut s, "edit.undo", json!({}));
     run(&mut s, "edit.undo", json!({}));
     assert!(!s.doc.components.iter().any(|c| made.contains(&c.id)));
     assert!(s.doc.assembly.joints.is_empty() && s.doc.assembly.links.is_empty());
@@ -1159,7 +1166,12 @@ fn an_update_keeps_the_assemblys_components_joints_and_links_in_place() {
     let group = r["group"].as_u64().unwrap();
     let before = counts(&s);
     assert_eq!(before, (empty.0 + 3, empty.1 + 2, empty.2 + 1), "two gears and the keep-out; two joints; one link");
-    let ids = |a: &Value| (a["members"].clone(), a["keep_out"].clone(), a["joints"].clone());
+    // (A member's body name and shaft follow the new tooth count; its component, occurrence
+    // and joint stay.)
+    let ids = |a: &Value| {
+        let members: Vec<(Value, Value, Value)> = a["members"].as_array().unwrap().iter().map(|m| (m["component"].clone(), m["occurrence"].clone(), m["joint"].clone())).collect();
+        (members, a["keep_out"].clone(), a["joints"].clone())
+    };
     let made = ids(&r["assembly"]);
     // In place (the same steps) and rebuilt (another tooth count's steps): the same components,
     // occurrences, joints and keep-out each time, the link given the new ratio.
@@ -1441,7 +1453,7 @@ fn same_angle(got: f64, want: f64) -> bool {
 fn joint_kinds(s: &mut Session, r: &Value) -> (usize, usize, usize) {
     let l = run(s, "joint.list", json!({}));
     let ours: Vec<u64> = r["assembly"]["joints"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
-    let kind_of = |id: u64| l["joints"].as_array().unwrap().iter().find(|j| j["id"].as_u64() == Some(id)).map(|j| j["kind"].as_str().unwrap_or_default().to_lowercase()).unwrap_or_default();
+    let kind_of = |id: u64| l["joints"].as_array().unwrap().iter().find(|j| j["id"].as_u64() == Some(id)).map(|j| j["type"].as_str().unwrap_or_default().to_lowercase()).unwrap_or_default();
     let (mut rev, mut rig, mut other) = (0, 0, 0);
     for k in ours.iter().map(|j| kind_of(*j)) {
         match k.as_str() {
@@ -1555,10 +1567,14 @@ fn an_internal_mesh_turns_the_ring_the_same_way() {
     let r = assembled(&mut s, json!({"sketch": sk, "type": "spur", "module": 2, "face_width": 6, "assembly": true}));
     let (ring, pinion) = (member_on(&r, 0.0, 0.0), member_on(&r, 40.0, 0.0));
     let j = member_joints(&r);
-    run(&mut s, "joint.drive", json!({"joint": j[pinion].unwrap(), "value": 30}));
-    let got = turned_about(&s, &r, ring);
-    eprintln!("GATE internal, pinion z20 by 30°: ring z60 expected +10°, measured {got:+.6}°");
-    assert!(same_angle(got, 10.0), "{got}");
+    // The motion links turn the driven member from the driver (member 1, here the ring drawn
+    // first): driven, the ring by 10° turns the pinion 30° the same way.
+    let driver = r["assembly"]["driver"].as_u64().unwrap() as usize - 1;
+    let (moved, read, by, want) = if driver == pinion { (pinion, ring, 30.0, 10.0) } else { (ring, pinion, 10.0, 30.0) };
+    run(&mut s, "joint.drive", json!({"joint": j[moved].unwrap(), "value": by}));
+    let got = turned_about(&s, &r, read);
+    eprintln!("GATE internal, z20 in z60, member {moved} by {by}°: expected {want:+}°, measured {got:+.6}°");
+    assert!(same_angle(got, want), "{got}");
 }
 
 /// Gate: bevels at 90° and 70°, gear 1 z20 by 30°: gear 2 z30 turns −20° about its own axis
@@ -1718,7 +1734,9 @@ fn selected_circles_with_roles_and_sizes_report_each_member() {
     // A module that doesn't fit a circle: that member's error.
     let sel = json!([{"sketch": sk, "curve": "g1", "role": "spur", "teeth": 18, "module": 2.5}, {"sketch": sk, "curve": "g2"}]);
     let r = run(&mut s, "gear.calculate", json!({"selection": sel}));
-    assert!(r["members"][0]["error"].as_str().unwrap_or_default().contains("18 teeth at module 2.5"), "{r}");
+    // Decision 1: no refusal; the drawn centre distance is held by profile shift, and said so.
+    assert!(r["members"][0]["error"].is_null(), "{r}");
+    assert!(r["notes"].as_array().unwrap().iter().any(|n| n.as_str().unwrap_or_default().contains("18 teeth at module 2.5")), "{r}");
     // A bearing on no shaft line.
     let sel = json!([{"sketch": sk, "curve": "g1"}, {"sketch": sk, "curve": "g2"}, {"axis": {"origin": [0, 0, 0], "dir": [0, 0, 1]}, "role": "shaft"}, {"sketch": sk, "point": "origin", "role": "bearing", "bearing": "608"}]);
     let r = run(&mut s, "gear.calculate", json!({"selection": sel}));

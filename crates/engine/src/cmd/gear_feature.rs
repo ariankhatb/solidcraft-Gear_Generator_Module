@@ -121,30 +121,44 @@ fn frozen(s: &Session, cmd: &str, mut request: Value) -> Result<(Value, Vec<Sket
         }
         request[key] = line(axis_of(s, &GearAxis(v), cmd, key)?);
     }
+    // A picked thing (of `selection`, or an item's `components`): a sketch's by its id, any other
+    // as the line it is now.
+    let mut fix = |what: &str, it: &mut Value| -> Result<()> {
+        if let Some(sk) = it.get("sketch").cloned().filter(|v| !v.is_null()) {
+            let id = s.sketch_id(Some(&sk), cmd, what)?;
+            add(id);
+            it["sketch"] = json!(id);
+            return Ok(());
+        }
+        let v = if let Some(e) = it.get("edge").filter(|v| !v.is_null()) {
+            json!({"edge": e})
+        } else if let Some(f) = it.get("face").filter(|v| !v.is_null()) {
+            json!({"face": f})
+        } else {
+            match it.get("axis") {
+                Some(a) if !a.is_null() => a.clone(),
+                _ => return Ok(()),
+            }
+        };
+        let a = axis_of(s, &GearAxis(v), cmd, what)?;
+        if let Some(o) = it.as_object_mut() {
+            o.remove("edge");
+            o.remove("face");
+            o.insert("axis".into(), line(a));
+        }
+        Ok(())
+    };
     if let Some(items) = request.get_mut("selection").and_then(Value::as_array_mut) {
         for (i, it) in items.iter_mut().enumerate() {
-            let what = format!("selection[{i}]");
-            if let Some(sk) = it.get("sketch").cloned() {
-                let id = s.sketch_id(Some(&sk), cmd, &what)?;
-                add(id);
-                it["sketch"] = json!(id);
-                continue;
-            }
-            let v = if let Some(e) = it.get("edge") {
-                json!({"edge": e})
-            } else if let Some(f) = it.get("face") {
-                json!({"face": f})
-            } else {
-                match it.get("axis") {
-                    Some(a) if !a.is_null() => a.clone(),
-                    _ => continue,
+            fix(&format!("selection[{i}]"), it)?;
+        }
+    }
+    if let Some(items) = request.get_mut("items").and_then(Value::as_array_mut) {
+        for (i, item) in items.iter_mut().enumerate() {
+            if let Some(cs) = item.get_mut("components").and_then(Value::as_array_mut) {
+                for (k, c) in cs.iter_mut().enumerate() {
+                    fix(&format!("items[{i}].components[{k}]"), c)?;
                 }
-            };
-            let a = axis_of(s, &GearAxis(v), cmd, &what)?;
-            if let Some(o) = it.as_object_mut() {
-                o.remove("edge");
-                o.remove("face");
-                o.insert("axis".into(), line(a));
             }
         }
     }
@@ -194,6 +208,19 @@ fn fresh(s: &Session, bases: &[String], own: Option<u64>) -> Vec<String> {
         .collect()
 }
 
+/// The plan the set's assembly is made of ([`rigid_plan`]) and the member that drives it: the
+/// drive gear's for a drivetrain of items (its assembly rooted there), else `assembly_driver`.
+fn assembly_plan(asked: &Asked, plan: &Plan, request: &Value) -> (Plan, Option<usize>) {
+    let mut rigid = rigid_plan(plan);
+    let Some(it) = &asked.items else { return (rigid, assembly::driver(request)) };
+    // (The drive's rigid member, as a member of the assembly.)
+    let driver = super::items::driver(it, plan).and_then(|r| rigid.assembly.members.iter().position(|m| m.body == r));
+    if let Some(d) = driver {
+        rigid.assembly = rigid.assembly.rooted(d);
+    }
+    (rigid, driver)
+}
+
 /// The set's assembly as its bodies stand: one member per rigid member.
 fn rigid_plan(plan: &Plan) -> Plan {
     let rigid = solid::members(plan);
@@ -218,11 +245,14 @@ fn failed(s: &Session, id: u64) -> Option<EngineError> {
 /// `gear.create` as one Gears feature.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn create(s: &mut Session, cmd: &str, asked: &Asked, plan: &Plan, name: String, request: Value, mut warnings: Vec<String>, sketch_print: Option<String>) -> Result<Value> {
-    let (request, sketches) = frozen(s, cmd, request)?;
+    let (mut request, sketches) = frozen(s, cmd, request)?;
     let (operation, targets, cuts) = tools_of(s, cmd, &request)?;
     let (members, keep_out) = generated(plan, operation, &cuts);
     let bases: Vec<String> = members.iter().cloned().chain(keep_out.clone()).collect();
     let names = fresh(s, &bases, None);
+    if asked.items.is_some() {
+        request["body_keys"] = json!(bases);
+    }
     let kind = FeatureKind::Gears { params: request.clone(), sketches, operation, targets, keep_out_cuts: cuts };
     let made = super::super::features::add_feature(s, &json!({"name": name, "body_names": names}), kind)?;
     let id = made.get("feature").and_then(Value::as_u64).ok_or_else(|| EngineError::Other("the Gears feature was not made".into()))?;
@@ -236,27 +266,29 @@ pub(super) fn create(s: &mut Session, cmd: &str, asked: &Asked, plan: &Plan, nam
     if assembly::wanted(&request) {
         let folder = assembly_folder(s, &name, id)?;
         group = folder;
-        built = Some(assembly::sync(s, &rigid_plan(plan), asked.spec.kind, &name, &member_names, keep_out_name.as_deref(), Some(folder), None, assembly::driver(&request), &mut warnings)?);
+        let (rigid, driver) = assembly_plan(asked, plan, &request);
+        built = Some(assembly::sync(s, &rigid, asked.spec.kind, &name, &member_names, keep_out_name.as_deref(), Some(folder), None, driver, &mut warnings)?);
     }
     let (assembly_record, assembly_made) = built.map_or((None, None), |(r, m)| (Some(r), Some(m)));
     let bodies = names.iter().map(|n| BodyRecord { name: n.clone(), steps: Vec::new(), auto: Some(n.clone()) }).collect();
     let rec = Record { version: RECORD_VERSION, group, name, request, params: params_of(&asked.spec), bodies, assembly: assembly_record, sketch_print, feature: Some(id) };
     keep(s, &rec, &mut warnings);
-    reply(
-        cmd,
-        GearResult {
-            bodies: names,
-            group: Some(group),
-            feature: Some(id),
-            clearance: keep_out_name,
-            assembly: assembly_made,
-            facts: facts(asked, plan),
-            warnings,
-            notes: notes(asked),
-            members: asked.members.clone(),
-            ..GearResult::default()
-        },
-    )
+    let mut r = GearResult {
+        bodies: names.clone(),
+        group: Some(group),
+        feature: Some(id),
+        clearance: keep_out_name,
+        assembly: assembly_made,
+        facts: facts(asked, plan),
+        warnings,
+        notes: notes(asked),
+        members: asked.members.clone(),
+        ..GearResult::default()
+    };
+    if let Some(it) = &asked.items {
+        super::items::fill(&mut r, it, plan, Some(&names));
+    }
+    reply(cmd, r)
 }
 
 /// The names the set's bodies have now: the feature's body names (a rename changes them), else
@@ -295,6 +327,9 @@ pub(super) fn update(s: &mut Session, cmd: &str, mut rec: Record, request: Value
     if !wanted(cmd, &request)? {
         return Err(bad(cmd, "this set is one Gears feature: its teeth can't be drawn as formulas, and it can't go back to a folder of features"));
     }
+    // Nothing asked but to follow the sketches (`follow_sketches`, a bare `gear.update {group}`):
+    // the bodies keep their names, as the feature keeps them through a sketch edit.
+    let bare = request == rec.request;
     let names_before = super::current_names(s, &rec);
     let auto_before: Vec<String> = rec.bodies.iter().map(|b| b.auto.clone().unwrap_or_else(|| b.name.clone())).collect();
     let before = s.doc.clone();
@@ -304,13 +339,23 @@ pub(super) fn update(s: &mut Session, cmd: &str, mut rec: Record, request: Value
         Some(_) => return Err(bad(cmd, "the set's Gears feature is gone")),
         None => convert(s, cmd, &rec)?,
     };
-    let (request, sketches) = frozen(s, cmd, request)?;
+    let (mut request, sketches) = frozen(s, cmd, request)?;
     let (operation, targets, cuts) = tools_of(s, cmd, &request)?;
     let (members, keep_out) = generated(plan, operation, &cuts);
     let bases: Vec<String> = members.iter().cloned().chain(keep_out.clone()).collect();
+    let items = asked.items.is_some();
     // Bodies keep their names where the set still has as many; another set of members is named
-    // afresh.
-    let names = if names_before.len() == bases.len() { names_before.clone() } else { fresh(s, &bases, Some(id)) };
+    // afresh. A drivetrain of items: each body whose item and gear are still there keeps its name.
+    let names = if items {
+        super::items::carry_names(s, id, &rec.request, &names_before, &request, &bases)
+    } else if names_before.len() == bases.len() {
+        names_before.clone()
+    } else {
+        fresh(s, &bases, Some(id))
+    };
+    if items {
+        request["body_keys"] = json!(bases);
+    }
     if let Some(f) = s.doc_mut().feature_mut(id) {
         f.kind = FeatureKind::Gears { params: request.clone(), sketches, operation, targets, keep_out_cuts: cuts };
         f.body_names = names.clone();
@@ -321,9 +366,16 @@ pub(super) fn update(s: &mut Session, cmd: &str, mut rec: Record, request: Value
         s.refresh();
         return Err(e);
     }
-    rec.bodies = names.iter().map(|n| BodyRecord { name: n.clone(), steps: Vec::new(), auto: None }).collect();
-    let auto: &[String] = if names_before.len() == bases.len() { &auto_before } else { &names };
-    super::follow_auto_names(s, &mut rec, &bases, &names, auto, &mut warnings);
+    rec.bodies = names.iter().map(|n| BodyRecord { name: n.clone(), steps: Vec::new(), auto: items.then(|| n.clone()) }).collect();
+    // (Bodies of items are named by item and gear, which an update doesn't change.)
+    if bare && !items && names_before.len() == bases.len() {
+        for (b, auto) in rec.bodies.iter_mut().zip(&auto_before) {
+            b.auto = Some(auto.clone());
+        }
+    } else if !items {
+        let auto: &[String] = if names_before.len() == bases.len() { &auto_before } else { &names };
+        super::follow_auto_names(s, &mut rec, &bases, &names, auto, &mut warnings);
+    }
     let member_names: Vec<String> = rec.bodies.iter().take(members.len()).map(|b| b.name.clone()).collect();
     let keep_out_name = keep_out.as_ref().and_then(|_| rec.bodies.get(members.len()).map(|b| b.name.clone()));
     let mut assembly_made = None;
@@ -336,7 +388,8 @@ pub(super) fn update(s: &mut Session, cmd: &str, mut rec: Record, request: Value
             None => assembly_folder(s, &rec.name, id)?,
         };
         group = Some(folder);
-        let (made, out) = assembly::sync(s, &rigid_plan(plan), asked.spec.kind, &rec.name, &member_names, keep_out_name.as_deref(), Some(folder), old_assembly, assembly::driver(&request), &mut warnings)?;
+        let (rigid, driver) = assembly_plan(asked, plan, &request);
+        let (made, out) = assembly::sync(s, &rigid, asked.spec.kind, &rec.name, &member_names, keep_out_name.as_deref(), Some(folder), old_assembly, driver, &mut warnings)?;
         rec.assembly = Some(made);
         assembly_made = Some(out);
     } else if let Some(old) = old_assembly {
@@ -356,22 +409,24 @@ pub(super) fn update(s: &mut Session, cmd: &str, mut rec: Record, request: Value
     if let Some(w) = s.model.result(id).and_then(|r| r.warning.clone()) {
         warnings.push(w);
     }
-    reply(
-        cmd,
-        GearResult {
-            bodies: rec.bodies.iter().map(|b| b.name.clone()).collect(),
-            group: Some(rec.group),
-            feature: Some(id),
-            clearance: keep_out_name,
-            assembly: assembly_made,
-            facts: facts(asked, plan),
-            warnings,
-            notes: notes(asked),
-            updated: Some(if converted { "rebuilt" } else { "in_place" }.into()),
-            rebuilt_because: converted.then(|| "the folder of features became one Gears feature".into()),
-            ..GearResult::default()
-        },
-    )
+    let bodies: Vec<String> = rec.bodies.iter().map(|b| b.name.clone()).collect();
+    let mut r = GearResult {
+        bodies: bodies.clone(),
+        group: Some(rec.group),
+        feature: Some(id),
+        clearance: keep_out_name,
+        assembly: assembly_made,
+        facts: facts(asked, plan),
+        warnings,
+        notes: notes(asked),
+        updated: Some(if converted { "rebuilt" } else { "in_place" }.into()),
+        rebuilt_because: converted.then(|| "the folder of features became one Gears feature".into()),
+        ..GearResult::default()
+    };
+    if let Some(it) = &asked.items {
+        super::items::fill(&mut r, it, plan, Some(&bodies));
+    }
+    reply(cmd, r)
 }
 
 #[cfg(test)]

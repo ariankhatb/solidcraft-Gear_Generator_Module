@@ -71,8 +71,15 @@ pub(super) fn eval(doc: &Document, f: &Feature, st: &mut ModelState, warning: &m
     // bodies), else the generator's.
     let mut named: Vec<(String, Body)> = Vec::new();
     let outputs = members.into_iter().chain(keep_out.clone().filter(|_| !cut_by_keep_out));
+    // A set that keeps its bodies' generator names (`body_keys`, beside its body names) names
+    // each body by its own, whatever its place in this plan; others by place.
+    let keys: Option<Vec<&str>> = params.get("body_keys").and_then(Value::as_array).map(|a| a.iter().map(|k| k.as_str().unwrap_or("")).collect());
     for (k, (generated, body)) in outputs.enumerate() {
-        let name = match f.body_names.get(k).filter(|n| !n.is_empty() && st.body(n).is_none()) {
+        let slot = match &keys {
+            Some(keys) => keys.iter().position(|key| *key == generated),
+            None => Some(k),
+        };
+        let name = match slot.and_then(|k| f.body_names.get(k)).filter(|n| !n.is_empty() && st.body(n).is_none()) {
             Some(n) => n.clone(),
             None => super::unique_body_name(st, &generated),
         };

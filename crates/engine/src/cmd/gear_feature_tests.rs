@@ -192,3 +192,264 @@ fn a_drawn_drivetrain_is_one_feature() {
     );
     assert_eq!(gears_features(&s).len(), 1);
 }
+
+// ---------------------------------------------------------------------------------------------
+// A drivetrain of gear items (GEAR_UI_SPEC §3, §6): one feature, its assembly kept by item+gear
+// ---------------------------------------------------------------------------------------------
+
+/// A finished sketch on `plane` with `draw` in it.
+fn sketch_on(s: &mut Session, plane: Value, draw: &[(&str, Value)]) -> u64 {
+    let sk = run(s, "sketch.create", json!({"plane": plane, "project_edges": false}))["sketch"].as_u64().unwrap();
+    for (id, p) in draw {
+        run(s, id, p.clone());
+    }
+    run(s, "sketch.finish", json!({}));
+    sk
+}
+
+fn circle(x: f64, y: f64, r: f64, id: &str) -> (&'static str, Value) {
+    ("sketch.circle.center", json!({"center": [x, y], "radius": r, "id": id}))
+}
+
+fn line(a: [f64; 2], b: [f64; 2], id: &str) -> (&'static str, Value) {
+    ("sketch.line", json!({"points": [a, b], "ids": [id]}))
+}
+
+fn plane(origin: [f64; 3], x: [f64; 3], y: [f64; 3]) -> Value {
+    json!({"origin": origin, "x_dir": x, "y_dir": y})
+}
+
+fn pick(sketch: u64, curve: &str) -> Value {
+    json!({"sketch": sketch, "curve": curve})
+}
+
+fn mesh(a: &str, ag: usize, b: &str, bg: usize) -> Value {
+    json!({"a": {"item": a, "port": ag}, "b": {"item": b, "port": bg}, "kind": "mesh"})
+}
+
+fn shaft(a: &str, ag: usize, b: &str, bg: usize) -> Value {
+    json!({"a": {"item": a, "gear": ag}, "b": {"item": b, "gear": bg}, "kind": "shaft"})
+}
+
+/// Six sketches: a spur pair A–B (z 0); a compound E (its shaft line in an XZ sketch, gear 1 on
+/// z 0 meshing A, gear 2 on z −25); a bevel pair C on B's shaft (pinion on z 40, gear on the
+/// plane x 65) and a worm and wheel D whose wheel shares the bevel gear's shaft (plane x 110).
+struct Mixed {
+    items: Value,
+    links: Value,
+    s2: u64,
+}
+
+fn mixed(s: &mut Session) -> Mixed {
+    let s1 = sketch_on(s, json!("XY"), &[circle(0.0, 0.0, 20.0, "a"), circle(50.0, 0.0, 30.0, "b"), circle(-50.0, 0.0, 30.0, "e1")]);
+    let s2 = sketch_on(s, plane([0.0, 0.0, -25.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]), &[circle(-50.0, 0.0, 15.0, "e2")]);
+    let s3 = sketch_on(s, plane([0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]), &[line([-50.0, -35.0], [-50.0, 10.0], "shaft_e")]);
+    let s4 = sketch_on(s, plane([0.0, 0.0, 40.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]), &[circle(50.0, 0.0, 15.0, "c1")]);
+    let s5 = sketch_on(s, plane([65.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), &[circle(0.0, 60.0, 20.0, "c2")]);
+    let s6 = sketch_on(s, plane([110.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), &[circle(0.0, 60.0, 30.0, "d1"), line([-40.0, 98.0], [40.0, 98.0], "worm")]);
+    let items = json!([
+        {"id": "A", "type": "spur", "components": [pick(s1, "a")], "gears": [{"gear": 0, "face": {"a": null, "b": null}, "profile_shift": "auto", "bore": "auto"}]},
+        {"id": "B", "type": "spur", "components": [pick(s1, "b")]},
+        {"id": "C", "type": "bevel", "components": [pick(s4, "c1"), pick(s5, "c2")], "bevel_style": "straight"},
+        {"id": "D", "type": "worm", "components": [pick(s6, "d1"), pick(s6, "worm")], "starts": 1},
+        {"id": "E", "type": "compound", "components": [pick(s3, "shaft_e"), pick(s1, "e1"), pick(s2, "e2")]},
+    ]);
+    let links = json!([mesh("A", 0, "B", 0), shaft("B", 0, "C", 0), shaft("C", 1, "D", 0), mesh("A", 0, "E", 0)]);
+    Mixed { items, links, s2 }
+}
+
+fn components_of(r: &Value) -> Vec<(String, u64, Option<u64>)> {
+    r["assembly"]["members"].as_array().unwrap().iter().map(|m| (m["body"].as_str().unwrap().to_string(), m["component"].as_u64().unwrap(), m["joint"].as_u64())).collect()
+}
+
+#[test]
+fn an_items_request_reads_back_as_it_was_sent() {
+    let p: crate::schema::gear::GearParams = serde_json::from_value(json!({
+        "items": [{"id": "A", "type": "compound", "components": [{"sketch": 3, "curve": "l", "slot": "axis"}, {"sketch": 3, "curve": "c1", "slot": "pitch"}],
+                   "gears": [{"gear": 0, "teeth": 18, "face": {"a": 4.0, "b": 0.0}, "helix_angle": 15.0, "hand": "left", "herringbone": true, "profile_shift": 0.2, "bore": null,
+                              "hub": {"diameter": 20.0, "length_a": 5.0, "length_b": null}}],
+                   "module_block": "M1", "starts": 2, "bevel_style": "spiral", "spiral_angle": 30.0}],
+        "links": [{"a": {"item": "A", "port": 0}, "b": {"item": "A", "port": 1}, "kind": "shaft"}],
+        "module_blocks": [{"id": "M1", "module": 1.5}],
+        "drive": {"item": "A", "gear": 1, "rpm": 100.0, "torque": 2.0},
+        "keep_out_gap": 0.5,
+    }))
+    .unwrap();
+    let items = p.items.as_ref().unwrap();
+    assert_eq!(items[0].gears[0].bore, Value::Null, "null bore: no hole, not Auto");
+    assert_eq!(items[0].gears[0].teeth, Some(18));
+    assert_eq!(p.links.as_ref().unwrap()[0].b.gear, 1, "`port` is the gear");
+    let back: crate::schema::gear::GearParams = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
+    assert_eq!(back, p);
+    assert!(serde_json::from_value::<crate::schema::gear::GearParams>(json!({"items": [{"type": "spur", "colour": 1}]})).is_err(), "unknown fields are refused");
+}
+
+#[test]
+fn a_mixed_drivetrain_is_one_feature_with_components_joints_and_links_kept_by_item() {
+    let mut s = Session::default();
+    let m = mixed(&mut s);
+    let calc = run(&mut s, "gear.calculate", json!({"items": m.items, "links": m.links, "drive": {"item": "A", "gear": 0, "rpm": 1000.0, "torque": 2.0}}));
+    assert!(calc.get("error").is_none(), "{calc}");
+    let gears = calc["gears"].as_array().unwrap().clone();
+    assert_eq!(gears.len(), 8, "A, B, C×2, D×2, E×2: {calc}");
+    assert!(gears.iter().all(|g| g["teeth"].as_u64().unwrap() > 0 && g["rpm"].is_number()), "{calc}");
+    assert_eq!(calc["links"].as_array().map(Vec::len), Some(4), "{calc}");
+    assert!(calc["links"].as_array().unwrap().iter().all(|l| l.get("error").is_none() && l["ratio"].is_number()), "{calc}");
+    assert!(calc["outlines"].as_array().is_some_and(|o| !o.is_empty()), "an outline per gear for the preview");
+
+    let r = run(&mut s, "gear.create", json!({"items": m.items, "links": m.links, "drive": {"item": "A", "gear": 0}, "assembly": true, "name": "Box"}));
+    no_errors(&s);
+    assert_eq!(gears_features(&s).len(), 1, "{r}");
+    let bodies: Vec<String> = r["bodies"].as_array().unwrap().iter().map(|b| b.as_str().unwrap().to_string()).collect();
+    // A; B with the bevel pinion (one shaft); the bevel gear with the wheel (one shaft); the
+    // worm; E's two gears.
+    assert_eq!(bodies.len(), 5, "{bodies:?}");
+    assert!(bodies.contains(&"Gear A·1".to_string()) && bodies.iter().any(|b| b.contains("E·1")), "{bodies:?}");
+    for b in &bodies {
+        assert!(volume(&mut s, b) > 100.0, "{b}");
+    }
+    let members = components_of(&r);
+    assert_eq!(members.len(), 5, "{r}");
+    assert!(members.iter().filter(|m| m.2.is_some()).count() >= 4, "a joint per moving member: {r}");
+    assert!(!r["assembly"]["links"].as_array().unwrap().is_empty(), "{r}");
+    // The drive gear drives: its member is the assembly's driver.
+    let a_member = r["gears"].as_array().unwrap().iter().find(|g| g["item"] == "A").and_then(|g| g["body"].as_str()).unwrap().to_string();
+    let driver = r["assembly"]["driver"].as_u64().unwrap() as usize;
+    assert_eq!(r["assembly"]["members"][driver - 1]["body"], json!(a_member), "{r}");
+    let feature = r["feature"].as_u64().unwrap();
+    let (params, sketch_count) = match s.doc.feature(feature).map(|f| &f.kind) {
+        Some(FeatureKind::Gears { params, sketches, .. }) => (params.clone(), sketches.len()),
+        _ => panic!("no Gears feature"),
+    };
+    assert_eq!(sketch_count, 6, "every sketch picked in is the feature's");
+    assert_eq!(params["body_keys"].as_array().map(Vec::len), Some(5));
+    let group = r["group"].as_u64().unwrap();
+
+    // The ratio across the compound, and across the bevel stage.
+    let t = |item: &str, gear: usize| gears.iter().find(|g| g["item"] == item && g["gear"] == gear).unwrap()["teeth"].as_f64().unwrap();
+    let q = run(&mut s, "gear.ratio", json!({"a": {"item": "E", "gear": 1}, "b": {"item": "B", "gear": 0}}));
+    let want = t("E", 0) / t("B", 0);
+    assert!((q["ratio"].as_f64().unwrap().abs() - want).abs() < 1e-9, "{q} vs {want}");
+    assert_eq!(q["direction"], "same", "two external meshes: {q}");
+    assert!(q["path"].as_array().unwrap().iter().any(|p| p["kind"] == "shaft"), "across E's shaft: {q}");
+    let w = run(&mut s, "gear.ratio", json!({"group": group, "a": a_member, "b": {"item": "D", "gear": 0}}));
+    let want = t("A", 0) / t("B", 0) * t("C", 0) / t("C", 1);
+    assert!((w["ratio"].as_f64().unwrap().abs() - want).abs() < 1e-9, "{w} vs {want}");
+    assert!(w["path"].as_array().unwrap().iter().any(|p| p["kind"] == "bevel" || p["kind"] == "spiral_bevel"), "{w}");
+    assert!(w["efficiency"].as_f64().unwrap() < 1.0);
+
+    // The compound's second gear grows: a sketch edit re-plans the feature, which keeps its
+    // bodies, components and joints.
+    if let Some(FeatureKind::Sketch { sketch, .. }) = s.doc_mut().feature_mut(m.s2).map(|f| &mut f.kind) {
+        for c in &mut sketch.curves {
+            if let solidcraft_sketch::CurveKind::Circle { r, .. } = &mut c.kind {
+                *r = 17.0;
+            }
+        }
+    }
+    s.refresh();
+    no_errors(&s);
+    let followed = crate::cmd::gear_follow_sketches(&mut s);
+    assert!(!followed.is_empty() && followed.iter().all(|f| f.get("error").is_none()), "{followed:?}");
+    let u = run(&mut s, "gear.update", json!({"group": group}));
+    no_errors(&s);
+    assert_eq!(components_of(&u), members, "the same components and joints after a sketch edit");
+    assert_eq!(gears_features(&s), vec![feature]);
+
+    // A module block's module: the feature is updated in place.
+    let mut blocked = m.items.clone();
+    for i in [0, 1, 4] {
+        blocked[i]["module_block"] = json!("M1");
+    }
+    let u = run(&mut s, "gear.update", json!({"group": group, "items": blocked, "module_blocks": [{"id": "M1", "module": 2.5}]}));
+    no_errors(&s);
+    assert_eq!(u["updated"], "in_place", "{u}");
+    assert_eq!(components_of(&u), members, "the same components and joints after a module change");
+    let a = u["gears"].as_array().unwrap().iter().find(|g| g["item"] == "A").unwrap().clone();
+    assert_eq!(a["module"], json!(2.5), "{a}");
+    assert_eq!(a["teeth"], json!(16), "Ø40 at module 2.5: {a}");
+
+    // Another item first in the list (a spur meshing E's second gear, so every other item's
+    // place changes) keeps every other member's component and joint.
+    let s7 = sketch_on(&mut s, plane([0.0, 0.0, -25.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]), &[circle(-50.0, -42.0, 25.0, "f")]);
+    let mut more = blocked.clone();
+    more.as_array_mut().unwrap().insert(0, json!({"id": "F", "type": "spur", "components": [pick(s7, "f")]}));
+    let mut links = m.links.as_array().unwrap().clone();
+    links.push(mesh("E", 1, "F", 0));
+    let u2 = run(&mut s, "gear.update", json!({"group": group, "items": more, "links": links}));
+    no_errors(&s);
+    let after = components_of(&u2);
+    assert_eq!(after.len(), 6, "{u2}");
+    for m in &members {
+        assert!(after.contains(m), "{m:?} kept: {after:?}");
+    }
+    // Taken away again: the others still keep theirs.
+    let u3 = run(&mut s, "gear.update", json!({"group": group, "items": blocked, "links": m.links}));
+    no_errors(&s);
+    assert_eq!(components_of(&u3), members, "{u3}");
+}
+
+/// Two spur items on one sketch, linked, as an assembly driven from B.
+fn spur_items(s: &mut Session) -> (u64, Value) {
+    let sk = pair_sketch(s);
+    let r = run(
+        s,
+        "gear.create",
+        json!({"items": [{"id": "A", "type": "spur", "components": [pick(sk, "g1")]}, {"id": "B", "type": "spur", "components": [pick(sk, "g2")]}],
+               "links": [mesh("A", 0, "B", 0)], "drive": {"item": "B", "gear": 0}, "assembly": true}),
+    );
+    no_errors(s);
+    (sk, r)
+}
+
+fn joint_text(s: &Session, id: u64) -> String {
+    serde_json::to_string(&s.doc.assembly.joints.iter().find(|j| j.id == id).unwrap().a).unwrap()
+}
+
+/// Gear 2 of [`pair_sketch`] grows, its centre moved out to x 56.
+fn grow_gear_2(s: &mut Session, sk: u64) {
+    if let Some(FeatureKind::Sketch { sketch, .. }) = s.doc_mut().feature_mut(sk).map(|f| &mut f.kind) {
+        for c in &mut sketch.curves {
+            if c.id == "g2"
+                && let solidcraft_sketch::CurveKind::Circle { r, .. } = &mut c.kind
+            {
+                *r = 36.0;
+            }
+        }
+        if let Some(p) = sketch.points.iter_mut().find(|p| (p.pos.x - 50.0).abs() < 1e-9) {
+            p.pos.x = 56.0;
+        }
+    }
+}
+
+#[test]
+fn finishing_a_sketch_edit_moves_the_items_joints() {
+    let mut s = Session::default();
+    let (sk, r) = spur_items(&mut s);
+    let before = components_of(&r);
+    let b = before.iter().find(|m| m.0 == "Gear B·1").cloned().unwrap_or_else(|| panic!("{r}"));
+    let driver = r["assembly"]["driver"].as_u64().unwrap() as usize;
+    assert_eq!(r["assembly"]["members"][driver - 1]["body"], "Gear B·1", "B drives: {r}");
+    run(&mut s, "sketch.edit", json!({"sketch": sk}));
+    grow_gear_2(&mut s, sk);
+    let f = run(&mut s, "sketch.finish", json!({}));
+    no_errors(&s);
+    assert!(f["gears_followed"].as_array().is_some_and(|g| !g.is_empty() && g.iter().all(|x| x.get("error").is_none())), "{f}");
+    assert!(joint_text(&s, b.2.unwrap()).contains("56"), "B's joint is on its new shaft: {}", joint_text(&s, b.2.unwrap()));
+    let u = run(&mut s, "gear.update", json!({"group": r["group"]}));
+    assert_eq!(components_of(&u), before);
+}
+
+#[test]
+fn a_sketch_edited_while_rolled_back_is_followed_when_rolled_forward() {
+    let mut s = Session::default();
+    let (sk, r) = spur_items(&mut s);
+    let b = components_of(&r).into_iter().find(|m| m.0 == "Gear B·1").unwrap();
+    run(&mut s, "timeline.roll_to", json!({"position": 1}));
+    grow_gear_2(&mut s, sk);
+    s.refresh();
+    let back = run(&mut s, "timeline.roll_to", json!({"position": "end"}));
+    no_errors(&s);
+    assert!(back["gears_followed"].as_array().is_some_and(|g| !g.is_empty()), "{back}");
+    assert!(joint_text(&s, b.2.unwrap()).contains("56"), "{}", joint_text(&s, b.2.unwrap()));
+}

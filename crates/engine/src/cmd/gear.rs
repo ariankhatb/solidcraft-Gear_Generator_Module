@@ -35,7 +35,7 @@ use super::sketch::{Left, edit_solved};
 use super::sketch_import::add_geometry;
 use crate::params::bad;
 use crate::schema::gear::{
-    BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, DiffDrive, DifferentialGoalParams, DifferentialParams, DiffMount, DiffPartsParams, DiffStyle, GearAxesResult, GearAxis, GearAxisLine, GearBevelPlanetMode, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult, GearMember, GearShaftInfo, GearContact, GearOutline, GearMaterial, GearParams, GearRelation, GearResult, GearSelection, GearSet, GearSketchParams, GearSketchResult, GearType, HardwareParams, PlacementParams, RackStandard, SeatAlongParams, SeatPointParams, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
+    BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, DiffDrive, DifferentialGoalParams, DifferentialParams, DiffMount, DiffPartsParams, DiffStyle, GearAxesResult, GearAxis, GearAxisLine, GearBevelPlanetMode, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult, GearMember, GearShaftInfo, GearContact, GearOutline, GearMaterial, GearParams, GearRatioParams, GearRatioResult, GearRelation, GearResult, GearSelection, GearSet, GearSketchParams, GearSketchResult, GearType, HardwareParams, PlacementParams, RackStandard, SeatAlongParams, SeatPointParams, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
 };
 use solidcraft_gear::spline::SplineStandard;
 use solidcraft_gear::strength::Material;
@@ -45,7 +45,10 @@ use crate::{EngineError, Result, Session};
 const GEAR_CONTRACT: TypedContract<GearParams> = TypedContract::new();
 const INSPECT_CONTRACT: TypedContract<GearInspectParams> = TypedContract::new();
 const SKETCH_CONTRACT: TypedContract<GearSketchParams> = TypedContract::new();
+const RATIO_CONTRACT: TypedContract<GearRatioParams> = TypedContract::new();
 
+#[path = "gear_items.rs"]
+mod items;
 #[path = "gear_sketch.rs"]
 mod sketch_link;
 pub use sketch_link::follow_sketches;
@@ -76,6 +79,13 @@ pub static COMMANDS: &[CommandSpec] = &[
              Drawn in one sketch: sketch?: id|name (circles = pitch circles, lines = shafts; type = the mode or what the drawing looks like), picks?: [point/curve ids per slot, origin point first], sketch_turn?: [x°, y°, normal°] about the origin point, \
              Selected: selection?: [{sketch, point|curve} | {edge: [x,y,z]} | {face: [x,y,z]} | {axis}, role?: shaft|bearing, pitch_diameter?, teeth?, along? (mm along the shaft), bearing? (\"608\"...)] \
              (shafts in order: one a gear on it, two the set their lie implies, three or more parallel a gear train; a circle is a shaft with its pitch Ø; bearings are keep-out seats, with assembly bearing bodies), \
+             Items (a drivetrain, one Gears feature): items?: [{id?, type: spur|helical|herringbone|internal|rack|compound|planetary|bevel|spiral_bevel|hypoid|worm|crossed_helical|shaft, \
+             components: [{sketch, curve|point} | {edge|face: [x,y,z]} | {axis}, slot?] (kept by id: the set follows its sketches), gears?: [{gear?, size_by?: module|teeth, module?, teeth?, \
+             face?: {preset?, a, b}, helix_angle?, hand?, herringbone?, profile_shift?: number|\"auto\", bore?: \"auto\"|null|Ø, hub?: {diameter, length_a, length_b}}], module_block?, rim?, starts?, \
+             throated?, bevel_style?, spiral_angle?, back_height?, diameter?, keyway?, planets?, carrier?}], links?: [{a: {item, gear}, b: {item, gear}, kind: mesh|shaft}] (none: as the \
+             drawing suggests), module_blocks?: [{id, module?}], drive?: {item, gear, rpm?, torque?}, keep_out_gap? → also gears: [{item, gear, teeth, module, pitch_d, ratio?, rpm?, torque?, \
+             contact_ratio?, warnings, body?}], links: [{a, b, kind, ratio?, error?, hint?}], suggestions: [{a, b, kind, why}], error?; bodies named by item and gear (Gear A·1), \
+             which keep their components and joints through sketch edits and updates; \
              ratio? (teeth2 ÷ teeth), cone_distance? (bevels, mm), flip1?, flip2?, swap_axes?, along? (mm along axis1); placement?: {origin, x, z}; \
              strength rating: torque? (N·m) | power? (kW), speed? (rpm) on the driver, \
              material?, material2?, material3?: steel_normalized|steel_through_hardened|steel_case_hardened|steel_nitrided|cast_iron|bronze|pom|pa66|pla|petg, \
@@ -149,6 +159,17 @@ pub static COMMANDS: &[CommandSpec] = &[
         .params(
             "group?: a set's timeline folder id | body?: one of its bodies (neither: every set in the design) → sets: [{group, name, bodies, features, \
              request (the parameters as given, with ui), params (the set as explicit gear.create parameters), sketch? (the sketch it follows), sketch_changed}]",
+        ),
+    CommandSpec::new("gear.ratio", "Gear Ratio", crate::checked!("gear.ratio", items::ratio))
+        .icon("gear_generator")
+        .noundo()
+        .read_only()
+        .contract(&RATIO_CONTRACT)
+        .output(output_schema_for::<GearRatioResult>)
+        .params(
+            "a, b: two gears of one set: a body's name, a component's id, or {item, gear} of a set made of items; group?: the set's folder or Gears feature (left out: the set a or b \
+             belongs to) → ratio (b's speed over a's, signed), direction (same|opposite), reduction, mm_per_rev? (b a rack), rev_per_mm? (a a rack), path: [{from, to, from_gear?, \
+             to_gear?, kind: shaft|spur|helical|herringbone|internal|rack|bevel|spiral_bevel|hypoid|crossed_helical|worm|wrap, teeth?, ratio, efficiency, self_locking?}], efficiency, notes",
         ),
 ];
 
@@ -1130,6 +1151,8 @@ struct Asked {
     /// gears' member (its row).
     members: Vec<GearMember>,
     rows: Vec<usize>,
+    /// Made of `items`: the items read and planned (the replies per gear and per link).
+    items: Option<Box<items::Items>>,
 }
 
 /// The axes of an axis-first request, where they are now.
@@ -1894,6 +1917,7 @@ fn from_selection(s: &dyn Reads, cmd: &str, p: &GearParams, items: &[GearSelecti
                 herringbone: it.herringbone,
                 shaft_body: own.and_then(|o| o.enabled),
                 shaft_diameter: own.and_then(|o| o.diameter),
+                sides: None,
             },
         });
     }
@@ -2021,11 +2045,20 @@ fn shafts_and_contacts(asked: &Asked, plan: &Plan) -> (Vec<GearShaftInfo>, Vec<G
 /// it can't be made, member by member.
 enum Read {
     Set(Asked, Plan),
-    Wrong { error: String, members: Vec<GearMember>, notes: Vec<String> },
+    Wrong { error: String, members: Vec<GearMember>, notes: Vec<String>, items: Option<Box<items::Items>> },
 }
 
 fn ask_read(s: &dyn Reads, cmd: &str, p: &Value) -> Result<Read> {
     let params = read(cmd, p)?;
+    // A drivetrain of gear items: planned whole.
+    if let Some(list) = &params.items {
+        let (it, plan, spec) = items::plan(s, cmd, &params, list)?;
+        let notes = it.system.notes.clone();
+        if let Some(error) = it.system.error.clone() {
+            return Ok(Read::Wrong { error, members: Vec::new(), notes, items: Some(Box::new(it)) });
+        }
+        return Ok(Read::Set(Asked { spec, solved: None, members: Vec::new(), rows: Vec::new(), items: Some(Box::new(it)) }, plan));
+    }
     let got = if let Some(items) = &params.selection {
         Some(from_selection(s, cmd, &params, items, assembly::wanted(p))?)
     } else if params.sketch.is_some() {
@@ -2035,18 +2068,18 @@ fn ask_read(s: &dyn Reads, cmd: &str, p: &Value) -> Result<Read> {
     };
     match got {
         Some(Got::Set(solved, members, rows)) => {
-            let asked = Asked { spec: solved.spec.clone(), solved: Some(solved), members, rows };
+            let asked = Asked { spec: solved.spec.clone(), solved: Some(solved), members, rows, items: None };
             let plan = solidcraft_gear::plan(&asked.spec).map_err(|e| bad(cmd, e))?;
             return Ok(Read::Set(asked, plan));
         }
-        Some(Got::Wrong { error, members, notes }) => return Ok(Read::Wrong { error, members, notes }),
+        Some(Got::Wrong { error, members, notes }) => return Ok(Read::Wrong { error, members, notes, items: None }),
         None => {}
     }
     let asked = match axes_of(s, cmd, &params)? {
-        None => Asked { spec: spec_of(&params).map_err(|e| bad(cmd, e))?, solved: None, members: Vec::new(), rows: Vec::new() },
+        None => Asked { spec: spec_of(&params).map_err(|e| bad(cmd, e))?, solved: None, members: Vec::new(), rows: Vec::new(), items: None },
         Some((a1, a2)) => {
             let solved = solve_on(&params, &a1, a2.as_ref()).map_err(|e| bad(cmd, e))?;
-            Asked { spec: solved.spec.clone(), solved: Some(solved), members: Vec::new(), rows: Vec::new() }
+            Asked { spec: solved.spec.clone(), solved: Some(solved), members: Vec::new(), rows: Vec::new(), items: None }
         }
     };
     let plan = solidcraft_gear::plan(&asked.spec).map_err(|e| bad(cmd, e))?;
@@ -2091,23 +2124,32 @@ fn calculate(s: &mut Session, p: &Value) -> Result<Value> {
     match ask_read(s, cmd, p)? {
         Read::Set(asked, plan) => {
             let (shafts, contacts, outlines) = shafts_and_contacts(&asked, &plan);
-            reply(
-                cmd,
-                GearResult {
-                    facts: facts(&asked, &plan),
-                    warnings: plan.warnings.clone(),
-                    notes: notes(&asked),
-                    params: Some(params_of(&asked.spec)),
-                    members: asked.members.clone(),
-                    shafts,
-                    contacts,
-                    outlines,
-                    ..GearResult::default()
-                },
-            )
+            let mut r = GearResult {
+                facts: facts(&asked, &plan),
+                warnings: plan.warnings.clone(),
+                notes: notes(&asked),
+                // (A drivetrain of items is no one gear.create type: its items are the request.)
+                params: asked.items.is_none().then(|| params_of(&asked.spec)),
+                members: asked.members.clone(),
+                shafts,
+                contacts,
+                outlines,
+                ..GearResult::default()
+            };
+            if let Some(it) = &asked.items {
+                items::fill(&mut r, it, &plan, None);
+            }
+            reply(cmd, r)
+        }
+        // What is wrong with an item drivetrain: per gear and per link, for the dialog.
+        Read::Wrong { error, notes, items: Some(it), .. } => {
+            let mut r = GearResult { notes, ..GearResult::default() };
+            items::fill(&mut r, &it, &Plan::default(), None);
+            r.error = Some(error);
+            reply(cmd, r)
         }
         // What each member became and what is wrong with it, for a front end to show.
-        Read::Wrong { error, members, notes } => reply(cmd, GearResult { warnings: vec![error], notes, members, ..GearResult::default() }),
+        Read::Wrong { error, members, notes, .. } => reply(cmd, GearResult { warnings: vec![error], notes, members, ..GearResult::default() }),
     }
 }
 
@@ -2182,7 +2224,7 @@ fn from_axes(s: &mut Session, p: &Value) -> Result<Value> {
             out.derived = derived_names(&solved.derived);
             out.frames = solved.frames.iter().map(|f| GearFrame { origin: f.origin, x: f.x, z: f.z }).collect();
             out.warnings = plan.warnings.clone();
-            let asked = Asked { spec: solved.spec.clone(), solved: Some(solved), members: Vec::new(), rows: Vec::new() };
+            let asked = Asked { spec: solved.spec.clone(), solved: Some(solved), members: Vec::new(), rows: Vec::new(), items: None };
             out.facts = facts(&asked, &plan);
             out.notes = notes(&asked);
         }
@@ -2210,6 +2252,9 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
         kind_title(spec.kind).to_string()
     };
     let mut request = if p.is_object() { p.clone() } else { json!({}) };
+    if asked.items.is_some() && !feature::wanted(cmd, &request)? {
+        return Err(bad(cmd, "a drivetrain of `items` is one Gears feature: leave `build` out (teeth drawn as formulas are not made for it)"));
+    }
     if feature::wanted(cmd, &request)? {
         return feature::create(s, cmd, &asked, &plan, group_name, request, warnings, sketch_print);
     }
@@ -2686,7 +2731,7 @@ fn update(s: &mut Session, p: &Value) -> Result<Value> {
     let (asked, plan) = ask(s, cmd, &request)?;
     let sketch_print = sketch_link::sketch_print(s, &request);
     let mut warnings = plan.warnings.clone();
-    if rec.feature.is_some() || feature::wanted(cmd, &request)? && request.get("build").is_some() {
+    if rec.feature.is_some() || asked.items.is_some() || feature::wanted(cmd, &request)? && request.get("build").is_some() {
         return feature::update(s, cmd, rec, request, &asked, &plan, warnings, sketch_print);
     }
     let (mode, notes_eq) = equations::Mode::of(s, cmd, &request, &asked.spec, &plan, &rec.name, false)?;

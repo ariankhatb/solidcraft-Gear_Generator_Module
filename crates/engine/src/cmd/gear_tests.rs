@@ -1103,7 +1103,8 @@ fn an_assembled_pair_turns_gear_2_by_the_ratio_and_undoes_in_one_step() {
     // One undo takes the gears, their components and joints away.
     let made: Vec<u64> = r["assembly"]["members"].as_array().unwrap().iter().filter_map(|m| m["component"].as_u64()).collect();
     run(&mut s, "edit.undo", json!({}));
-    assert!(!s.doc.components.iter().any(|c| made.contains(&c.id)));
+    let left: Vec<(u64, String)> = s.doc.components.iter().map(|c| (c.id, c.name.clone())).collect();
+    assert!(!s.doc.components.iter().any(|c| made.contains(&c.id)), "made {made:?}, after undo {left:?}, undo stack {:?}", s.undo.iter().map(|u| u.label.clone()).collect::<Vec<_>>());
     assert!(s.doc.assembly.joints.is_empty() && s.doc.assembly.links.is_empty());
 }
 
@@ -1159,7 +1160,11 @@ fn an_update_keeps_the_assemblys_components_joints_and_links_in_place() {
     let group = r["group"].as_u64().unwrap();
     let before = counts(&s);
     assert_eq!(before, (empty.0 + 3, empty.1 + 2, empty.2 + 1), "two gears and the keep-out; two joints; one link");
-    let ids = |a: &Value| (a["members"].clone(), a["keep_out"].clone(), a["joints"].clone());
+    // The same components, placements and joints (the shafts move, the bodies are renamed).
+    let ids = |a: &Value| {
+        let ms: Vec<(Value, Value, Value)> = a["members"].as_array().unwrap().iter().map(|m| (m["component"].clone(), m["occurrence"].clone(), m["joint"].clone())).collect();
+        (ms, a["keep_out"].clone(), a["joints"].clone())
+    };
     let made = ids(&r["assembly"]);
     // In place (the same steps) and rebuilt (another tooth count's steps): the same components,
     // occurrences, joints and keep-out each time, the link given the new ratio.
@@ -1441,7 +1446,8 @@ fn same_angle(got: f64, want: f64) -> bool {
 fn joint_kinds(s: &mut Session, r: &Value) -> (usize, usize, usize) {
     let l = run(s, "joint.list", json!({}));
     let ours: Vec<u64> = r["assembly"]["joints"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
-    let kind_of = |id: u64| l["joints"].as_array().unwrap().iter().find(|j| j["id"].as_u64() == Some(id)).map(|j| j["kind"].as_str().unwrap_or_default().to_lowercase()).unwrap_or_default();
+    // joint.list names a joint's kind `type`.
+    let kind_of = |id: u64| l["joints"].as_array().unwrap().iter().find(|j| j["id"].as_u64() == Some(id)).map(|j| j["type"].as_str().unwrap_or_default().to_lowercase()).unwrap_or_default();
     let (mut rev, mut rig, mut other) = (0, 0, 0);
     for k in ours.iter().map(|j| kind_of(*j)) {
         match k.as_str() {
@@ -1554,6 +1560,8 @@ fn an_internal_mesh_turns_the_ring_the_same_way() {
     let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 60.0, "ring"), circle(40.0, 0.0, 20.0, "pinion")]);
     let r = assembled(&mut s, json!({"sketch": sk, "type": "spur", "module": 2, "face_width": 6, "assembly": true}));
     let (ring, pinion) = (member_on(&r, 0.0, 0.0), member_on(&r, 40.0, 0.0));
+    eprintln!("GATE internal assembly: {}", r["assembly"]);
+    eprintln!("GATE internal members: {}", r["members"]);
     let j = member_joints(&r);
     run(&mut s, "joint.drive", json!({"joint": j[pinion].unwrap(), "value": 30}));
     let got = turned_about(&s, &r, ring);

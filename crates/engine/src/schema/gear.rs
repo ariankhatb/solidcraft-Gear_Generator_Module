@@ -1502,6 +1502,8 @@ pub struct GearAssembly {
     pub links: Vec<usize>,
     /// The member that drives the others (1-based; `assembly_driver`).
     pub driver: usize,
+    /// What the set is held in: the one grounded frame its shafts' joints are made to.
+    pub ground: String,
     /// Loops of meshes whose ratios don't agree (the system would lock), each naming the members
     /// round it; the mesh closing each is left out of the joints.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

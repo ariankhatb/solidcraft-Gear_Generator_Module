@@ -370,6 +370,17 @@ pub(super) fn sync(
         }
         (None, None) => None,
     };
+    // The frame the set turns in: the keep-out component when there is one (grounded: the
+    // housing's space, every shaft's revolute joint on it), else the design's origin.
+    let ground_occ = match keep_out_component.and_then(|c| occurrence_of(s, c)) {
+        Some(o) => {
+            if keep_out_kept.is_some() {
+                s.execute("occurrence.ground", &json!({"occurrence": o, "grounded": true}))?;
+            }
+            o
+        }
+        None => 0,
+    };
 
     // A joint per member that moves: on its shaft, to the world or its carrier. A kept joint of
     // the same type on the same side keeps its id, name and value, its frames moved onto the
@@ -402,7 +413,7 @@ pub(super) fn sync(
         }
         let (kind_name, other) = match rigid_to[i] {
             Some(on) => ("rigid", occs[on]),
-            None => (if slides[i] { "slider" } else { "revolute" }, base_of(a, i).map_or(0, |c| occs[c])),
+            None => (if slides[i] { "slider" } else { "revolute" }, base_of(a, i).map_or(ground_occ, |c| occs[c])),
         };
         let ax = &m.axis;
         let same = rec.joint.filter(|j| joint_exists(s, *j)).filter(|_| rec.kind == kind_name && rec.base == other);
@@ -551,7 +562,11 @@ pub(super) fn sync(
     let keep_out_record = keep_out_component.and_then(|c| keep_out.map(|b| (b.to_string(), c)));
     let joints = records.iter().filter_map(|r| r.joint).collect();
     let record = AssemblyRecord { members: records, keep_out: keep_out_record };
-    Ok((record, GearAssembly { members, keep_out: keep_out_component, joints, links, driver: driver.filter(|d| *d < n).unwrap_or(0) + 1, issues }))
+    let ground = match keep_out_component {
+        Some(c) => format!("the keep-out component (component {c}), grounded: every shaft turns in it"),
+        None => "the design's origin: every shaft's joint is to it".to_string(),
+    };
+    Ok((record, GearAssembly { members, keep_out: keep_out_component, joints, links, driver: driver.filter(|d| *d < n).unwrap_or(0) + 1, issues, ground }))
 }
 
 /// Takes a set's assembly down (`assembly` switched off on an update): its joints (with their

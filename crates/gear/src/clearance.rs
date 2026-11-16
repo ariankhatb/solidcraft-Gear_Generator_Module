@@ -440,6 +440,10 @@ fn build(
         let coarse = Solid::new(b, 1.0);
         let span = (coarse.z.1 - coarse.z.0).max(1e-3);
         let (h, hz) = spacing(s.module, span);
+        // A member whose clearance follows formulas has its rows spaced by the module, not its
+        // face width: the axial reach (`hz`) then stays what it was planned with when a face
+        // width parameter changes, as the body regenerated from the new numbers has it.
+        let hz = if follows.get(i).is_some_and(Option::is_some) { (s.module / 30.0).clamp(0.05, 1.0) } else { hz };
         let solid = Solid::new(b, h);
         let pts = solid.material_points(hz);
         let z = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q[2]), a.1.max(q[2])));

@@ -703,13 +703,18 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
 
 /// Whether a timeline folder is a gear set (Edit Gears opens the dialog on it).
 pub fn is_set(app: &SolveApp, group: u64) -> bool {
-    solidcraft_engine::gear_sets(&app.session).iter().any(|set| set.group == group)
+    solidcraft_engine::gear_sets(&app.session).iter().any(|set| owns(set, group))
+}
+
+/// Whether `id` is the set's timeline folder or its Gears feature (the two ids differ).
+fn owns(set: &solidcraft_engine::schema::gear::GearSet, id: u64) -> bool {
+    set.group == id || set.feature == Some(id)
 }
 
 /// Opens the dialog on the gear set of a timeline folder.
 pub fn open_set(app: &mut SolveApp, group: u64) -> Result<(), String> {
     let sets = solidcraft_engine::gear_sets(&app.session);
-    let set = sets.iter().find(|set| set.group == group).ok_or_else(|| "That folder is not a gear set".to_string())?;
+    let set = sets.iter().find(|set| owns(set, group)).ok_or_else(|| "That folder is not a gear set".to_string())?;
     let g = for_set(set);
     let targets: Vec<Sel> = set.request.get("targets").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(|name| Sel::Body { name: name.to_string() }).collect();
     app.start("gear.create");

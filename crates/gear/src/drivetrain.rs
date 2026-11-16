@@ -536,13 +536,13 @@ fn crossed(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], st
                 return;
             }
         }
-        crate::axes::Relation::Skew { offset, .. } if family != Some(Kind::Worm) => {
-            if (offset - g1.1.r - g2.1.r).abs() > 1e-6 + TOLERANCE * g1.1.r.min(g2.1.r) {
-                err[g2.0].get_or_insert_with(|| {
-                    format!("{} and {} don't touch: their shafts are {} mm apart and their radii add up to {} mm", who(items, g1.0), who(items, g2.0), num(offset), num(g1.1.r + g2.1.r))
-                });
-                return;
-            }
+        crate::axes::Relation::Skew { offset, .. } if family != Some(Kind::Worm)
+            && (offset - g1.1.r - g2.1.r).abs() > 1e-6 + TOLERANCE * g1.1.r.min(g2.1.r) =>
+        {
+            err[g2.0].get_or_insert_with(|| {
+                format!("{} and {} don't touch: their shafts are {} mm apart and their radii add up to {} mm", who(items, g1.0), who(items, g2.0), num(offset), num(g1.1.r + g2.1.r))
+            });
+            return;
         }
         _ => {}
     }

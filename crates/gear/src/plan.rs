@@ -2594,7 +2594,7 @@ fn worm(s: &Spec, p: &mut Plan) {
         let per_section = tooth(0.0).map_or(1, |t| loft_curves(&sided_outline(&t, zw, PI / f64::from(zw))).max(1));
         let most = {
             let n = (LOFT_CURVE_LIMIT / per_section).max(3);
-            if n % 2 == 0 { n - 1 } else { n }
+            if n.is_multiple_of(2) { n - 1 } else { n }
         };
         count = WHEEL_SECTIONS_MIN.min(most);
         loop {

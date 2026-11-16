@@ -2213,7 +2213,7 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
             for za in 10..=24u32 {
                 for zp in 9..=16u32 {
                     let zb = (f64::from(za) * want).round() as u32;
-                    if zb <= za || (za + zb) % n != 0 {
+                    if zb <= za || !(za + zb).is_multiple_of(n) {
                         continue;
                     }
                     let c = f64::from(zb - za) / (2.0 * f64::from(zp));
@@ -2245,7 +2245,7 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
         Style::TorsenB => {
             d.side_teeth = 18;
             d.pinion_teeth = 11;
-            if (2 * d.side_teeth) % d.pinions != 0 {
+            if !(2 * d.side_teeth).is_multiple_of(d.pinions) {
                 d.side_teeth = 20;
             }
             if goal.bias > 0.0 {

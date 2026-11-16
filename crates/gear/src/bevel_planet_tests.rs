@@ -395,7 +395,7 @@ fn bevel_planetary_on_a_face_gears_shafts_plans_quickly() {
     let sol = crate::simple::solve(&sketch_rules::simple_of(&m, &crate::simple::Simple::default()), &fg);
     assert!(sol.error.is_none(), "{:?}", sol.error);
     let (a1, a2) = sketch_rules::axes_for(&m, &sol.spec, &crate::plan::Frame::at([0.0; 3]), [0.0; 3]);
-    let bp = Spec { bore: fg.bore.clone(), bore2: fg.bore2.clone(), ..Spec::defaults_for(Kind::BevelPlanetary) };
+    let bp = Spec { bore: fg.bore, bore2: fg.bore2, ..Spec::defaults_for(Kind::BevelPlanetary) };
     let t = std::time::Instant::now();
     let solved = axes::solve(&a1, a2.as_ref(), Some(Kind::BevelPlanetary), &bp, &Drive::default());
     eprintln!("solve: {:?} in {:?}", solved.as_ref().map(|s| (s.spec.module, s.spec.teeth, s.spec.teeth2, s.spec.shaft_angle, s.spec.planets)).map_err(|e| e.clone()), t.elapsed());

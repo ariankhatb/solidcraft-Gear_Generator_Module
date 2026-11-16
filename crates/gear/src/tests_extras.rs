@@ -415,19 +415,18 @@ pub(crate) fn random_extras(r: &mut crate::sweep_tests::Rng, s: &mut Spec) {
     };
     match s.kind {
         Kind::Sprocket => {
-            let pitch;
-            if r.chance(0.25) {
+            let pitch = if r.chance(0.25) {
                 s.chain = crate::sprocket::CUSTOM;
                 s.chain_pitch = r.log_range(3.0, 80.0);
                 s.roller_diameter = s.chain_pitch * r.range(0.3, 0.8);
                 s.roller_width = s.chain_pitch * r.range(0.2, 1.0);
                 s.strand_pitch = s.roller_width * r.range(1.05, 2.5);
-                pitch = s.chain_pitch;
+                s.chain_pitch
             } else {
                 let c = CHAINS[r.int(0, CHAINS.len() as u32 - 1) as usize];
                 s.chain = c.id;
-                pitch = c.pitch;
-            }
+                c.pitch
+            };
             s.strands = r.int(1, 4);
             s.side_chamfer = r.chance(0.6);
             s.teeth = r.teeth(6).min(250);

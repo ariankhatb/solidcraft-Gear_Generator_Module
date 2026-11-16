@@ -747,7 +747,7 @@ pub fn spec_for(m: &Measured, base: &Spec) -> Result<(Spec, Vec<String>), String
             exact(std, md);
             (s.module, s.teeth, s.teeth2) = (md, z[0], z[1]);
             s.teeth3 = z[0] + 2 * z[1];
-            if (s.teeth + s.teeth3) % s.planets.max(1) != 0 {
+            if !(s.teeth + s.teeth3).is_multiple_of(s.planets.max(1)) {
                 notes.push(format!("{} planets don't space evenly with {} + {} teeth: (sun + ring) ÷ planets must be whole", s.planets, s.teeth, s.teeth3));
             }
         }

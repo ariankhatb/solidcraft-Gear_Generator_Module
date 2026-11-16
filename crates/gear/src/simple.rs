@@ -1177,7 +1177,7 @@ fn internal(c: &mut Ctx) -> Result<(), String> {
     let outer = move |m: f64, z: u32| m * f64::from(z) / cb + 2.0 * (rack.dedendum * m + rim_k.map_or(rim_mm, |k| k * m));
     let pitch = move |m: f64, z: u32| m * f64::from(z) / cb;
     // The pinion inside, for its size and the ring's teeth from a ratio.
-    let ring_d = s.ring_diameter.filter(|d| *d > 0.0).or_else(|| match (s.pitch_diameter, s.ratio) {
+    let ring_d = s.ring_diameter.filter(|d| *d > 0.0).or(match (s.pitch_diameter, s.ratio) {
         (Some(p), Some(r)) => Some(p * r),
         _ => None,
     });
@@ -1306,7 +1306,7 @@ fn planetary(c: &mut Ctx) -> Result<(), String> {
                 if n > 1 && 2.0 * a * (PI / f64::from(n)).sin() <= 2.0 * ra_p + 0.5 * m {
                     continue;
                 }
-                let even = (zs + zr) % n == 0;
+                let even = (zs + zr).is_multiple_of(n);
                 let got = 1.0 + f64::from(zr) / f64::from(zs);
                 let mut score = 40.0 * (got / ratio).ln().abs() + if even { 0.0 } else { 3.0 } + if second { 0.3 } else { 0.0 };
                 for (have, want) in size_of(m, zs, zp) {
@@ -1463,7 +1463,7 @@ fn bevel(c: &mut Ctx, kind: Kind) -> Result<(), String> {
             };
             for z1 in firsts {
                 let z2 = (f64::from(z1) * ratio).round() as u32;
-                if z1 < zl.min(s.teeth.unwrap_or(zl)) || z2 < 6 || z2 > 2000 || cones(sigma, f64::from(z1), f64::from(z2)).is_none() {
+                if z1 < zl.min(s.teeth.unwrap_or(zl)) || !(6..=2000).contains(&z2) || cones(sigma, f64::from(z1), f64::from(z2)).is_none() {
                     continue;
                 }
                 let got = m * f64::from(z1);
@@ -1572,7 +1572,7 @@ fn bevel_planetary(c: &mut Ctx) -> Result<(), String> {
         };
         for z1 in firsts {
             let z2 = (f64::from(z1) * ratio).round() as u32;
-            if z1 < zl.min(s.teeth.unwrap_or(zl)) || z2 < 6 || z2 > 2000 {
+            if z1 < zl.min(s.teeth.unwrap_or(zl)) || !(6..=2000).contains(&z2) {
                 continue;
             }
             let cand = Spec { module: m, teeth: z1, teeth2: z2, teeth3: 0, ..c.spec.clone() };

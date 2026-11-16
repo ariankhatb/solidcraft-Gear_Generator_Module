@@ -353,7 +353,7 @@ fn design_iso(s: &Spec) -> Result<Design, String> {
         let d = design_with(s, Some((d2, (de2 - b2 * d2.sin()) / 2.0))).ok()?;
         let r = rho_lim(&d);
         let own = d.cone_m2 / d.beta2.sin().abs().max(1e-6);
-        (r.is_finite() && r > 0.0).then(|| (r - own, d))
+        (r.is_finite() && r > 0.0).then_some((r - own, d))
     };
     // From the bevel estimate a degree at a time towards the crossing (the limit radius grows
     // with the wheel pitch angle, the spiral's own falls), then halving.
@@ -636,7 +636,7 @@ pub(crate) fn corners(o: &Outline) -> Vec<V2> {
 pub(crate) fn restarts(sections: &[Outline], teeth: usize) -> Vec<usize> {
     let rings: Vec<Vec<V2>> = sections.iter().map(corners).collect();
     let m = rings[0].len();
-    let per = if teeth > 0 && m % teeth == 0 { m / teeth } else { m };
+    let per = if teeth > 0 && m.is_multiple_of(teeth) { m / teeth } else { m };
     let mut dirs: Vec<V2> = rings[rings.len() - 1].clone();
     let mut out = Vec::with_capacity(rings.len());
     for r in &rings {
@@ -666,8 +666,8 @@ pub(crate) fn restarts(sections: &[Outline], teeth: usize) -> Vec<usize> {
 /// would then cut across the flanks.
 pub(crate) fn slips(sections: &[Outline], teeth: usize) -> bool {
     let m = corners(&sections[0]).len();
-    let per = if teeth > 0 && m % teeth == 0 { m / teeth } else { m };
-    let bad = |k: &[usize]| k.iter().any(|v| *v == usize::MAX) || k.windows(2).any(|w| (w[1] + m - w[0]) % per != 0);
+    let per = if teeth > 0 && m.is_multiple_of(teeth) { m / teeth } else { m };
+    let bad = |k: &[usize]| k.contains(&usize::MAX) || k.windows(2).any(|w| !(w[1] + m - w[0]).is_multiple_of(per));
     let rev: Vec<Outline> = sections.iter().rev().cloned().collect();
     bad(&restarts(sections, teeth)) || bad(&restarts(&rev, teeth))
 }
@@ -2980,7 +2980,7 @@ mod tests {
                     let k = loft_shifts(&b.frame, sections);
                     let per = corners(&sections[0].0).len() / teeth as usize;
                     eprintln!("{}: Σ {sigma} {} sections, {per} corners a tooth, restarts {:?}", b.name, sections.len(), k);
-                    assert!(k.windows(2).all(|w| (w[1] + per * teeth as usize - w[0]) % per == 0), "{}: the kernel would slip a section: {k:?}", b.name);
+                    assert!(k.windows(2).all(|w| (w[1] + per * teeth as usize - w[0]).is_multiple_of(per)), "{}: the kernel would slip a section: {k:?}", b.name);
                 }
             }
         }
@@ -3106,7 +3106,7 @@ mod tests {
                 let Step::Loft { sections, .. } = &b.steps[0] else { panic!() };
                 let k = loft_shifts(&b.frame, sections);
                 let per = corners(&sections[0].0).len() / teeth as usize;
-                assert!(k.windows(2).all(|w| (w[1] + per * teeth as usize - w[0]) % per == 0), "Σ {sigma}: {} would slip", b.name);
+                assert!(k.windows(2).all(|w| (w[1] + per * teeth as usize - w[0]).is_multiple_of(per)), "Σ {sigma}: {} would slip", b.name);
             }
         }
         for sigma in [105.0, 120.0] {

@@ -169,7 +169,7 @@ impl Involute {
         let v = self.thickness() / (2.0 * self.r()) + inv(at) + dp / (self.module * z * self.pressure_angle.cos()) - PI / z;
         let am = inv_inv(v);
         let rm = self.rb() / am.cos();
-        let m = if self.teeth % 2 == 0 { 2.0 * rm + dp } else { 2.0 * rm * (PI / (2.0 * z)).cos() + dp };
+        let m = if self.teeth.is_multiple_of(2) { 2.0 * rm + dp } else { 2.0 * rm * (PI / (2.0 * z)).cos() + dp };
         (m, dp)
     }
 }

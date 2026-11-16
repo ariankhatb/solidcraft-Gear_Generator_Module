@@ -548,11 +548,11 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
     for (k, m) in &mut meshes {
         let l = t.links[*k];
         let pair = format!("gears {}–{}", l.a + 1, l.b + 1);
-        if l.kind == LinkKind::External {
-            if let (Some(fa), Some(fb)) = (&flanks[l.a], &flanks[l.b]) {
-                m.contact_ratio = contact_ratio_external(&gs[l.a], fa, &gs[l.b], fb, m);
-                m.total_contact_ratio = m.contact_ratio + m.overlap_ratio;
-            }
+        if l.kind == LinkKind::External
+            && let (Some(fa), Some(fb)) = (&flanks[l.a], &flanks[l.b])
+        {
+            m.contact_ratio = contact_ratio_external(&gs[l.a], fa, &gs[l.b], fb, m);
+            m.total_contact_ratio = m.contact_ratio + m.overlap_ratio;
         }
         p.fact(format!("{pair} ratio"), f64::from(t.gears[l.b].teeth) / f64::from(t.gears[l.a].teeth), Unit::None);
         p.fact(format!("{pair} centre distance"), m.center_distance, Unit::Mm);
@@ -598,7 +598,6 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
     // own body.
     let mut body = vec![None; n];
     let units = rigid_units(t);
-    let mut built = built;
     for unit in &units {
         let shaft = unit.shaft.map(|k| &t.shafts[k]);
         let gears: Vec<usize> = unit.gears.iter().copied().filter(|i| built[*i].is_some()).collect();

@@ -725,7 +725,7 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
         }
         BevelPlanetMode::Ring => {
             let vf = virt(zf, g.delta_far, 0.0);
-            let ring = Internal { gear: vf.clone() };
+            let ring = Internal { gear: vf };
             let flank = ring.space_flank();
             let ph = mesh_phase_internal(vp.teeth, php, vf.teeth, 0.0);
             let rim = if s.rim > 0.0 { s.rim } else { 3.0 * s.module };

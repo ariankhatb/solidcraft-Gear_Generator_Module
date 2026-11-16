@@ -42,10 +42,11 @@ fn assembly_matches_preview(p: &Plan) {
     assert_eq!(p.assembly.members.len(), p.bodies.len());
     for (k, g) in p.preview.iter().enumerate() {
         let r = p.assembly.ratio(0, k);
-        if g.speed != 0.0 && k > 0 {
-            if let Some(r) = r {
-                assert!((r - g.speed).abs() < 1e-9, "gear {}: assembly {r}, preview {}", k + 1, g.speed);
-            }
+        if g.speed != 0.0
+            && k > 0
+            && let Some(r) = r
+        {
+            assert!((r - g.speed).abs() < 1e-9, "gear {}: assembly {r}, preview {}", k + 1, g.speed);
         }
     }
 }

@@ -35,7 +35,7 @@ use super::sketch::{Left, edit_solved};
 use super::sketch_import::add_geometry;
 use crate::params::bad;
 use crate::schema::gear::{
-    BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, DiffDrive, DifferentialGoalParams, DifferentialParams, DiffMount, DiffPartsParams, DiffStyle, GearAxesResult, GearAxis, GearAxisLine, GearBevelPlanetMode, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult, GearMember, GearShaftInfo, GearContact, GearOutline, GearMaterial, GearParams, GearRelation, GearResult, GearSelection, GearSet, GearSketchParams, GearSketchResult, GearType, HardwareParams, PlacementParams, RackStandard, SeatAlongParams, SeatPointParams, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
+    BearingSizeParams, BeltProfile, BoreParams, BoreType, ChainSize, ChamferParams, ClearanceBearing, ClearanceParams, ClearanceSeat, DiffDrive, DifferentialGoalParams, DifferentialParams, DiffMount, DiffPartsParams, DiffStyle, GearAxesResult, GearAxis, GearAxisLine, GearBevelPlanetMode, GearBroken, GearCandidate, GearFact, GearFrame, GearInspectParams, GearInspectResult, GearMember, GearShaftInfo, GearContact, GearOutline, GearItemParams, GearItemGear, GearPortParams, GearItemGearOut, GearLinkOut, GearItemOut, GearPortOut, GearMaterial, GearParams, GearRelation, GearResult, GearSelection, GearSet, GearSketchParams, GearSketchResult, GearType, HardwareParams, PlacementParams, RackStandard, SeatAlongParams, SeatPointParams, ShaftEndType, ShaftParams, SpiralHand, SplineStandardParam,
 };
 use solidcraft_gear::spline::SplineStandard;
 use solidcraft_gear::strength::Material;
@@ -1130,6 +1130,8 @@ struct Asked {
     /// gears' member (its row).
     members: Vec<GearMember>,
     rows: Vec<usize>,
+    /// Made of items: what each item, gear and link became.
+    items: Option<solidcraft_gear::items::Resolved>,
 }
 
 /// The axes of an axis-first request, where they are now.
@@ -1815,15 +1817,6 @@ fn from_selection(s: &dyn Reads, cmd: &str, p: &GearParams, items: &[GearSelecti
     let mut bearing: Option<String> = None;
     for (i, it) in items.iter().enumerate() {
         let what = format!("selection[{i}]");
-        let given = [("sketch point", it.point.is_some()), ("sketch curve", it.curve.is_some()), ("edge", it.edge.is_some()), ("face", it.face.is_some()), ("axis", it.axis.is_some())];
-        let named: Vec<&str> = given.iter().filter(|(_, g)| *g).map(|(n, _)| *n).collect();
-        if named.len() != 1 {
-            let extra = if named.is_empty() { String::new() } else { format!(", not {}", named.join(" and ")) };
-            return Err(bad(cmd, format!("`{what}`: give exactly one of {{sketch, point}}, {{sketch, curve}}, {{edge: [x,y,z]}}, {{face: [x,y,z]}} or {{axis}}{extra}")));
-        }
-        if (it.point.is_some() || it.curve.is_some()) != it.sketch.is_some() {
-            return Err(bad(cmd, format!("`{what}`: a sketch point or curve needs `sketch` (and `sketch` a point or curve)")));
-        }
         for (name, v) in [("pitch_diameter", it.pitch_diameter), ("along", it.along), ("module", it.module), ("face_width", it.face_width)] {
             if v.is_some_and(|v| !v.is_finite() || v.abs() > 1e6 || (name != "along" && v <= 0.0)) {
                 return Err(bad(cmd, format!("`{what}.{name}` must be a finite number{}", if name == "along" { "" } else { " greater than 0" })));
@@ -1850,32 +1843,7 @@ fn from_selection(s: &dyn Reads, cmd: &str, p: &GearParams, items: &[GearSelecti
             }
         }
         // A sketch's point, circle or line (flat or 3D), else an axis line.
-        let thing = match (&it.sketch, it.curve.as_ref().or(it.point.as_ref())) {
-            (Some(sk), Some(entity)) => {
-                let id = s.sketch_id(Some(sk), cmd, &what)?;
-                let gs = s.gear_sketch(id).map_err(|e| bad(cmd, format!("`{what}`: {e}")))?;
-                let found = sketch_items(&gs).into_iter().find(|(k, _)| k == entity).map(|(_, t)| t.thing);
-                match found {
-                    Some(t) => t,
-                    // The sketch's own origin and other points the drawing reads as none.
-                    None => {
-                        let a = axis_of(s, &GearAxis(json!({"sketch": sk, "point": it.point, "curve": it.curve})), cmd, &what)?;
-                        if it.point.is_some() { drivetrain::Thing::Point(a.origin) } else { drivetrain::Thing::Line(drivetrain::Line3 { a: a.origin, b: bearing_point(&a, 1.0) }) }
-                    }
-                }
-            }
-            _ => {
-                let v = if let Some(e) = &it.edge {
-                    json!({"edge": e})
-                } else if let Some(f) = &it.face {
-                    json!({"face": f})
-                } else {
-                    it.axis.clone().unwrap_or(Value::Null)
-                };
-                let a = axis_of(s, &GearAxis(v), cmd, &what)?;
-                drivetrain::Thing::Line(drivetrain::Line3 { a: a.origin, b: bearing_point(&a, 1.0) })
-            }
-        };
+        let thing = locate(s, cmd, &what, &Locator { sketch: it.sketch.as_ref(), point: it.point.as_deref(), curve: it.curve.as_deref(), edge: it.edge.as_ref(), face: it.face.as_ref(), axis: it.axis.as_ref() })?;
         if matches!(thing, drivetrain::Thing::Point(_) | drivetrain::Thing::Circle(_)) && it.along.is_some() {
             return Err(bad(cmd, format!("`{what}.along`: `along` is for a gear or bearing on a shaft line; a point or circle sits where it is")));
         }
@@ -1895,11 +1863,18 @@ fn from_selection(s: &dyn Reads, cmd: &str, p: &GearParams, items: &[GearSelecti
                 shaft_body: own.and_then(|o| o.enabled),
                 shaft_diameter: own.and_then(|o| o.diameter),
                 row: Some(it.index.unwrap_or(i)),
+                sides: None,
             },
         });
     }
     // Circles, or gears asked by role: a drivetrain.
-    let drivetrain = read.iter().any(|it| matches!(it.thing, drivetrain::Thing::Circle(_)) || it.ask.role.is_some_and(|r| !matches!(r, drivetrain::Role::Shaft | drivetrain::Role::Bearing)));
+    // Shafts without a size (a sketch point or a line, its gear to fill the spacing to its
+    // neighbours) are shafts in order, a circle among them a sized shaft: no drivetrain.
+    let no_size = read.iter().zip(items).any(|(it, e)| {
+        !matches!(it.ask.role, Some(drivetrain::Role::Bearing)) && matches!(it.thing, drivetrain::Thing::Point(_) | drivetrain::Thing::Line(_)) && e.pitch_diameter.is_none() && e.teeth.is_none() && it.ask.role.is_none_or(|r| r == drivetrain::Role::Shaft) && e.point.is_some()
+    });
+    let roles = read.iter().any(|it| it.ask.role.is_some_and(|r| !matches!(r, drivetrain::Role::Shaft | drivetrain::Role::Bearing)));
+    let drivetrain = roles || (!no_size && read.iter().any(|it| matches!(it.thing, drivetrain::Thing::Circle(_))));
     if drivetrain {
         // A spiral angle asked of a bevel member is the set's.
         let spiral = items.iter().find_map(|it| it.spiral_angle);
@@ -1943,7 +1918,12 @@ fn from_selection(s: &dyn Reads, cmd: &str, p: &GearParams, items: &[GearSelecti
                 }
                 shafts.push(Shaft { axis: a, pitch_diameter: it.ask.pitch_diameter, teeth: it.ask.teeth });
             }
-            (drivetrain::Thing::Circle(_), _) => unreachable!("circles are read as a drivetrain"),
+            // A circle: a shaft at its centre, square to it, with its pitch diameter.
+            (drivetrain::Thing::Circle(c), _) => {
+                let a = Axis::new(c.c, c.n).ok_or_else(|| bad(cmd, format!("`{what}` has no direction")))?;
+                shafts.push(Shaft { axis: a, pitch_diameter: it.ask.pitch_diameter.or(Some(2.0 * c.r)), teeth: it.ask.teeth });
+                along.get_or_insert(0.0);
+            }
         }
     }
     let kind = p.kind.map(kind_of);
@@ -1975,6 +1955,247 @@ fn from_selection(s: &dyn Reads, cmd: &str, p: &GearParams, items: &[GearSelecti
         left_hand: p.hand == Some(SpiralHand::Left) || p.helix_angle.is_some_and(|h| h < 0.0),
     };
     Ok(Got::Set(set_on_shafts(&shafts, &ask, &base).map_err(|e| bad(cmd, e))?, Vec::new(), Vec::new()))
+}
+
+/// Where a picked thing is: one of a sketch's point or curve, a model edge or face, an axis.
+struct Locator<'a> {
+    sketch: Option<&'a Value>,
+    point: Option<&'a str>,
+    curve: Option<&'a str>,
+    edge: Option<&'a Value>,
+    face: Option<&'a Value>,
+    axis: Option<&'a Value>,
+}
+
+/// The thing a locator picks, where it is now (world): a sketch's point, circle or line (flat or
+/// 3D), else a model edge's, face's or axis's line. One function for `selection` and `items`.
+fn locate(s: &dyn Reads, cmd: &str, what: &str, l: &Locator) -> Result<drivetrain::Thing> {
+    use solidcraft_gear::select::bearing_point;
+    let given = [("sketch point", l.point.is_some()), ("sketch curve", l.curve.is_some()), ("edge", l.edge.is_some()), ("face", l.face.is_some()), ("axis", l.axis.is_some())];
+    let named: Vec<&str> = given.iter().filter(|(_, g)| *g).map(|(n, _)| *n).collect();
+    if named.len() != 1 {
+        let extra = if named.is_empty() { String::new() } else { format!(", not {}", named.join(" and ")) };
+        return Err(bad(cmd, format!("`{what}`: give exactly one of {{sketch, point}}, {{sketch, curve}}, {{edge: [x,y,z]}}, {{face: [x,y,z]}} or {{axis}}{extra}")));
+    }
+    if (l.point.is_some() || l.curve.is_some()) != l.sketch.is_some() {
+        return Err(bad(cmd, format!("`{what}`: a sketch point or curve needs `sketch` (and `sketch` a point or curve)")));
+    }
+    Ok(match (l.sketch, l.curve.or(l.point)) {
+        (Some(sk), Some(entity)) => {
+            let id = s.sketch_id(Some(sk), cmd, what)?;
+            let gs = s.gear_sketch(id).map_err(|e| bad(cmd, format!("`{what}`: {e}")))?;
+            match sketch_items(&gs).into_iter().find(|(k, _)| k == entity).map(|(_, t)| t.thing) {
+                Some(t) => t,
+                // The sketch's own origin and other points the drawing reads as none.
+                None => {
+                    let a = axis_of(s, &GearAxis(json!({"sketch": sk, "point": l.point, "curve": l.curve})), cmd, what)?;
+                    if l.point.is_some() { drivetrain::Thing::Point(a.origin) } else { drivetrain::Thing::Line(drivetrain::Line3 { a: a.origin, b: bearing_point(&a, 1.0) }) }
+                }
+            }
+        }
+        _ => {
+            let v = if let Some(e) = l.edge {
+                json!({"edge": e})
+            } else if let Some(f) = l.face {
+                json!({"face": f})
+            } else {
+                l.axis.cloned().unwrap_or(Value::Null)
+            };
+            let a = axis_of(s, &GearAxis(v), cmd, what)?;
+            drivetrain::Thing::Line(drivetrain::Line3 { a: a.origin, b: bearing_point(&a, 1.0) })
+        }
+    })
+}
+
+/// A set made of items and links (`items`, `links`, `module_blocks`; see
+/// [`solidcraft_gear::items`]): each component located where it is now, then resolved by the
+/// one reader. What isn't made yet is refused by name.
+fn from_items(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemParams], assembly: bool) -> Result<(Got, solidcraft_gear::items::Resolved)> {
+    use solidcraft_gear::items::{BevelStyle, Block, GearAsk, ItemIn, ItemType, LinkIn, LinkType, Port};
+    if p.sketch.is_some() || p.selection.is_some() || p.axis1.is_some() || p.placement.is_some() {
+        return Err(bad(cmd, "give `items` (and `links`), or `selection`, or `sketch`, or `axis1` / `placement`: one of them"));
+    }
+    if list.is_empty() || list.len() > 64 {
+        return Err(bad(cmd, "`items`: 1 to 64 items"));
+    }
+    let side = |v: Option<f64>| v.filter(|v| v.is_finite() && *v >= 0.0);
+    let gear_ask = |what: &str, g: &GearItemGear| -> Result<GearAsk> {
+        // Not made yet: refused by name rather than left out.
+        if let Some(v) = &g.profile_shift
+            && v.as_str() != Some("auto")
+        {
+            return Err(bad(cmd, format!("`{what}.profile_shift`: a shift given is not made for items yet (it is worked out: \"auto\"); leave it out")));
+        }
+        if let Some(v) = &g.bore
+            && v.as_str() != Some("auto")
+        {
+            return Err(bad(cmd, format!("`{what}.bore`: a bore of its own is not made for items yet (a gear's bore fits its shaft: \"auto\"); leave it out")));
+        }
+        if g.hub.as_ref().is_some_and(|h| !h.is_null()) {
+            return Err(bad(cmd, format!("`{what}.hub`: hubs on items are not made yet; leave it out")));
+        }
+        if g.throated == Some(true) {
+            return Err(bad(cmd, format!("`{what}.throated`: the worm wheel is always throated (cut by the worm); leave it out")));
+        }
+        let hand = match g.hand.as_deref() {
+            None => None,
+            Some("left") => Some(true),
+            Some("right") => Some(false),
+            Some(o) => return Err(bad(cmd, format!("`{what}.hand`: \"left\" or \"right\", not \"{o}\""))),
+        };
+        let style = match g.bevel_style.as_deref() {
+            None => None,
+            Some("straight") => Some(BevelStyle::Straight),
+            Some("spiral") => Some(BevelStyle::Spiral),
+            Some("chevron") => Some(BevelStyle::Chevron),
+            Some(o) => return Err(bad(cmd, format!("`{what}.bevel_style`: straight, spiral or chevron, not {o}"))),
+        };
+        Ok(GearAsk {
+            module: g.module,
+            teeth: g.teeth,
+            face: g.face.as_ref().map(|f| (side(f.a), side(f.b))),
+            helix: g.helix_angle,
+            left_hand: hand,
+            herringbone: g.herringbone,
+            spiral_angle: g.spiral_angle,
+            bevel_style: style,
+            starts: g.starts,
+            rim: g.rim,
+        })
+    };
+    let mut items = Vec::with_capacity(list.len());
+    for (k, it) in list.iter().enumerate() {
+        let what = format!("items[{k}]");
+        let kind = ItemType::parse(&it.kind).ok_or_else(|| {
+            let all: Vec<&str> = ItemType::ALL.iter().map(|t| t.name()).collect();
+            bad(cmd, format!("`{what}.type`: one of {}, not {}", all.join(", "), it.kind))
+        })?;
+        let mut components = Vec::with_capacity(it.components.len());
+        for (j, c) in it.components.iter().enumerate() {
+            let w = format!("{what}.components[{j}]");
+            let thing = locate(s, cmd, &w, &Locator { sketch: c.sketch.as_ref(), point: c.point.as_deref(), curve: c.curve.as_deref(), edge: c.edge.as_ref(), face: c.face.as_ref(), axis: c.axis.as_ref() })?;
+            components.push((c.slot.clone(), thing));
+        }
+        // The item's own settings are its first gear's (and every gear's it doesn't list).
+        let own = gear_ask(&what, &it.own())?;
+        let mut gears = vec![own];
+        for (j, g) in it.gears.iter().flatten().enumerate() {
+            let g = gear_ask(&format!("{what}.gears[{j}]"), g)?;
+            let merged = GearAsk {
+                module: g.module.or(own.module),
+                teeth: g.teeth,
+                face: g.face.or(own.face),
+                helix: g.helix.or(own.helix),
+                left_hand: g.left_hand.or(own.left_hand),
+                herringbone: g.herringbone.or(own.herringbone),
+                ..own
+            };
+            if j == 0 {
+                gears[0] = merged;
+            } else {
+                gears.push(merged);
+            }
+        }
+        items.push(ItemIn { id: it.id.clone(), kind, components, gears, module_block: it.module_block.clone() });
+    }
+    let port = |what: &str, q: &GearPortParams| -> Result<Port> {
+        let gear = match &q.port {
+            None | Some(Value::Null) => 0,
+            Some(Value::Number(n)) => n.as_u64().map(|v| v as usize).ok_or_else(|| bad(cmd, format!("`{what}.port`: a gear number (0 first) or a slot name")))?,
+            Some(Value::String(slot)) => match slot.as_str() {
+                "pitch" | "gear" => 0,
+                x => x.trim_start_matches("pitch").parse::<usize>().ok().filter(|k| *k >= 2).map(|k| k - 1).ok_or_else(|| bad(cmd, format!("`{what}.port`: `pitch`, `pitch2`, … or a gear number, not {x}")))?,
+            },
+            Some(_) => return Err(bad(cmd, format!("`{what}.port`: a gear number (0 first) or a slot name"))),
+        };
+        Ok(Port { item: q.item.clone(), gear })
+    };
+    let mut links = Vec::new();
+    for (k, l) in p.links.iter().flatten().enumerate() {
+        let what = format!("links[{k}]");
+        let kind = match l.kind.as_str() {
+            "mesh" => LinkType::Mesh,
+            "shaft" => LinkType::Shaft,
+            o => return Err(bad(cmd, format!("`{what}.kind`: mesh or shaft, not {o}"))),
+        };
+        links.push(LinkIn { a: port(&format!("{what}.a"), &l.a)?, b: port(&format!("{what}.b"), &l.b)?, kind });
+    }
+    let blocks: Vec<Block> = p.module_blocks.iter().flatten().map(|b| Block { id: b.id.clone(), module: b.module }).collect();
+    let style = p.kind.map(kind_of).filter(|k| sketch_rules::is_style(*k));
+    let mut base = spec_of(&GearParams { kind: Some(gear_type(style.unwrap_or(Kind::Spur))), ..p.clone() }).map_err(|e| bad(cmd, e))?;
+    if let Some(gap) = p.keep_out_gap {
+        if !(gap.is_finite() && (0.0..=50.0).contains(&gap)) {
+            return Err(bad(cmd, "`keep_out_gap` must be 0 to 50 mm"));
+        }
+        let mut c = base.clearance_body.clone().unwrap_or_default();
+        (c.radial, c.axial) = (gap, gap);
+        base.clearance_body = Some(c);
+    }
+    let shafts = p.shafts.as_ref().and_then(|s| s.generate) != Some(false);
+    let r = solidcraft_gear::items::resolve(&items, &links, &blocks, style, &read_settings(p), &base, shafts);
+    let members: Vec<GearMember> = r.members.iter().map(member_of).collect();
+    let got = match (&r.solved, &r.error) {
+        (Some(solved), None) => {
+            let mut solved = solved.clone();
+            if !r.seats.is_empty() {
+                let mut c = solved.spec.clearance_body.clone().unwrap_or_default();
+                if c.bearing.is_none() && c.bearing_size.is_none() {
+                    return Err(bad(cmd, "the shaft items' bearings need a size: give `clearance_body.bearing` (a standard name such as 608)"));
+                }
+                c.seats.extend(r.seats.iter().map(|q| Seat::Point(*q)));
+                if p.clearance_body.as_ref().and_then(|c| c.bearing_bodies).is_none() {
+                    c.bearing_bodies = assembly;
+                }
+                solved.spec.clearance_body = Some(c);
+            }
+            solved.notes.extend(r.notes.iter().cloned());
+            Got::Set(solved, members, r.gear_items.clone())
+        }
+        _ => Got::Wrong { error: r.error.clone().unwrap_or_else(|| "the items make no set".into()), members, notes: r.notes.clone() },
+    };
+    Ok((got, r))
+}
+
+/// What the items became, for the reply: per gear, per link, per item and block, suggestions.
+fn items_reply(r: &solidcraft_gear::items::Resolved) -> (Vec<GearItemGearOut>, Vec<GearLinkOut>, Vec<GearItemOut>, Vec<GearItemOut>, Vec<String>) {
+    let port = |p: &solidcraft_gear::items::Port| GearPortOut { item: p.item.clone(), gear: p.gear };
+    let gears = r
+        .gears
+        .iter()
+        .map(|g| GearItemGearOut {
+            item: g.item.clone(),
+            gear: g.gear,
+            teeth: g.teeth,
+            module: g.module,
+            pitch_d: g.pitch_d,
+            face_width: g.face_width,
+            ratio: g.ratio,
+            rpm: g.rpm,
+            torque: g.torque,
+            contact_ratio: g.contact_ratio,
+            warnings: g.warnings.clone(),
+            error: g.error.clone(),
+        })
+        .collect();
+    let links = r
+        .links
+        .iter()
+        .map(|l| GearLinkOut {
+            a: port(&l.a),
+            b: port(&l.b),
+            kind: match l.kind {
+                solidcraft_gear::items::LinkType::Mesh => "mesh",
+                solidcraft_gear::items::LinkType::Shaft => "shaft",
+            }
+            .into(),
+            ratio: l.ratio,
+            error: l.error.clone(),
+            hint: l.hint.clone(),
+        })
+        .collect();
+    let items = r.item_errors.iter().map(|(id, e)| GearItemOut { id: id.clone(), error: e.clone() }).collect();
+    let blocks = r.block_errors.iter().map(|(id, e)| GearItemOut { id: id.clone(), error: e.clone() }).collect();
+    (gears, links, items, blocks, r.suggestions.clone())
 }
 
 /// A member reported by its row (`index`) instead of its place in the selection.
@@ -2022,11 +2243,27 @@ fn shafts_and_contacts(asked: &Asked, plan: &Plan) -> (Vec<GearShaftInfo>, Vec<G
 /// it can't be made, member by member.
 enum Read {
     Set(Asked, Plan),
-    Wrong { error: String, members: Vec<GearMember>, notes: Vec<String> },
+    Wrong { error: String, members: Vec<GearMember>, notes: Vec<String>, items: Option<solidcraft_gear::items::Resolved> },
 }
 
 fn ask_read(s: &dyn Reads, cmd: &str, p: &Value) -> Result<Read> {
     let params = read(cmd, p)?;
+    // Items and links.
+    if let Some(list) = &params.items {
+        let (got, mut r) = from_items(s, cmd, &params, list, assembly::wanted(p))?;
+        return Ok(match got {
+            Got::Set(solved, members, rows) => {
+                let asked = Asked { spec: solved.spec.clone(), solved: Some(solved), members, rows, items: None };
+                let plan = solidcraft_gear::plan(&asked.spec).map_err(|e| bad(cmd, e))?;
+                let drive = params.drive.as_ref().map(|d| solidcraft_gear::items::Drive { item: d.item.clone(), gear: d.gear.unwrap_or(0), rpm: d.rpm, torque: d.torque });
+                if let Some(e) = solidcraft_gear::items::report(&mut r, &plan, drive.as_ref()) {
+                    return Err(bad(cmd, format!("`drive`: {e}")));
+                }
+                Read::Set(Asked { items: Some(r), ..asked }, plan)
+            }
+            Got::Wrong { error, members, notes } => Read::Wrong { error, members, notes, items: Some(r) },
+        });
+    }
     let got = if let Some(items) = &params.selection {
         Some(from_selection(s, cmd, &params, items, assembly::wanted(p))?)
     } else if params.sketch.is_some() {
@@ -2036,18 +2273,18 @@ fn ask_read(s: &dyn Reads, cmd: &str, p: &Value) -> Result<Read> {
     };
     match got {
         Some(Got::Set(solved, members, rows)) => {
-            let asked = Asked { spec: solved.spec.clone(), solved: Some(solved), members, rows };
+            let asked = Asked { spec: solved.spec.clone(), solved: Some(solved), members, rows, items: None };
             let plan = solidcraft_gear::plan(&asked.spec).map_err(|e| bad(cmd, e))?;
             return Ok(Read::Set(asked, plan));
         }
-        Some(Got::Wrong { error, members, notes }) => return Ok(Read::Wrong { error, members, notes }),
+        Some(Got::Wrong { error, members, notes }) => return Ok(Read::Wrong { error, members, notes, items: None }),
         None => {}
     }
     let asked = match axes_of(s, cmd, &params)? {
-        None => Asked { spec: spec_of(&params).map_err(|e| bad(cmd, e))?, solved: None, members: Vec::new(), rows: Vec::new() },
+        None => Asked { spec: spec_of(&params).map_err(|e| bad(cmd, e))?, solved: None, members: Vec::new(), rows: Vec::new(), items: None },
         Some((a1, a2)) => {
             let solved = solve_on(&params, &a1, a2.as_ref()).map_err(|e| bad(cmd, e))?;
-            Asked { spec: solved.spec.clone(), solved: Some(solved), members: Vec::new(), rows: Vec::new() }
+            Asked { spec: solved.spec.clone(), solved: Some(solved), members: Vec::new(), rows: Vec::new(), items: None }
         }
     };
     let plan = solidcraft_gear::plan(&asked.spec).map_err(|e| bad(cmd, e))?;
@@ -2092,6 +2329,7 @@ fn calculate(s: &mut Session, p: &Value) -> Result<Value> {
     match ask_read(s, cmd, p)? {
         Read::Set(asked, plan) => {
             let (shafts, contacts, outlines) = shafts_and_contacts(&asked, &plan);
+            let (gears, links, items, module_blocks, suggestions) = asked.items.as_ref().map(items_reply).unwrap_or_default();
             reply(
                 cmd,
                 GearResult {
@@ -2103,12 +2341,20 @@ fn calculate(s: &mut Session, p: &Value) -> Result<Value> {
                     shafts,
                     contacts,
                     outlines,
+                    gears,
+                    links,
+                    items,
+                    module_blocks,
+                    suggestions,
                     ..GearResult::default()
                 },
             )
         }
         // What each member became and what is wrong with it, for a front end to show.
-        Read::Wrong { error, members, notes } => reply(cmd, GearResult { warnings: vec![error], notes, members, ..GearResult::default() }),
+        Read::Wrong { error, members, notes, items } => {
+            let (gears, links, items, module_blocks, suggestions) = items.as_ref().map(items_reply).unwrap_or_default();
+            reply(cmd, GearResult { warnings: vec![error], notes, members, gears, links, items, module_blocks, suggestions, ..GearResult::default() })
+        }
     }
 }
 
@@ -2183,7 +2429,7 @@ fn from_axes(s: &mut Session, p: &Value) -> Result<Value> {
             out.derived = derived_names(&solved.derived);
             out.frames = solved.frames.iter().map(|f| GearFrame { origin: f.origin, x: f.x, z: f.z }).collect();
             out.warnings = plan.warnings.clone();
-            let asked = Asked { spec: solved.spec.clone(), solved: Some(solved), members: Vec::new(), rows: Vec::new() };
+            let asked = Asked { spec: solved.spec.clone(), solved: Some(solved), members: Vec::new(), rows: Vec::new(), items: None };
             out.facts = facts(&asked, &plan);
             out.notes = notes(&asked);
         }

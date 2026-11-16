@@ -1674,7 +1674,9 @@ fn drivetrain_3d(s: &mut Session) -> u64 {
             ("sketch.options", json!({"sketch_3d": true})),
             ("sketch.line3d", json!({"points": [[0, 0, -10], [0, 0, 40]]})),
             ("sketch.line3d", json!({"points": [[50, 0, -10], [50, 0, 40]]})),
-            ("sketch.line3d", json!({"points": [[85, 0, -10], [85, 0, 40]]})),
+            // (Gear 4's shaft only where gear 4 is: drawn down to gear 2's plane it would run
+            // into gear 2.)
+            ("sketch.line3d", json!({"points": [[85, 0, 15], [85, 0, 35]]})),
             arc([0.0, 0.0, 0.0], 20.0),
             arc([50.0, 0.0, 0.0], 30.0),
             arc([50.0, 0.0, 20.0], 15.0),
@@ -1752,4 +1754,30 @@ fn a_compound_from_two_sketches_on_parallel_planes_and_a_shaft_in_a_third() {
     // Linked to every sketch it read: moving gear 4's circle in the second regenerates it.
     let st = run(&mut s, "gear.inspect", json!({"group": group}));
     assert_eq!(st["sets"][0]["sketch_changed"], false, "{st}");
+}
+
+/// Items and links: two spur items picked from a sketch, linked to mesh, driven at 1200 rpm;
+/// what isn't made yet is refused by name.
+#[test]
+fn items_and_links_report_each_gear_and_link() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[circle(0.0, 0.0, 20.0, "g1"), circle(50.0, 0.0, 30.0, "g2")]);
+    let ask = json!({
+        "items": [
+            {"id": "A", "type": "spur", "components": [{"slot": "pitch", "sketch": sk, "curve": "g1"}]},
+            {"id": "B", "type": "spur", "components": [{"slot": "pitch", "sketch": sk, "curve": "g2"}], "face": {"a": 4, "b": 4}}
+        ],
+        "links": [{"a": {"item": "A"}, "b": {"item": "B", "port": "pitch"}, "kind": "mesh"}],
+        "drive": {"item": "A", "rpm": 1200, "torque": 2}
+    });
+    let r = run(&mut s, "gear.calculate", ask.clone());
+    assert!((r["links"][0]["ratio"].as_f64().unwrap() - 1.5).abs() < 1e-9, "{r}");
+    assert!((r["gears"][1]["rpm"].as_f64().unwrap() + 800.0).abs() < 1e-6, "{r}");
+    assert_eq!(r["gears"][1]["face_width"].as_f64(), Some(8.0), "{r}");
+    run(&mut s, "gear.create", ask);
+    let e = s
+        .execute("gear.calculate", &json!({"items": [{"id": "A", "type": "spur", "components": [{"slot": "pitch", "sketch": sk, "curve": "g1"}], "hub": {"diameter": 10}}]}))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("hubs on items are not made yet"), "{e}");
 }

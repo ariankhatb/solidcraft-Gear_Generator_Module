@@ -1088,7 +1088,9 @@ fn assembled(s: &mut Session, p: Value) -> Value {
 #[test]
 fn an_assembled_pair_turns_gear_2_by_the_ratio_and_undoes_in_one_step() {
     let mut s = Session::default();
+    let start = s.undo.len();
     let r = assembled(&mut s, json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 32, "face_width": 8, "assembly": true}));
+    assert_eq!(s.undo.len(), start + 1, "the set, its components and joints: one undo step");
     let j = member_joints(&r);
     let (g1, g2) = (j[0].unwrap(), j[1].unwrap());
     assert_eq!(r["assembly"]["links"].as_array().map(Vec::len), Some(1), "{r}");
@@ -1102,6 +1104,10 @@ fn an_assembled_pair_turns_gear_2_by_the_ratio_and_undoes_in_one_step() {
     assert!((p.x - (52.0 + 32.0 * t.cos())).abs() < 1e-6 && (p.y - 32.0 * t.sin()).abs() < 1e-6, "{p:?}");
     // One undo takes the gears, their components and joints away.
     let made: Vec<u64> = r["assembly"]["members"].as_array().unwrap().iter().filter_map(|m| m["component"].as_u64()).collect();
+    // (Driving the joint is an undo step of its own: undone first.)
+    while s.undo.len() > start + 1 {
+        run(&mut s, "edit.undo", json!({}));
+    }
     run(&mut s, "edit.undo", json!({}));
     let left: Vec<(u64, String)> = s.doc.components.iter().map(|c| (c.id, c.name.clone())).collect();
     assert!(!s.doc.components.iter().any(|c| made.contains(&c.id)), "made {made:?}, after undo {left:?}, undo stack {:?}", s.undo.iter().map(|u| u.label.clone()).collect::<Vec<_>>());

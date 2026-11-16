@@ -414,7 +414,7 @@ fn editing_the_gears_feature_opens_that_set_and_updates_it_in_place() {
 /// driver (GEAR_UI_SPEC.md §6).
 #[test]
 fn items_and_the_graph_make_the_request() {
-    use crate::dialogs_gear_graph::{GNode, GearItem, ITEM_TYPES, Suggested, pin};
+    use crate::dialogs_gear_graph::{GearItem, ITEM_TYPES, Suggested};
     let mut app = app();
     let sk = app.session.execute("sketch.create", &json!({"plane": "XY"})).unwrap()["sketch"].as_u64().unwrap();
     for (id, x, r) in [("c1", 0.0, 20.0), ("c2", 30.0, 10.0), ("c3", 30.0, 5.0)] {
@@ -441,10 +441,9 @@ fn items_and_the_graph_make_the_request() {
     g.items[0].module = "2 mm".into();
     g.items[0].gears = vec![crate::dialogs_gear_graph::GearSettings { face_preset: 1, face_a: "8 mm".into(), hand: 1, ..Default::default() }];
     g.graph.accept(&Suggested { a: 0, a_gear: 0, b: 1, b_gear: 1, kind: "mesh".into() });
-    let block = g.graph.0.insert_node(egui::pos2(0.0, 0.0), GNode::Block { module: "2 mm".into() });
-    for (i, gears) in [(0usize, 1usize), (1, 2)] {
-        let n = g.graph.node_of(i);
-        g.graph.0.connect(egui_snarl::OutPinId { node: n, output: pin(gears, false) }, egui_snarl::InPinId { node: block, input: 0 });
+    let block = g.graph.add_block("2 mm");
+    for i in [0usize, 1] {
+        g.graph.put_in_block(block, i);
     }
     g.drive_item = Some((1, 0));
     g.rpm = "1000".into();

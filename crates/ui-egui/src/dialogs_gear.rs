@@ -1687,6 +1687,9 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
                 };
                 k.members = r.as_ref().map(members_of).unwrap_or_default();
                 (k.link_errors, k.suggested) = r.as_ref().map(crate::dialogs_gear_graph::link_notes).unwrap_or_default();
+                if let Ok(r) = r.as_ref() {
+                    k.graph.note(r);
+                }
                 k.results = r.as_ref().map(results_of).unwrap_or_default();
                 k.shafts = r.as_ref().map(shafts_of).unwrap_or_default();
                 k.contacts = r.as_ref().map(contacts_of).unwrap_or_default();

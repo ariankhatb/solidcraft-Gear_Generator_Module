@@ -1368,10 +1368,14 @@ impl PinionFace {
     pub(crate) fn back(&self) -> V2 {
         self.at(self.heel, self.heel_under)
     }
-    /// The stretch of the axis the toothed loft takes (heel side first): from behind the heel's
-    /// flat back to past the toe cone at the tips, so the cones cut through whole teeth.
+    /// The stretch of the axis the toothed loft takes (heel side first): between the planes
+    /// square to the axis through the pitch circles at the heel and at the toe, where the teeth
+    /// end. (Trimming them to the heel and toe cones instead made the kernel's trim curves on the
+    /// spiral flanks near-cusped, "Bad CurveCusp", and took minutes: the planes are the loft's own
+    /// end sections, nothing to trim. The tips run a little past the heel cone, the roots stop a
+    /// little short of it, as a bevel's do up to `FLAT_CONE`.)
     fn span(&self) -> (f64, f64) {
-        (self.back().y - self.margin, self.at(self.toe, self.toe_tip).y + self.margin)
+        (self.at(self.heel, 0.0).y, self.at(self.toe, 0.0).y)
     }
     /// The pinion's blank (radius, s): flat from the axis to under the roots at the heel, the
     /// heel cone to above the tips, a line over the tips, the toe cone down to under the roots,
@@ -1738,10 +1742,11 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
         let toothed = (face.at(face.heel, 0.0).y - face.at(face.toe, 0.0).y).abs();
         let shank_l = if s.hub_length > 0.0 { s.hub_length } else { 0.8 * toothed };
         let lap = 0.5 * d.mmn;
-        let z_sh = set.z_of(face.back().y);
+        // The shank from the heel's end plane (into the teeth by `lap`) out away from them.
+        let z_sh = set.z_of(face.at(face.heel, 0.0).y);
         let z0 = if set.heel_first { z_sh - shank_l } else { z_sh - lap };
+        let _ = &blank;
         let mut steps = vec![Step::Loft { sections: pinion_sections.clone(), op: Op::New }];
-        steps.push(Step::Revolve { profile: blank, op: Op::Intersect });
         steps.push(Step::Prism { region: circle(shank_r), z0, height: shank_l + lap, twist: 0.0, op: Op::Join });
         if let Some(b) = s.bore.outline() {
             let nose = face.at(face.toe, face.under).x;
@@ -3176,12 +3181,13 @@ mod tests {
                 }
                 assert_eq!(any, within, "ring gear at mu {mu} ({} to {})", f.mu_i, f.mu_e);
             }
-            // The pinion: along its pitch cone, the same.
+            // The pinion: along its pitch cone, the same (its teeth end on the planes through the
+            // pitch circles at the toe and the heel, so on the pitch cone they end at both).
             let face = set.face;
             let d = &set.d;
             for j in 0..=40 {
                 let cone = face.toe - 8.0 + (face.heel - face.toe + 16.0) * f64::from(j) / 40.0;
-                let any = [-0.6 * d.hf1, 0.0, 0.6 * d.ha1].iter().any(|h| {
+                let any = [0.0].iter().any(|h: &f64| {
                     let q = face.at(cone, *h * cone / d.cone_m1);
                     fill(&pinion, s.teeth as usize, q.x, set.z_of(q.y), 1.0) > 0.0
                 });

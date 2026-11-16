@@ -500,7 +500,7 @@ fn keep_out_holds_hubs_and_shafts_joined_after_trims() {
         ..Spec::defaults_for(kind)
     };
     let hubbed = |kind: Kind| Spec { bore, bore2: bore, hub_diameter: 30.0, hub_length: 8.0, clearance_body: Some(Clearance::default()), ..Spec::defaults_for(kind) };
-    let mut checked = 0;
+    let (mut checked, mut trimmed) = (0, false);
     for kind in [Kind::Bevel, Kind::SpiralBevel, Kind::BevelPlanetary, Kind::Hypoid, Kind::Pair, Kind::Spur, Kind::Helical] {
         for (what, s) in [("shafts", dressed(kind)), ("hub", hubbed(kind))] {
             let p = match plan(&s) {
@@ -521,6 +521,7 @@ fn keep_out_holds_hubs_and_shafts_joined_after_trims() {
                     if last_trim.is_none_or(|t| i < t) || !matches!(op_of(st), Op::Join | Op::New) {
                         continue;
                     }
+                    trimmed = true;
                     let alone = Body { name: String::new(), frame: b.frame, steps: vec![st.clone()] };
                     let pts = Solid::new(&alone, 0.2).material_points(0.3);
                     let (lo, hi) = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q[2]), a.1.max(q[2])));
@@ -544,5 +545,7 @@ fn keep_out_holds_hubs_and_shafts_joined_after_trims() {
             let _ = c;
         }
     }
-    assert!(checked > 500, "only {checked} points of parts joined after a trim");
+    // (No set joins a part after a trim now (the hypoid pinion's teeth end on planes, its shank
+    // joined to them untrimmed): then there is nothing of the kind to check.)
+    assert!(checked > 500 || !trimmed, "only {checked} points of parts joined after a trim");
 }

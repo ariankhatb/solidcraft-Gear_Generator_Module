@@ -5862,6 +5862,7 @@ dependencies = [
  "solidcraft-derive",
  "solidcraft-display-units",
  "solidcraft-format",
+ "solidcraft-gear",
  "solidcraft-geom",
  "solidcraft-kernel",
  "solidcraft-profile",

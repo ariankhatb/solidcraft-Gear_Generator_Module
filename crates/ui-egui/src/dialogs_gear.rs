@@ -578,8 +578,6 @@ pub struct Gear {
     /// The value rows, by parameter path, as typed (empty: worked out).
     pub values: BTreeMap<String, String>,
     pub assembly: bool,
-    /// A keep-out body round the set (its bearings' seats, when bearings are picked).
-    pub clearance: bool,
     /// Teeth from the equations (fitted curves otherwise).
     pub equations: bool,
     /// An index into `solidcraft_gear::hub::BEARINGS`: the size of the bearings picked.
@@ -625,8 +623,20 @@ pub struct Gear {
     pub new_kind: usize,
     pub graph: crate::dialogs_gear_graph::Graph,
     /// What the engine says of the links, and the links the drawing suggests.
-    pub link_errors: Vec<String>,
-    pub suggested: Vec<(usize, usize, String)>,
+    pub link_errors: Vec<(String, bool)>,
+    pub suggested: Vec<crate::dialogs_gear_graph::Suggested>,
+    /// The graph in its own window (⤢ Pop out), the item whose node is hovered, each item's
+    /// gear count (for the window), the driving item·gear, input rpm and torque, the keep-out
+    /// gap, why the last pick was refused, and the results table's rows.
+    pub graph_popped: bool,
+    pub graph_hovered: Option<usize>,
+    pub gear_counts: Vec<usize>,
+    pub drive_item: Option<(usize, usize)>,
+    pub rpm: String,
+    pub torque: String,
+    pub keep_out_gap: String,
+    pub refused: Option<String>,
+    pub results: Vec<[String; 9]>,
 }
 
 impl Gear {
@@ -663,7 +673,6 @@ fn new(sketch: Option<u64>) -> Gear {
         base: Map::new(),
         values,
         assembly: false,
-        clearance: false,
         equations: false,
         bearing,
         diff_style: 0,
@@ -690,6 +699,15 @@ fn new(sketch: Option<u64>) -> Gear {
         graph: Default::default(),
         link_errors: Vec::new(),
         suggested: Vec::new(),
+        graph_popped: false,
+        graph_hovered: None,
+        gear_counts: Vec::new(),
+        drive_item: None,
+        rpm: String::new(),
+        torque: String::new(),
+        keep_out_gap: String::new(),
+        refused: None,
+        results: Vec::new(),
     }
 }
 
@@ -818,7 +836,6 @@ pub fn for_set(set: &solidcraft_engine::schema::gear::GearSet) -> Gear {
     let flag = |key: &str| r.get(key).and_then(Value::as_bool) == Some(true);
     g.assembly = flag("assembly");
     g.equations = r.get("tooth_curves").and_then(Value::as_str) == Some("equations");
-    g.clearance = r.get("clearance_body").is_some_and(|c| !c.is_null());
     if let Some(d) = r.get("differential") {
         g.diff_style = DIFF_STYLES.iter().position(|s| d.get("style").and_then(Value::as_str) == Some(s.0)).unwrap_or(0);
         g.diff_drive = DIFF_DRIVES.iter().position(|s| d.get("drive").and_then(Value::as_str) == Some(s.0)).unwrap_or(1);
@@ -897,6 +914,30 @@ fn numbers(app: &SolveApp, k: &Gear, rows: &[Field], out: &mut Map<String, Value
 
 /// A selection item's locator (`gear.create`'s `selection`), or `None` for a pick it can't name
 /// (a projected copy: its source's).
+/// Whether `sel` is a construction curve of its sketch (a helper, never a gear or a shaft).
+pub(crate) fn is_construction(app: &SolveApp, sel: &Sel) -> bool {
+    let (sketch, id) = match sel {
+        Sel::SketchCurve { id, sketch } => (sketch.or(app.session.active_sketch), id),
+        Sel::ExternalSketchCurve { sketch, id } => (Some(*sketch), id),
+        _ => return false,
+    };
+    let state = crate::open_meshing::session_world(&app.session);
+    sketch.and_then(|sk| state.sketch(sk)).is_some_and(|ss| ss.sketch.curves.iter().any(|c| c.id == *id && c.construction))
+}
+
+/// Whether point `sel` lies on one of the lines in `picks`.
+pub(crate) fn point_on_picked_line(app: &SolveApp, sel: &Sel, picks: &[Sel]) -> bool {
+    let mut all: Vec<Geo> = picks.iter().map(|p| geo(app, p)).collect();
+    let point = geo(app, sel);
+    all.push(point.clone());
+    bearing_refused(&point, &all).is_none()
+}
+
+/// A ratio as a link shows it ("2.00").
+pub(crate) fn fmt_ratio(r: f64) -> String {
+    format!("{r:.2}")
+}
+
 /// `sel` as a `selection` locator (for the items' components).
 pub(crate) fn locate(app: &SolveApp, sel: &Sel) -> Option<Value> {
     locator(app, sel)
@@ -968,16 +1009,13 @@ fn settings(app: &SolveApp, k: &Gear) -> Result<Map<String, Value>, String> {
     if k.equations {
         p.insert("tooth_curves".into(), json!("equations"));
     }
-    if k.clearance {
-        p.insert("clearance_body".into(), json!({}));
-    }
     Ok(p)
 }
 
 /// The keys the dialog's rows own: on an update, one left empty is taken away (back to auto).
 fn owned(k: &Gear) -> Vec<&'static str> {
     let mut keys: Vec<&'static str> = fields(k.gear_kind(), true).iter().chain(ADVANCED.iter()).map(|f| f.key).filter(|key| !key.contains('.')).collect();
-    keys.extend(["assembly", "tooth_curves", "clearance_body", "herringbone", "bore", "bore2", "differential", "shafts", "operation", "targets", "keep_out_cuts", "assembly_driver"]);
+    keys.extend(["assembly", "tooth_curves", "clearance_body", "herringbone", "bore", "bore2", "differential", "shafts", "operation", "targets", "keep_out_cuts", "assembly_driver", "items", "links", "module_blocks", "drive", "keep_out_gap"]);
     keys
 }
 
@@ -1084,6 +1122,27 @@ fn request(app: &SolveApp, k: &Gear, inputs: &[SelInput]) -> Result<Value, Strin
     } else {
         // Gear items and their links: each its own components.
         p.extend(crate::dialogs_gear_graph::items_request(app, &k.items, &k.graph)?);
+        let num = |t: &str, kind: ValueKind, what: &str| -> Result<Option<f64>, String> {
+            if t.trim().is_empty() {
+                return Ok(None);
+            }
+            app.session.doc.eval(t.trim(), kind).map(Some).map_err(|e| format!("{what}: {e}: type a number, or leave it empty"))
+        };
+        if let Some((item, gear)) = k.drive_item {
+            let mut drive = json!({"item": crate::dialogs_gear_graph::item_id(item), "gear": gear});
+            if let Some(rpm) = num(&k.rpm, ValueKind::Unitless, "Input rpm")? {
+                drive["rpm"] = json!(rpm);
+            }
+            if let Some(t) = num(&k.torque, ValueKind::Unitless, "Input torque")? {
+                drive["torque"] = json!(t);
+            }
+            p.insert("drive".into(), drive);
+        }
+        if k.cut_keep_out
+            && let Some(gap) = num(&k.keep_out_gap, ValueKind::Length, "Keep-out gap")?
+        {
+            p.insert("keep_out_gap".into(), json!(gap));
+        }
         for key in ["sketch", "selection", "picks"] {
             p.insert(key.into(), Value::Null);
         }
@@ -1181,7 +1240,7 @@ fn summary(r: &Value) -> Vec<String> {
 fn shaft_rows(ui: &mut egui::Ui, k: &mut Gear) -> bool {
     let mut enter = false;
     ui.checkbox(&mut k.generate_shafts, solidcraft_ui_text::tr_label("Generate Shafts"))
-        .on_hover_text("A shaft on every gear axis, one body with its gears (a picked line sets a shaft's length)");
+        .on_hover_text("A shaft on every gear axis, made one body with its gears. A picked line sets its length.");
     if !k.generate_shafts {
         return enter;
     }
@@ -1201,52 +1260,132 @@ fn shaft_rows(ui: &mut egui::Ui, k: &mut Gear) -> bool {
 fn value_rows(ui: &mut egui::Ui, k: &mut Gear, rows: &[Field]) -> bool {
     let mut enter = false;
     for fd in rows {
-        enter |= hint_row(ui, fd.label, k.value_mut(fd.key), fd.hint);
+        let tip = match fd.key {
+            "pressure_angle" => "Tooth flank angle. 20° is standard.",
+            "backlash" => "Play between meshing teeth, taken from each tooth's thickness.",
+            "module" => "Tooth size in mm (pitch Ø ÷ teeth). Auto picks a standard module so the smallest gear has ≥17 teeth.",
+            "profile_shift" | "profile_shift2" => "Moves the tooth out to avoid undercut on small gears. Auto does it below 17 teeth.",
+            "spiral_angle" => "Spiral bevel/hypoid tooth angle at mid-face. 35° is typical.",
+            "starts" => "Thread starts on the worm. More starts = faster, less self-locking.",
+            "helix_angle" => "Tooth angle to the axis. 0 = straight. Meshing gears get equal angles of opposite hand.",
+            _ => "",
+        };
+        let r = ui.scope(|ui| enter |= hint_row(ui, fd.label, k.value_mut(fd.key), fd.hint)).response;
+        if !tip.is_empty() {
+            r.on_hover_text(tip);
+        }
     }
     enter
 }
 
-/// The gear items: a type and Create New make one, the picks then go to it (the active item);
-/// each row lists what its type still needs, and is made active or removed with its buttons.
-fn item_rows(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput]) {
+/// The header (one type list: the item types, then the types made from their rows or read as
+/// one drawing), Create New, the guide block or the item cards (the active one with its
+/// settings and its status line), the docked graph and its links, the drive and the results
+/// (GEAR_UI_SPEC.md §1, §2).
+fn item_rows(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], hover: &mut Option<(usize, Sel)>) -> bool {
     use crate::dialogs_gear_graph::{GearItem, ITEM_TYPES};
-    let names: Vec<&str> = ITEM_TYPES.iter().map(|t| t.1).collect();
+    let mut enter = false;
+    // One type list.
+    let families: Vec<usize> = (0..TYPES.len()).filter(|i| !by_rows(TYPES[*i].0) && !parallel(TYPES[*i].0)).collect();
+    let mut names: Vec<&str> = ITEM_TYPES.iter().map(|t| t.1).collect();
+    names.extend(families.iter().map(|i| TYPES[*i].1));
+    let mut at = if by_rows(k.gear_kind()) || parallel(k.gear_kind()) { k.new_kind } else { ITEM_TYPES.len() + families.iter().position(|i| *i == k.kind).unwrap_or(0) };
+    let mut create = false;
     ui.horizontal(|ui| {
-        combo(ui, "gear_new_item", &names, &mut k.new_kind);
-        if ui_kit::button(ui, solidcraft_ui_text::tr_label("Create New"), ui_kit::Button::Normal).on_hover_text("A new gear item of this type: then pick what defines it").clicked() {
-            k.items.push(GearItem { kind: k.new_kind, picks: Vec::new() });
-            k.active = Some(k.items.len() - 1);
-            if let Some(input) = inputs.first_mut() {
-                input.items.clear();
-            }
+        ui.scope(|ui| combo(ui, "gear_new_item", &names, &mut at)).response.on_hover_text("What the next item will be. Each type lists the geometry it needs.");
+        if at < ITEM_TYPES.len() {
+            create = ui_kit::button(ui, solidcraft_ui_text::tr_label("Create New"), ui_kit::Button::Normal)
+                .on_hover_text("Start a new gear item of this type, then click the geometry it asks for in the view.")
+                .clicked();
         }
     });
-    // The picks made go to the active item.
-    if let (Some(a), Some(input)) = (k.active, inputs.first()) {
-        let taken: Vec<Sel> = k.items.iter().enumerate().filter(|(i, _)| *i != a).flat_map(|(_, it)| it.picks.clone()).collect();
-        if let Some(item) = k.items.get_mut(a) {
-            item.picks = input.items.iter().filter(|s| !taken.contains(s)).cloned().collect();
+    if at < ITEM_TYPES.len() {
+        k.new_kind = at;
+        if !by_rows(k.gear_kind()) && !parallel(k.gear_kind()) {
+            k.kind = 0;
+        }
+    } else {
+        k.kind = families[at - ITEM_TYPES.len()];
+        return enter;
+    }
+    if create {
+        k.items.push(GearItem::new(k.new_kind));
+        k.active = Some(k.items.len() - 1);
+        k.refused = None;
+        if let Some(input) = inputs.first_mut() {
+            input.items.clear();
         }
     }
+    if k.items.is_empty() {
+        if inputs.first().is_none_or(|i| i.items.is_empty()) {
+            ui.label(egui::RichText::new("① Pick a gear type ② press Create New ③ click the geometry it asks for ④ connect items in the graph (tangent circles are suggested for you)").small());
+        }
+        return enter;
+    }
+    // The picks made go to the active item; one that doesn't fit is refused with its reason.
+    if let (Some(a), Some(input)) = (k.active, inputs.first_mut()) {
+        let others: Vec<(usize, &GearItem)> = k.items.iter().enumerate().filter(|(i, _)| *i != a).collect();
+        let mut kept = Vec::new();
+        for sel in input.items.clone() {
+            let mine = k.items.get(a).is_some_and(|it| it.picks.contains(&sel));
+            let mut trial = k.items[a].clone();
+            trial.picks.retain(|p| kept.contains(p));
+            match (mine, trial.refusal(app, &sel, &others)) {
+                (false, Some(why)) => k.refused = Some(format!("Item {}: {why}", a + 1)),
+                _ => kept.push(sel),
+            }
+        }
+        input.items = kept.clone();
+        k.items[a].picks = kept;
+    }
     let (mut make_active, mut remove) = (None, None);
-    for (i, it) in k.items.iter().enumerate() {
+    let lit = k.graph_hovered;
+    for i in 0..k.items.len() {
         let active = k.active == Some(i);
-        ui.horizontal_wrapped(|ui| {
-            let label = format!("Item {} · {}", i + 1, ITEM_TYPES.get(it.kind).map_or("", |t| t.1));
-            if ui.selectable_label(active, egui::RichText::new(label).strong()).on_hover_text("Make it the item picks go to").clicked() {
-                make_active = Some(i);
-            }
-            for (what, done) in it.checklist(app) {
-                let mark = if done { "✓" } else { "○" };
-                ui.label(egui::RichText::new(format!("{mark} {what}")).small().color(if done { ui.visuals().text_color() } else { ui.visuals().warn_fg_color }));
-            }
-            if ui_kit::button(ui, "×", ui_kit::Button::Normal).on_hover_text("Remove the item").clicked() {
-                remove = Some(i);
+        let it = k.items[i].clone();
+        let checklist: Vec<String> = it.slots_now(app).iter().map(|(slot, required, filled)| {
+            let mark = if *filled { "✓" } else if *required { "●" } else { "○" };
+            format!("{mark} {}", match slot {
+                crate::dialogs_gear_graph::Slot::Circle => "pitch circle",
+                crate::dialogs_gear_graph::Slot::Line => "shaft line",
+                crate::dialogs_gear_graph::Slot::Point => "bearing point",
+            })
+        }).collect();
+        let complete = it.complete(app);
+        let frame = egui::Frame::group(ui.style()).stroke(if active || lit == Some(i) { egui::Stroke::new(1.5, ui.visuals().selection.stroke.color) } else { ui.visuals().widgets.noninteractive.bg_stroke });
+        let card = frame.show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                paint_icon(ui.painter(), r, "gear_generator", 1.0);
+                let head = format!("{} · {}", i + 1, it.label());
+                if ui.selectable_label(active, egui::RichText::new(head).strong()).on_hover_text("Click to make this the item your picks go to. Hover to light its geometry.").clicked() {
+                    make_active = Some(i);
+                }
+                for c in &checklist {
+                    let open = !c.starts_with('✓');
+                    let l = ui.label(egui::RichText::new(c).small().color(if open { ui.visuals().warn_fg_color } else { ui.visuals().text_color() }));
+                    if open {
+                        l.on_hover_text(format!("Still needed: {}. Click one in the view.", &c[c.find(' ').map_or(0, |p| p + 1)..]));
+                    }
+                }
+                if ui_kit::button(ui, "×", ui_kit::Button::Normal).on_hover_text("Remove the item (its node and links go too)").clicked() {
+                    remove = Some(i);
+                }
+            });
+            if active || !complete {
+                let id = i;
+                enter |= crate::dialogs_gear_graph::item_settings(app, ui, &mut k.items[id], id);
             }
         });
+        if card.response.hovered()
+            && let Some(first) = k.items[i].picks.first()
+        {
+            *hover = Some((0, first.clone()));
+        }
     }
     if let Some(i) = make_active {
         k.active = Some(i);
+        k.refused = None;
         if let Some(input) = inputs.first_mut() {
             input.items = k.items[i].picks.clone();
         }
@@ -1258,7 +1397,112 @@ fn item_rows(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelI
         if let Some(input) = inputs.first_mut() {
             input.items = k.active.map(|a| k.items[a].picks.clone()).unwrap_or_default();
         }
+        k.drive_item = k.drive_item.filter(|(d, _)| *d != i).map(|(d, g)| (if d > i { d - 1 } else { d }, g));
     }
+    // The status line: what the active item needs next, or why a pick was refused.
+    if let Some(why) = &k.refused {
+        ui.label(egui::RichText::new(why).small().color(ui.visuals().warn_fg_color));
+    } else if let Some(a) = k.active.filter(|a| *a < k.items.len()) {
+        let it = &k.items[a];
+        match it.next_slot(app) {
+            Some(next) => ui.label(egui::RichText::new(format!("Item {} · {} — pick: {next}", a + 1, it.label())).small()),
+            None => ui.label(egui::RichText::new(format!("Item {} · {} is complete: Create New for the next item, or connect them in the graph", a + 1, it.label())).small().weak()),
+        };
+    }
+    // The graph, docked (or in its window).
+    k.gear_counts = k.items.iter().map(|it| it.gear_count(app)).collect();
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(solidcraft_ui_text::tr_label("Graph")).strong());
+        if ui_kit::button(ui, if k.graph_popped { "⤡ Dock" } else { "⤢ Pop out" }, ui_kit::Button::Normal).on_hover_text("Show the graph in a larger window of its own").clicked() {
+            k.graph_popped = !k.graph_popped;
+        }
+        if !k.suggested.is_empty()
+            && ui_kit::button(ui, format!("Accept suggested ({})", k.suggested.len()), ui_kit::Button::Normal)
+                .on_hover_text("Make every dashed link real. Dashed = circles the drawing shows as touching or on one line.")
+                .clicked()
+        {
+            for s in k.suggested.clone() {
+                k.graph.accept(&s);
+            }
+        }
+    });
+    if !k.graph_popped {
+        let size = egui::vec2(ui.available_width().max(240.0), 260.0);
+        let out = crate::dialogs_gear_graph::graph_ui(ui, &k.items, &k.gear_counts, &mut k.graph, k.drive_item, size, "sc_gear_graph_docked");
+        if out.driver.is_some() {
+            k.drive_item = out.driver;
+        }
+        k.graph_hovered = out.hovered;
+    }
+    if let Some(item) = k.graph_hovered
+        && let Some(first) = k.items.get(item).and_then(|it| it.picks.first())
+    {
+        *hover = Some((0, first.clone()));
+    }
+    for (note, bad) in &k.link_errors {
+        ui.label(egui::RichText::new(note).small().color(if *bad { ui.visuals().error_fg_color } else { ui.visuals().text_color() }));
+    }
+    enter |= shaft_rows(ui, k);
+    // Drive: which item·gear turns, and optionally its speed and torque.
+    let gears: Vec<(usize, usize)> = k.gear_counts.iter().enumerate().flat_map(|(i, n)| (0..*n).map(move |g| (i, g))).collect();
+    if !gears.is_empty() {
+        let labels: Vec<String> = gears.iter().map(|(i, g)| format!("{}·{} {}", i + 1, g + 1, k.items[*i].label())).collect();
+        let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+        let mut at = k.drive_item.and_then(|d| gears.iter().position(|x| *x == d)).unwrap_or(0);
+        choice_row(ui, "Driver", "gear_drive_item", &mut at, &labels).on_hover_text("The gear you turn. Every other gear's speed and direction follow from it.");
+        k.drive_item = gears.get(at).copied();
+        let tip = "Optional: fills speed and torque for every gear in Results.";
+        ui.scope(|ui| enter |= hint_row(ui, "Input rpm", &mut k.rpm, "optional")).response.on_hover_text(tip);
+        ui.scope(|ui| enter |= hint_row(ui, "Input Torque", &mut k.torque, "N·m, optional")).response.on_hover_text(tip);
+    }
+    // Results: one row per gear.
+    if !k.results.is_empty() {
+        ui_kit::section(ui, "gear_results", "Results", true, |ui| {
+            egui::Grid::new("gear_results_grid").striped(true).show(ui, |ui| {
+                for h in ["Gear", "z", "m", "Ø pitch", "Ratio", "rpm", "Torque", "Contact", "Warnings"] {
+                    ui.label(egui::RichText::new(h).small().strong());
+                }
+                ui.end_row();
+                for row in &k.results {
+                    for (c, cell) in row.iter().enumerate() {
+                        let t = egui::RichText::new(cell).small();
+                        ui.label(if c == 8 && !cell.is_empty() { t.color(ui.visuals().warn_fg_color) } else { t });
+                    }
+                    ui.end_row();
+                }
+            });
+        });
+    }
+    enter
+}
+
+/// The results table's rows from `gear.calculate`'s `gears` (§6): item·gear, z, m, Ø pitch,
+/// ratio from the driver, rpm, torque, contact ratio, warnings.
+pub(crate) fn results_of(r: &Value) -> Vec<[String; 9]> {
+    let f = |v: Option<&Value>| v.and_then(Value::as_f64).map(fmt).unwrap_or_default();
+    r.get("gears")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|g| {
+            let n = |k: &str| match k {
+                "item" => g.get(k).and_then(crate::dialogs_gear_graph::item_index).unwrap_or(0) as u64 + 1,
+                _ => g.get(k).and_then(Value::as_u64).unwrap_or(0) + 1,
+            };
+            let warnings = g.get("warnings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join("; ");
+            [
+                format!("{}·{}", n("item"), n("gear")),
+                f(g.get("teeth")),
+                f(g.get("module")),
+                f(g.get("pitch_d")),
+                g.get("ratio").and_then(Value::as_f64).map(fmt_ratio).unwrap_or_default(),
+                f(g.get("rpm")),
+                f(g.get("torque")),
+                f(g.get("contact_ratio")),
+                warnings,
+            ]
+        })
+        .collect()
 }
 
 /// The picked rows: number, icon and name (as the input's own chips name them), role, and what
@@ -1339,15 +1583,12 @@ fn pick_rows(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelI
 
 pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], hover: &mut Option<(usize, Sel)>, labels: &[String]) -> bool {
     let mut enter = false;
-    let names: Vec<&str> = TYPES.iter().map(|t| t.1).collect();
-    choice_row(ui, "Type", "gear_type", &mut k.kind, &names);
+    // One type list (the header's): the old separate Type row is gone.
+    enter |= item_rows(app, ui, k, inputs, hover);
     let gk = k.gear_kind();
     let sketched = sketch_rules::sketched(gk);
-    if sketched {
-        item_rows(app, ui, k, inputs);
-        if k.items.is_empty() {
-            enter |= pick_rows(app, ui, k, inputs, hover, labels);
-        }
+    if sketched && k.items.is_empty() {
+        enter |= pick_rows(app, ui, k, inputs, hover, labels);
         if by_rows(gk) {
             let mut size = usize::from(k.by_teeth);
             choice_row(ui, "Size By", "gear_size_by", &mut size, &["Module", "Teeth"]);
@@ -1375,7 +1616,9 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
         choice_row(ui, "Drive", "gear_diff_drive", &mut k.diff_drive, &drives);
     }
     let shown_fields: Vec<Field> = fields(gk, k.has_drive()).into_iter().filter(|f| !(k.by_teeth && by_rows(gk) && f.key == "module")).collect();
-    enter |= value_rows(ui, k, &shown_fields);
+    if k.items.is_empty() || !sketched {
+        enter |= value_rows(ui, k, &shown_fields);
+    }
     if gk == GearKind::Differential {
         let bevel = k.diff_style < 2;
         let drive = k.has_drive();
@@ -1401,11 +1644,12 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
         let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
         form_row(ui, "Bearing", |ui| combo(ui, "gear_bearing", &labels, &mut k.bearing));
     }
-    choice_row(ui, "Operation", "gear_op", &mut k.operation, &OP_LABELS);
-    ui.checkbox(&mut k.cut_keep_out, solidcraft_ui_text::tr_label("Cut Keep-Out from Targets")).on_hover_text("Cut the room the set needs to turn out of the Targets (a housing)");
-    ui.checkbox(&mut k.assembly, solidcraft_ui_text::tr_label("Assembly")).on_hover_text("Each gear a component, turning on a joint, linked to its mates");
-    ui.checkbox(&mut k.clearance, solidcraft_ui_text::tr_label("Clearance Body"))
-        .on_hover_text("A keep-out body round the set, with the bearings' seats when bearings are picked, to cut a housing with");
+    choice_row(ui, "Operation", "gear_op", &mut k.operation, &OP_LABELS).on_hover_text("New Body: separate bodies. Join/Cut/Intersect: combine with the Targets.");
+    ui.checkbox(&mut k.cut_keep_out, solidcraft_ui_text::tr_label("Cut Keep-Out from Targets")).on_hover_text("Cut the space the gears sweep (plus the gap) out of the Targets, e.g. a housing.");
+    if k.cut_keep_out {
+        ui.scope(|ui| enter |= hint_row(ui, "Keep-Out Gap", &mut k.keep_out_gap, "auto")).response.on_hover_text("Extra room around the swept teeth when cutting the housing.");
+    }
+    ui.checkbox(&mut k.assembly, solidcraft_ui_text::tr_label("Assembly")).on_hover_text("Each shaft and its gears become a component on a revolve joint, linked to its mates by the gear ratio.");
     if sketched {
         ui.horizontal_wrapped(|ui| {
             if ui_kit::button(ui, solidcraft_ui_text::tr_label("New Sketch"), ui_kit::Button::Normal)
@@ -1426,7 +1670,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
     if gk != GearKind::Differential {
         ui_kit::section(ui, "gear_advanced", "Advanced", false, |ui| {
             enter |= value_rows(ui, k, &ADVANCED);
-            ui.checkbox(&mut k.equations, solidcraft_ui_text::tr_label("Equation Teeth")).on_hover_text("Teeth drawn from their equations instead of fitted curves");
+            ui.checkbox(&mut k.equations, solidcraft_ui_text::tr_label("Equation Teeth")).on_hover_text("Exact involute curves instead of fitted splines: slower, smoother.");
         });
     }
     // What the engine reads from the picks: worked out once per change.
@@ -1443,6 +1687,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
                 };
                 k.members = r.as_ref().map(members_of).unwrap_or_default();
                 (k.link_errors, k.suggested) = r.as_ref().map(crate::dialogs_gear_graph::link_notes).unwrap_or_default();
+                k.results = r.as_ref().map(results_of).unwrap_or_default();
                 k.shafts = r.as_ref().map(shafts_of).unwrap_or_default();
                 k.contacts = r.as_ref().map(contacts_of).unwrap_or_default();
                 k.flagged = flagged(app, k, &*inputs, r.is_err());

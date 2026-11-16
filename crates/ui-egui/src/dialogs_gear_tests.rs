@@ -409,45 +409,71 @@ fn editing_the_gears_feature_opens_that_set_and_updates_it_in_place() {
     assert_eq!(after[0].feature, set.feature, "updated in place");
 }
 
-/// Gear items: Create New makes one of the chosen type, the picks go to it, its checklist says
-/// what it still needs; the graph's wires are the links, a Module Block the shared module.
+/// Gear items: each fills its slots from the picks (a wrong pick refused with its reason), has
+/// its own per-gear settings, and is sent with the graph's links and module blocks and the
+/// driver (GEAR_UI_SPEC.md §6).
 #[test]
 fn items_and_the_graph_make_the_request() {
-    use crate::dialogs_gear_graph::{GNode, GearItem, ITEM_TYPES};
+    use crate::dialogs_gear_graph::{GNode, GearItem, ITEM_TYPES, Suggested, pin};
     let mut app = app();
     let sk = app.session.execute("sketch.create", &json!({"plane": "XY"})).unwrap()["sketch"].as_u64().unwrap();
     for (id, x, r) in [("c1", 0.0, 20.0), ("c2", 30.0, 10.0), ("c3", 30.0, 5.0)] {
         app.session.execute("sketch.circle.center", &json!({"center": [x, 0], "radius": r, "id": id})).unwrap();
     }
     app.session.execute("sketch.line", &json!({"points": [[30, 0], [30, 40]], "ids": ["s"]})).unwrap();
+    app.session.execute("sketch.line", &json!({"points": [[0, 0], [30, 0]], "ids": ["k"], "construction": true})).unwrap();
     app.session.execute("sketch.finish", &json!({})).unwrap();
     app.start("gear.create");
     let mut d = app.dialog.clone().unwrap();
     let curve = |id: &str| Sel::SketchCurve { id: id.into(), sketch: Some(sk) };
     let Kind::Gear(g) = &mut d.kind else { panic!() };
     let compound = ITEM_TYPES.iter().position(|t| t.0 == "compound").unwrap();
-    g.items = vec![GearItem { kind: 0, picks: vec![curve("c1")] }, GearItem { kind: compound, picks: vec![curve("c2")] }];
-    // The compound still needs its second circle and its shaft line.
-    let list = g.items[1].checklist(&app);
-    assert!(list.iter().any(|(_, done)| !done), "{list:?}");
-    g.items[1].picks.extend([curve("c3"), curve("s")]);
-    assert!(g.items[1].checklist(&app).iter().all(|(_, done)| *done));
-    g.graph.accept(0, 1, "mesh");
+    g.items = vec![GearItem { picks: vec![curve("c1")], ..GearItem::new(0) }, GearItem { picks: vec![curve("c2")], ..GearItem::new(compound) }];
+    // The compound still needs its shaft line first; a construction line is refused.
+    assert_eq!(g.items[1].next_slot(&app).as_deref(), Some("shaft line"));
+    assert_eq!(g.items[1].refusal(&app, &curve("k"), &[]).as_deref(), Some("a construction line is a helper, not a shaft"));
+    let others = [(0usize, &g.items[0].clone())];
+    assert_eq!(g.items[1].refusal(&app, &curve("c1"), &others).as_deref(), Some("already used by Item 1"));
+    g.items[1].picks.extend([curve("s"), curve("c3")]);
+    assert!(g.items[1].complete(&app), "{:?}", g.items[1].slots_now(&app));
+    assert_eq!(g.items[1].gear_count(&app), 2);
+    // Per gear: face side A only on the first gear; sized by module 2.
+    g.items[0].module = "2 mm".into();
+    g.items[0].gears = vec![crate::dialogs_gear_graph::GearSettings { face_preset: 1, face_a: "8 mm".into(), hand: 1, ..Default::default() }];
+    g.graph.accept(&Suggested { a: 0, a_gear: 0, b: 1, b_gear: 1, kind: "mesh".into() });
     let block = g.graph.0.insert_node(egui::pos2(0.0, 0.0), GNode::Block { module: "2 mm".into() });
-    for i in 0..2 {
+    for (i, gears) in [(0usize, 1usize), (1, 2)] {
         let n = g.graph.node_of(i);
-        g.graph.0.connect(egui_snarl::OutPinId { node: n, output: 2 }, egui_snarl::InPinId { node: block, input: 0 });
+        g.graph.0.connect(egui_snarl::OutPinId { node: n, output: pin(gears, false) }, egui_snarl::InPinId { node: block, input: 0 });
     }
+    g.drive_item = Some((1, 0));
+    g.rpm = "1000".into();
     let c = apply_commands(&app, &d).unwrap();
     let p = &c[0].1;
     assert_eq!(p["items"][1]["type"], "compound", "{p}");
     assert_eq!(p["items"][1]["components"].as_array().unwrap().len(), 3);
-    assert_eq!(p["links"], json!([{"a": 0, "b": 1, "kind": "mesh"}]));
-    assert_eq!(p["module_blocks"][0]["module"], json!(2.0));
-    assert_eq!(p["module_blocks"][0]["items"], json!([0, 1]));
-    assert!(p.get("selection").is_none() && p.get("sketch").is_none(), "{p}");
-    // What the engine says of the links, and what it suggests.
-    let (errors, suggested) = crate::dialogs_gear_graph::link_notes(&json!({"links": [{"a": 0, "b": 1, "error": "too far apart to mesh"}], "suggested_links": [{"a": 1, "b": 2, "kind": "mesh"}]}));
-    assert_eq!(errors, ["item 1 – item 2: too far apart to mesh"]);
-    assert_eq!(suggested, [(1, 2, "mesh".to_string())]);
+    let g0 = &p["items"][0]["gears"][0];
+    assert_eq!((g0["module"].as_f64(), g0["hand"].as_str()), (Some(2.0), Some("left")), "{g0}");
+    assert_eq!(g0["face"], json!({"a": 8.0, "b": 0.0}));
+    assert_eq!(g0["profile_shift"], "auto");
+    // The engine's names (gear-items): item ids, components by slot, links by item and port.
+    assert_eq!((p["items"][0]["id"].as_str(), p["items"][1]["id"].as_str()), (Some("A"), Some("B")));
+    let slots: Vec<&str> = p["items"][1]["components"].as_array().unwrap().iter().map(|c| c["slot"].as_str().unwrap()).collect();
+    assert_eq!(slots, ["pitch", "axis", "pitch2"], "in pick order: c2, s, c3");
+    assert_eq!(p["links"], json!([{"a": {"item": "A", "port": 0}, "b": {"item": "B", "port": 1}, "kind": "mesh"}]));
+    assert_eq!(p["module_blocks"], json!([{"id": "M1", "module": 2.0}]));
+    assert_eq!((p["items"][0]["module_block"].as_str(), p["items"][1]["module_block"].as_str()), (Some("M1"), Some("M1")));
+    assert_eq!(p["drive"], json!({"item": "B", "gear": 0, "rpm": 1000.0}));
+    assert!(p.get("selection").is_none() && p.get("sketch").is_none() && p.get("clearance_body").is_none(), "{p}");
+    // What the engine says of the links (ratio, or the error and what to do), and suggests.
+    let (notes, suggested) = crate::dialogs_gear_graph::link_notes(&json!({
+        "links": [{"a": {"item": "A", "gear": 0}, "b": {"item": "B", "gear": 1}, "kind": "mesh", "ratio": 2.0}, {"a": {"item": "B", "gear": 0}, "b": {"item": "C", "gear": 0}, "kind": "mesh", "error": "centre distance 31.2, needs 30.0 ±0.05", "hint": "move the circles"}],
+        "suggestions": ["item B gear 1 and item C gear 1 are tangent: link them?"]
+    }));
+    assert_eq!(notes, [("1·1 – 2·2: 2.00 : 1".to_string(), false), ("2·1 – 3·1: centre distance 31.2, needs 30.0 ±0.05: move the circles".to_string(), true)]);
+    assert_eq!(suggested, [Suggested { a: 1, a_gear: 0, b: 2, b_gear: 0, kind: "mesh".into() }]);
+    // The results table.
+    let rows = results_of(&json!({"gears": [{"item": "A", "gear": 0, "teeth": 20, "module": 2.0, "pitch_d": 40.0, "ratio": 1.0, "rpm": 1000.0, "contact_ratio": 1.6, "warnings": ["undercut"]}]}));
+    assert_eq!(rows[0][0], "1·1");
+    assert_eq!(rows[0][8], "undercut");
 }

@@ -40,6 +40,7 @@ use std::f64::consts::PI;
 
 use crate::axes::{Axis, MODULES, MODULES_2};
 use crate::geom::V2;
+use crate::involute::{Involute, shift_sum_for_center};
 use crate::plan::{Frame, Kind, Spec};
 
 /// A circle of the sketch (its plane's coordinates, mm).
@@ -693,6 +694,442 @@ pub fn fit_module(ds: &[(f64, f64)], zmin: u32) -> (f64, Vec<u32>, bool) {
     (if sz > 0.0 { sd / sz } else { 1.0 }, zs, false)
 }
 
+// =============================================================================================
+// Decision 1 (the user's diameter rule): the drawn pitch circle is kept. With a module, each gear
+// takes the whole tooth count nearest its drawn diameter; the drawn centre distances are held
+// exactly by profile shift, so the drawn circles are the operating pitch circles. Refused only
+// where the shift needed leaves the teeth's limits (undercut, pointed tips), naming sizes that
+// would work.
+
+/// Teeth the automatic module gives the smallest gear at least ([`auto_module`]): the fewest a
+/// 20° gear takes without undercut.
+pub const AUTO_TEETH: u32 = 17;
+
+/// The automatic module for gears of drawn pitch Ø `ds` (each with its factor, as in
+/// [`fit_module`]): the largest ISO 54 series I module whose nearest whole counts give the
+/// smallest gear [`AUTO_TEETH`] or more teeth (the others' diameters are reached by profile
+/// shift). Where no standard module gives that (tiny gears): the largest giving `zmin` or more,
+/// with a note (profile shift clears their undercut); failing that, the exact module of `zmin`
+/// teeth on the smallest gear, with a note.
+pub fn auto_module(ds: &[(f64, f64)], zmin: u32) -> (f64, Vec<u32>, Option<String>) {
+    let counts = |m: f64| -> Vec<u32> { ds.iter().map(|(d, f)| (d / (m * f)).round().clamp(0.0, 1e6) as u32).collect() };
+    let fewest = |zs: &[u32]| zs.iter().copied().min().unwrap_or(u32::MAX);
+    for &m in MODULES.iter().rev() {
+        let zs = counts(m);
+        if fewest(&zs) >= AUTO_TEETH {
+            return (m, zs, None);
+        }
+    }
+    let zmin = zmin.max(3);
+    for &m in MODULES.iter().rev() {
+        let zs = counts(m);
+        let few = fewest(&zs);
+        if few >= zmin {
+            return (m, zs, Some(format!("no standard module gives the smallest gear {AUTO_TEETH} teeth: module {} gives it {few}, cleared of undercut by profile shift", num(m))));
+        }
+    }
+    let small = ds.iter().map(|(d, f)| d / f).fold(f64::INFINITY, f64::min);
+    let m = if small.is_finite() && small > 0.0 { small / f64::from(zmin) } else { 1.0 };
+    (m, counts(m), Some(format!("too small for a standard module: module {} gives the smallest gear {zmin} teeth", num(m))))
+}
+
+/// The profile-shift limits of an external involute gear `g` (its own shift ignored):
+/// `(lowest, highest, preferred)`.
+/// - lowest: the practical undercut limit (teeth down to 5/6 of the fewest without undercut, as
+///   DIN 3960 allows), but never above 0: a shift may not cut the teeth deeper than their count
+///   already does;
+/// - highest: a tip land of 0.2 modules left (beyond it the tips come to a point);
+/// - preferred: the shift that just clears undercut (0 when there is none), within the two.
+pub fn shift_limits(g: &Involute) -> (f64, f64, f64) {
+    // x clear of undercut = ha − k, k = ha·z / (fewest teeth without undercut at no shift)
+    // (= z·sin²αt / 2cos β); the practical limit ha − 1.2·k.
+    let ha = g.rack.addendum;
+    let fewest = Involute { shift: 0.0, ..*g }.min_teeth_no_undercut();
+    let k = if fewest > 0.0 { ha * g.z() / fewest } else { f64::INFINITY };
+    let lo = (ha - 1.2 * k).min(0.0);
+    let land = |x: f64| {
+        let h = Involute { shift: x, ..*g };
+        h.thickness_at(h.ra()) - 0.2 * g.module
+    };
+    // The land narrows as the shift grows (from a modest negative shift up: far below, the
+    // pitch thickness itself goes negative): searched from the lowest shift allowed, or −1.
+    let (mut a, mut b) = (lo.max(-1.0), 3.0f64);
+    let hi = if land(b) >= 0.0 {
+        b
+    } else if land(a) < 0.0 {
+        a
+    } else {
+        for _ in 0..60 {
+            let mid = 0.5 * (a + b);
+            if land(mid) >= 0.0 {
+                a = mid;
+            } else {
+                b = mid;
+            }
+        }
+        a
+    };
+    let pref = (ha - k).max(0.0).min(hi).max(lo);
+    (lo, hi, pref)
+}
+
+/// A mesh of a meshing group for [`group_shifts`]: gears `a` and `b` (indices into its gears;
+/// `internal`: `b` is a ring with `a` inside it) and their drawn centre distance (mm).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GroupMesh {
+    pub a: usize,
+    pub b: usize,
+    pub internal: bool,
+    pub dist: f64,
+}
+
+/// Why no shifts hold a stage's or group's drawn distances.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ShiftFail {
+    /// No profile shift puts gears `.0` and `.1` at their distance.
+    Unreachable(usize, usize),
+    /// The shifts needed leave the limits: `low` bounds the free shift from below, `high` from
+    /// above (they cross), each a gear and whether its undercut (true) or pointed tips (false).
+    Limits { low: (usize, bool), high: (usize, bool) },
+}
+
+/// The profile shifts (one per gear, in its order) for shifts that are linear in one free shift
+/// t: gear k's is `lin[k].0 + lin[k].1 · t` (slope ±1, or 0 for a shift the distances fix). t is
+/// chosen nearest every gear's preferred shift ([`shift_limits`]: clear of undercut, so the
+/// smaller gears take the positive share) in the least-squares sense, within every gear's limits
+/// (rings: none, preferring no shift).
+fn choose_shifts(gears: &[Involute], ring: &[bool], lin: &[(f64, f64)]) -> Result<Vec<f64>, ShiftFail> {
+    let (mut sum, mut den) = (0.0, 0.0);
+    let mut lo: (f64, (usize, bool)) = (f64::NEG_INFINITY, (0, true));
+    let mut hi: (f64, (usize, bool)) = (f64::INFINITY, (0, false));
+    for (k, (g, &(a, s))) in gears.iter().zip(lin).enumerate() {
+        if ring.get(k).copied().unwrap_or(false) {
+            sum -= s * a;
+            den += s * s;
+            continue;
+        }
+        let (l, u, pref) = shift_limits(g);
+        sum += s * (pref - a);
+        den += s * s;
+        if s == 0.0 {
+            if a < l - 1e-9 {
+                return Err(ShiftFail::Limits { low: (k, true), high: (k, true) });
+            }
+            if a > u + 1e-9 {
+                return Err(ShiftFail::Limits { low: (k, false), high: (k, false) });
+            }
+            continue;
+        }
+        // l ≤ a + s·t ≤ u.
+        let (from, to, from_cut) = if s > 0.0 { ((l - a) / s, (u - a) / s, true) } else { ((u - a) / s, (l - a) / s, false) };
+        if from > lo.0 {
+            lo = (from, (k, from_cut));
+        }
+        if to < hi.0 {
+            hi = (to, (k, !from_cut));
+        }
+    }
+    let want = if den > 0.0 && sum.is_finite() { sum / den } else { 0.0 };
+    let t = if lo.0 <= hi.0 {
+        want.clamp(lo.0, hi.0)
+    } else if lo.0 - hi.0 <= 1e-9 {
+        0.5 * (lo.0 + hi.0)
+    } else {
+        return Err(ShiftFail::Limits { low: lo.1, high: hi.1 });
+    };
+    Ok(lin.iter().map(|(a, s)| a + s * t).collect())
+}
+
+/// The profile shifts of a meshing group (decision 1): `gears` (their shifts ignored), which are
+/// rings, and the `meshes` joining them (a tree from gear 0). Every mesh's drawn centre
+/// distance is held exactly (outside: the shift sum, from the operating pressure angle; inside a
+/// ring: the ring's shift less the gear's); the one shift left free is chosen by
+/// [`choose_shifts`]. A group of one gear keeps no shift.
+pub fn group_shifts(gears: &[Involute], ring: &[bool], meshes: &[GroupMesh]) -> Result<Vec<f64>, ShiftFail> {
+    let n = gears.len();
+    if n <= 1 {
+        return Ok(vec![0.0; n]);
+    }
+    let at0 = |k: usize| Involute { shift: 0.0, ..gears[k] };
+    let mut lin: Vec<Option<(f64, f64)>> = vec![None; n];
+    lin[0] = Some((0.0, 1.0));
+    let mut queue = vec![0];
+    while let Some(i) = queue.pop() {
+        let (ai, si) = lin[i].unwrap_or((0.0, 1.0));
+        for m in meshes {
+            let j = if m.a == i {
+                m.b
+            } else if m.b == i {
+                m.a
+            } else {
+                continue;
+            };
+            if j >= n || lin[j].is_some() {
+                continue;
+            }
+            let next = if m.internal {
+                crate::plan::ring_shift_for_center(&at0(m.a), &at0(m.b), m.dist).map(|d| if j == m.b { (ai + d, si) } else { (ai - d, si) })
+            } else {
+                shift_sum_for_center(&at0(i), &at0(j), m.dist).map(|sum| (sum - ai, -si))
+            };
+            match next {
+                Some(v) if v.0.is_finite() => {
+                    lin[j] = Some(v);
+                    queue.push(j);
+                }
+                _ => return Err(ShiftFail::Unreachable(m.a, m.b)),
+            }
+        }
+    }
+    let lin: Vec<(f64, f64)> = lin.into_iter().map(|v| v.unwrap_or((0.0, 0.0))).collect();
+    choose_shifts(gears, ring, &lin)
+}
+
+/// "a", "a and b", "a, b and c".
+fn and_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// What would work instead when the shifts can't hold the drawn distances at module `m` with
+/// `zs` teeth (gears of drawn Ø and factor `ds`, named by `name`): up to three standard modules
+/// nearest `m` giving every gear 8 or more teeth (the counts nearest its diameter), then up to
+/// three single gears a tooth more or fewer at `m`, each one `works`.
+fn other_sizes(ds: &[(f64, f64)], m: f64, zs: &[u32], name: &dyn Fn(usize) -> String, works: &dyn Fn(f64, &[u32]) -> bool) -> Vec<String> {
+    let mut ideas = Vec::new();
+    let mut cands: Vec<f64> = MODULES.iter().chain(MODULES_2.iter()).copied().filter(|x| (x - m).abs() > 1e-9 * m).collect();
+    cands.sort_by(|a, b| (a / m).ln().abs().total_cmp(&(b / m).ln().abs()).then(b.total_cmp(a)));
+    let mut found = 0;
+    for mm in cands {
+        if found == 3 {
+            break;
+        }
+        let zz: Vec<u32> = ds.iter().map(|(d, f)| (d / (mm * f)).round().clamp(0.0, 1e6) as u32).collect();
+        if zz.iter().all(|z| *z >= 8) && works(mm, &zz) {
+            let list: Vec<String> = zz.iter().map(u32::to_string).collect();
+            ideas.push(format!("module {} ({} teeth)", num(mm), list.join(", ")));
+            found += 1;
+        }
+    }
+    let mut found = 0;
+    for k in 0..zs.len() {
+        for z in [zs[k].saturating_sub(1), zs[k] + 1] {
+            if found == 3 || z < 3 || z == zs[k] {
+                continue;
+            }
+            let mut zz = zs.to_vec();
+            zz[k] = z;
+            if works(m, &zz) {
+                ideas.push(format!("{} with {z} teeth", name(k)));
+                found += 1;
+            }
+        }
+    }
+    ideas
+}
+
+/// The refusal when no shifts hold `what` (e.g. "the drawn centre distances"): why, and `ideas`
+/// ([`other_sizes`]).
+fn shift_refusal(why: ShiftFail, name: &dyn Fn(usize) -> String, zs: &[u32], m: f64, what: &str, ideas: &[String]) -> String {
+    let counts: Vec<String> = zs.iter().map(u32::to_string).collect();
+    let text = match why {
+        ShiftFail::Unreachable(a, b) => format!("no profile shift puts {} and {} at {what} ({} teeth at module {})", name(a), name(b), and_list(&counts), num(m)),
+        ShiftFail::Limits { low, high } => {
+            let says = |(k, cut): (usize, bool)| if cut { format!("{} would be undercut", name(k)) } else { format!("{}'s tips would come to a point", name(k)) };
+            let mut list = vec![says(low)];
+            if high != low {
+                list.push(says(high));
+            }
+            format!("holding {what} needs more profile shift than {} teeth at module {} take ({})", and_list(&counts), num(m), and_list(&list))
+        }
+    };
+    if ideas.is_empty() { format!("{text}: draw the circles nearer whole teeth at this module") } else { format!("{text}. These would work: {}", ideas.join(", ")) }
+}
+
+/// One gear of a stage to size ([`size_stage`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StageGear {
+    /// Its drawn pitch Ø (mm): a bevel's, hypoid's or face gear's outer pitch Ø; a worm's pitch Ø.
+    pub d: f64,
+    /// Pitch Ø = module × teeth × factor: 1 / cos β for a crossed helical or helical gear, else 1.
+    pub factor: f64,
+    /// Teeth asked (Size by Teeth: the module follows from d ÷ (teeth × factor)); a worm's starts.
+    pub teeth: Option<u32>,
+}
+
+impl StageGear {
+    pub fn of(d: f64) -> StageGear {
+        StageGear { d, factor: 1.0, teeth: None }
+    }
+}
+
+/// What [`size_stage`] made of a stage: the module, and per gear its teeth, profile shift
+/// coefficient and built pitch Ø; notes on what differs from the drawing.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct StageSize {
+    pub module: f64,
+    pub teeth: Vec<u32>,
+    pub shift: Vec<f64>,
+    pub pitch_diameter: Vec<f64>,
+    pub notes: Vec<String>,
+}
+
+/// Sizes one stage by decision 1, its gears as drawn (`gears`, gear 1 first) and `module` asked
+/// (a module block's or the gear's own; `None`: by teeth asked, else [`auto_module`]). `base`
+/// gives the pressure angle, rack, backlash, the shaft angle (bevel), a ratio (`teeth2 / teeth`,
+/// where the drawing gives one gear) and the worm's starts.
+/// - Pair / spur / helical / herringbone `[gear 1, gear 2]` (touching outside) and internal
+///   `[ring, gear inside]`: as a train's meshing group ([`group_shifts`]).
+/// - Rack `[pinion]`: the pitch line at the drawn radius by the pinion's shift.
+/// - Worm `[wheel, worm]`: the wheel sized by the rule; the worm's Ø as drawn (its `teeth` the
+///   starts); the drawn centre distance (Ø sum ÷ 2) by the wheel's shift.
+/// - Crossed helical `[gear 1, gear 2]` (factors 1 / cos β of each): point contact, so the
+///   centre distance is the pitch radii plus (x1 + x2)·m; the drawn one held by that sum.
+/// - Bevel, spiral bevel, bevel planetary `[gear 1, gear 2?]`: the rule can't hold both drawn
+///   Ø: the pitch cones meet at the apex, so the ratio sets the cone angles and a shift moves
+///   nothing. Gear 1's drawn outer pitch Ø is kept (module = Ø ÷ its rounded teeth, standard or
+///   not), gear 2 takes the teeth nearest its drawn Ø (or `base`'s ratio), with a note where the
+///   ratio differs from the drawn one; shifts x1 = −x2 clear the smaller gear's undercut
+///   (virtual teeth z / cos δ).
+/// - Hypoid, face gear `[ring or face gear]`: likewise the drawn Ø kept (module = Ø ÷ rounded
+///   teeth); the pinion's size is the settings'; no shift.
+pub fn size_stage(kind: Kind, gears: &[StageGear], module: Option<f64>, base: &Spec) -> Result<StageSize, String> {
+    let need = match kind {
+        Kind::Pair | Kind::Spur | Kind::Helical | Kind::Herringbone | Kind::Internal | Kind::Worm | Kind::CrossedHelical => 2,
+        _ => 1,
+    };
+    if gears.len() < need {
+        return Err(format!("a {} stage needs {need} drawn gears", kind.label().to_lowercase()));
+    }
+    if gears.iter().any(|g| !(g.d > 0.0 && g.d.is_finite() && g.factor >= 1.0 && g.factor.is_finite())) {
+        return Err("each gear needs a drawn pitch Ø greater than 0".into());
+    }
+    // The gears the module sizes: a worm's own Ø is free.
+    let sized: &[StageGear] = match kind {
+        Kind::Worm | Kind::Hypoid | Kind::FaceGear | Kind::Rack => &gears[..1],
+        _ => gears,
+    };
+    let ds: Vec<(f64, f64)> = sized.iter().map(|g| (g.d, g.factor)).collect();
+    let mut notes = Vec::new();
+    let by_teeth = sized.iter().find_map(|g| g.teeth.filter(|z| *z > 0).map(|z| g.d / (g.factor * f64::from(z))));
+    let m = match module.filter(|m| *m > 0.0 && m.is_finite()).or(by_teeth) {
+        Some(m) => m,
+        None => {
+            let (m, _, note) = auto_module(&ds, 8);
+            notes.extend(note);
+            m
+        }
+    };
+    let zs: Vec<u32> = sized.iter().map(|g| g.teeth.filter(|z| *z > 0).unwrap_or_else(|| (g.d / (m * g.factor)).round().clamp(3.0, 1e6) as u32)).collect();
+    match stage_at(kind, gears, m, &zs, base, &mut notes) {
+        Ok(mut s) => {
+            s.notes.splice(0..0, notes);
+            Ok(s)
+        }
+        Err(why) => {
+            let name = |k: usize| format!("gear {}", k + 1);
+            let ideas = other_sizes(&ds, m, &zs, &name, &|mm, zz| stage_at(kind, gears, mm, zz, base, &mut Vec::new()).is_ok());
+            let what = if matches!(kind, Kind::Rack) { "the drawn pitch line" } else { "the drawn centre distance" };
+            Err(shift_refusal(why, &name, &zs, m, what, &ideas))
+        }
+    }
+}
+
+/// [`size_stage`] at module `m` with teeth `zs` (one per gear the module sizes).
+fn stage_at(kind: Kind, gears: &[StageGear], m: f64, zs: &[u32], base: &Spec, notes: &mut Vec<String>) -> Result<StageSize, ShiftFail> {
+    let helix_of = |f: f64| (1.0 / f).clamp(-1.0, 1.0).acos().to_degrees();
+    let inv = |m: f64, z: u32, f: f64| Spec { module: m, train: None, ..base.clone() }.involute(z.max(3), 0.0, helix_of(f));
+    let built = |k: usize| m * gears[k].factor * f64::from(zs[k]);
+    let mut out = StageSize { module: m, teeth: zs.to_vec(), ..StageSize::default() };
+    match kind {
+        Kind::Pair | Kind::Spur | Kind::Helical | Kind::Herringbone | Kind::Internal => {
+            let internal = kind == Kind::Internal;
+            // Internal: gear 1 is the ring, gear 2 inside it (the mesh's `b` is the ring).
+            let gs = [inv(m, zs[0], gears[0].factor), inv(m, zs[1], gears[1].factor)];
+            let (gs, ring, dist) = if internal { ([gs[1], gs[0]], [false, true], (gears[0].d - gears[1].d) / 2.0) } else { (gs, [false, false], (gears[0].d + gears[1].d) / 2.0) };
+            let mut xs = group_shifts(&gs, &ring, &[GroupMesh { a: 0, b: 1, internal, dist }]).map_err(|e| if internal { swap(e) } else { e })?;
+            if internal {
+                xs.swap(0, 1);
+            }
+            out.shift = xs;
+            out.pitch_diameter = vec![built(0), built(1)];
+        }
+        Kind::Rack => {
+            let x = (gears[0].d - built(0)) / (2.0 * m);
+            out.shift = choose_shifts(&[inv(m, zs[0], gears[0].factor)], &[false], &[(x, 0.0)])?;
+            out.pitch_diameter = vec![built(0)];
+        }
+        Kind::Worm => {
+            let x = (gears[0].d - built(0)) / (2.0 * m);
+            let mut xs = choose_shifts(&[inv(m, zs[0], 1.0)], &[false], &[(x, 0.0)])?;
+            xs.push(0.0);
+            out.shift = xs;
+            out.teeth.push(gears[1].teeth.filter(|z| *z > 0).unwrap_or(base.starts.max(1)));
+            out.pitch_diameter = vec![built(0), gears[1].d];
+        }
+        Kind::CrossedHelical => {
+            let sum = ((gears[0].d + gears[1].d) - (built(0) + built(1))) / (2.0 * m);
+            let gs = [inv(m, zs[0], gears[0].factor), inv(m, zs[1], gears[1].factor)];
+            out.shift = choose_shifts(&gs, &[false, false], &[(0.0, 1.0), (sum, -1.0)])?;
+            out.pitch_diameter = vec![built(0), built(1)];
+        }
+        Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary => {
+            let z1 = zs[0];
+            let me = gears[0].d / f64::from(z1);
+            if (me - m).abs() > 1e-9 * m {
+                notes.push(format!("module {} keeps gear 1's drawn outer pitch Ø{} with {z1} teeth (a bevel's pitch cones fix its size: no shift reaches it)", num(me), num(gears[0].d)));
+            }
+            let z2 = match gears.get(1) {
+                Some(g) => g.teeth.filter(|z| *z > 0).unwrap_or_else(|| (g.d / me).round().clamp(3.0, 1e6) as u32),
+                None => ((f64::from(z1) * f64::from(base.teeth2.max(1)) / f64::from(base.teeth.max(1))).round() as u32).max(3),
+            };
+            if let Some(g) = gears.get(1)
+                && (me * f64::from(z2) - g.d).abs() > 1e-6
+            {
+                notes.push(format!(
+                    "gear 2: Ø{} drawn, Ø{} built ({z2} teeth): the ratio is {z2}:{z1} = {:.4}, not the drawn {:.4}; the cone angles follow the teeth",
+                    num(g.d),
+                    num(me * f64::from(z2)),
+                    f64::from(z2) / f64::from(z1),
+                    g.d / gears[0].d
+                ));
+            }
+            let sigma = base.shaft_angle.to_radians();
+            let u = f64::from(z2) / f64::from(z1);
+            let d1 = sigma.sin().atan2(u + sigma.cos());
+            let virt = |z: u32, delta: f64| Involute { virtual_teeth: f64::from(z) / delta.cos().abs().max(1e-6), ..inv(me, z, 1.0) };
+            let gs = [virt(z1, d1), virt(z2, sigma - d1)];
+            out.module = me;
+            out.teeth = vec![z1, z2];
+            out.shift = choose_shifts(&gs, &[false, false], &[(0.0, 1.0), (0.0, -1.0)])?;
+            out.pitch_diameter = vec![gears[0].d, me * f64::from(z2)];
+        }
+        _ => {
+            // Hypoid, face gear and the rest: the drawn Ø kept with the rounded teeth.
+            let me = gears[0].d / f64::from(zs[0]);
+            if (me - m).abs() > 1e-9 * m {
+                notes.push(format!("module {} keeps the drawn pitch Ø{} with {} teeth", num(me), num(gears[0].d), zs[0]));
+            }
+            out.module = me;
+            out.shift = vec![0.0];
+            out.pitch_diameter = vec![gears[0].d];
+        }
+    }
+    Ok(out)
+}
+
+/// A [`ShiftFail`] of a two-gear stage solved in the other order.
+fn swap(e: ShiftFail) -> ShiftFail {
+    let o = |k: usize| 1 - k.min(1);
+    match e {
+        ShiftFail::Unreachable(a, b) => ShiftFail::Unreachable(o(a), o(b)),
+        ShiftFail::Limits { low, high } => ShiftFail::Limits { low: (o(low.0), low.1), high: (o(high.0), high.1) },
+    }
+}
+
 /// The spec of the measured mode: `base` (of the same kind) with the module and tooth counts
 /// that give the drawn diameters, and the sizes the drawing gives (offset, centre distance,
 /// shaft angle, worm Ø). What the drawing doesn't give (helix, face width, the mate's size by
@@ -1103,6 +1540,9 @@ pub struct Sized {
     pub errors: Vec<Option<String>>,
     /// Why there is no spec: every member's error in one line, or one about the whole train.
     pub error: Option<String>,
+    /// One per circle: its profile shift coefficient (the train's gears carry the same; 0 where
+    /// an error left it unknown).
+    pub shifts: Vec<f64>,
 }
 
 /// Sizes the train drawn as `circles` (gear 1 first: the driver) with tooth style `style`
@@ -1111,12 +1551,16 @@ pub struct Sized {
 ///   the same centre gears on one shaft (a cluster: each meshing group on its own layer along
 ///   the shafts, or where `z` puts it); circles that cross must be on different layers, and a
 ///   circle touching nothing is an error (it would mesh with nothing);
-/// - one module per meshing group: the module a member asks (all its members agree), the one
-///   its asked teeth give, `settings.module`, or the largest standard (ISO 54) module that gives
-///   every diameter within half a percent ([`fit_module`]; with `settings.exact` the module that
-///   draws the group exactly); at least 8 teeth; teeth asked must match the drawn diameter;
-/// - the drawn centre distances kept exactly by profile shift along each group from its first
-///   gear; helix hands opposite across outside meshes, the same inside rings and on a shaft.
+/// - one module per meshing group (decision 1): the module a member asks (all its members agree;
+///   a module block's reaches here as each member's), else the one the first gear asking teeth
+///   gives (drawn Ø ÷ teeth, standard or not), else `settings.module`, else [`auto_module`] (the
+///   standard module giving the smallest gear 17+ teeth; with `settings.exact` the module that
+///   draws the group exactly); each gear the teeth it asks, else the count nearest its drawn Ø;
+/// - the drawn centre distances held exactly by profile shift ([`group_shifts`]: the drawn
+///   circles are the operating pitch circles), the free shift of each group spent clearing the
+///   smaller gears' undercut; refused only where the shifts leave the teeth's limits
+///   (undercut, pointed tips), naming modules and tooth counts that would work (`shifts`);
+/// - helix hands opposite across outside meshes, the same inside rings and on a shaft.
 ///
 /// What the drawing doesn't give stays `base`'s (pressure angle, rack, backlash, bores...);
 /// `settings` gives the face width (default 10 modules; a member's own wins), helix angle
@@ -1382,11 +1826,20 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             }
         }
     }
-    // One module per meshing group, and the teeth.
+    // One module per meshing group (decision 1): the module its members ask (a module block's
+    // reaches here as each member's own; they must agree), else the one the first gear asking
+    // teeth gives (Size by Teeth: drawn Ø ÷ teeth, standard or not), else `settings.module`,
+    // else the automatic one ([`auto_module`]). Each gear takes the teeth it asks, else the
+    // whole count nearest its drawn diameter; the drawn centre distances are then held by
+    // profile shift (below), so the drawn circles are the operating pitch circles.
     let fs: Vec<f64> = gh.iter().map(|h| 1.0 / h.to_radians().cos()).collect();
     let mut module = vec![0.0f64; n];
     let mut teeth = vec![0u32; n];
     let roots: Vec<usize> = (0..n).filter(|i| group[*i] == *i).collect();
+    let group_names = |members: &[usize]| -> String {
+        let names: Vec<String> = members.iter().map(|i| (i + 1).to_string()).collect();
+        format!("gear{} {}", if names.len() > 1 { "s" } else { "" }, and_list(&names))
+    };
     for &g in &roots {
         let members: Vec<usize> = (0..n).filter(|i| group[*i] == g).collect();
         if members.iter().any(|i| err[*i].is_some() && c[*i].r <= 0.0) {
@@ -1394,89 +1847,44 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
         }
         let d = |i: usize| 2.0 * c[i].r;
         let f = fs[g];
-        // The module the members ask, or the one their asked teeth give: they must agree.
-        let mut asked: Option<(usize, f64, &str)> = None;
+        let mut asked: Option<(usize, f64)> = None;
         for &i in &members {
-            let own = circles[i].module.filter(|m| *m > 0.0).map(|m| (m, "asks module")).or_else(|| circles[i].teeth.filter(|z| *z > 0).map(|z| (d(i) / (f * f64::from(z)), "has teeth for module")));
-            let Some((m, how)) = own else { continue };
+            let Some(m) = circles[i].module.filter(|m| *m > 0.0 && m.is_finite()) else { continue };
             match asked {
-                None => asked = Some((i, m, how)),
-                Some((j, mj, _)) if (m - mj).abs() > TOLERANCE * mj => fail(
+                None => asked = Some((i, m)),
+                Some((j, mj)) if (m - mj).abs() > 1e-9 * mj => fail(
                     &mut err,
                     i,
-                    format!("gear {} {how} {}, but gear {} it meshes with is module {}: meshing gears share one module", i + 1, num(m), j + 1, num(mj)),
+                    format!("gear {} asks module {}, but gear {} it meshes with is module {}: meshing gears share one module", i + 1, num(m), j + 1, num(mj)),
                 ),
                 Some(_) => {}
             }
         }
-        let fixed = asked.map(|a| a.1).or(settings.module.filter(|m| *m > 0.0));
-        let ds: Vec<(f64, f64)> = members.iter().map(|i| (d(*i), f)).collect();
-        let (m, zs): (f64, Vec<u32>) = match fixed {
-            Some(m) => {
-                let zs = members
-                    .iter()
-                    .map(|&i| {
-                        let zf = d(i) / (m * f);
-                        let z = circles[i].teeth.filter(|z| *z > 0).unwrap_or(zf.round().max(1.0) as u32);
-                        let built = m * f * f64::from(z);
-                        if (built - d(i)).abs() > TOLERANCE * d(i) {
-                            let e = if circles[i].teeth.is_some() {
-                                format!("gear {}: {z} teeth at module {} make Ø{}, but its circle is Ø{}", i + 1, num(m), num(built), num(d(i)))
-                            } else {
-                                let (lo, hi) = (m * f * zf.floor().max(1.0), m * f * zf.ceil());
-                                let with = members.iter().find(|j| **j != i).map(|j| format!(" with gear {}", j + 1)).unwrap_or_default();
-                                format!(
-                                    "gear {} (Ø{}) is {:.2} teeth at module {}: not whole teeth, so it can't mesh{with} at one module. Draw it Ø{} or Ø{}, or leave the module free",
-                                    i + 1,
-                                    num(d(i)),
-                                    zf,
-                                    num(m),
-                                    num(lo),
-                                    num(hi)
-                                )
-                            };
-                            fail(&mut err, i, e);
-                        }
-                        z
-                    })
-                    .collect();
-                (m, zs)
-            }
+        let by_teeth = members.iter().find_map(|&i| circles[i].teeth.filter(|z| *z > 0).map(|z| d(i) / (f * f64::from(z))));
+        let fixed = asked.map(|a| a.1).or(by_teeth).or(settings.module.filter(|m| *m > 0.0 && m.is_finite()));
+        let nearest = |m: f64| -> Vec<u32> { members.iter().map(|&i| circles[i].teeth.filter(|z| *z > 0).unwrap_or_else(|| (d(i) / (m * f)).round().clamp(1.0, 1e6) as u32)).collect() };
+        let (m, zs) = match fixed {
+            Some(m) => (m, nearest(m)),
             None => {
-                let (m, zs, standard) = fit_module(&ds, 8);
+                let ds: Vec<(f64, f64)> = members.iter().map(|i| (d(*i), f)).collect();
+                let (m, _, note) = auto_module(&ds, 8);
+                let zs = nearest(m);
+                if let Some(note) = note {
+                    notes.push(format!("{}: {note}", group_names(&members)));
+                }
                 let (sd, sz): (f64, f64) = ds.iter().zip(&zs).fold((0.0, 0.0), |(a, b), ((d, f), z)| (a + d, b + f * f64::from(*z)));
-                let m = if settings.exact && standard && sz > 0.0 { sd / sz } else { m };
-                if !standard || settings.exact {
-                    let names: Vec<String> = members.iter().map(|i| (i + 1).to_string()).collect();
-                    notes.push(format!("gear{} {}: module {} (not a standard one) gives the drawn diameters", if names.len() > 1 { "s" } else { "" }, names.join(", "), num(m)));
+                if settings.exact && sz > 0.0 {
+                    let m = sd / sz;
+                    notes.push(format!("{}: module {} (not a standard one) gives the drawn diameters", group_names(&members), num(m)));
+                    (m, zs)
+                } else {
+                    (m, zs)
                 }
-                for (&i, z) in members.iter().zip(&zs) {
-                    let built = m * f * f64::from(*z);
-                    if (built - d(i)).abs() > 4.0 * TOLERANCE * d(i) {
-                        fail(
-                            &mut err,
-                            i,
-                            format!(
-                                "gear {} (Ø{}) can't share a module with the gears it meshes with: the nearest is Ø{} ({} teeth at module {}); meshing gears need one module",
-                                i + 1,
-                                num(d(i)),
-                                num(built),
-                                z,
-                                num(m)
-                            ),
-                        );
-                    }
-                }
-                (m, zs)
             }
         };
         for (&i, z) in members.iter().zip(zs) {
             module[i] = m;
             teeth[i] = z;
-            let built = m * f * f64::from(z);
-            if err[i].is_none() && (built - d(i)).abs() > 1e-6 {
-                notes.push(format!("gear {}: Ø{} drawn, Ø{} built ({} teeth at module {}); the drawn centre distances are kept by profile shift", i + 1, num(d(i)), num(built), z, num(m)));
-            }
         }
     }
     for i in 0..n {
@@ -1484,47 +1892,68 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             fail(&mut err, i, format!("gear {}: {} teeth are too few (module {})", i + 1, teeth[i], num(module[i])));
         }
     }
-    // Shifts that keep every drawn centre distance, from each group's first gear along its tree.
+    // The shifts that keep every drawn centre distance, per meshing group ([`group_shifts`]):
+    // refused only where they leave the teeth's limits, naming sizes that would work.
     let face = settings.face_width.filter(|f| *f > 0.0).unwrap_or(10.0 * module.iter().copied().fold(0.0, f64::max));
     let probe = Spec { kind: style, helix, face_width: face, train: None, ..base.clone() };
-    let inv = |i: usize, x: f64| Spec { module: module[i].max(1e-6), helix: gh[i], ..probe.clone() }.involute(teeth[i].max(3), x, hand[i] * gh[i]);
+    let inv0 = |i: usize, m: f64, z: u32| Spec { module: m.max(1e-6), helix: gh[i], ..probe.clone() }.involute(z.max(3), 0.0, hand[i] * gh[i]);
     let mut shift: Vec<Option<f64>> = vec![None; n];
     for &g in &roots {
-        shift[g] = Some(0.0);
-        let mut queue = vec![g];
-        while let Some(i) = queue.pop() {
-            for l in links.iter().filter(|l| l.kind != LinkKind::Compound) {
-                let j = if l.a == i {
-                    l.b
-                } else if l.b == i {
-                    l.a
-                } else {
-                    continue;
-                };
-                if shift[j].is_some() {
-                    continue;
+        let members: Vec<usize> = (0..n).filter(|i| group[*i] == g).collect();
+        if members.iter().any(|i| err[*i].is_some()) {
+            continue;
+        }
+        let local = |i: usize| members.iter().position(|j| *j == i).unwrap_or(0);
+        let meshes: Vec<GroupMesh> = links
+            .iter()
+            .filter(|l| l.kind != LinkKind::Compound && group[l.a] == g)
+            .map(|l| GroupMesh { a: local(l.a), b: local(l.b), internal: l.kind == LinkKind::Internal, dist: c[l.a].c.dist(c[l.b].c) })
+            .collect();
+        let rings: Vec<bool> = members.iter().map(|i| ring[*i]).collect();
+        let solve = |m: f64, zs: &[u32]| {
+            let gs: Vec<crate::involute::Involute> = members.iter().zip(zs).map(|(&i, &z)| inv0(i, m, z)).collect();
+            group_shifts(&gs, &rings, &meshes)
+        };
+        let zs: Vec<u32> = members.iter().map(|i| teeth[*i]).collect();
+        let m = module[g];
+        match solve(m, &zs) {
+            Ok(xs) => {
+                for (&i, x) in members.iter().zip(xs) {
+                    shift[i] = Some(x);
                 }
-                let dist = c[i].c.dist(c[j].c);
-                let x = if err[i].is_some() || err[j].is_some() {
-                    Some(0.0)
-                } else {
-                    crate::plan::train::shift_to_reach(&inv(i, shift[i].unwrap_or(0.0)), &inv(j, 0.0), l.kind, ring[i], dist)
+            }
+            Err(why) => {
+                let ds: Vec<(f64, f64)> = members.iter().map(|&i| (2.0 * c[i].r, fs[i])).collect();
+                let name = |k: usize| format!("gear {}", members[k] + 1);
+                let ideas = other_sizes(&ds, m, &zs, &name, &|m, zs| solve(m, zs).is_ok());
+                let mut who: Vec<usize> = match why {
+                    ShiftFail::Unreachable(a, b) => vec![members[a], members[b]],
+                    ShiftFail::Limits { low, high } => vec![members[low.0], members[high.0]],
                 };
-                let x = match x {
-                    Some(x) => x,
-                    None => {
-                        fail(&mut err, j, format!("gears {} and {}: no profile shift puts their centres {} mm apart; draw the circles touching", i + 1, j + 1, num(dist)));
-                        0.0
-                    }
-                };
-                if x.abs() > 1.0 {
-                    notes.push(format!("gear {}: profile shift {:.2} keeps the drawn centre distance to gear {}: draw the circles nearer touching", j + 1, x, i + 1));
+                who.sort_unstable();
+                who.dedup();
+                let e = format!("{}: {}", group_names(&who), shift_refusal(why, &name, &zs, m, "the drawn centre distances", &ideas));
+                for i in who {
+                    fail(&mut err, i, e.clone());
                 }
-                shift[j] = Some(x);
-                queue.push(j);
             }
         }
     }
+    for i in 0..n {
+        let built = module[i] * fs[i] * f64::from(teeth[i]);
+        if err[i].is_none() && (built - 2.0 * c[i].r).abs() > 1e-6 {
+            notes.push(format!(
+                "gear {}: Ø{} drawn, Ø{} built ({} teeth at module {}); profile shift {:+.3} holds the drawn centre distances",
+                i + 1,
+                num(2.0 * c[i].r),
+                num(built),
+                teeth[i],
+                num(module[i]),
+                shift[i].unwrap_or(0.0)
+            ));
+        }
+    }
+    out.shifts = shift.iter().map(|x| x.unwrap_or(0.0)).collect();
     // Where each gear sits along the shafts. Worked out, a face width fits between the gears
     // drawn on one shaft (nine tenths of the nearest's spacing).
     let spacing = |i: usize| -> Option<f64> {

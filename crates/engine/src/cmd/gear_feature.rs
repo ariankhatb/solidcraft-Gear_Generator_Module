@@ -318,6 +318,21 @@ fn convert(s: &mut Session, cmd: &str, rec: &Record) -> Result<u64> {
     Ok(first)
 }
 
+/// Every sketch the feature reads comes before it in the timeline: one drawn after it (an item
+/// added with a new sketch) is moved to just before it.
+fn sketches_first(s: &mut Session, cmd: &str, id: u64, sketches: &[SketchId]) -> Result<()> {
+    for sk in sketches {
+        let at = |s: &Session, f: u64| s.doc.features.iter().position(|x| x.id == f);
+        if let (Some(fp), Some(sp)) = (at(s, id), at(s, sk.0))
+            && sp > fp
+        {
+            s.execute("timeline.reorder", &json!({"feature": sk.0, "position": fp}))
+                .map_err(|e| bad(cmd, format!("sketch {} comes after the Gears feature and can't be moved before it ({e})", sk.0)))?;
+        }
+    }
+    Ok(())
+}
+
 /// `gear.update` of a Gears feature (or of a folder set asked to become one): the feature's
 /// parameters set and the design evaluated again; the bodies keep their names where the set has
 /// as many, those still called what the generator named them follow the new set's names, and
@@ -356,6 +371,7 @@ pub(super) fn update(s: &mut Session, cmd: &str, mut rec: Record, request: Value
     if items {
         request["body_keys"] = json!(bases);
     }
+    sketches_first(s, cmd, id, &sketches)?;
     if let Some(f) = s.doc_mut().feature_mut(id) {
         f.kind = FeatureKind::Gears { params: request.clone(), sketches, operation, targets, keep_out_cuts: cuts };
         f.body_names = names.clone();

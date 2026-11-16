@@ -109,6 +109,15 @@ fn a_set_made_with_a_new_sketch_is_linked_to_it() {
     assert!(run(&mut s, "gear.inspect", json!({}))["sets"].as_array().unwrap().is_empty());
 }
 
+/// Why gear.calculate can't make the set: its refusal, or (a drawing it reads member by member) what
+/// it says is wrong, in its warnings.
+fn refusal(s: &mut Session, p: Value) -> String {
+    match s.execute("gear.calculate", &p) {
+        Err(e) => e.to_string(),
+        Ok(r) => r["warnings"].to_string(),
+    }
+}
+
 /// The user's own sketch: two tangent circles, a third equal one touching nothing, and
 /// construction lines joining the centres. Construction lines are helpers, never shafts; the
 /// lone circle is named in the refusal; tangent, the three make a train.
@@ -123,14 +132,14 @@ fn construction_lines_are_helpers_and_a_lone_circle_is_named() {
         run(&mut s, "sketch.line", json!({"points": [a, b], "ids": [id], "construction": true}));
     }
     run(&mut s, "sketch.finish", json!({}));
-    let e = s.execute("gear.calculate", &json!({"sketch": sk, "type": "spur"})).unwrap_err().to_string();
+    let e = refusal(&mut s, json!({"sketch": sk, "type": "spur"}));
     assert!(e.contains("circle c3 touches no other gear"), "{e}");
     assert!(!e.contains("shaft line"), "construction lines read as shafts: {e}");
     // A centre line (not construction) between circles that don't touch says what to do.
     run(&mut s, "sketch.edit", json!({"sketch": sk}));
     run(&mut s, "sketch.line", json!({"points": [[0, 0], [5, 40]], "ids": ["m"]}));
     run(&mut s, "sketch.finish", json!({}));
-    let e = s.execute("gear.calculate", &json!({"sketch": sk, "type": "spur"})).unwrap_err().to_string();
+    let e = refusal(&mut s, json!({"sketch": sk, "type": "spur"}));
     assert!(e.contains("joined by the centre line m but don't touch"), "{e}");
 }
 

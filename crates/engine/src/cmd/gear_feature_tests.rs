@@ -331,7 +331,7 @@ fn a_mixed_drivetrain_is_one_feature_with_components_joints_and_links_kept_by_it
     let want = t("E", 0) / t("B", 0);
     assert!((q["ratio"].as_f64().unwrap().abs() - want).abs() < 1e-9, "{q} vs {want}");
     assert_eq!(q["direction"], "same", "two external meshes: {q}");
-    assert!(q["path"].as_array().unwrap().iter().any(|p| p["kind"] == "shaft"), "across E's shaft: {q}");
+    assert_eq!(q["a"], "Gear E·1+2", "E's two gears are one body: {q}");
     let w = run(&mut s, "gear.ratio", json!({"group": group, "a": a_member, "b": {"item": "D", "gear": 0}}));
     let want = t("A", 0) / t("B", 0) * t("C", 0) / t("C", 1);
     assert!((w["ratio"].as_f64().unwrap().abs() - want).abs() < 1e-9, "{w} vs {want}");

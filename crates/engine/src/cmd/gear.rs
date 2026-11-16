@@ -1921,6 +1921,22 @@ fn from_selection(s: &dyn Reads, cmd: &str, p: &GearParams, items: &[GearSelecti
             },
         });
     }
+    // A sketch point that is no bearing (not asked to be one, and on no selected shaft line, or
+    // given a gear's size or role) is the shaft through it normal to its sketch, as it is
+    // without circles.
+    let lines: Vec<drivetrain::Line3> = read.iter().filter_map(|it| if let drivetrain::Thing::Line(l) = it.thing { Some(l) } else { None }).collect();
+    for (i, it) in items.iter().enumerate() {
+        let drivetrain::Thing::Point(q) = read[i].thing else { continue };
+        if it.sketch.is_none() || it.point.is_none() || read[i].ask.role == Some(drivetrain::Role::Bearing) {
+            continue;
+        }
+        let sized = it.pitch_diameter.is_some() || it.teeth.is_some() || it.module.is_some() || read[i].ask.role.is_some();
+        let on_line = lines.iter().any(|l| Axis::new(l.a, [l.b[0] - l.a[0], l.b[1] - l.a[1], l.b[2] - l.a[2]]).is_some_and(|a| a.distance(q) < 1e-6));
+        if sized || !on_line {
+            let a = axis_of(s, &GearAxis(json!({"sketch": it.sketch, "point": it.point})), cmd, &format!("selection[{i}]"))?;
+            read[i].thing = drivetrain::Thing::Line(drivetrain::Line3 { a: a.origin, b: bearing_point(&a, 1.0) });
+        }
+    }
     // Circles, or gears asked by role: a drivetrain.
     let drivetrain = read.iter().any(|it| matches!(it.thing, drivetrain::Thing::Circle(_)) || it.ask.role.is_some_and(|r| !matches!(r, drivetrain::Role::Shaft | drivetrain::Role::Bearing)));
     if drivetrain {

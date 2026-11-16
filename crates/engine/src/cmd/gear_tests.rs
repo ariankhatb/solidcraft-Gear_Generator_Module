@@ -1181,7 +1181,9 @@ fn an_update_keeps_the_assemblys_components_joints_and_links_in_place() {
         assert_eq!(counts(&s), before, "{u}");
         assert_eq!(ids(&u["assembly"]), made, "{u}");
         let j = member_joints(&u);
-        let got = drive_and_read(&mut s, j[0].unwrap(), 40.0, j[1].unwrap());
+        // (By 40° from where the joints stand: an update keeps their values.)
+        let (a0, b0) = (joint_value(&mut s, j[0].unwrap()), joint_value(&mut s, j[1].unwrap()));
+        let got = drive_and_read(&mut s, j[0].unwrap(), a0 + 40.0, j[1].unwrap()) - b0;
         assert!((got + 40.0 * 20.0 / teeth2).abs() < 1e-6, "{got} for {teeth2} teeth: {u}");
     }
     // Taking the assembly away leaves the gears as bodies again.
@@ -1690,7 +1692,8 @@ fn drivetrain_3d(s: &mut Session) -> u64 {
             ("sketch.options", json!({"sketch_3d": true})),
             ("sketch.line3d", json!({"points": [[0, 0, -10], [0, 0, 40]]})),
             ("sketch.line3d", json!({"points": [[50, 0, -10], [50, 0, 40]]})),
-            ("sketch.line3d", json!({"points": [[85, 0, -10], [85, 0, 40]]})),
+            // (Starts above gear 2: down to z −10 the Ø18 shaft would run through its teeth.)
+            ("sketch.line3d", json!({"points": [[85, 0, 10], [85, 0, 40]]})),
             arc([0.0, 0.0, 0.0], 20.0),
             arc([50.0, 0.0, 0.0], 30.0),
             arc([50.0, 0.0, 20.0], 15.0),

@@ -78,7 +78,8 @@ fn three_parallel_shafts_make_a_train_on_them() {
     let s = [shaft([0.0; 3], [0.0, 1.0, 0.0], Some(40.0)), shaft([50.0, 0.0, 0.0], [0.0, 1.0, 0.0], None), shaft([50.0, 3.0, 45.0], [0.0, 1.0, 0.0], Some(30.0))];
     let out = set_on_shafts(&s, &Ask { along: 2.0, ..Ask::default() }, &Spec::default()).unwrap();
     let t = out.spec.train.as_ref().unwrap();
-    assert_eq!(t.gears.iter().map(|g| g.teeth).collect::<Vec<_>>(), vec![16, 24, 12]);
+    // The automatic module: 1.5, the smallest gear (Ø30) 20 teeth.
+    assert_eq!(t.gears.iter().map(|g| g.teeth).collect::<Vec<_>>(), vec![27, 40, 20]);
     let p = crate::plan(&out.spec).unwrap();
     clean(&p);
     // Each gear on its shaft, 2 mm along shaft 1's direction from shaft 1's origin.

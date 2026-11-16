@@ -1269,10 +1269,9 @@ fn bevel_bodies_pass_the_kernels_check() {
     ] {
         check(p.clone()).unwrap_or_else(|e| panic!("{p}: {e}"));
     }
-    for p in [json!({"type": "bevel", "module": 2.5, "teeth": 17, "teeth2": 34, "shaft_angle": 100, "only": 2})] {
-        if let Err(e) = check(p.clone()) {
-            assert!(e.lines().filter(|l| l.contains("Test #")).all(|l| l.contains("CurveCusp")), "{p}: {e}");
-        }
+    let p = json!({"type": "bevel", "module": 2.5, "teeth": 17, "teeth2": 34, "shaft_angle": 100, "only": 2});
+    if let Err(e) = check(p.clone()) {
+        assert!(e.lines().filter(|l| l.contains("Test #")).all(|l| l.contains("CurveCusp")), "{p}: {e}");
     }
 }
 

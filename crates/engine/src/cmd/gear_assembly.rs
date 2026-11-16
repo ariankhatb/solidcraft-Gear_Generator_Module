@@ -165,7 +165,7 @@ fn same_shaft(a: &[[f64; 3]; 2], b: &Axis) -> bool {
 /// cluster nearest the driver; the others rigid on it), and a motion link per mesh, each driven
 /// from the end nearer the driver. Loops of meshes whose ratios don't agree
 /// (`Plan::assembly_issues`) are left out and named in the warnings.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 pub(super) fn sync(
     s: &mut Session,
     plan: &Plan,
@@ -254,22 +254,22 @@ pub(super) fn sync(
         }
     }
     for (k, slot) in left.iter_mut().enumerate() {
-        if let Some(i) = claim[k] {
-            if let Some(m) = slot.take() {
-                let (home, old_body) = (m.component, m.body.clone());
-                rehoused.push((i, home));
-                kept[i] = Some(MemberRecord { body: bodies[i].clone(), ..m });
-                // The transfer that moved the old body in has nothing to move now.
-                let stale: Vec<u64> = s
-                    .doc
-                    .features
-                    .iter()
-                    .filter(|f| matches!(&f.kind, solidcraft_doc::FeatureKind::BodyTransfer { to, bodies, .. } if *to == home && bodies.iter().any(|b| *b == old_body.as_str())))
-                    .map(|f| f.id)
-                    .collect();
-                if !stale.is_empty() {
-                    s.execute("timeline.delete", &json!({"features": stale}))?;
-                }
+        if let Some(i) = claim[k]
+            && let Some(m) = slot.take()
+        {
+            let (home, old_body) = (m.component, m.body.clone());
+            rehoused.push((i, home));
+            kept[i] = Some(MemberRecord { body: bodies[i].clone(), ..m });
+            // The transfer that moved the old body in has nothing to move now.
+            let stale: Vec<u64> = s
+                .doc
+                .features
+                .iter()
+                .filter(|f| matches!(&f.kind, solidcraft_doc::FeatureKind::BodyTransfer { to, bodies, .. } if *to == home && bodies.iter().any(|b| *b == old_body.as_str())))
+                .map(|f| f.id)
+                .collect();
+            if !stale.is_empty() {
+                s.execute("timeline.delete", &json!({"features": stale}))?;
             }
         }
     }

@@ -1444,6 +1444,7 @@ fn base_mode(p: &GearParams) -> Option<solidcraft_gear::plan::BevelPlanetMode> {
 
 /// What a sketch or a selection was read as: the set (and what each member became), or why it
 /// can't be made with what each member became and what is wrong with it.
+#[allow(clippy::large_enum_variant)]
 enum Got {
     /// The set, each member, and each of the set's gears' member (its row).
     Set(Solved, Vec<GearMember>, Vec<usize>),
@@ -1982,7 +1983,8 @@ fn from_selection(s: &dyn Reads, cmd: &str, p: &GearParams, items: &[GearSelecti
                 }
                 shafts.push(Shaft { axis: a, pitch_diameter: it.ask.pitch_diameter, teeth: it.ask.teeth });
             }
-            (drivetrain::Thing::Circle(_), _) => unreachable!("circles are read as a drivetrain"),
+            // (Circles are read as a drivetrain above: none come here.)
+            (drivetrain::Thing::Circle(_), _) => continue,
         }
     }
     let kind = p.kind.map(kind_of);
@@ -2059,6 +2061,7 @@ fn shafts_and_contacts(asked: &Asked, plan: &Plan) -> (Vec<GearShaftInfo>, Vec<G
 
 /// What a request asks for: the set and its plan, or (read from a sketch or a selection) why
 /// it can't be made, member by member.
+#[allow(clippy::large_enum_variant)]
 enum Read {
     Set(Asked, Plan),
     Wrong { error: String, members: Vec<GearMember>, notes: Vec<String>, items: Option<Box<items::Items>> },
@@ -3014,8 +3017,6 @@ fn new_sketch(s: &mut Session, def: &SketchDef) -> Result<u64> {
     Ok(id)
 }
 
-/// Sections a spiral taper is lofted through.
-
 fn op_name(op: Op) -> &'static str {
     match op {
         Op::New => "new",
@@ -3236,7 +3237,7 @@ fn formula_picks(r: &Region, eq: &equations::EqSketch) -> Option<Value> {
         .filter_map(|(i, o)| {
             let at = if toothed(i) {
                 let mid = middle(o);
-                let bore = r.holes.iter().enumerate().filter(|(j, _)| !toothed(n + j)).map(|(_, h)| h).min_by(|a, b| middle(*a).dist(mid).total_cmp(&middle(*b).dist(mid)));
+                let bore = r.holes.iter().enumerate().filter(|(j, _)| !toothed(n + j)).map(|(_, h)| h).min_by(|a, b| middle(a).dist(mid).total_cmp(&middle(b).dist(mid)));
                 match bore {
                     Some(h) => near_edge(h, false)?,
                     None => mid,
@@ -3258,7 +3259,7 @@ fn near_edge(o: &Outline, inside: bool) -> Option<solidcraft_gear::V2> {
     let mid = pts.iter().fold(solidcraft_gear::V2::ZERO, |a, q| a + *q) * (1.0 / n);
     let far = pts.iter().copied().max_by(|a, b| a.dist(mid).total_cmp(&b.dist(mid)))?;
     let reach = far.dist(mid);
-    let step = (reach * 0.01).min(0.2).max(1e-4);
+    let step = (reach * 0.01).clamp(1e-4, 0.2);
     let toward = if inside { mid - far } else { far - mid };
     Some(far + toward.norm() * step)
 }

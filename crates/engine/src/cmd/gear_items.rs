@@ -159,8 +159,8 @@ fn settings_of(cmd: &str, what: &str, it: &GearItemParams, g: &GearItemGear) -> 
             None => match (f.a, f.b) {
                 (None, None) => gi::FacePreset::Symmetric,
                 (Some(a), Some(b)) if (a - b).abs() < 1e-12 => gi::FacePreset::Symmetric,
-                (_, Some(b)) if b == 0.0 => gi::FacePreset::AOnly,
-                (Some(a), _) if a == 0.0 => gi::FacePreset::BOnly,
+                (_, Some(b)) if b <= 0.0 => gi::FacePreset::AOnly,
+                (Some(a), _) if a <= 0.0 => gi::FacePreset::BOnly,
                 _ => gi::FacePreset::Custom,
             },
         };
@@ -369,8 +369,8 @@ fn name_bodies(sp: &mut SystemPlan, ids: &[String]) {
     // The other planets of a planetary set: by their carrier's item.
     let asm = &sp.plan.assembly;
     let mut count: Vec<(usize, usize)> = Vec::new();
-    for b in 0..n {
-        if names[b].is_some() {
+    for (b, name) in names.iter_mut().enumerate() {
+        if name.is_some() {
             continue;
         }
         let carrier_body = asm.members.iter().find(|m| m.body == b).and_then(|m| m.carrier).and_then(|c| asm.members.get(c)).map(|c| c.body);
@@ -385,7 +385,7 @@ fn name_bodies(sp: &mut SystemPlan, ids: &[String]) {
                     2
                 }
             };
-            names[b] = Some(format!("Planet {} {k}", id(item)));
+            *name = Some(format!("Planet {} {k}", id(item)));
         }
     }
     let mut taken: Vec<String> = Vec::new();

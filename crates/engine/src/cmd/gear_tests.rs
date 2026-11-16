@@ -300,7 +300,8 @@ fn a_set_is_kept_and_inspected() {
 }
 
 /// A herringbone's upper half is its lower half mirrored and joined (one sweep, not two): the
-/// solid the two sweeps made (14043.12 mm³, kernel scripts of both), and it updates in place.
+/// solid the two sweeps made (14043.12 mm³, kernel scripts of both). The set is one Gears
+/// feature, which an update changes in place.
 #[test]
 fn a_herringbone_is_one_sweep_mirrored_and_updates_in_place() {
     let mut s = Session::default();
@@ -311,8 +312,10 @@ fn a_herringbone_is_one_sweep_mirrored_and_updates_in_place() {
     assert!((v / 14043.1213 - 1.0).abs() < 1e-3, "{v}");
     let set = run(&mut s, "gear.inspect", json!({"group": group}))["sets"][0].clone();
     let features = set["features"].clone();
-    // The lower half's profile, path and sweep, and the mirror.
-    assert_eq!(features.as_array().map(Vec::len), Some(4), "{set}");
+    // One feature: the Gears feature (its steps are its own, not loose sketches and sweeps).
+    assert_eq!(features.as_array().map(Vec::len), Some(1), "{set}");
+    let id = features[0].as_u64().unwrap();
+    assert!(matches!(s.doc.feature(id).map(|f| &f.kind), Some(solidcraft_doc::FeatureKind::Gears { .. })), "{set}");
     let u = run(&mut s, "gear.update", json!({"group": group, "face_width": 20}));
     assert_eq!(u["updated"], "in_place", "{u}");
     let after = volume(&mut s, &body);
@@ -346,20 +349,22 @@ fn an_update_changes_the_set_in_place() {
     assert!(s.execute("gear.update", &json!({"group": group, "teeth": 1})).is_err());
 }
 
-/// A change of structure (another type: other bodies) rebuilds the set in the same folder.
+/// A change of structure (another type: other bodies) regenerates the set's one Gears feature in
+/// place, in the same folder: the first gear keeps its body.
 #[test]
 fn an_update_that_changes_the_steps_rebuilds_under_the_same_names() {
     let mut s = Session::default();
     let r = run(&mut s, "gear.create", json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 10}));
     let group = r["group"].as_u64().unwrap();
     let body = r["bodies"][0].as_str().unwrap().to_string();
-    let before = volume(&mut s, &body);
+    let features = run(&mut s, "gear.inspect", json!({"group": group}))["sets"][0]["features"].clone();
     let u = run(&mut s, "gear.update", json!({"body": body, "type": "pair", "teeth2": 30}));
-    assert_eq!(u["updated"], "rebuilt", "{u}");
-    assert!(u["rebuilt_because"].as_str().is_some());
+    no_errors(&s);
+    assert_eq!(u["updated"], "in_place", "{u}");
     assert_eq!(u["bodies"].as_array().unwrap().len(), 2);
+    assert_eq!(u["bodies"][0], body.as_str(), "{u}");
     assert_eq!(u["group"].as_u64(), Some(group), "{u}");
-    let _ = before;
+    assert_eq!(run(&mut s, "gear.inspect", json!({"group": group}))["sets"][0]["features"], features, "the same Gears feature");
     // And back to one gear, with everything else as it was last asked.
     let u = run(&mut s, "gear.update", json!({"group": group, "type": "spur", "teeth2": null}));
     assert_eq!(u["bodies"].as_array().unwrap().len(), 1, "{u}");
@@ -776,10 +781,17 @@ fn every_type_builds_its_clearance_body() {
 
 #[test]
 fn a_worm_sets_loft_sketches_are_hidden() {
+    // As one Gears feature: no loose sketches at all (the wheel's sections are the feature's).
     let mut s = Session::default();
     run(&mut s, "gear.create", json!({"type": "worm"}));
-    // Every sketch the set made (the wheel's loft sections, the thread) is hidden: shown, they
-    // draw their outlines over the teeth.
+    no_errors(&s);
+    let kinds: Vec<&solidcraft_doc::FeatureKind> = s.doc.features.iter().map(|f| &f.kind).collect();
+    assert!(!kinds.iter().any(|k| matches!(k, solidcraft_doc::FeatureKind::Sketch { .. })), "a sketch left over");
+    assert_eq!(kinds.iter().filter(|k| matches!(k, solidcraft_doc::FeatureKind::Gears { .. })).count(), 1);
+    // Built as features (`build: features`): every sketch the set made (the wheel's loft
+    // sections, the thread) is hidden: shown, they draw their outlines over the teeth.
+    let mut s = Session::default();
+    run(&mut s, "gear.create", json!({"type": "worm", "build": "features"}));
     let sketches: Vec<u64> = s.doc.features.iter().filter(|f| matches!(f.kind, solidcraft_doc::FeatureKind::Sketch { .. })).map(|f| f.id).collect();
     assert!(sketches.len() > 3, "{sketches:?}");
     for id in sketches {

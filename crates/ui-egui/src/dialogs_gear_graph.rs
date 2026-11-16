@@ -18,13 +18,15 @@ use egui_snarl::{InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
 use serde_json::{Value, json};
 
 use crate::SolveApp;
-pub use crate::dialogs_gear_items::{GearItem, GearSettings, ITEM_TYPES, Slot, item_id, item_index, item_settings, items_request};
+pub use crate::dialogs_gear_items::{GearItem, GearSettings, item_id, item_index, item_settings, items_request};
+use solidcraft_gear::items::{GearReply, ItemKind};
 
 const MESH_TIP: &str = "Drag to another gear's Mesh pin: they mesh. The distance between them is checked.";
 const SHAFT_TIP: &str = "Drag to another gear's Shaft pin: they share a shaft and turn together.";
 const BLOCK_TIP: &str = "Gears in this block share one module, so they can mesh with each other.";
 const DRIVER_TIP: &str = "The gear you turn. Every other gear's speed and direction follow from it.";
 const ACCEPT_TIP: &str = "Make every dashed link real. Dashed = circles the drawing shows as touching or on one line.";
+const RATIO_TIP: &str = "Click two gear rows to see the ratio between them (Ratio, under the graph).";
 const EMPTY: &str = "Items appear here. Drag from a ● Mesh pin to another to make them mesh.";
 
 /// A ratio as a link shows it: "2.00" (of "2.00 : 1").
@@ -81,8 +83,8 @@ pub struct Graph {
     snarl: Snarl<GNode>,
     notes: Vec<Note>,
     suggested: Vec<Suggested>,
-    /// Each gear's teeth and module as worked out: (item, gear, z, m).
-    sizes: Vec<(usize, usize, u32, f64)>,
+    /// What the engine worked out for each gear (`gear.calculate`'s `gears`).
+    replies: Vec<GearReply>,
     /// Where each node and pin was drawn last (screen): nodes by id, pins by (node, output?, pin).
     rects: Vec<(NodeId, egui::Rect)>,
     pins: Vec<((NodeId, bool, usize), egui::Pos2)>,
@@ -108,9 +110,80 @@ pub fn pin(gear: usize, shaft: bool) -> usize {
     2 * gear + usize::from(shaft)
 }
 
-/// An item type whose two gears mesh inside it (drawn as a solid inner link).
-fn is_pair(t: &str) -> bool {
-    matches!(t, "bevel" | "hypoid" | "worm" | "crossed_helical")
+/// The meshes inside an item of `kind` making `gears` gears (drawn as solid inner links): a
+/// pair's two gears, a ring gear or rack with its pinion, a planetary set's sun–planet and
+/// planet–ring.
+fn inner_meshes(kind: ItemKind, gears: usize) -> &'static [(usize, usize)] {
+    match kind {
+        ItemKind::Bevel | ItemKind::Hypoid | ItemKind::Worm | ItemKind::CrossedHelical => &[(0, 1)],
+        ItemKind::Internal | ItemKind::Rack if gears >= 2 => &[(0, 1)],
+        ItemKind::Planetary => &[(0, 2), (2, 1)],
+        _ => &[],
+    }
+}
+
+/// `gear.calculate`'s `gears` (GEAR_UI_SPEC §6): per gear its `item` (an id or index), `gear`,
+/// `teeth`, `module`, `pitch_d`, `ratio`, `rpm`, `torque`, `contact_ratio`, `profile_shift` and
+/// `warnings`, as the gear crate's [`GearReply`].
+pub fn gear_replies(r: &Value) -> Vec<GearReply> {
+    r.get("gears")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|g| {
+            let (item, gear) = end(Some(g));
+            let num = |k: &str| g.get(k).and_then(Value::as_f64);
+            Some(GearReply {
+                item,
+                gear,
+                teeth: num("teeth").map_or(0, |z| z.round().max(0.0) as u32),
+                module: num("module").unwrap_or(0.0),
+                pitch_d: num("pitch_d").or_else(|| num("pitch_diameter")).unwrap_or(0.0),
+                ratio: num("ratio"),
+                rpm: num("rpm"),
+                torque: num("torque"),
+                contact_ratio: num("contact_ratio"),
+                profile_shift: num("profile_shift"),
+                warnings: g.get("warnings").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect(),
+            })
+            .filter(|_| g.is_object())
+        })
+        .collect()
+}
+
+/// A gear row's text once worked out: "z20 m2 Ø40 · 0.50 : 1 · 500 rpm" (`len` shows a length in
+/// the design's units).
+pub fn reply_text(r: &GearReply, len: &dyn Fn(f64) -> String) -> String {
+    let mut t = Vec::new();
+    if r.teeth > 0 {
+        t.push(format!("z{} m{}", r.teeth, module_text(r.module)));
+    }
+    if r.pitch_d > 0.0 {
+        t.push(format!("Ø{}", len(r.pitch_d)));
+    }
+    if let Some(x) = r.ratio {
+        t.push(format!("{} : 1", ratio_text(x)));
+    }
+    if let Some(n) = r.rpm {
+        t.push(format!("{} rpm", crate::dialogs_gear::fmt((n * 10.0).round() / 10.0)));
+    }
+    t.join(" · ")
+}
+
+/// A gear's hover text: torque, contact ratio, profile shift and warnings.
+pub fn reply_tip(r: &GearReply) -> String {
+    let mut t = Vec::new();
+    if let Some(v) = r.torque {
+        t.push(format!("Torque {} N·m", crate::dialogs_gear::fmt(v)));
+    }
+    if let Some(v) = r.contact_ratio {
+        t.push(format!("Contact ratio {}", crate::dialogs_gear::fmt(v)));
+    }
+    if let Some(v) = r.profile_shift {
+        t.push(format!("Profile shift {}", crate::dialogs_gear::fmt(v)));
+    }
+    t.extend(r.warnings.iter().map(|w| format!("⚠ {w}")));
+    t.join("\n")
 }
 
 /// Where the next new node goes: a grid, by how many nodes there are.
@@ -239,21 +312,22 @@ impl Graph {
     /// links the drawing suggests (less those already made), and each gear's teeth and module.
     pub fn note(&mut self, r: &Value) {
         self.notes = notes_of(r);
+        self.suggest(suggested_of(r));
+        self.replies = gear_replies(r);
+    }
+
+    /// The links the drawing suggests, less those already made (drawn dashed).
+    pub fn suggest(&mut self, list: Vec<Suggested>) {
         let made = self.links();
-        self.suggested = suggested_of(r)
+        self.suggested = list
             .into_iter()
             .filter(|s| !made.iter().any(|(a, ag, b, bg, _)| (*a, *ag, *b, *bg) == (s.a, s.a_gear, s.b, s.b_gear) || (*b, *bg, *a, *ag) == (s.a, s.a_gear, s.b, s.b_gear)))
             .collect();
-        self.sizes = r
-            .get("gears")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|g| {
-                let (item, gear) = end(Some(g));
-                Some((item, gear, u32::try_from(g.get("teeth")?.as_u64()?).ok()?, g.get("module")?.as_f64()?))
-            })
-            .collect();
+    }
+
+    /// What the engine worked out for each gear, as last given ([`Graph::note`]).
+    pub fn replies(&self) -> &[GearReply] {
+        &self.replies
     }
 
     /// The engine's notes on the links, as last given ([`Graph::note`]).
@@ -391,7 +465,11 @@ pub fn link_notes(r: &Value) -> (Vec<(String, bool)>, Vec<Suggested>) {
 struct Viewer<'a> {
     items: &'a [GearItem],
     gears: &'a [usize],
-    sizes: &'a [(usize, usize, u32, f64)],
+    replies: &'a [GearReply],
+    len: &'a dyn Fn(f64) -> String,
+    /// The two gears picked for the ratio, and a gear row clicked now.
+    picked: [Option<(usize, usize)>; 2],
+    clicked: Option<(usize, usize)>,
     suggested: usize,
     driver: Option<(usize, usize)>,
     hovered: Option<usize>,
@@ -409,11 +487,14 @@ impl Viewer<'_> {
         }
     }
 
-    /// A gear row's label: its number, and its teeth and module once worked out.
-    fn row(&self, item: usize, gear: usize) -> String {
-        match self.sizes.iter().find(|(i, g, ..)| (*i, *g) == (item, gear)) {
-            Some((_, _, z, m)) => format!("{} · z{z} m{}", gear + 1, module_text(*m)),
-            None => format!("{}", gear + 1),
+    /// A gear row's label (its number, and what it came to once worked out) and its hover text.
+    fn row(&self, item: usize, gear: usize) -> (String, String) {
+        match self.replies.iter().find(|r| (r.item, r.gear) == (item, gear)) {
+            Some(r) => {
+                let warn = if r.warnings.is_empty() { "" } else { " ⚠" };
+                (format!("{} · {}{warn}", gear + 1, reply_text(r, self.len)), reply_tip(r))
+            }
+            None => (format!("{}", gear + 1), String::new()),
         }
     }
 }
@@ -440,8 +521,21 @@ impl SnarlViewer<GNode> for Viewer<'_> {
     fn show_input(&mut self, pin: &InPin, ui: &mut egui::Ui, snarl: &mut Snarl<GNode>) -> impl SnarlPin + 'static {
         let shaft = pin.id.input % 2 == 1;
         if let GNode::Item(i) = &snarl[pin.id.node] {
-            let row = self.row(*i, pin.id.input / 2);
-            let r = if shaft { ui.label("■ Shaft").on_hover_text(SHAFT_TIP) } else { ui.label(format!("● Mesh  {row}")).on_hover_text(MESH_TIP) };
+            let gear = (*i, pin.id.input / 2);
+            let (row, tip) = self.row(gear.0, gear.1);
+            let r = if shaft {
+                ui.label("■ Shaft").on_hover_text(SHAFT_TIP)
+            } else {
+                // Click a gear row to pick it for the ratio (two gears).
+                let picked = self.picked.contains(&Some(gear));
+                let text = egui::RichText::new(format!("● Mesh  {row}"));
+                let tip = if tip.is_empty() { format!("{MESH_TIP}\n{RATIO_TIP}") } else { format!("{tip}\n\n{MESH_TIP}\n{RATIO_TIP}") };
+                let r = ui.add(egui::Label::new(if picked { text.strong().underline() } else { text }).sense(egui::Sense::click())).on_hover_text(tip);
+                if r.clicked() {
+                    self.clicked = Some(gear);
+                }
+                r
+            };
             self.pins.push(((pin.id.node, false, pin.id.input), egui::pos2(r.rect.left() - 10.0, r.rect.center().y)));
         }
         pin_info(shaft)
@@ -556,6 +650,16 @@ pub struct GraphOut {
     pub hovered: Option<usize>,
     pub link: Option<(usize, usize, usize, usize)>,
     pub driver: Option<(usize, usize)>,
+    /// A gear row clicked (item, gear): picked for the ratio.
+    pub clicked: Option<(usize, usize)>,
+}
+
+/// What the graph marks: the driving gear (▶), the two gears picked for the ratio, and how a length
+/// is shown (the design's units).
+pub struct Marks<'a> {
+    pub driver: Option<(usize, usize)>,
+    pub picked: [Option<(usize, usize)>; 2],
+    pub len: &'a dyn Fn(f64) -> String,
 }
 
 /// The distance from `p` to the segment `a`–`b`.
@@ -566,7 +670,8 @@ fn to_segment(p: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
 }
 
 /// The graph, `gears` the gears of each item (docked in the dialog, or in its window).
-pub fn graph_ui(ui: &mut egui::Ui, items: &[GearItem], gears: &[usize], graph: &mut Graph, driver: Option<(usize, usize)>, size: egui::Vec2, salt: &str) -> GraphOut {
+pub fn graph_ui(ui: &mut egui::Ui, items: &[GearItem], gears: &[usize], graph: &mut Graph, marks: Marks<'_>, size: egui::Vec2, salt: &str) -> GraphOut {
+    let driver = marks.driver;
     for i in 0..items.len() {
         graph.node_of(i);
     }
@@ -579,11 +684,14 @@ pub fn graph_ui(ui: &mut egui::Ui, items: &[GearItem], gears: &[usize], graph: &
     if pressed {
         graph.pressed = Some(graph.rects.clone());
     }
-    let sizes = graph.sizes.clone();
+    let replies = graph.replies.clone();
     let mut viewer = Viewer {
         items,
         gears,
-        sizes: &sizes,
+        replies: &replies,
+        len: marks.len,
+        picked: marks.picked,
+        clicked: None,
         suggested: graph.suggested.len(),
         driver,
         hovered: None,
@@ -593,7 +701,7 @@ pub fn graph_ui(ui: &mut egui::Ui, items: &[GearItem], gears: &[usize], graph: &
         pins: Vec::new(),
     };
     SnarlWidget::new().id_salt(salt).style(SnarlStyle::new()).min_size(size).max_size(size).show(&mut graph.snarl, &mut viewer, ui);
-    let (hovered, make_driver, accept_all) = (viewer.hovered, viewer.make_driver, viewer.accept_all);
+    let (hovered, make_driver, accept_all, clicked) = (viewer.hovered, viewer.make_driver, viewer.accept_all, viewer.clicked);
     graph.rects = std::mem::take(&mut viewer.rects);
     graph.pins = std::mem::take(&mut viewer.pins);
     if released && let Some(before) = graph.pressed.take() {
@@ -613,15 +721,16 @@ pub fn graph_ui(ui: &mut egui::Ui, items: &[GearItem], gears: &[usize], graph: &
             painter.rect_stroke(f, 6.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(230, 140, 50)), egui::StrokeKind::Outside);
         }
     }
-    // A pair's two gears mesh inside it: a solid inner link between its rows.
+    // The meshes inside an item (a pair, a ring gear or rack with its pinion, a planetary set): a
+    // solid inner link between its rows.
     for (id, n) in graph.snarl.node_ids() {
         let GNode::Item(i) = n else { continue };
-        if !items.get(*i).is_some_and(|it| is_pair(it.type_name())) {
-            continue;
-        }
-        if let (Some(p0), Some(p1)) = (graph.pin_at(id, true, pin(0, false)), graph.pin_at(id, true, pin(1, false))) {
-            let x = p0.x.max(p1.x) + 8.0;
-            painter.line(vec![p0, egui::pos2(x, p0.y), egui::pos2(x, p1.y), p1], egui::Stroke::new(2.0, text));
+        let Some(it) = items.get(*i) else { continue };
+        for (k, (g0, g1)) in inner_meshes(it.kind, gears.get(*i).copied().unwrap_or(0)).iter().enumerate() {
+            if let (Some(p0), Some(p1)) = (graph.pin_at(id, true, pin(*g0, false)), graph.pin_at(id, true, pin(*g1, false))) {
+                let x = p0.x.max(p1.x) + 8.0 + 6.0 * k as f32;
+                painter.line(vec![p0, egui::pos2(x, p0.y), egui::pos2(x, p1.y), p1], egui::Stroke::new(2.0, text));
+            }
         }
     }
     // The links: a shaft link thick and grey; each one's ratio, or its error in red, at its
@@ -660,11 +769,12 @@ pub fn graph_ui(ui: &mut egui::Ui, items: &[GearItem], gears: &[usize], graph: &
             painter.extend(egui::Shape::dashed_line(&[pa, pb], egui::Stroke::new(1.5, weak), 6.0, 4.0));
         }
     }
-    GraphOut { hovered, link: lit, driver: make_driver }
+    GraphOut { hovered, link: lit, driver: make_driver, clicked }
 }
 
 /// The popped-out graph's window (⤢ Pop out), while the dialog is open.
 pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
+    let len = crate::dialogs_gear::len_of(app);
     let Some(d) = app.dialog.as_mut() else { return };
     let crate::dialogs::Kind::Gear(g) = &mut d.kind else { return };
     if !g.graph_popped {
@@ -672,16 +782,19 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     }
     let mut open = true;
     let mut out = GraphOut::default();
-    let (items, gears, driver) = (g.items.clone(), g.gear_counts.clone(), g.drive_item);
+    let (items, gears, driver, picked) = (g.items.clone(), g.gear_counts.clone(), g.drive_item, g.ratio_pick);
     egui::Window::new(solidcraft_ui_text::tr_label("Gear Graph")).id(egui::Id::unique("sc_gear_graph")).open(&mut open).default_size(egui::vec2(640.0, 420.0)).resizable(true).show(ctx, |ui| {
         let size = ui.available_size().max(egui::vec2(320.0, 240.0));
-        out = graph_ui(ui, &items, &gears, &mut g.graph, driver, size, "sc_gear_graph_window");
+        out = graph_ui(ui, &items, &gears, &mut g.graph, Marks { driver, picked, len: &len }, size, "sc_gear_graph_window");
     });
     if out.driver.is_some() {
         g.drive_item = out.driver;
     }
     if out.hovered.is_some() {
         g.graph_hovered = out.hovered;
+    }
+    if let Some(c) = out.clicked {
+        crate::dialogs_gear::pick_for_ratio(g, c);
     }
     g.graph_popped = open;
 }
@@ -691,7 +804,7 @@ mod tests {
     use super::*;
 
     fn item(kind: &str) -> GearItem {
-        GearItem::new(ITEM_TYPES.iter().position(|t| t.0 == kind).unwrap())
+        GearItem::new(ItemKind::parse(kind).unwrap())
     }
 
     #[test]
@@ -719,7 +832,8 @@ mod tests {
         g.accept_all();
         assert!(g.suggested().is_empty());
         assert_eq!(g.links(), vec![(0, 0, 1, 0, "mesh"), (1, 0, 2, 0, "mesh")]);
-        assert_eq!(g.sizes, vec![(0, 0, 20, 2.0)]);
+        assert_eq!((g.replies()[0].item, g.replies()[0].gear, g.replies()[0].teeth, g.replies()[0].module), (0, 0, 20, 2.0));
+        assert_eq!(reply_text(&g.replies()[0], &|v: f64| crate::dialogs_gear::fmt(v)), "z20 m2");
         assert_eq!(module_text(1.25), "1.25");
         assert_eq!(module_text(2.0), "2");
     }
@@ -770,7 +884,11 @@ mod tests {
 
     #[test]
     fn pairs_have_an_inner_mesh_and_the_dialogs_lines_read_the_notes() {
-        assert!(is_pair(item("bevel").type_name()) && is_pair(item("worm").type_name()) && !is_pair(item("compound").type_name()));
+        assert_eq!(inner_meshes(item("bevel").kind, 2), &[(0, 1)]);
+        assert_eq!(inner_meshes(item("worm").kind, 2), &[(0, 1)]);
+        assert!(inner_meshes(item("compound").kind, 2).is_empty());
+        assert_eq!(inner_meshes(item("planetary").kind, 3), &[(0, 2), (2, 1)]);
+        assert!(inner_meshes(item("internal").kind, 1).is_empty());
         let (lines, suggested) = link_notes(&json!({"links": [{"a": {"item": "A", "gear": 0}, "b": {"item": "B", "gear": 1}, "kind": "mesh", "ratio": 0.5}], "suggestions": ["item A gear 1 and item C gear 1 are tangent: link them?"]}));
         assert_eq!(lines, vec![("1·1 – 2·2: 0.50 : 1".to_string(), false)]);
         assert_eq!(suggested, vec![Suggested { a: 0, a_gear: 0, b: 2, b_gear: 0, kind: "mesh".into() }]);

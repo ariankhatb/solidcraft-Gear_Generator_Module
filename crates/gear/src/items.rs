@@ -1705,6 +1705,7 @@ pub fn to_drivetrain(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlo
                 herringbone: s.v.then_some(true),
                 shaft_body: None,
                 shaft_diameter: None,
+                sides: None,
             }
         };
         let face_of = |g: usize| {

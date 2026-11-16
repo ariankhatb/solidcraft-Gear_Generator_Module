@@ -15,11 +15,14 @@
 //! Gears on parallel shafts (any number) are a gear train ([`crate::sketch_rules::size_train`],
 //! planned by [`crate::plan::train`]); two gears on shafts at an angle are the set their shafts
 //! imply ([`crate::select::set_on_shafts`]: meeting a bevel pair, skew crossed helicals or a worm
-//! and wheel). Anything wrong is said per member ([`Member::error`]), naming it.
+//! and wheel). More gears with some at an angle (a train with a bevel or crossed stage) are
+//! planned stage by stage by [`crate::plan::system`] and come back as [`Outcome::planned`].
+//! Meshing gears share one tooth style; gears on one shaft may differ. Anything wrong is said
+//! per member ([`Member::error`]), naming it.
 
 use crate::axes::{Axis, Solved, square_to};
 use crate::geom::V2;
-use crate::plan::{Frame, Kind, Spec};
+use crate::plan::{Frame, Kind, SidePreset, Spec};
 use crate::select::{Ask as ShaftAsk, Shaft, set_on_shafts};
 use crate::simple::Simple;
 use crate::sketch_rules::{Circle, TOLERANCE, TrainCircle, is_style, size_train};
@@ -169,6 +172,9 @@ pub struct Ask {
     /// (default from the smallest gear's root).
     pub shaft_body: Option<bool>,
     pub shaft_diameter: Option<f64>,
+    /// A gear on parallel shafts: which side of its sketch plane its face extends along its axis
+    /// (`None`: all on side A, as before sides existed; see [`SidePreset`]).
+    pub sides: Option<SidePreset>,
 }
 
 /// One member read: its geometry and what is asked of it.
@@ -213,6 +219,10 @@ pub struct Outcome {
     pub error: Option<String>,
     /// The gears in the set's order (its train's gears, `Plan::members`): each one's item.
     pub gears: Vec<usize>,
+    /// A drivetrain of stages of several kinds (a train with a bevel or crossed stage among
+    /// more than two gears) has no one spec: its plan, made by
+    /// [`crate::plan::system::plan_items`] (`solved` is `None`; `gears` in its members' order).
+    pub planned: Option<crate::plan::Plan>,
 }
 
 /// Lines this close to parallel (radians) are parallel.
@@ -372,13 +382,9 @@ pub fn read_with(items: &[Item], style: Option<Kind>, settings: &Simple, base: &
     } else if gears.len() == 2 {
         crossed(items, &gears, &role, style, settings, base, &mut out, &mut err);
     } else {
-        let off: Vec<String> = gears.iter().filter(|(_, c)| !parallel(c.n, n0)).map(|(i, _)| (i + 1).to_string()).collect();
-        out.error = Some(format!(
-            "a drivetrain with a bevel, worm or crossed stage among more than two gears is not made yet: {} {} at an angle to {}'s shaft",
-            if off.len() > 1 { "members" } else { "member" },
-            off.join(", "),
-            who(items, gears[0].0)
-        ));
+        // Stages of several kinds (parallel trains, bevel, crossed helical): the items' system
+        // planner, each stage by its own planner, merged into one plan.
+        crate::plan::system::read_mixed(items, &gears, &role, style, base, &mut out, &mut err);
     }
     finish(out, err)
 }
@@ -386,8 +392,10 @@ pub fn read_with(items: &[Item], style: Option<Kind>, settings: &Simple, base: &
 /// Gears on parallel shafts: a train (see [`read`]).
 #[allow(clippy::too_many_arguments)]
 fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], style: Kind, settings: &Simple, base: &Spec, shafts: bool, out: &mut Outcome, err: &mut [Option<String>]) {
-    // One tooth style: the gears' own, all alike.
+    // Each gear's tooth style (its own); meshing gears share one (checked after the sizing finds
+    // the meshes), gears on one shaft may differ.
     let mut chosen: Option<(usize, Kind)> = None;
+    let mut styles: Vec<Option<Kind>> = vec![None; items.len()];
     for &(i, _) in gears {
         let k = match role[i] {
             Some(Role::Gear(k)) if is_style(k) => k,
@@ -401,15 +409,15 @@ fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], styl
             }
             _ => continue,
         };
-        match chosen {
-            None => chosen = Some((i, k)),
-            Some((j, kj)) if kj != k => {
-                err[i].get_or_insert_with(|| format!("{} is {} but {} is {}: the gears of a train share one tooth style", who(items, i), Role::Gear(k).name(), who(items, j), Role::Gear(kj).name()));
-            }
-            Some(_) => {}
+        styles[i] = Some(k);
+        if chosen.is_none() {
+            chosen = Some((i, k));
         }
     }
     let style = chosen.map_or(style, |c| c.1);
+    // A gear asked to be helical or herringbone where the set's style is another: the set's helix
+    // angle (as the sizing takes it), its V teeth its own.
+    let helix_default = settings.helix.filter(|h| *h != 0.0).map(f64::abs).unwrap_or(if base.helix != 0.0 { base.helix.abs() } else { 20.0 });
     // The plane square to the shafts through gear 1's centre; each circle's place in it and
     // along the shafts.
     let flip = |c: &Circle3| if dot(c.n, gears[0].1.n) < 0.0 { mul(c.n, -1.0) } else { c.n };
@@ -438,19 +446,23 @@ fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], styl
                 module: a.module,
                 teeth: a.teeth,
                 face_width: a.face_width,
-                sides: None,
                 ring: (role[*i] == Some(Role::Internal)).then_some(true),
                 shaft: on,
                 shaft_span: span,
                 shaft_diameter: a.shaft_diameter.or(line_ask.shaft_diameter),
                 helix: a.helix.or(match role[*i] {
                     Some(Role::Gear(Kind::Spur)) if a.role.is_some() => Some(0.0),
+                    Some(Role::Gear(k @ (Kind::Helical | Kind::Herringbone))) if a.role.is_some() && k != style => Some(helix_default),
                     _ => None,
                 }),
                 herringbone: a.herringbone.or(match role[*i] {
                     Some(Role::Gear(Kind::Herringbone)) if a.role.is_some() => Some(true),
+                    Some(Role::Gear(Kind::Spur | Kind::Helical)) if a.role.is_some() && style == Kind::Herringbone => Some(false),
                     _ => None,
                 }),
+                // Side A along the gear's own axis: turned round where it points against the
+                // train's z.
+                sides: a.sides.map(|s| if dot(c.n, z) < 0.0 { s.swapped() } else { s }),
             }
         })
         .collect();
@@ -466,6 +478,19 @@ fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], styl
         mem.cluster = m.cluster;
         if let Some(e) = &sized.errors[k] {
             err[*i].get_or_insert_with(|| renamed(e, items, gears));
+        }
+    }
+    // Meshing gears share one tooth style (gears on one shaft may differ).
+    for (k, (i, _)) in gears.iter().enumerate() {
+        for &j in &sized.members[k].meshes_with {
+            let Some(&(jj, _)) = gears.get(j) else { continue };
+            if let (Some(a), Some(b)) = (styles[*i], styles[jj])
+                && a != b
+            {
+                err[*i].get_or_insert_with(|| {
+                    format!("{} is {} but {} it meshes with is {}: meshing gears share one tooth style", who(items, *i), Role::Gear(a).name(), who(items, jj), Role::Gear(b).name())
+                });
+            }
         }
     }
     if let (Some(e), true) = (&sized.error, sized.errors.iter().all(Option::is_none)) {
@@ -509,6 +534,10 @@ fn crossed(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], st
     if role[g1.0] == Some(Role::Gear(Kind::Worm)) || role[g2.0] == Some(Role::Wheel) {
         std::mem::swap(&mut g1, &mut g2);
     }
+    // A hypoid set is its pinion (the smaller) and then its ring gear.
+    if family == Some(Kind::Hypoid) && g1.1.r > g2.1.r {
+        std::mem::swap(&mut g1, &mut g2);
+    }
     out.gears = vec![g1.0, g2.0];
     if let (Some(a), Some(b)) = (kind_of(g1.0), kind_of(g2.0))
         && a != b
@@ -537,7 +566,7 @@ fn crossed(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], st
                 return;
             }
         }
-        crate::axes::Relation::Skew { offset, .. } if family != Some(Kind::Worm)
+        crate::axes::Relation::Skew { offset, .. } if !matches!(family, Some(Kind::Worm | Kind::Hypoid))
             && (offset - g1.1.r - g2.1.r).abs() > 1e-6 + TOLERANCE * g1.1.r.min(g2.1.r) =>
         {
             err[g2.0].get_or_insert_with(|| {

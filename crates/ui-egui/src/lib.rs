@@ -55,6 +55,7 @@ pub mod dialogs_parts;
 pub mod dialogs_plastic;
 pub mod dialogs_gear;
 pub mod dialogs_gear_graph;
+pub mod dialogs_gear_items;
 pub mod dialogs_save_mesh;
 pub mod dialogs_sheet;
 pub mod dialogs_surface;

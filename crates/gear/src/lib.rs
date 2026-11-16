@@ -126,3 +126,5 @@ mod drivetrain_tests;
 mod items_tests;
 #[cfg(test)]
 mod solid_tests;
+#[cfg(test)]
+mod system_compose_tests;

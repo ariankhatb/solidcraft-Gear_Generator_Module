@@ -840,6 +840,7 @@ impl SnarlWidget {
     /// Returns new [`SnarlWidget`] with default parameters.
     #[inline]
     #[must_use]
+    #[allow(deprecated)] // SolidCraft: egui 0.37 deprecates Id::new; the salt stays an Id.
     pub fn new() -> Self {
         SnarlWidget {
             id_salt: Id::new(":snarl:"),
@@ -870,6 +871,7 @@ impl SnarlWidget {
     /// Ignored if [`SnarlWidget::id`] was set.
     #[inline]
     #[must_use]
+    #[allow(deprecated)] // SolidCraft: egui 0.37 deprecates AsId and Id::new; signature kept.
     pub fn id_salt(mut self, id_salt: impl egui::AsId) -> Self {
         self.id_salt = Id::new(id_salt);
         self
@@ -910,7 +912,7 @@ impl SnarlWidget {
     where
         V: SnarlViewer<T>,
     {
-        let snarl_id = self.get_id(ui.id());
+        let snarl_id = self.get_id(ui.scope_id()); // SolidCraft: Ui::id renamed scope_id
 
         show_snarl(
             snarl_id,
@@ -1862,7 +1864,7 @@ where
         UiBuilder::new()
             .max_rect(node_frame_rect.round_ui())
             .layout(Layout::top_down(Align::Center))
-            .id(node_id),
+            .scope_id(node_id), // SolidCraft: UiBuilder::id renamed scope_id
     );
 
     // Interact with node frame.

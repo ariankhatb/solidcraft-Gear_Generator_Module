@@ -125,3 +125,6 @@ SolidCraft changes:
 - `Cargo.toml` (both): egui 0.37 instead of 0.36; examples, dev-dependencies and the optional
   `egui-probe` dependency (on egui 0.36) removed, its feature kept empty so the source's cfgs stay
   known; egui-snarl takes egui-scale from `../egui-scale`.
+- egui-snarl `src/ui.rs`, `src/ui/state.rs`, `src/ui/wire.rs`: egui 0.37 deprecations. `Ui::id`
+  and `UiBuilder::id` become `scope_id`; `use core::f32;` removed so `f32::NAN` is the associated
+  constant; `Id::new`/`AsId` in `SnarlWidget::new` and `id_salt` kept under `allow(deprecated)`.

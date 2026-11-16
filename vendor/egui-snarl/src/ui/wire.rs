@@ -1,5 +1,4 @@
-use core::f32;
-
+// SolidCraft: `use core::f32;` removed, so `f32::NAN` is the associated constant (std::f32::NAN is deprecated).
 use ahash::HashMap;
 use egui::{Context, Id, Pos2, Rect, Shape, Stroke, Ui, cache::CacheTrait, pos2};
 

@@ -58,9 +58,9 @@ fn three() -> Vec<Circle> {
 
 #[test]
 fn three_tangent_circles_make_a_three_gear_train() {
-    let (spec, p, _) = train(Kind::Spur, three(), Simple::default()).unwrap();
+    let (spec, p, _) = train(Kind::Spur, three(), m25()).unwrap();
     let t = spec.train.as_ref().unwrap();
-    // One standard module for the group: 2.5 gives 16, 24 and 12 teeth exactly.
+    // Module 2.5 gives 16, 24 and 12 teeth exactly: no shift needed, the free one clears undercut.
     assert!(t.gears.iter().all(|g| g.module == 2.5), "{:?}", t.gears);
     assert_eq!(t.gears.iter().map(|g| g.teeth).collect::<Vec<_>>(), vec![16, 24, 12]);
     assert_eq!(t.links.len(), 2);
@@ -101,7 +101,7 @@ fn a_gear_inside_a_ring_with_an_idler() {
     // Ring Ø120 (gear 1), a Ø48 gear inside touching it, a Ø24 idler inside touching that one.
     let a = 120f64.to_radians();
     let c = vec![circle(0.0, 0.0, 60.0), circle(36.0, 0.0, 24.0), circle(36.0 + 36.0 * a.cos(), 36.0 * a.sin(), 12.0)];
-    let (spec, p, _) = train(Kind::Spur, c, Simple::default()).unwrap();
+    let (spec, p, _) = train(Kind::Spur, c, Simple { module: Some(3.0), ..Simple::default() }).unwrap();
     let t = spec.train.as_ref().unwrap();
     assert!(t.gears[0].ring && !t.gears[1].ring && !t.gears[2].ring);
     assert_eq!(t.gears.iter().map(|g| g.teeth).collect::<Vec<_>>(), vec![40, 16, 8]);
@@ -123,7 +123,7 @@ fn a_gear_touching_nothing_is_an_error_naming_it() {
     assert!(e.contains("gear 4 touches no other gear") && e.contains("from gear 2's"), "{e}");
     // Per member: only gear 4 is wrong; the others are sized and meshed.
     let tc: Vec<TrainCircle> = c.iter().map(|k| TrainCircle::of(*k)).collect();
-    let sized = size_train(&tc, Kind::Spur, &Simple::default(), &Spec::default());
+    let sized = size_train(&tc, Kind::Spur, &m25(), &Spec::default());
     assert!(sized.spec.is_none());
     assert!(sized.errors[..3].iter().all(Option::is_none) && sized.errors[3].is_some(), "{:?}", sized.errors);
     assert_eq!(sized.members[1].meshes_with, vec![0, 2]);
@@ -142,23 +142,165 @@ fn a_circle_nearly_touching_is_refused_naming_it() {
     assert!(e.contains("pitch circles cross"), "{e}");
 }
 
+fn m25() -> Simple {
+    Simple { module: Some(2.5), ..Simple::default() }
+}
+
+/// The plan's centre distance of the mesh of gears `a`–`b` (1-based) is the drawn one.
+fn centre_kept(p: &Plan, a: usize, b: usize, drawn: f64) {
+    let got = fact(p, &format!("gears {a}–{b} centre distance"));
+    assert!((got - drawn).abs() < 1e-6, "gears {a}–{b}: {got} built, {drawn} drawn");
+}
+
 #[test]
-fn diameters_that_cant_share_the_module_asked_are_refused() {
-    // Ø40 and Ø61 touching, at module 2: 30.5 teeth.
+fn a_three_gear_train_off_the_module_is_held_by_shift() {
+    // Ø40, Ø61 and Ø30 touching in a row at module 2: 20, 31 (30.5 rounded) and 15 teeth; no
+    // 0.5 % refusal, the drawn centre distances held by profile shift.
     let c = vec![circle(0.0, 0.0, 20.0), circle(50.5, 0.0, 30.5), circle(50.5, 45.5, 15.0)];
-    let e = train(Kind::Spur, c, Simple { module: Some(2.0), ..Simple::default() }).unwrap_err();
-    assert!(e.contains("gear 2") && e.contains("30.50 teeth at module 2") && e.contains("can't mesh with gear 1"), "{e}");
-    // Free, the same drawing takes one module and keeps the drawn centres.
-    let c = vec![circle(0.0, 0.0, 20.0), circle(50.5, 0.0, 30.5), circle(50.5, 45.5, 15.0)];
-    let (_, p, _) = train(Kind::Spur, c, Simple::default()).unwrap();
+    let (spec, p, notes) = train(Kind::Spur, c, Simple { module: Some(2.0), ..Simple::default() }).unwrap();
+    let t = spec.train.as_ref().unwrap();
+    assert!(t.gears.iter().all(|g| g.module == 2.0), "{:?}", t.gears);
+    assert_eq!(t.gears.iter().map(|g| g.teeth).collect::<Vec<_>>(), vec![20, 31, 15]);
+    assert!(notes.iter().any(|n| n.contains("gear 2: Ø61 drawn, Ø62 built")), "{notes:?}");
+    centre_kept(&p, 1, 2, 50.5);
+    centre_kept(&p, 2, 3, 45.5);
     meshes_clean(&p, 2);
+}
+
+#[test]
+fn module_3_on_a_40_circle_is_13_teeth_and_a_shift() {
+    // Ø40 is 13.33 teeth at module 3: 13 (Ø39), and Ø60 is 20. The 50 mm drawn centre distance
+    // (49.5 standard) is held by a positive shift sum, most of it on the 13-tooth gear (undercut).
+    let c = [circle(0.0, 0.0, 20.0), circle(50.0, 0.0, 30.0)];
+    let tc: Vec<TrainCircle> = c.iter().map(|k| TrainCircle::of(*k)).collect();
+    let sized = size_train(&tc, Kind::Spur, &Simple { module: Some(3.0), ..Simple::default() }, &Spec::defaults_for(Kind::Spur));
+    assert!(sized.error.is_none(), "{:?}", sized.error);
+    let spec = sized.spec.unwrap();
+    let t = spec.train.as_ref().unwrap();
+    assert_eq!(t.gears.iter().map(|g| g.teeth).collect::<Vec<_>>(), vec![13, 20]);
+    assert!(t.gears.iter().all(|g| g.module == 3.0));
+    let x: Vec<f64> = t.gears.iter().map(|g| g.shift).collect();
+    assert_eq!(sized.shifts, x);
+    assert!(x[0] > 0.1 && x[0] > x[1], "{x:?}");
+    // The shift sum the operating pressure angle gives for 50 mm.
+    let inv = |a: f64| a.tan() - a;
+    let a20 = 20f64.to_radians();
+    let aw = (49.5 * a20.cos() / 50.0).acos();
+    let sum = (inv(aw) - inv(a20)) * 33.0 / (2.0 * a20.tan());
+    assert!((x[0] + x[1] - sum).abs() < 1e-9, "{x:?} vs {sum}");
+    let p = crate::plan(&spec).unwrap();
+    centre_kept(&p, 1, 2, 50.0);
+    meshes_clean(&p, 1);
+}
+
+#[test]
+fn the_automatic_module_gives_the_smallest_gear_17_teeth() {
+    // Smallest Ø30: module 1.5 is the largest series I module giving it 17 or more (20).
+    let (spec, p, _) = train(Kind::Spur, three(), Simple::default()).unwrap();
+    let t = spec.train.as_ref().unwrap();
+    assert!(t.gears.iter().all(|g| g.module == 1.5), "{:?}", t.gears);
+    assert_eq!(t.gears.iter().map(|g| g.teeth).collect::<Vec<_>>(), vec![27, 40, 20]);
+    assert!(t.gears.iter().map(|g| g.teeth).min().unwrap() >= crate::sketch_rules::AUTO_TEETH);
+    centre_kept(&p, 1, 2, 50.0);
+    centre_kept(&p, 2, 3, 45.0);
+    meshes_clean(&p, 2);
+    // Tiny gears: no standard module gives 17 teeth; fewer with a note.
+    let (m, z, note) = crate::sketch_rules::auto_module(&[(2.0, 1.0)], 8);
+    assert_eq!((m, z), (0.25, vec![8]));
+    assert!(note.unwrap().contains("profile shift"));
+}
+
+#[test]
+fn size_by_teeth_takes_the_module_from_the_drawn_diameter() {
+    // Gear 1 Ø41 with 16 teeth: module 41/16 (not standard). Gear 2 Ø60 takes 23 teeth.
+    let mut tc: Vec<TrainCircle> = [circle(0.0, 0.0, 20.5), circle(50.5, 0.0, 30.0)].iter().map(|k| TrainCircle::of(*k)).collect();
+    tc[0].teeth = Some(16);
+    let sized = size_train(&tc, Kind::Spur, &Simple::default(), &Spec::defaults_for(Kind::Spur));
+    assert!(sized.error.is_none(), "{:?}", sized.error);
+    let spec = sized.spec.unwrap();
+    let t = spec.train.as_ref().unwrap();
+    assert!(t.gears.iter().all(|g| (g.module - 41.0 / 16.0).abs() < 1e-12), "{:?}", t.gears);
+    assert_eq!(t.gears.iter().map(|g| g.teeth).collect::<Vec<_>>(), vec![16, 23]);
+    assert!((sized.members[0].pitch_diameter - 41.0).abs() < 1e-9);
+    let p = crate::plan(&spec).unwrap();
+    centre_kept(&p, 1, 2, 50.5);
+    meshes_clean(&p, 1);
+}
+
+#[test]
+fn shifts_past_the_limits_are_refused_naming_sizes_that_work() {
+    // Two Ø20 touching at module 3: 7 teeth each (Ø21), 20 mm apart: the shift sum is negative,
+    // and neither 7-tooth gear may be cut deeper.
+    let c = [circle(0.0, 0.0, 10.0), circle(20.0, 0.0, 10.0)];
+    let tc: Vec<TrainCircle> = c.iter().map(|k| TrainCircle::of(*k)).collect();
+    let sized = size_train(&tc, Kind::Spur, &Simple { module: Some(3.0), ..Simple::default() }, &Spec::defaults_for(Kind::Spur));
+    assert!(sized.spec.is_none() && sized.errors.iter().all(Option::is_some), "{:?}", sized.errors);
+    let e = sized.error.unwrap();
+    assert!(e.contains("gears 1 and 2") && e.contains("undercut") && e.contains("7 and 7 teeth at module 3"), "{e}");
+    assert!(e.contains("module 2.5 (8, 8 teeth)") && e.contains("with 6 teeth"), "{e}");
+}
+
+#[test]
+fn a_module_block_sizes_all_its_gears() {
+    // Gears 1 and 2 in a block at module 2 (each carries the block's module), gear 3 free: the
+    // whole meshing group takes module 2: 21, 29 and 15 teeth, the drawn centres held.
+    let c = [circle(0.0, 0.0, 20.6), circle(50.0, 0.0, 29.4), circle(50.0, 44.4, 15.0)];
+    let mut tc: Vec<TrainCircle> = c.iter().map(|k| TrainCircle::of(*k)).collect();
+    tc[0].module = Some(2.0);
+    tc[1].module = Some(2.0);
+    let sized = size_train(&tc, Kind::Spur, &Simple::default(), &Spec::defaults_for(Kind::Spur));
+    assert!(sized.error.is_none(), "{:?}", sized.error);
+    assert!(sized.members.iter().all(|m| m.module == 2.0));
+    assert_eq!(sized.members.iter().map(|m| m.teeth).collect::<Vec<_>>(), vec![21, 29, 15]);
+    let p = crate::plan(&sized.spec.unwrap()).unwrap();
+    centre_kept(&p, 1, 2, 50.0);
+    centre_kept(&p, 2, 3, 44.4);
+    meshes_clean(&p, 2);
+    // A gear asking another module than its block's meshing partners: refused.
+    tc[2].module = Some(2.5);
+    let sized = size_train(&tc, Kind::Spur, &Simple::default(), &Spec::defaults_for(Kind::Spur));
+    assert!(sized.errors[2].as_deref().is_some_and(|e| e.contains("meshing gears share one module")), "{:?}", sized.errors);
+}
+
+#[test]
+fn stages_follow_the_rule_where_they_can() {
+    use crate::sketch_rules::{StageGear, size_stage};
+    let base = Spec::defaults_for(Kind::Spur);
+    // Rack: Ø40 at module 3, 13 teeth; the pitch line at 20 mm by the shift (40 − 39) ÷ 6.
+    let s = size_stage(Kind::Rack, &[StageGear::of(40.0)], Some(3.0), &base).unwrap();
+    assert_eq!(s.teeth, vec![13]);
+    assert!((s.shift[0] - 1.0 / 6.0).abs() < 1e-12);
+    // Worm: wheel Ø61.4 at module 2 (31 teeth, Ø62), the worm's Ø20 kept: the wheel's shift.
+    let s = size_stage(Kind::Worm, &[StageGear::of(61.4), StageGear::of(20.0)], Some(2.0), &base).unwrap();
+    assert_eq!(s.teeth, vec![31, base.starts.max(1)]);
+    assert!((s.shift[0] + 0.15).abs() < 1e-9 && s.shift[1] == 0.0, "{:?}", s.shift);
+    // Crossed helical at 45° each: 14 and 21 teeth at module 2; the shift sum makes up the
+    // centre distance: (100 − 99) ÷ 2 ÷ 2.
+    let f = 1.0 / 45f64.to_radians().cos();
+    let g = |d: f64| StageGear { d, factor: f, teeth: None };
+    let s = size_stage(Kind::CrossedHelical, &[g(40.0), g(60.0)], Some(2.0), &base).unwrap();
+    assert_eq!(s.teeth, vec![14, 21]);
+    let built = 2.0 * f * 35.0;
+    assert!((s.shift[0] + s.shift[1] - (100.0 - built) / 4.0).abs() < 1e-9, "{:?}", s.shift);
+    // Bevel: gear 1's outer Ø40 kept (13 teeth, module 40/13); gear 2 Ø62 → 20 teeth, the ratio
+    // noted; balanced shifts favour the 13-tooth gear.
+    let bevel = Spec { shaft_angle: 90.0, ..Spec::defaults_for(Kind::Bevel) };
+    let s = size_stage(Kind::Bevel, &[StageGear::of(40.0), StageGear::of(62.0)], Some(3.0), &bevel).unwrap();
+    assert_eq!(s.teeth, vec![13, 20]);
+    assert!((s.module - 40.0 / 13.0).abs() < 1e-12);
+    assert!((s.pitch_diameter[0] - 40.0).abs() < 1e-12);
+    assert!(s.shift[0] >= 0.0 && (s.shift[0] + s.shift[1]).abs() < 1e-12, "{:?}", s.shift);
+    assert!(s.notes.iter().any(|n| n.contains("ratio")), "{:?}", s.notes);
+    // A pair past the limits: refused with sizes that work.
+    let e = size_stage(Kind::Pair, &[StageGear::of(20.0), StageGear::of(20.0)], Some(3.0), &base).unwrap_err();
+    assert!(e.contains("undercut") && e.contains("module 2.5 (8, 8 teeth)"), "{e}");
 }
 
 #[test]
 fn drawn_centres_are_kept_by_profile_shift() {
     // 0.3 % off standard sizes: module 2.5 teeth, the centre distances reached by shifting.
     let c = vec![circle(0.0, 0.0, 20.06), circle(50.12, 0.0, 30.06), circle(50.12, 45.1, 15.04)];
-    let (spec, p, notes) = train(Kind::Spur, c, Simple::default()).unwrap();
+    let (spec, p, notes) = train(Kind::Spur, c, m25()).unwrap();
     let t = spec.train.as_ref().unwrap();
     assert_eq!(t.gears.iter().map(|g| g.teeth).collect::<Vec<_>>(), vec![16, 24, 12]);
     assert!(t.gears[1].shift.abs() > 1e-6, "{:?}", t.gears);

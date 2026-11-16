@@ -89,12 +89,14 @@ fn per_member_module_and_teeth_are_kept_or_contradictions_named() {
     let e = o.members[6].error.clone().unwrap();
     assert!(e.contains("member 7 asks module 2") && e.contains("member 6"), "{e}");
     assert!(o.solved.is_none() && o.error.is_some());
-    // Teeth that don't fit the circle.
+    // Teeth and module both asked off the circle (Ø45 on Ø40): kept, the drawn centre distance
+    // held by profile shift (decision 1).
     let mut items = compound();
     items[3].ask = Ask { module: Some(2.5), teeth: Some(18), ..Ask::default() };
     let o = read(&items, None, &Simple::default(), &Spec::default());
-    let e = o.members[3].error.clone().unwrap();
-    assert!(e.contains("18 teeth at module 2.5 make Ø45") && e.contains("Ø40"), "{e}");
+    assert!(o.members[3].error.is_none(), "{:?}", o.members[3].error);
+    assert_eq!((o.members[3].teeth, o.members[3].module), (Some(18), Some(2.5)));
+    assert!(o.notes.iter().any(|n| n.contains("Ø40 drawn, Ø45 built")), "{:?}", o.notes);
 }
 
 #[test]
@@ -281,17 +283,19 @@ fn the_rc_gearbox_power_split_with_clusters() {
     clean(&p, 4);
     let m = &o.members;
     assert!(m.iter().all(|m| m.error.is_none()), "{:?}", m);
-    // Stage 1 module 1.5 (20 and 10 teeth, 22.5 apart), stage 2 module 1.25 (20 and 12, 20 apart).
-    assert_eq!((m[0].teeth, m[1].teeth, m[2].teeth), (Some(20), Some(10), Some(10)));
-    assert_eq!((m[3].teeth, m[4].teeth, m[5].teeth), (Some(20), Some(20), Some(12)));
-    assert_eq!((m[0].module, m[3].module), (Some(1.5), Some(1.25)));
+    // The automatic module (smallest gear 17+ teeth): 0.8 for both stages; stage 1 38 and 19 teeth
+    // (Ø30 and Ø15, 22.5 apart), stage 2 31 and 19 (Ø25 and Ø15, 20 apart), held by shift.
+    assert_eq!((m[0].teeth, m[1].teeth, m[2].teeth), (Some(38), Some(19), Some(19)));
+    assert_eq!((m[3].teeth, m[4].teeth, m[5].teeth), (Some(31), Some(31), Some(19)));
+    assert_eq!((m[0].module, m[3].module), (Some(0.8), Some(0.8)));
     assert!(m[1].cluster.is_some() && m[1].cluster == m[3].cluster && m[2].cluster == m[4].cluster && m[1].cluster != m[2].cluster);
     assert_eq!((m[1].shaft, m[3].shaft, m[2].shaft, m[4].shaft), (Some(6), Some(6), Some(7), Some(7)));
     assert_eq!(m[5].meshes_with, vec![3, 4]);
     // Faces fit the 15 mm between the gears on each countershaft.
     assert!(m.iter().filter_map(|m| m.face_width).all(|f| f <= 13.5 + 1e-9), "{:?}", m.iter().map(|m| m.face_width).collect::<Vec<_>>());
     let ratio = p.facts.iter().find(|f| f.label == "train ratio gear 1 → gear 6").unwrap().value;
-    assert!((ratio - 0.3).abs() < 1e-12, "{ratio}");
+    // (19 ÷ 38) × (19 ÷ 31): the drawn 0.3, rounded to whole teeth.
+    assert!((ratio - 19.0 / 38.0 * 19.0 / 31.0).abs() < 1e-12, "{ratio}");
     assert_eq!(p.clusters.len(), 2);
     // Auto: spur on every gear, worked out; four shafts (input, two countershafts, output), each
     // one body with its gears; a contact line per mesh.

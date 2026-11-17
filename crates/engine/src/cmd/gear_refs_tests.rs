@@ -389,7 +389,7 @@ fn a_deleted_pick_is_never_replaced_by_the_next_entity() {
     run(&mut f.s, "sketch.circle.center", json!({"center": [55, 0], "radius": 30.0}));
     run(&mut f.s, "sketch.finish", json!({}));
     let e = feature_error(&f.s, gears).unwrap_or_else(|| panic!("the new circle is not gear B's: {:?}", ids(&f.s)));
-    assert!(e.contains("`b`") && e.contains("Pitch circles"), "{e}");
+    assert!(e.contains("curve b is gone") && e.contains("Pitch circles") && !e.contains('`'), "{e}");
 }
 
 #[test]
@@ -689,7 +689,7 @@ fn bore_circle_follows_its_dimension_and_a_deleted_one_fails_by_name() {
     run(&mut s, "sketch.delete", json!({"entities": ["ab"]}));
     run(&mut s, "sketch.finish", json!({}));
     let e = feature_error(&s, before.feature).expect("the set fails without its bore circle");
-    assert!(e.contains("item A, bore") && e.contains("`ab`") && e.contains("Detailed"), "{e}");
+    assert!(e.contains("Gear A, bore circle") && e.contains("curve ab") && e.contains("Detailed"), "{e}");
     undo(&mut s);
     assert_eq!(whole(&mut s), before);
 }
@@ -716,7 +716,7 @@ fn a_bore_circle_off_centre_is_refused_by_name() {
     let mut s = Session::default();
     detailed_sketch(&mut s);
     let e = s.execute("gear.calculate", &detailed_request(&[("b", "bore")])).unwrap_err().to_string();
-    assert!(e.contains("item A, bore") && e.contains("concentric"), "{e}");
+    assert!(e.contains("Gear A, bore circle") && e.contains("concentric"), "{e}");
 }
 
 #[test]
@@ -821,7 +821,7 @@ fn bearing_points_on_shaft_lines_are_the_housing_cutouts_seats() {
     run(&mut s, "sketch.delete", json!({"entities": ["p2"]}));
     run(&mut s, "sketch.finish", json!({}));
     let e = feature_error(&s, feature).expect("the set fails without its bearing point");
-    assert!(e.contains("item B") && e.contains("p2") && e.contains("Shafts"), "{e}");
+    assert!(e.contains("Gear B") && e.contains("p2") && e.contains("Shafts"), "{e}");
 }
 
 /// The set's tooth chamfer: every gear loses a ring off its tips' edges, the pair still turns

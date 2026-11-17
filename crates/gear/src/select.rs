@@ -148,6 +148,14 @@ pub fn set_on_shafts(shafts: &[Shaft], ask: &Ask, base: &Spec) -> Result<Solved,
                 spec.helix = helix;
                 spec.herringbone = style == Some(Kind::Herringbone);
             }
+            // Crossed helicals on skew shafts: sized with equal helices that add up to the
+            // shafts' angle (the acute one: the set takes the hand that fits).
+            if kind == Kind::CrossedHelical
+                && let Relation::Skew { angle, .. } = rel
+                && base.kind != kind
+            {
+                spec.helix = 0.5 * fold(angle);
+            }
             if let Some(f) = ask.face_width {
                 spec.face_width = f;
             }
@@ -205,6 +213,11 @@ pub fn set_on_shafts(shafts: &[Shaft], ask: &Ask, base: &Spec) -> Result<Solved,
         }
         _ => train_on(shafts, ask, style, helix, base, notes),
     }
+}
+
+/// An angle between two lines, in degrees, as the acute one.
+fn fold(deg: f64) -> f64 {
+    if deg > 90.0 { 180.0 - deg } else { deg }
 }
 
 /// Three or more parallel shafts: a gear train (see the module docs).

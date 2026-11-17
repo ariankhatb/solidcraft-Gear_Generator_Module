@@ -89,8 +89,26 @@ impl Pick<'_> {
         Pick { item, slot, what }
     }
     fn said(&self, why: impl std::fmt::Display) -> String {
-        format!("item {}, {}: {why} (`{}`)", self.item, self.slot, self.what)
+        format!("Gear {}, {}: {why}", self.item, slot_label(&self.slot))
     }
+    /// What to do about a pick that is gone.
+    fn repick(&self) -> String {
+        format!("click Gear {}'s card, then its replacement in the view", self.item)
+    }
+}
+
+/// A slot as the dialog labels it ("pitch": "pitch circle", "axis2": "shaft line 2").
+fn slot_label(slot: &str) -> String {
+    match slot {
+        "bore" => return "bore circle".into(),
+        "hub" => return "hub circle".into(),
+        _ => {}
+    }
+    gi::ItemKind::ALL
+        .iter()
+        .flat_map(|k| gi::slots(*k).iter().flat_map(|l| l.iter()))
+        .find(|s| s.name == slot)
+        .map_or_else(|| slot.to_string(), |s| s.what.to_string())
 }
 
 /// Whether a sketch has an entity (a point, curve or 3D wire) with id `entity`, whatever it is.
@@ -116,7 +134,7 @@ fn thing_of(s: &dyn Reads, cmd: &str, who: &Pick, c: &GearComponent) -> Result<g
     let line = |a: &solidcraft_gear::axes::Axis| gi::Thing::line(a.origin, solidcraft_gear::select::bearing_point(a, 1.0));
     if let (Some(sk), Some(entity)) = (&c.sketch, c.curve.as_ref().or(c.point.as_ref())) {
         let label = c.sketch_name.clone().map_or_else(|| super::super::features::sketch_key(Some(sk)).unwrap_or_default(), |n| format!("'{n}'"));
-        let id = s.sketch_id(Some(sk), cmd, what).map_err(|_| bad(cmd, who.said(format!("sketch {label} is gone (deleted): pick the {} again", who.slot))))?;
+        let id = s.sketch_id(Some(sk), cmd, what).map_err(|_| bad(cmd, who.said(format!("sketch {label} is gone (deleted): {}", who.repick()))))?;
         let Some(ss) = s.solved(id) else {
             let name = s.sketch_name(id).map_or(label, |n| format!("'{n}'"));
             return Err(bad(cmd, who.said(format!("sketch {name} isn't there before the Gears feature (it comes after it in the timeline, or it is suppressed or failed): move it before the Gears feature"))));
@@ -124,7 +142,7 @@ fn thing_of(s: &dyn Reads, cmd: &str, who: &Pick, c: &GearComponent) -> Result<g
         let name = ss.name.clone();
         let kind = if c.point.is_some() { "point" } else { "curve" };
         if !has_entity(&ss, entity) {
-            return Err(bad(cmd, who.said(format!("{kind} `{entity}` is gone from sketch '{name}': pick the {} again, or draw it again with id `{entity}`", who.slot))));
+            return Err(bad(cmd, who.said(format!("{kind} {entity} is gone from sketch '{name}': {} (or draw it again with id {entity})", who.repick()))));
         }
         let gs = s.gear_sketch(id).map_err(|e| bad(cmd, who.said(e)))?;
         if let Some((_, it)) = sketch_items(&gs).into_iter().find(|(k, _)| k == entity) {
@@ -592,6 +610,8 @@ fn side_a(items: &[gi::GearItem]) -> Vec<(GearRef, [f64; 3])> {
 struct Wanted {
     gear: GearRef,
     bore: Option<f64>,
+    /// A hub asked with its Ø on auto: 1.6 × the bore, or half the root Ø (within the roots).
+    hub_auto: bool,
     hub: Option<f64>,
     /// How far the hub reaches past the face on side A and side B (mm; both 0: half the face
     /// width on side A).
@@ -612,8 +632,9 @@ fn gear_details(cmd: &str, items: &[gi::GearItem], details: &[DetailPick]) -> Re
                 _ => None,
             };
             let (hub, len_a, len_b) = st.hub.map_or((None, 0.0, 0.0), |h| (h.diameter, h.length_a, h.length_b));
-            if bore.is_some() || hub.is_some() {
-                out.push(Wanted { gear: GearRef::new(i, g), bore, hub, len_a, len_b });
+            let hub_auto = st.hub.is_some_and(|h| h.diameter.is_none());
+            if bore.is_some() || hub.is_some() || hub_auto {
+                out.push(Wanted { gear: GearRef::new(i, g), bore, hub, hub_auto, len_a, len_b });
             }
         }
     }
@@ -627,7 +648,7 @@ fn gear_details(cmd: &str, items: &[gi::GearItem], details: &[DetailPick]) -> Re
         let g = geoms
             .iter()
             .position(|geo| !geo.ring && geo.radius.is_some() && concentric(geo, centre, normal))
-            .ok_or_else(|| bad(cmd, format!("{}: the circle isn't concentric with a pitch circle of item {} (the same centre, in a parallel plane)", d.said, it.id)))?;
+            .ok_or_else(|| bad(cmd, format!("{}: the circle isn't concentric with a pitch circle of Gear {} (the same centre, in a parallel plane)", d.said, it.id)))?;
         let pitch = geoms[g].radius.unwrap_or(0.0);
         if radius >= pitch - 1e-9 {
             return Err(bad(cmd, format!("{}: Ø{} isn't inside the pitch circle (Ø{})", d.said, num(2.0 * radius), num(2.0 * pitch))));
@@ -636,12 +657,13 @@ fn gear_details(cmd: &str, items: &[gi::GearItem], details: &[DetailPick]) -> Re
             Some(k) => k,
             None => {
                 let h = it.settings(g).hub;
-                out.push(Wanted { gear: GearRef::new(d.item, g), bore: None, hub: None, len_a: h.map_or(0.0, |h| h.length_a), len_b: h.map_or(0.0, |h| h.length_b) });
+                out.push(Wanted { gear: GearRef::new(d.item, g), bore: None, hub: None, hub_auto: false, len_a: h.map_or(0.0, |h| h.length_a), len_b: h.map_or(0.0, |h| h.length_b) });
                 out.len() - 1
             }
         };
         if d.hub {
             out[at].hub = Some(2.0 * radius);
+            out[at].hub_auto = false;
         } else {
             out[at].bore = Some(2.0 * radius);
         }
@@ -650,10 +672,20 @@ fn gear_details(cmd: &str, items: &[gi::GearItem], details: &[DetailPick]) -> Re
         if let (Some(b), Some(h)) = (w.bore, w.hub)
             && b >= h
         {
-            return Err(bad(cmd, format!("item {}, gear {}: the bore (Ø{}) must be smaller than the hub (Ø{})", items[w.gear.item].id, w.gear.gear + 1, num(b), num(h))));
+            return Err(bad(cmd, format!("{}: the bore (Ø{}) must be smaller than the hub (Ø{})", gear_who(items, w.gear), num(b), num(h))));
         }
     }
     Ok(out)
+}
+
+/// A gear as the dialog names it: "Gear A", "Gear W worm", "Gear C2".
+fn gear_who(items: &[gi::GearItem], r: GearRef) -> String {
+    let it = &items[r.item];
+    match gi::part_name(it.kind, r.gear) {
+        _ if it.gear_count() <= 1 => format!("Gear {}", it.id),
+        Some(p) => format!("Gear {} {p}", it.id),
+        None => format!("Gear {}{}", it.id, r.gear + 1),
+    }
 }
 
 fn num(v: f64) -> String {
@@ -683,10 +715,10 @@ fn apply_details(items: &[gi::GearItem], wanted: &[Wanted], sp: &mut SystemPlan)
         }
         let root = shape.map(|x| x.root_diameter).filter(|d| *d > 0.0);
         let mut warn = Vec::new();
-        let who = format!("item {}, gear {}", items[w.gear.item].id, w.gear.gear + 1);
+        let who = gear_who(items, w.gear);
         let bore = match (w.bore, root) {
             (Some(d), Some(r)) if d >= r - 1e-9 => {
-                warn.push(format!("{who}: the bore (Ø{}) reaches the teeth's root (Ø{}): it is left out", num(d), num(r)));
+                warn.push(format!("{who}: the bore (Ø{}) reaches the tooth roots (Ø{}), so no bore is cut. Draw a smaller bore circle.", num(d), num(r)));
                 None
             }
             (d, _) => d,
@@ -694,8 +726,13 @@ fn apply_details(items: &[gi::GearItem], wanted: &[Wanted], sp: &mut SystemPlan)
         if let (Some(h), Some(r)) = (w.hub, root)
             && h > r
         {
-            warn.push(format!("{who}: the hub (Ø{}) is wider than the teeth's root (Ø{})", num(h), num(r)));
+            warn.push(format!("{who}: the hub (Ø{}) is wider than the tooth roots (Ø{})", num(h), num(r)));
         }
+        let hub_d = w.hub.or_else(|| {
+            let r = root?;
+            w.hub_auto.then(|| bore.map_or(0.5 * r, |b| 1.6 * b).min(0.85 * r)).filter(|h| bore.is_none_or(|b| *h > b + 1.0))
+        });
+        let w = &Wanted { hub: hub_d, ..*w };
         let (len_a, len_b) = if w.len_a + w.len_b > 0.0 { (w.len_a, w.len_b) } else { (0.5 * (a + bb), 0.0) };
         // The gear's axis in its body's frame: the pitch circle's centre, side A along +z.
         let body = &mut sp.plan.bodies[b];

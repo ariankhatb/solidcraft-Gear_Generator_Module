@@ -527,8 +527,7 @@ fn a_tooth_chamfer_leaves_a_note_where_it_does_not_go() {
     let before = sp.plan.bodies.clone();
     tooth_chamfer(&worm, &mut sp, ToothChamfer { size: 0.2, faces: ChamferFaces::Both }).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(sp.plan.bodies, before, "a worm pair is left plain");
-    assert!(sp.notes.iter().any(|n| n == "tooth chamfer not applied to Gear A1: worm"), "{:?}", sp.notes);
-    assert!(sp.notes.iter().any(|n| n == "tooth chamfer not applied to Gear A2: worm"), "{:?}", sp.notes);
+    assert!(sp.notes.iter().any(|n| n == "tooth chamfer not applied to Gear A: worm"), "{:?}", sp.notes);
     // A compound of two layers, face to face: three of its four ends chamfered.
     let compound = vec![item("E", ItemKind::Compound, vec![line([0.0, 0.0, -10.0], [0.0, 0.0, 30.0]), circ([0.0; 3], Z, 20.0), circ([0.0, 0.0, 20.0], Z, 12.0)])];
     let mut sp = plan_items(&compound, &[], &[], None, &Spec::default()).unwrap_or_else(|e| panic!("{e}"));
@@ -539,4 +538,34 @@ fn a_tooth_chamfer_leaves_a_note_where_it_does_not_go() {
     tooth_chamfer(&compound, &mut sp, ToothChamfer { size: 0.3 * m, faces: ChamferFaces::Both }).unwrap_or_else(|e| panic!("{e}"));
     eprintln!("compound ends chamfered: {}", count(&sp) - before);
     assert!(count(&sp) - before >= 3, "each layer's free ends");
+}
+
+/// Crossed helical items build two helical gears whose helix angles add up to the shaft angle
+/// (not a worm), at 90° and at 60°; a chevron bevel pair's teeth change hand at mid-face (not the
+/// spiral's).
+#[test]
+fn crossed_helical_and_chevron_bevel_are_what_they_say() {
+    use crate::items::{BevelStyle, GearSettings};
+    use crate::plan::Step;
+    for deg in [90.0f64, 60.0] {
+        let (s, c) = (deg.to_radians().sin(), deg.to_radians().cos());
+        // Gear A round Z at the origin (r 20); gear B (r 10) round an axis at `deg` to Z, 30 mm off along Y.
+        let items = vec![item("A", ItemKind::CrossedHelical, vec![circ([0.0; 3], Z, 20.0), circ([0.0, 30.0, 0.0], [s, 0.0, c], 10.0)])];
+        let sp = plan_items(&items, &[], &[], None, &Spec::default()).unwrap_or_else(|e| panic!("{deg}°: {e}"));
+        assert!(sp.error.is_none(), "{deg}°: {:?}", sp.error);
+        let worm = sp.plan.assembly.links.iter().any(|l| matches!(l, AssemblyLink::Worm { .. }));
+        assert!(!worm, "{deg}°: built as a worm: {:?}", sp.plan.assembly.links);
+        let helix: Vec<f64> = ["gear 1 helix angle", "gear 2 helix angle"].iter().filter_map(|l| sp.plan.facts.iter().find(|f| f.label.ends_with(l)).map(|f| f.value.abs())).collect();
+        assert_eq!(helix.len(), 2, "{deg}°: {:?}", sp.plan.facts.iter().map(|f| &f.label).collect::<Vec<_>>());
+        eprintln!("{deg}°: helix {helix:?}, teeth {:?}", sp.gears.iter().map(|g| g.teeth).collect::<Vec<_>>());
+        assert!((helix.iter().sum::<f64>() - deg).abs() < 0.5, "{deg}°: helix angles {helix:?} add up to the shaft angle");
+    }
+    let bevel = |style| {
+        let mut it = item("A", ItemKind::Bevel, vec![circ([0.0, 0.0, 0.0], Z, 30.0), circ([0.0, 30.0, 15.0], [0.0, 1.0, 0.0], 15.0)]);
+        it.gears = vec![GearSettings { bevel_style: style, ..GearSettings::default() }];
+        let sp = plan_items(&[it], &[], &[], None, &Spec::default()).unwrap_or_else(|e| panic!("{e}"));
+        assert!(sp.error.is_none(), "{:?}", sp.error);
+        sp.plan.bodies.iter().map(|b| b.steps.clone()).collect::<Vec<Vec<Step>>>()
+    };
+    assert_ne!(bevel(BevelStyle::Chevron), bevel(BevelStyle::Spiral), "chevron teeth differ from the spiral's");
 }

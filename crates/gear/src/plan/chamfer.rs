@@ -88,9 +88,7 @@ pub fn tooth_chamfer(items: &[GearItem], sp: &mut SystemPlan, c: ToothChamfer) -
     for (i, it) in items.iter().enumerate() {
         let geoms = gear_geoms(it);
         if let Some(why) = left_plain(it.kind) {
-            for g in 0..geoms.len().max(1) {
-                notes.push(format!("tooth chamfer not applied to {}: {why}", who(items, GearRef::new(i, g))));
-            }
+            notes.push(format!("tooth chamfer not applied to {}: {why}", it.who()));
             continue;
         }
         for (g, geo) in geoms.iter().enumerate() {

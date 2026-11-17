@@ -710,6 +710,11 @@ pub fn items_of(r: &Map<String, Value>, ui: Option<&Value>, graph: &mut Graph) -
         it.carrier = v.get("carrier").and_then(Value::as_bool) != Some(false);
         it.shaft_d = s("diameter", ValueKind::Length);
         it.keyway = v.get("keyway").and_then(Value::as_bool) == Some(true);
+        // Saved with the circles it keeps out: it takes any new one the drawing gets by itself.
+        if let Some(d) = ui.and_then(|u| u.get("gear_dropped")).and_then(|d| d.get(i)).and_then(|d| serde_json::from_value::<Vec<Sel>>(d.clone()).ok()) {
+            it.auto_details = true;
+            it.dropped = d;
+        }
         graph.node_of(i);
         out.push(it);
     }

@@ -903,8 +903,8 @@ fn other_sizes(ds: &[(f64, f64)], m: f64, zs: &[u32], name: &dyn Fn(usize) -> St
         }
         let zz: Vec<u32> = ds.iter().map(|(d, f)| (d / (mm * f)).round().clamp(0.0, 1e6) as u32).collect();
         if zz.iter().all(|z| *z >= 8) && works(mm, &zz) {
-            let list: Vec<String> = zz.iter().map(u32::to_string).collect();
-            ideas.push(format!("module {} ({} teeth)", num(mm), list.join(", ")));
+            let list: Vec<String> = zz.iter().enumerate().map(|(k, z)| format!("{} z{z}", name(k))).collect();
+            ideas.push(format!("module {} ({})", num(mm), list.join(", ")));
             found += 1;
         }
     }
@@ -917,7 +917,9 @@ fn other_sizes(ds: &[(f64, f64)], m: f64, zs: &[u32], name: &dyn Fn(usize) -> St
             let mut zz = zs.to_vec();
             zz[k] = z;
             if works(m, &zz) {
-                ideas.push(format!("{} with {z} teeth", name(k)));
+                // Or the drawing made to fit: the circle that gives that count at this module.
+                let d = ds.get(k).map_or(0.0, |(_, f)| m * f64::from(z) * f);
+                ideas.push(format!("{} with {z} teeth (or draw it Ø{})", name(k), num(d)));
                 found += 1;
             }
         }
@@ -928,16 +930,16 @@ fn other_sizes(ds: &[(f64, f64)], m: f64, zs: &[u32], name: &dyn Fn(usize) -> St
 /// The refusal when no shifts hold `what` (e.g. "the drawn centre distances"): why, and `ideas`
 /// ([`other_sizes`]).
 fn shift_refusal(why: ShiftFail, name: &dyn Fn(usize) -> String, zs: &[u32], m: f64, what: &str, ideas: &[String]) -> String {
-    let counts: Vec<String> = zs.iter().map(u32::to_string).collect();
+    let counts: Vec<String> = zs.iter().enumerate().map(|(k, z)| format!("{} z{z}", name(k))).collect();
     let text = match why {
-        ShiftFail::Unreachable(a, b) => format!("no profile shift puts {} and {} at {what} ({} teeth at module {})", name(a), name(b), and_list(&counts), num(m)),
+        ShiftFail::Unreachable(a, b) => format!("no profile shift puts {} and {} at {what} ({} at module {})", name(a), name(b), and_list(&counts), num(m)),
         ShiftFail::Limits { low, high } => {
             let says = |(k, cut): (usize, bool)| if cut { format!("{} would be undercut", name(k)) } else { format!("{}'s tips would come to a point", name(k)) };
             let mut list = vec![says(low)];
             if high != low {
                 list.push(says(high));
             }
-            format!("holding {what} needs more profile shift than {} teeth at module {} take ({})", and_list(&counts), num(m), and_list(&list))
+            format!("holding {what} needs more profile shift than these teeth take at module {} ({}): {}", num(m), and_list(&counts), and_list(&list))
         }
     };
     if ideas.is_empty() { format!("{text}: draw the circles nearer whole teeth at this module") } else { format!("{text}. These would work: {}", ideas.join(", ")) }
@@ -1462,9 +1464,11 @@ pub fn rename_gears(text: &str, name: &dyn Fn(usize) -> String) -> String {
     let mut k = 0;
     while k < words.len() {
         let w = words[k];
-        match (w, words.get(k + 1).and_then(|n| digits(n))) {
+        // "(gear 4": the name after its bracket.
+        let lead = w.len() - w.trim_start_matches(['(', '[']).len();
+        match (&w[lead..], words.get(k + 1).and_then(|n| digits(n))) {
             ("gear", Some((g, rest))) => {
-                out.push(format!("{}{rest}", name(g)));
+                out.push(format!("{}{}{rest}", &w[..lead], name(g)));
                 k += 2;
             }
             ("gears", Some((g, rest))) if rest.is_empty() && words.get(k + 2) == Some(&"and") => match words.get(k + 3).and_then(|n| digits(n)) {
@@ -1888,7 +1892,10 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
     }
     for i in 0..n {
         if err[i].is_none() && teeth[i] < 3 {
-            fail(&mut err, i, format!("gear {}: {} teeth are too few (module {})", i + 1, teeth[i], num(module[i])));
+            let d = 2.0 * c[i].r;
+            let most = (d / 3.0 * 10.0).floor() / 10.0;
+            let fix = if most > 0.0 { format!("draw it bigger or use a smaller module (≤{})", num(most)) } else { "draw it bigger".to_string() };
+            fail(&mut err, i, format!("gear {}: a Ø{} mm pitch circle gives {} {} at module {}, and a gear needs 3 or more; {fix}", i + 1, num(d), teeth[i], if teeth[i] == 1 { "tooth" } else { "teeth" }, num(module[i])));
         }
     }
     // The shifts that keep every drawn centre distance, per meshing group ([`group_shifts`]):

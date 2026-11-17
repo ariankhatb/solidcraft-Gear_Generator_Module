@@ -2368,7 +2368,12 @@ fn crossed_frame2(origin: [f64; 3], e: f64, sigma: f64) -> Frame {
 fn crossed(s: &Spec, p: &mut Plan) {
     let sigma = s.shaft_angle.to_radians();
     let b1 = s.helix.to_radians();
-    let b2 = sigma - b1;
+    // b1 + b2 is the shaft angle, or (the mirror set, left-hand past square) 180° less.
+    let b2 = match sigma - b1 {
+        b if b > FRAC_PI_2 + 1e-9 => b - PI,
+        b if b < -FRAC_PI_2 - 1e-9 => b + PI,
+        b => b,
+    };
     if b2.abs() >= 75f64.to_radians() || b1.abs() >= 75f64.to_radians() {
         p.refuse(format!(
             "gear 2's helix angle is the shaft angle less gear 1's: {}° − {}° = {}°; both must be under 75°",

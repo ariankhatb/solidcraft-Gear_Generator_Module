@@ -174,7 +174,7 @@ fn engine_messages_go_on_their_cards() {
     assert_eq!(about_item("Item B: the pinion doesn't touch the ring"), Some((1, "the pinion doesn't touch the ring".to_string())));
     assert_eq!(about_item("Gear C · Compound still needs a pitch circle: click one"), Some((2, "Gear C · Compound still needs a pitch circle: click one".to_string())));
     assert_eq!(about_item("centre distance 31.2, needs 30.0"), None);
-    assert_eq!(worded("item A gear 1 and Item B"), "gear A gear 1 and Gear B");
+    assert_eq!(worded("item A gear 1 and Item B"), "Gear A gear 1 and Gear B");
     // A gear's own name for its parts: sun, ring, planet; a compound's numbered.
     let mut g = new(None);
     g.items = vec![GearItem::new(ItemKind::Planetary), GearItem::new(ItemKind::Compound), GearItem::new(ItemKind::Spur)];
@@ -551,7 +551,7 @@ fn the_engine_reply_is_shown_per_gear_and_per_link() {
     assert_eq!(graph.notes()[1].label(), Some(("centre distance 31.2, needs 30.0 ±0.05: move the circles".into(), true)));
     assert_eq!(graph.suggested(), &[Suggested { a: 0, a_gear: 0, b: 2, b_gear: 0, kind: "mesh".into() }]);
     let (lines, _) = crate::dialogs_gear_graph::link_notes(&reply);
-    assert_eq!(lines[0], ("1·1 – 2·1: 2.00 : 1".to_string(), false));
+    assert_eq!(lines[0], ("A – B: 2.00 : 1".to_string(), false));
     // `error`: the status line says it (nothing is built); `notes` are kept.
     assert_eq!(status_of(Ok::<_, String>(reply.clone())), Err("Item C: the pinion doesn't touch the ring".to_string()));
     assert_eq!(notes_of(&reply), ["module 2 from Module Block M1"]);
@@ -584,7 +584,7 @@ fn the_ratio_readout_from_two_gears() {
     let r = json!({"ratio": 3.5, "direction": "opposite", "path": [step(("A", 0), ("B", 0), "spur"), step(("B", 0), ("B", 1), "shaft"), step(("B", 1), ("C", 0), "spur")], "efficiency": 0.9604, "mm_per_rev": 62.832});
     let lines = ratio_lines(&r, &|v: f64| fmt(v));
     assert_eq!(lines[0], ("Ratio".to_string(), "3.50 : 1, opposite direction".to_string()));
-    assert_eq!(lines[1], ("Path".to_string(), "1·1 → 2·1 → 2·2 → 3·1".to_string()));
+    assert_eq!(lines[1], ("Path".to_string(), "A → B → B2 → C".to_string()));
     assert_eq!(lines[2], ("Efficiency".to_string(), "96 %".to_string()));
     assert_eq!(lines[3], ("Rack travel".to_string(), "62.832 / rev".to_string()));
     // Not two gear bodies: no ratio asked.
@@ -632,13 +632,13 @@ fn the_dialogs_request_is_the_engines_schema() {
     assert_eq!((a.teeth, a.module), (40, 1.0), "Ø40 at module 1 from the block: {r}");
     assert!(a.rpm.is_some_and(|x| (x - 1000.0).abs() < 1e-6), "{a:?}");
     let (lines, _) = crate::dialogs_gear_graph::link_notes(&r);
-    assert!(lines.iter().any(|(t, bad)| t.starts_with("1·1 – 2·1") && !bad), "{lines:?} {r}");
+    assert!(lines.iter().any(|(t, bad)| t.starts_with("A – B:") && !bad), "{lines:?} {r}");
     // gear.ratio on the dialog's request: A·1 (z40) → B·2, one body with B·1 (z20): 2 : 1, the sign said in words.
     let q = json!({"request": p, "a": gear_ref((0, 0)), "b": gear_ref((1, 1))});
     let ratio = app.session.execute("gear.ratio", &q).unwrap();
     let lines = ratio_lines(&ratio, &|v: f64| fmt(v));
     assert!(lines[0].1.starts_with("2.00 : 1, opposite"), "{lines:?} {ratio}");
-    assert_eq!(lines[1], ("Path".to_string(), "1·1 → 2·1 → 2·2".to_string()), "a compound is one body; the path names both its gears: {ratio}");
+    assert_eq!(lines[1], ("Path".to_string(), "A → B → B2".to_string()), "a compound is one body; the path names both its gears: {ratio}");
 }
 
 /// A set made of items in the dialog (Create New + picks): every way to edit it opens the
@@ -964,7 +964,7 @@ fn qa_details_by_themselves_side_view_by_lines_and_quiet_edits() {
     click(&app, &mut g, &mut inputs, at("near"));
     refresh(&mut app, &mut g, &inputs);
     let notes: Vec<&str> = g.item_msgs[2].iter().map(|m| m.text.as_str()).collect();
-    assert!(notes.iter().any(|n| n.starts_with("A and C are 8 mm apart, so they won't mesh")), "{notes:?}");
+    assert!(notes.iter().any(|n| n.starts_with("Gears A and C are 8 mm apart, so they won't mesh")), "{notes:?}");
     // Collisions named "Gear D gear 1 and Gear E gear 1" (or B1/B2) read as the items they name.
     assert_eq!(gears_named("Gear D gear 1 and Gear E gear 1 collide: link them"), vec![3, 4]);
     assert_eq!(gears_named("Gear B1 and Gear C overlap"), vec![1, 2]);
@@ -990,4 +990,60 @@ fn qa_details_by_themselves_side_view_by_lines_and_quiet_edits() {
     assert!(commands(&app, &spur, &inputs, &Map::new()).unwrap().is_empty());
     spur.items[0].gears = vec![crate::dialogs_gear_items::GearSettings { module: "3 mm".into(), ..Default::default() }];
     assert_eq!(commands(&app, &spur, &inputs, &Map::new()).unwrap()[0].0, "gear.update");
+}
+
+/// Round 2: a refusal's suggestions are one click each on the card; "item" is reworded only
+/// where it names an item; a gear made here keeps the circles it dropped through save and Edit,
+/// and takes a new one drawn later by itself.
+#[test]
+fn round_two_fixes_wording_and_new_circles_on_edit() {
+    let mut app = app();
+    let s = app.session.execute("sketch.create", &json!({"plane": "XY"})).unwrap()["sketch"].as_u64().unwrap();
+    for (id, x, r) in [("a", 0.0, 20.0), ("abore", 0.0, 4.0), ("b", 50.0, 30.0)] {
+        app.session.execute("sketch.circle.center", &json!({"center": [x, 0], "radius": r, "id": id})).unwrap();
+    }
+    app.session.execute("sketch.finish", &json!({})).unwrap();
+    let (mut g, mut inputs) = opened(&mut app);
+    click(&app, &mut g, &mut inputs, Sel::SketchCurve { id: "a".into(), sketch: Some(s) });
+    click(&app, &mut g, &mut inputs, Sel::SketchCurve { id: "b".into(), sketch: Some(s) });
+    for _ in 0..3 {
+        refresh(&mut app, &mut g, &inputs);
+        auto_details(&app, &mut g, &mut inputs);
+    }
+    assert_eq!(g.items.len(), 2);
+    // The fixes a refusal names.
+    let text = "holding the drawn centre distances needs more profile shift than these teeth take at module 2 (Gear A z18 and Gear B z12): Gear A would be undercut. These would work: module 1.5 (Gear A z24, Gear B z16), Gear B with 14 teeth (or draw it Ø28)";
+    let fixes = fixes_in(&g, text);
+    assert_eq!(fixes, vec![Fix::Module(1.5), Fix::Teeth { item: 1, gear: 0, teeth: 14 }], "{text}");
+    assert_eq!(fixes[1].label(&g), "Use 14 teeth on B");
+    apply_fix(&mut g, 0, &fixes[1], &inputs);
+    assert!(g.items[1].gears[0].by_teeth && g.items[1].gears[0].teeth == "14");
+    apply_fix(&mut g, 0, &fixes[0], &inputs);
+    assert_eq!(g.items[0].gears[0].module, "1.5 mm");
+    // "item" only where an item's letter follows.
+    assert_eq!(worded("item B has no gear 2; Item C meshes nothing; items here"), "Gear B has no gear 2; Gear C meshes nothing; items here");
+    // A's bore was taken by itself: drop it, save, and the reopened set keeps it out but takes a
+    // circle drawn on B later.
+    assert!(g.items[0].details.iter().any(|(sel, _)| *sel == Sel::SketchCurve { id: "abore".into(), sketch: Some(s) }), "{:?}", g.items[0].details);
+    let abore = Sel::SketchCurve { id: "abore".into(), sketch: Some(s) };
+    drop_detail(&mut g, 0, &abore, &mut inputs);
+    g.items[0].gears[0] = Default::default();
+    g.items[1].gears[0] = Default::default();
+    let mut d = app.dialog.clone().unwrap();
+    d.kind = Kind::Gear(g.clone());
+    d.inputs = inputs.clone();
+    let p = apply_commands(&app, &d).unwrap()[0].1.clone();
+    assert_eq!(p["ui"]["gear_dropped"][0], json!([abore]), "{p}");
+    app.session.execute("sketch.edit", &json!({"sketch": s})).unwrap();
+    app.session.execute("sketch.circle.center", &json!({"center": [50, 0], "radius": 5.0, "id": "bbore"})).unwrap();
+    app.session.execute("sketch.finish", &json!({})).unwrap();
+    let set = solidcraft_engine::schema::gear::GearSet { group: 7, feature: Some(8), name: "Gears".into(), bodies: Vec::new(), features: Vec::new(), request: p, params: json!({}), sketch: None, sketch_changed: false };
+    let mut e = for_set(&set);
+    let mut inputs2 = inputs.clone();
+    for _ in 0..3 {
+        refresh(&mut app, &mut e, &inputs2);
+        auto_details(&app, &mut e, &mut inputs2);
+    }
+    assert!(e.items[0].details.is_empty(), "the dropped bore stays out: {:?}", e.items[0].details);
+    assert!(e.items[1].details.iter().any(|(sel, _)| *sel == Sel::SketchCurve { id: "bbore".into(), sketch: Some(s) }), "the new circle on B is taken: {:?}", e.items[1].details);
 }

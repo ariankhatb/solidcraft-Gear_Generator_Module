@@ -20,8 +20,10 @@ export async function begin(sketchScript, { view = 'top', zoom = 1.35 } = {}) {
 /// The view framed on everything, pulled back so the dialog on the right doesn't cover it.
 export async function frame(sc, view = 'top', zoom = 1.35) {
   await sc.call('ui.view', { view });
-  const cam = await sc.call('ui.camera', { fit: true });
-  if (cam?.distance) await sc.call('ui.camera', { distance: cam.distance * zoom });
+  try {
+    const cam = await sc.call('ui.camera', { fit: true });
+    if (cam?.distance) await sc.call('ui.camera', { distance: cam.distance * zoom });
+  } catch { /* nothing to fit yet */ }
   await sleep(500);
 }
 
@@ -30,14 +32,17 @@ export async function gears(sc) {
   await sleep(1200);
 }
 
+export async function top(sc) { await sc.call('ui.scroll', { x: 1300, y: 600, delta: 3000 }); await sleep(400); }
+
 export async function chooseType(sc, label) {
+  await top(sc);
   await sc.clickHandle('dialog:Type');
   await sleep(500);
   await sc.clickHandle(`dialog:Type:${label}`);
   await sleep(400);
 }
 
-export async function newGear(sc) { await sc.clickHandle('gear:new'); await sleep(500); }
+export async function newGear(sc) { await top(sc); await sc.clickHandle('gear:new'); await sleep(500); }
 
 /// A pick in the view at a world point (on a circle, a line or a point of the sketch).
 export async function pick(sc, p) { await sc.clickWorld(p); await sleep(700); }

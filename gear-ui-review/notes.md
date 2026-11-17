@@ -34,6 +34,20 @@ driven over the control channel (`drive/*.mjs`).
     assembly set) activates that gear's component instead (before-entry-viewport-dbl.png); the
     Gears dialog never opens. The timeline row and "body selected + Gears" do open the set.
 
-## After
 
-See after-*.png and walkthrough-*.png and the list in the commit messages.
+## After: what changed (after-*.png, w1…w7-*.png)
+
+| Before | After |
+|---|---|
+| 1. Create New off screen | The form fits its card: **Type** (icon list) + one wide primary **New gear** button at the top, with the type's picture and what it needs (after-01-empty). |
+| 2. Two flows at once | One flow. The row/role mode, Generate Shafts rows and the old type families are gone from the dialog; old sets open as they are with **Convert to gears**. |
+| 3. Legacy families | Only the 12 item types (Spur … Shaft). |
+| 4. No "what next" | A status line, always: "Gear B · Compound — click: shaft line", "… is complete — optional: shaft line; or New gear", a refusal in the warning colour with the reason, a missing pick named. |
+| 5. Geometry/Targets chips on top | Gone from the top; picks go to the active gear; Targets appear under Output only when Join/Cut/Intersect or Cut keep-out needs them. |
+| 6. Cramped cards, 1/2/3 numbering | One card per gear: colour dot, icon, "Gear B", type, ×; while active a checklist (✓ with the sketch and size of the pick, → next, ○ optional); complete: one line "z20 m2". Names match the engine/timeline (A, B, C…); a compound's gears B1/B2, a planetary's sun/ring/planet. |
+| 7. Graph as the main link view | Drivetrain rows "A ↔ B1 mesh 0.50 : 1 opposite", "B ═ C same shaft", suggestions listed with one Accept button, Add a link by hand (closed), Driver + rpm/torque, Ratio from/to with path; the graph only under "Show graph". |
+| 8. Settings hidden | "Gear B settings" section under the cards: Size by Module/Teeth (the other shown as worked out), Face preset + sides, Helix (Hand and V once there is a helix), More (profile shift, bore, hub), type-specific rows; a gear in a Module Block edits the block's module ("Shared by gears A, B"). |
+| 9. Wall of text | Warnings/errors on the card they belong to; one shared by several gears (an under-defined sketch) said once with an **Edit sketch** button. |
+| 10. Viewport double-click | Opens the set (it activated the component); a feature in the set's folder and an active gear component + Gears open it too. |
+
+Also: each picked sketch piece is drawn in its gear's colour and labelled in the view ("B · shaft line"), the active gear's side-A arrow, card hover lights its geometry; box-selecting several circles makes one gear each (w6).

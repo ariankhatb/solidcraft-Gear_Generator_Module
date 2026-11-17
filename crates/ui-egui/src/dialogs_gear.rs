@@ -290,8 +290,16 @@ fn selected_set(app: &SolveApp) -> Option<solidcraft_engine::schema::gear::GearS
     if let Some(set) = solidcraft_engine::gear_selected_set(&app.session) {
         return Some(set);
     }
-    // A set's timeline folder or feature picked in the timeline (not a model selection).
     let sets = solidcraft_engine::gear_sets(&app.session);
+    // A gear's component active (a double-click on it used to activate it) and nothing else
+    // picked: that gear's set.
+    if app.session.active_component != 0 && app.session.selection.is_empty() && app.tree.picked_timeline_groups.is_empty() {
+        let st = crate::open_meshing::session_world(&app.session);
+        if let Some(set) = sets.iter().find(|s| s.bodies.iter().any(|b| st.body(b).is_some_and(|x| x.component == app.session.active_component))) {
+            return Some(set.clone());
+        }
+    }
+    // A set's timeline folder or feature picked in the timeline (not a model selection).
     app.tree.picked_timeline_groups.iter().find_map(|id| sets.iter().find(|set| owns(set, *id)).cloned())
 }
 
@@ -303,7 +311,12 @@ pub fn is_set(app: &SolveApp, group: u64) -> bool {
 /// The gear set a feature belongs to: the set's own folder or Gears feature, or a feature the set
 /// made (a gear's body, inside its folder).
 pub fn set_of_feature(app: &SolveApp, id: u64) -> Option<u64> {
-    solidcraft_engine::gear_sets(&app.session).into_iter().find(|set| owns(set, id) || set.features.contains(&id)).map(|set| set.group)
+    let sets = solidcraft_engine::gear_sets(&app.session);
+    // A feature in a set's timeline folder (the assembly's body transfers, joints' features).
+    let folder = |set: &solidcraft_engine::schema::gear::GearSet| {
+        app.session.doc.timeline_groups.iter().any(|g| (g.id == set.group || Some(g.id) == set.feature) && g.features.contains(&id))
+    };
+    sets.into_iter().find(|set| owns(set, id) || set.features.contains(&id) || folder(set)).map(|set| set.group)
 }
 
 /// A double-click on a body in the view: a gear of a set opens the Gears dialog on that set (in
@@ -333,7 +346,9 @@ pub fn open_set(app: &mut SolveApp, group: u64) -> Result<(), String> {
         .iter()
         .find(|set| owns(set, group) || set.features.contains(&group))
         .ok_or_else(|| "That is not a gear set".to_string())?;
-    let g = for_set(set);
+    let mut g = for_set(set);
+    // A gear whose pick is gone opens active, so the status line asks for its replacement.
+    g.active = g.items.iter().position(|it| !it.missing(app).is_empty());
     let targets = targets_of(set);
     crate::dialogs::cancel(app);
     app.dialog = None;
@@ -1116,16 +1131,34 @@ pub(crate) fn refresh(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput]) {
             }
         }
     }
+    // A message several gears share (one sketch that isn't fully defined): said once, above the
+    // cards, naming the gears.
+    let mut shared: Vec<(String, bool, Vec<usize>)> = Vec::new();
+    for (i, msgs) in per.iter().enumerate() {
+        for m in msgs {
+            match shared.iter_mut().find(|s| s.0 == m.text) {
+                Some(s) => s.2.push(i),
+                None => shared.push((m.text.clone(), m.error, vec![i])),
+            }
+        }
+    }
+    for (text, error, gears) in shared.into_iter().filter(|s| s.2.len() > 1) {
+        for i in &gears {
+            per[*i].retain(|m| m.text != text);
+        }
+        let names: Vec<String> = gears.iter().map(|i| crate::dialogs_gear_graph::item_id(*i)).collect();
+        set_msgs.push(Msg { text: format!("Gears {}: {text}", names.join(", ")), error });
+    }
     k.item_msgs = per;
     k.set_msgs = set_msgs;
     // The preview: the outline from the picked geometry where the engine drew none, each item's
     // picked geometry, each gear's side-A arrow, the links the drawing suggests.
+    // (Always the items' own outline, coloured by item: the engine's outlines are numbered by
+    // body, which a compound shares, so their colours wouldn't match the cards.)
     let (lines, contacts, arrows) = items_preview(app, k);
-    if !k.from_engine.0 {
-        k.shape = lines;
-        if k.contacts.is_empty() || asked.is_err() {
-            k.contacts = contacts;
-        }
+    k.shape = lines;
+    if k.contacts.is_empty() || asked.is_err() {
+        k.contacts = contacts;
     }
     k.arrows = arrows;
     k.picked = picked_geometry(app, k);
@@ -1368,8 +1401,12 @@ pub fn overlay(painter: &egui::Painter, proj: &crate::viewport::Proj, k: &Gear) 
             }
         }
         // Which gear and which of its slots this sketch piece is ("B · shaft line"), by its
-        // highest point on screen (a line: its middle).
-        let at = if pts.len() == 2 { pts[0] + (pts[1] - pts[0]) * 0.5 } else { pts.iter().copied().fold(pts[0], |a, p| if p.y < a.y { p } else { a }) };
+        // highest point on screen (a line: its middle). With many gears, only the active or
+        // hovered one's, so the labels don't pile up.
+        if k.items.len() > 4 && k.active != Some(*item) && lit != Some(*item) {
+            continue;
+        }
+        let at =if pts.len() == 2 { pts[0] + (pts[1] - pts[0]) * 0.5 } else { pts.iter().copied().fold(pts[0], |a, p| if p.y < a.y { p } else { a }) };
         let font = egui::FontId::proportional(11.0);
         let g = painter.layout_no_wrap(label.clone(), font, color);
         let r = egui::Align2::CENTER_BOTTOM.anchor_size(at - egui::vec2(0.0, 4.0), g.size()).expand2(egui::vec2(4.0, 1.0));

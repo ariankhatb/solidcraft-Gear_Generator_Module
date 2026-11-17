@@ -64,7 +64,7 @@ fn needs(kind: ItemKind) -> &'static str {
         ItemKind::Rack => "Needs: the rack's pitch line. Optional: its pinion's circle.",
         ItemKind::Compound => "Needs: a shaft line and two or more circles on it (in parallel sketches).",
         ItemKind::Planetary => "Needs: the sun's and the ring's circles, then one planet's circle.",
-        ItemKind::Bevel => "Needs: two circles on crossing axes, or two axis lines and a circle, or (side view) the apex point and two shaft lines.",
+        ItemKind::Bevel => "Needs: two circles on crossing axes, or two axis lines and a circle, or (side view) its two shaft lines, then the apex point where they meet.",
         ItemKind::Hypoid => "Needs: the ring gear's circle and the pinion's (offset) axis line.",
         ItemKind::Worm => "Needs: the wheel's pitch circle and the worm's axis line.",
         ItemKind::CrossedHelical => "Needs: two circles on skew axes.",
@@ -101,8 +101,17 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
     }
     status(app, ui, k, *input);
     legacy(app, ui, k);
+    let mut edit = None;
     for m in &k.set_msgs {
         message(ui, m);
+        if let Some(sk) = loose_sketch(app, &m.text)
+            && ui_kit::button(ui, "Edit sketch", ui_kit::Button::Normal).backing_on_hover_text("Open the sketch to dimension it; the dialog comes back when you finish it.").clicked()
+        {
+            edit = Some(sk);
+        }
+    }
+    if let Some(sk) = edit {
+        k.action = Some(dg::Action::EditSketch(sk));
     }
     if k.items.is_empty() && k.legacy.is_none() {
         guide(ui);
@@ -208,7 +217,7 @@ fn guide(ui: &mut egui::Ui) {
 /// One message on a card: ⚠ a warning, ⛔ an error, with what to do.
 fn message(ui: &mut egui::Ui, m: &Msg) {
     let t = Tokens::get();
-    let (mark, ink) = if m.error { ("⛔", t.error) } else { ("⚠", t.warning) };
+    let (mark, ink) = if m.error { ("×", t.error) } else { ("⚠", t.warning) };
     ui.add(egui::Label::new(egui::RichText::new(format!("{mark} {}", m.text)).size(t.font_small).color(ink)).wrap());
 }
 
@@ -380,8 +389,10 @@ fn settings(ui: &mut egui::Ui, k: &mut Gear, a: usize) -> bool {
     let title = format!("Gear {} settings", item_id(a));
     let n = k.gear_counts.get(a).copied().unwrap_or(1);
     let kind = k.items[a].kind;
-    let names: Vec<String> = (0..n).map(|g| k.gear_name((a, g))).collect();
+    let names: Vec<String> = (0..n).map(|g| crate::dialogs_gear_items::gear_part(k.items[a].kind, g).map_or_else(|| k.gear_name((a, g)), str::to_string)).collect();
     let replies: Vec<_> = k.graph.replies().iter().filter(|r| r.item == a).cloned().collect();
+    // The module block this gear is in, if any: its module is the one the gears in it share.
+    let blocks = k.graph.blocks().into_iter().enumerate().find(|(_, (_, m))| m.contains(&a)).map(|(b, (_, m))| (b, m.iter().map(|i| item_id(*i)).collect::<Vec<_>>().join(", ")));
     ui_kit::section(ui, ("gear_settings", a), &title, true, |ui| {
         let it = &mut k.items[a];
         // The type's own settings.
@@ -404,7 +415,7 @@ fn settings(ui: &mut egui::Ui, k: &mut Gear, a: usize) -> bool {
             }
             ItemKind::Rack => enter |= hint_row(ui, "Back height", &mut it.back_height, "auto"),
             ItemKind::Planetary => {
-                enter |= hint_row(ui, "Planets", &mut it.planets, "auto: as many as fit, 3 at most");
+                enter |= field(ui, "Planets", &mut it.planets, "auto", "How many planets: Auto fits as many as there is room for, 3 at most.");
                 ui_kit::checkbox(ui, "Carrier", &mut it.carrier);
             }
             _ => {}
@@ -419,14 +430,15 @@ fn settings(ui: &mut egui::Ui, k: &mut Gear, a: usize) -> bool {
         let g = k.gear_tab.min(n.saturating_sub(1));
         let reply = replies.iter().find(|r| r.gear == g);
         let s: &mut GearSettings = &mut it.settings_mut(n)[g];
-        enter |= gear_rows(ui, s, kind, reply);
+        let block = blocks.as_ref().and_then(|(b, names)| Some((k.graph.block_module_mut(*b)?, names.clone())));
+        enter |= gear_rows(ui, s, kind, reply, block);
         enter |= more_rows(ui, s, (a, g));
     });
     enter
 }
 
 /// One gear's main rows: Size by, Module / Teeth (the other greyed as worked out), Face, Helix.
-fn gear_rows(ui: &mut egui::Ui, s: &mut GearSettings, kind: ItemKind, reply: Option<&solidcraft_gear::items::GearReply>) -> bool {
+fn gear_rows(ui: &mut egui::Ui, s: &mut GearSettings, kind: ItemKind, reply: Option<&solidcraft_gear::items::GearReply>, block: Option<(&mut String, String)>) -> bool {
     let mut enter = false;
     let mut size = usize::from(s.by_teeth);
     segments(ui, "Size by", &mut size, &["Module", "Teeth"], TIP_SIZE_BY);
@@ -435,6 +447,10 @@ fn gear_rows(ui: &mut egui::Ui, s: &mut GearSettings, kind: ItemKind, reply: Opt
     if s.by_teeth {
         enter |= field(ui, "Teeth", &mut s.teeth, "from the circle", TIP_TEETH);
         ui_kit::caption(ui, "Teeth", &format!("Module: {}", worked(reply.filter(|r| r.module > 0.0).map(|r| dg::fmt(r.module)))));
+    } else if let Some((module, members)) = block {
+        // In a module block: the block's module is the one its gears share (decision 2).
+        enter |= field(ui, "Module", module, "auto", "This gear is in a Module Block: its gears share this one module, so they can mesh. Change it here or in the graph.");
+        ui_kit::caption(ui, "Module", &format!("Shared by gears {members} · teeth: {}", worked(reply.filter(|r| r.teeth > 0).map(|r| r.teeth.to_string()))));
     } else {
         enter |= field(ui, "Module", &mut s.module, "auto", TIP_MODULE);
         ui_kit::caption(ui, "Module", &format!("Teeth: {}", worked(reply.filter(|r| r.teeth > 0).map(|r| r.teeth.to_string()))));
@@ -506,7 +522,7 @@ fn drivetrain(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear) -> bool {
                 let what = if *kind == "shaft" { "same shaft" } else { "mesh" };
                 ui.label(egui::RichText::new(what).size(t.font_small).color(t.form_dim)).backing_on_hover_text(if *kind == "shaft" { TIP_SHAFT } else { TIP_MESH });
                 if let Some(r) = note.as_ref().and_then(|n| n.ratio).filter(|_| *kind == "mesh") {
-                    let turn = if r < 0.0 { "  opposite direction" } else { "  same direction" };
+                    let turn = if r < 0.0 { " opposite" } else { " same way" };
                     ui.label(egui::RichText::new(format!("{} : 1", dg::fmt_ratio(r.abs()))).size(t.font_label).color(t.form_ink));
                     ui.label(egui::RichText::new(turn).size(t.font_small).color(t.form_dim));
                 }

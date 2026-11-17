@@ -154,14 +154,15 @@ fn slots_are_the_gear_crates() {
     let (mut g, mut inputs) = opened(&mut app);
     g.new_kind = type_of(ItemKind::Bevel);
     new_gear(&mut g, &mut inputs);
-    click(&app, &mut g, &mut inputs, Sel::ExternalSketchPoint { sketch: s, id: "apex".into() });
-    assert_eq!(g.items[0].picks.len(), 1, "{:?}", g.refused);
-    let rows: Vec<&str> = g.items[0].slot_rows(&app, &len).iter().map(|r| r.what).collect();
-    let side: Vec<&str> = gi::slots(ItemKind::Bevel).iter().find(|l| l.iter().any(|s| s.kind == gi::SlotKind::Point)).unwrap().iter().map(|s| s.what).collect();
-    assert_eq!(rows, side);
+    // (The gear crate checks a side view as a whole: the two shaft lines first, then the apex.)
     for id in ["s1", "s2"] {
         click(&app, &mut g, &mut inputs, Sel::SketchCurve { id: id.into(), sketch: Some(s) });
     }
+    click(&app, &mut g, &mut inputs, Sel::ExternalSketchPoint { sketch: s, id: "apex".into() });
+    assert_eq!(g.items[0].picks.len(), 3, "{:?}", g.refused);
+    let rows: Vec<&str> = g.items[0].slot_rows(&app, &len).iter().map(|r| r.what).collect();
+    let side: Vec<&str> = gi::slots(ItemKind::Bevel).iter().find(|l| l.iter().any(|s| s.kind == gi::SlotKind::Point)).unwrap().iter().map(|s| s.what).collect();
+    assert_eq!(rows, side);
     assert!(g.items[0].complete(&app), "{:?} {:?}", g.items[0].slot_rows(&app, &len), g.refused);
     assert_eq!(g.items[0].optional_slot(&app).as_deref(), Some("contact line"));
 }
@@ -171,7 +172,7 @@ fn slots_are_the_gear_crates() {
 #[test]
 fn engine_messages_go_on_their_cards() {
     assert_eq!(about_item("Item B: the pinion doesn't touch the ring"), Some((1, "the pinion doesn't touch the ring".to_string())));
-    assert_eq!(about_item("Gear C · Compound still needs a pitch circle: click one"), Some((2, "click one".to_string())));
+    assert_eq!(about_item("Gear C · Compound still needs a pitch circle: click one"), Some((2, "Gear C · Compound still needs a pitch circle: click one".to_string())));
     assert_eq!(about_item("centre distance 31.2, needs 30.0"), None);
     assert_eq!(worded("item A gear 1 and Item B"), "gear A gear 1 and Gear B");
     // A gear's own name for its parts: sun, ring, planet; a compound's numbered.
@@ -746,4 +747,49 @@ fn double_clicks_in_the_timeline_open_an_items_set_and_it_stays_open() {
     h.app.edit_feature(feature);
     h.frames(5);
     assert_eq!(state(&h), Some((Some(set.group), 2)), "edit_feature, frames later");
+}
+
+/// The entry points the real app showed opening the wrong thing: a double-click on a gear in the
+/// view (in an assembly set it activated the gear's component instead of opening the set), a
+/// feature of the set's folder (a body transfer), and Gears pressed while a gear's component is
+/// active. Each opens THIS set with its gears.
+#[test]
+fn a_gear_double_clicked_or_its_component_active_opens_its_set() {
+    use crate::dialogs_gear_graph::{GearItem, Suggested};
+    let mut app = app();
+    let (s1, s2, s3) = items_drawing(&mut app);
+    let at = |sk: u64, id: &str| Sel::SketchCurve { id: id.into(), sketch: Some(sk) };
+    app.start("gear.create");
+    let mut d = app.dialog.clone().unwrap();
+    let Kind::Gear(g) = &mut d.kind else { panic!() };
+    g.items = vec![GearItem { picks: vec![at(s1, "c1")], ..GearItem::new(ItemKind::Spur) }, GearItem { picks: vec![at(s1, "c2"), at(s3, "s"), at(s2, "c3")], ..GearItem::new(ItemKind::Compound) }];
+    g.graph.accept(&Suggested { a: 0, a_gear: 0, b: 1, b_gear: 0, kind: "mesh".into() });
+    g.assembly = true;
+    let c = apply_commands(&app, &d).unwrap();
+    crate::dialogs::cancel(&mut app);
+    run_all(&mut app, c);
+    let set = solidcraft_engine::gear_sets(&app.session).into_iter().next().expect("a set");
+    let check = |app: &SolveApp, how: &str| {
+        let g = gear(app);
+        assert_eq!((g.group, g.items.len()), (Some(set.group), 2), "{how}");
+    };
+    // A double-click on a gear body.
+    let body = set.bodies.first().cloned().expect("a body");
+    assert!(double_click_body(&mut app, &body));
+    check(&app, "double-click on a gear");
+    crate::dialogs::cancel(&mut app);
+    assert!(!double_click_body(&mut app, "not a gear"), "another body is left to the view");
+    // Every feature in the set's folder belongs to it.
+    let folder: Vec<u64> = app.session.doc.timeline_groups.iter().filter(|g| g.id == set.group || Some(g.id) == set.feature).flat_map(|g| g.features.clone()).collect();
+    for f in folder {
+        assert_eq!(set_of_feature(&app, f), Some(set.group), "feature {f} of the folder");
+    }
+    // A gear's component active, nothing selected, then Gears.
+    let component = crate::open_meshing::session_world(&app.session).body(&body).map(|b| b.component).filter(|c| *c != 0);
+    if let Some(component) = component {
+        app.session.active_component = component;
+        app.session.selection.clear();
+        app.start("gear.create");
+        check(&app, "a gear's component active + Gears");
+    }
 }

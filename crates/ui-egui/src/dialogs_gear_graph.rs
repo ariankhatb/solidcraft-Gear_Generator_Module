@@ -251,6 +251,17 @@ impl Graph {
         self.blocks().len() - 1
     }
 
+    /// Block `block`'s module as typed (empty: Auto), to edit in place.
+    pub fn block_module_mut(&mut self, block: usize) -> Option<&mut String> {
+        self.snarl
+            .nodes_mut()
+            .filter_map(|n| match n {
+                GNode::Block { module, .. } => Some(module),
+                GNode::Item(_) => None,
+            })
+            .nth(block)
+    }
+
     /// Item `item` put in block `block` (an index among the blocks), and out of any other.
     pub fn put_in_block(&mut self, block: usize, item: usize) {
         let mut k = 0;

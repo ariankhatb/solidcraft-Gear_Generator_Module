@@ -1,88 +1,108 @@
 > [!NOTE]
-> **This is a fork of [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft) with a built-in Gear Generator.**
-> The upstream SolidCraft README follows below the line. Hands-on guide: [GEAR_GENERATOR.md](GEAR_GENERATOR.md).
+> **This is a fork of [tangency-labs/solidcraft](https://github.com/tangency-labs/solidcraft) with a built-in gear drivetrain generator.**
+> User guide: [docs/gears/](docs/gears/README.md) (start with the [quick start](docs/gears/quick-start.md)).
+> The upstream SolidCraft README follows below the line.
 > Work in progress, shared for testing: issues and pull requests are welcome here.
 
-# Gear Generator for SolidCraft
+# Gears for SolidCraft
 
-A gear generator that is part of the app, not a plugin. You draw the set in an ordinary sketch, and
-**Model › Create › Gears** opens a native command dialog that turns it into solid gears in the
-parametric timeline, linked to the sketch. It covers parallel, intersecting and crossed shafts, from a spur gear to a
-hypoid final drive, a multi-start worm or a complete differential with its case and drive gear,
-and it can make any set an assembly whose gears turn each other.
+Draw your drivetrain in ordinary sketches, then click **Model › Create › Gears**. Each circle you
+pick becomes a gear at the size you drew it. The whole drivetrain is built as **one editable Gears
+feature**: the gear bodies, a revolute joint per shaft and a gear link per mesh, so turning one gear
+turns the others. Change the sketch and the gears follow.
 
-<p align="center"><img src="crates/look/icons/design/svg/model/gear_generator.svg" width="72" height="72" alt="Gear Generator"/></p>
+<p align="center"><img src="docs/gears/img/hero-drivetrain.png" width="760" alt="A mixed drivetrain built by one Gears feature"/></p>
 
-<table align="center">
-<tr><td align="center"><img src="crates/look/icons/design/svg/model/gear_spur.svg" width="44" height="44" alt="Spur"/><br/><sub>Spur</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_helical.svg" width="44" height="44" alt="Helical"/><br/><sub>Helical</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_herringbone.svg" width="44" height="44" alt="Herringbone"/><br/><sub>Herringbone</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_internal.svg" width="44" height="44" alt="Internal"/><br/><sub>Internal</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_rack.svg" width="44" height="44" alt="Rack"/><br/><sub>Rack</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_pair.svg" width="44" height="44" alt="Pair"/><br/><sub>Pair</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_planetary.svg" width="44" height="44" alt="Planetary"/><br/><sub>Planetary</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_bevel.svg" width="44" height="44" alt="Bevel"/><br/><sub>Bevel</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_spiral_bevel.svg" width="44" height="44" alt="Spiral bevel"/><br/><sub>Spiral bevel</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_face.svg" width="44" height="44" alt="Face"/><br/><sub>Face</sub></td></tr>
-<tr><td align="center"><img src="crates/look/icons/design/svg/model/gear_bevel_planetary.svg" width="44" height="44" alt="Bevel planetary"/><br/><sub>Bevel planetary</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_hypoid.svg" width="44" height="44" alt="Hypoid"/><br/><sub>Hypoid</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_crossed_helical.svg" width="44" height="44" alt="Crossed helical"/><br/><sub>Crossed helical</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_worm.svg" width="44" height="44" alt="Worm"/><br/><sub>Worm</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_cycloidal.svg" width="44" height="44" alt="Cycloidal"/><br/><sub>Cycloidal</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_cycloidal_drive.svg" width="44" height="44" alt="Cycloidal drive"/><br/><sub>Cycloidal drive</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_sprocket.svg" width="44" height="44" alt="Sprocket"/><br/><sub>Sprocket</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_pulley.svg" width="44" height="44" alt="Pulley"/><br/><sub>Pulley</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_spline.svg" width="44" height="44" alt="Spline"/><br/><sub>Spline</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_elliptical.svg" width="44" height="44" alt="Elliptical"/><br/><sub>Elliptical</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_differential.svg" width="44" height="44" alt="Differential"/><br/><sub>Differential</sub></td></tr>
-</table>
-
-### What's new in test build 2 (2026-11-15, later)
-
-- **Smoother window:** the 3D preview draws on the GPU instead of the CPU (before: 15–57 ms a frame
-  while turning big sets, more on high-DPI screens).
-- **Differential, simpler case:** the case is plain stock that keeps its material: only the gears'
-  clearance, the axle bore and the pin bores are cut. No windows, bolt or tapped holes by default
-  (ring bolts are an option). The case no longer overlaps the side gears.
-- **Fixes:** the face gear's false red *Interferes* is gone; setting labels show in full; the turn
-  buttons read "X +90°" etc.; the window stays put when you switch types and fits narrow screens;
-  bodies and components the generator named follow the new tooth counts after an edit (names you
-  gave stay); keep-out bodies cover hubs and shafts on trimmed bevels and hypoids.
-- **Bevel ends:** ordinary bevels (pitch cones up to 70°) end on planes again, which the kernel's own
-  check accepts; flatter members keep the cone trim (see known issues).
-
-### What's new in test build 1 (2026-11-15)
-
-- **Assembly:** tick *Assembly (components + joints)* and the set becomes components on revolute
-  joints (a slider for a rack), tied by gear and rack-and-pinion links, so driving one gear turns
-  the others. Edits keep the components, the joints and any joints you made to them.
-- **Differential designer:** open bevel, torque-biasing bevel (uneven side gears), Torsen Type B and
-  Torsen Type A, with the case, a drive gear (spiral bevel, straight bevel, hypoid or helical,
-  bolted or integral) and a housing keep-out body. In Simple mode its **Design** button sizes one
-  from the axle, ratio and torque.
-- **Bevels at any angle:** teeth end on their back and front cones, so nearly flat cones (100° to
-  150° shaft angles) build correctly. Each gear has its own face width and heel offset, with rows in
-  the window and toe and heel lines to drag in the drawing.
-- **Hypoid rework:** proper ring gear teeth, trimmed at toe and heel, and the pinion's own face
-  width and offset.
-- **Window:** columns stack when the window is narrow, previews fit the window, rows wrap. Reopen a
-  set by double-clicking its History folder, or select one of its bodies or components and click
-  **Gears**.
-- **Fixes:** switching from Face gear to Bevel planetary no longer freezes the window; parametric
-  equation sets keep their mates and clearance body in step with the parameters.
-
-### It runs live while you design
-
-Every set turns in the window's preview as you edit it, drawn from the gear math in milliseconds
-(these are screen captures of that preview, not kernel renders):
+<p align="center"><img src="crates/look/icons/design/svg/model/gear_generator.svg" width="72" height="72" alt="Gears"/></p>
 
 <table align="center">
-<tr><td align="center"><img src="docs/gear-generator/pair.gif" width="260" alt="Gear pair turning in the live preview"/><br/><sub>Gear pair</sub></td><td align="center"><img src="docs/gear-generator/helical-clip.gif" width="260" alt="Helical turning in the live preview"/><br/><sub>Helical</sub></td><td align="center"><img src="docs/gear-generator/herringbone-clip.gif" width="260" alt="Herringbone turning in the live preview"/><br/><sub>Herringbone</sub></td></tr>
-<tr><td align="center"><img src="docs/gear-generator/internal.gif" width="260" alt="Internal ring turning in the live preview"/><br/><sub>Internal ring</sub></td><td align="center"><img src="docs/gear-generator/planetary.gif" width="260" alt="Planetary turning in the live preview"/><br/><sub>Planetary</sub></td><td align="center"><img src="docs/gear-generator/bevel.gif" width="260" alt="Straight bevel turning in the live preview"/><br/><sub>Straight bevel</sub></td></tr>
-<tr><td align="center"><img src="docs/gear-generator/spiral_bevel.gif" width="260" alt="Spiral bevel turning in the live preview"/><br/><sub>Spiral bevel</sub></td><td align="center"><img src="docs/gear-generator/hypoid.gif" width="260" alt="Hypoid turning in the live preview"/><br/><sub>Hypoid</sub></td><td align="center"><img src="docs/gear-generator/crossed_helical.gif" width="260" alt="Crossed helical turning in the live preview"/><br/><sub>Crossed helical</sub></td></tr>
-<tr><td align="center"><img src="docs/gear-generator/worm.gif" width="260" alt="Worm and wheel turning in the live preview"/><br/><sub>Worm and wheel</sub></td><td align="center"><img src="docs/gear-generator/cycloidal-clip.gif" width="260" alt="Cycloidal turning in the live preview"/><br/><sub>Cycloidal</sub></td></tr>
+<tr><td align="center"><img src="crates/look/icons/design/svg/model/gear_spur.svg" width="44" height="44" alt="Spur"/><br/><sub>Spur</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_helical.svg" width="44" height="44" alt="Helical"/><br/><sub>Helical</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_herringbone.svg" width="44" height="44" alt="Herringbone"/><br/><sub>Herringbone</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_internal.svg" width="44" height="44" alt="Ring gear"/><br/><sub>Ring gear</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_rack.svg" width="44" height="44" alt="Rack"/><br/><sub>Rack</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_pair.svg" width="44" height="44" alt="Compound"/><br/><sub>Compound</sub></td></tr>
+<tr><td align="center"><img src="crates/look/icons/design/svg/model/gear_planetary.svg" width="44" height="44" alt="Planetary"/><br/><sub>Planetary</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_bevel.svg" width="44" height="44" alt="Bevel pair"/><br/><sub>Bevel pair</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_hypoid.svg" width="44" height="44" alt="Hypoid pair"/><br/><sub>Hypoid pair</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_worm.svg" width="44" height="44" alt="Worm and wheel"/><br/><sub>Worm and wheel</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/gear_crossed_helical.svg" width="44" height="44" alt="Crossed helical"/><br/><sub>Crossed helical</sub></td><td align="center"><img src="crates/look/icons/design/svg/model/axis_through_cylinder.svg" width="44" height="44" alt="Shaft"/><br/><sub>Shaft</sub></td></tr>
 </table>
 
-### Designed from one small drawing
+## Gear types
 
-Simple mode: circles are pitch circles, lines are shafts, a dot is the origin (a bevel's apex).
-Each screenshot shows the type picker, the editable drawing, the turning 3D preview and the
-numbers the solver chose:
+Every type below is made from the Gears dialog. How to sketch each one is in the
+[gear types guide](docs/gears/gear-types.md); a larger gallery is in [docs/gears/GALLERY.md](docs/gears/GALLERY.md).
 
 <table align="center">
-<tr><td align="center"><img src="docs/gear-generator/window_pair.png" width="380" alt="Gear pair: two pitch circles"/><br/><sub>Gear pair: two pitch circles</sub></td><td align="center"><img src="docs/gear-generator/window_spiral_bevel.png" width="380" alt="Spiral bevel: side view, apex dot and 90° meeting angle"/><br/><sub>Spiral bevel: side view, apex dot and 90° meeting angle</sub></td></tr>
-<tr><td align="center"><img src="docs/gear-generator/window_hypoid.png" width="380" alt="Hypoid: ring circle, pinion shaft offset"/><br/><sub>Hypoid: ring circle, pinion shaft offset</sub></td><td align="center"><img src="docs/gear-generator/window_worm.png" width="380" alt="Worm: wheel circle and tangent worm line"/><br/><sub>Worm: wheel circle and tangent worm line</sub></td></tr>
+<tr><td align="center" width="25%"><img src="docs/gears/img/types/spur.png" width="200" alt="Spur"/><br/><b>Spur</b><br/><sub>a circle; touching circles mesh</sub></td><td align="center" width="25%"><img src="docs/gears/img/types/helical.png" width="200" alt="Helical"/><br/><b>Helical</b><br/><sub>a circle; helix angle per gear</sub></td><td align="center" width="25%"><img src="docs/gears/img/types/herringbone.png" width="200" alt="Herringbone"/><br/><b>Herringbone</b><br/><sub>a circle; V teeth</sub></td><td align="center" width="25%"><img src="docs/gears/img/types/internal.png" width="200" alt="Ring gear"/><br/><b>Ring gear</b><br/><sub>ring circle + pinion circle touching inside</sub></td></tr>
+<tr><td align="center" width="25%"><img src="docs/gears/img/types/rack.png" width="200" alt="Rack"/><br/><b>Rack</b><br/><sub>a pitch line + the pinion circle tangent to it</sub></td><td align="center" width="25%"><img src="docs/gears/img/types/compound.png" width="200" alt="Compound"/><br/><b>Compound</b><br/><sub>a shaft line + circles in parallel sketches</sub></td><td align="center" width="25%"><img src="docs/gears/img/types/planetary.png" width="200" alt="Planetary"/><br/><b>Planetary</b><br/><sub>sun and ring concentric + one planet</sub></td><td align="center" width="25%"><img src="docs/gears/img/types/bevel-straight.png" width="200" alt="Bevel, straight"/><br/><b>Bevel, straight</b><br/><sub>side view: two shaft lines meeting at the apex</sub></td></tr>
+<tr><td align="center" width="25%"><img src="docs/gears/img/types/bevel-spiral.png" width="200" alt="Bevel, spiral"/><br/><b>Bevel, spiral</b><br/><sub>the same side view; Style: Spiral</sub></td><td align="center" width="25%"><img src="docs/gears/img/types/bevel-chevron.png" width="200" alt="Bevel, chevron"/><br/><b>Bevel, chevron</b><br/><sub>the same side view; Style: Chevron</sub></td><td align="center" width="25%"><img src="docs/gears/img/types/hypoid.png" width="200" alt="Hypoid"/><br/><b>Hypoid</b><br/><sub>ring circle + the pinion axis line, offset</sub></td><td align="center" width="25%"><img src="docs/gears/img/types/worm.png" width="200" alt="Worm and wheel"/><br/><b>Worm and wheel</b><br/><sub>wheel circle + the worm axis line in its plane</sub></td></tr>
+<tr><td align="center" width="25%"><img src="docs/gears/img/types/crossed-helical.png" width="200" alt="Crossed helical"/><br/><b>Crossed helical</b><br/><sub>two circles on skew axes, touching</sub></td></tr>
 </table>
 
-| Shafts | Types |
+<details>
+<summary>Live previews from the earlier Gear Generator window (replaced in this branch)</summary>
+
+These clips were captured from the earlier window's own 3D preview, which the Gears dialog doesn't have. The cycloidal gear is made only by the <code>gear.create</code> command in this build.
+
+<table align="center">
+<tr><td align="center"><img src="docs/gear-generator/pair.gif" width="220" alt="Gear pair"/><br/><sub>Gear pair</sub></td><td align="center"><img src="docs/gear-generator/helical-clip.gif" width="220" alt="Helical"/><br/><sub>Helical</sub></td><td align="center"><img src="docs/gear-generator/herringbone-clip.gif" width="220" alt="Herringbone"/><br/><sub>Herringbone</sub></td><td align="center"><img src="docs/gear-generator/internal.gif" width="220" alt="Internal ring"/><br/><sub>Internal ring</sub></td></tr>
+<tr><td align="center"><img src="docs/gear-generator/planetary.gif" width="220" alt="Planetary"/><br/><sub>Planetary</sub></td><td align="center"><img src="docs/gear-generator/bevel.gif" width="220" alt="Straight bevel"/><br/><sub>Straight bevel</sub></td><td align="center"><img src="docs/gear-generator/spiral_bevel.gif" width="220" alt="Spiral bevel"/><br/><sub>Spiral bevel</sub></td><td align="center"><img src="docs/gear-generator/hypoid.gif" width="220" alt="Hypoid"/><br/><sub>Hypoid</sub></td></tr>
+<tr><td align="center"><img src="docs/gear-generator/crossed_helical.gif" width="220" alt="Crossed helical"/><br/><sub>Crossed helical</sub></td><td align="center"><img src="docs/gear-generator/worm.gif" width="220" alt="Worm and wheel"/><br/><sub>Worm and wheel</sub></td><td align="center"><img src="docs/gear-generator/cycloidal-clip.gif" width="220" alt="Cycloidal (command only)"/><br/><sub>Cycloidal (command only)</sub></td></tr>
+</table>
+
+</details>
+
+### What's new: the drivetrain feature
+
+- **One Gears feature for a whole drivetrain.** Any number of gears and stages in one feature, one
+  timeline row, one undo step. Edit it to change any gear; OK updates it in place.
+- **Sketch-driven.** You draw with the normal sketch tools in as many sketches as you need. The
+  drawn pitch diameter is kept; each gear takes the tooth count nearest it for the module, and the
+  drawn centre distances are held by profile shift.
+- **References are kept, never guessed.** Each gear remembers the exact sketch entities it was
+  made from. If one is deleted, the feature names it ("curve b of sketch 'Pitch circles'") and
+  waits for you to pick its replacement.
+- **Many gears per run.** Box-select several circles to get one gear each; touching circles are
+  suggested as meshes and accepted with one button.
+- **Mixed stages.** Spur, helical, herringbone, ring gear, rack, compound, planetary, bevel
+  (straight, spiral, chevron), hypoid, worm and crossed helical stages in one drivetrain, chained
+  through shared shafts.
+- **Motion.** Each rigid part becomes a component on a revolute joint (a slider for a rack), with
+  a gear link per mesh at its ratio and direction. Pick a driver and an input rpm and torque to see
+  every gear's speed and torque; read the ratio and path between any two gears.
+- **Housing cutout.** Points on the shaft lines become bearing seats in one "Housing cutout" body
+  that also holds the gears' swept space: cut it from a housing block.
+- **Coming next:** a set-wide tooth chamfer setting.
+
+## How you design now
+
+1. **Draw the sketch.** A circle is a pitch circle, a line is a shaft, a point on a shaft line is a
+   bearing, and smaller circles on a gear's centre are its bore and hub. A bevel pair is one side
+   view: two shaft lines meeting at the apex (and optionally a contact line between them). Fully
+   define the sketch so the gears can't drift.
+2. **Click Gears** (Model › Create). Pick a type, then click the sketch pieces the status line asks
+   for, or box-select several circles. Each gear gets a card with a checklist and its own settings:
+   module or teeth, face sides, helix.
+3. **Link them** under Drivetrain: accept the suggested meshes, add links by hand, pick the driver.
+4. **OK.** The gears, joints and links are built as one feature.
+
+<table align="center">
+<tr><td align="center"><img src="docs/gears/img/w1-01-empty.png" width="400" alt="The Gears dialog before any pick: type, New gear, status line and a three-step guide"/><br/><sub>The dialog: type, New gear, the status line and a guide</sub></td><td align="center"><img src="docs/gears/img/w1-05-linked.png" width="400" alt="Two gears picked and linked: the mesh row shows 0.67 : 1 opposite"/><br/><sub>Two circles picked, the mesh accepted: 0.67 : 1</sub></td></tr>
+<tr><td align="center"><img src="docs/gears/img/w2-03-compound-complete.png" width="400" alt="A compound gear: a shaft line and two circles in parallel sketches"/><br/><sub>A compound: a shaft line and a circle in each of two layers</sub></td><td align="center"><img src="docs/gears/img/spur-04-edit.png" width="400" alt="Editing a built pair: both gear cards come back with z20 m2 and z30 m2"/><br/><sub>Edit reopens the set with every gear's card</sub></td></tr>
+<tr><td align="center"><img src="docs/gears/img/w7-04-missing-pick-named.png" width="400" alt="A deleted pitch circle named on its card"/><br/><sub>A deleted reference is named, not guessed</sub></td><td align="center"><img src="docs/gears/img/w1-06-built.png" width="400" alt="The built spur pair with its joints and gear link in the browser"/><br/><sub>Built: bodies, joints and a gear link in one feature</sub></td></tr>
+</table>
+
+Ten example designs, from a spur pair to a mixed drivetrain, are in
+[examples/gears/](examples/gears/README.md).
+
+### What the Gears dialog makes
+
+| Shafts | Types in the dialog |
 |---|---|
-| Parallel | spur, helical, herringbone, internal ring, rack, pair, planetary |
-| Intersecting | straight bevel and spiral bevel (any shaft angle), face (crown) gear (90°), bevel planetary (differential, single, or with an internal bevel ring) |
-| Crossed | hypoid, crossed helical, worm and throated wheel (1 to 12 starts) |
-| Chain and belt | ISO 606 / ANSI roller-chain sprockets, timing pulleys (GT2, HTD, T2.5/T5/T10, MXL, XL) and the chain or belt between them |
-| Special | cycloidal clock gears, cycloidal drive, DIN 5480 / ANSI B92.1 splines, elliptical pairs |
-| Differentials | open bevel, torque-biasing bevel, Torsen Type B (helical planetary), Torsen Type A (worm), each with its case, drive gear and keep-out body |
+| Parallel | spur, helical, herringbone (each per gear: helix angle, hand, V teeth), ring gear with its pinion, rack and pinion, compound (two or more gears on one shaft, one body), planetary (sun, ring, planets and a generated carrier) |
+| Intersecting | bevel pair: straight, spiral or chevron, any shaft angle |
+| Crossed | hypoid pair, worm and wheel, crossed helical |
+| — | shaft (a shaft line with bearing points, no teeth) |
+
+**Not in the dialog.** The gear engine also makes chain sprockets, timing pulleys, cycloidal
+gears, a cycloidal drive, involute splines, elliptical pairs, face gears, bevel planetary sets and
+complete differentials. These were reachable from the earlier Gear Generator window, which this
+branch replaced. In this build they can only be made with the `gear.create` command (CLI, scripts,
+MCP), not from the Gears dialog. Sets made with the earlier window open as they are and keep
+following their sketch.
 
 ## How it works
 
@@ -106,133 +126,91 @@ numbers the solver chose:
   message gives the largest offset that still works.
 - **Worm wheels** are throated and hobbed: the hob is the worm's own thread, made taller by the root
   clearance. Each section through the face is what the thread leaves as it turns.
-- **Other teeth:** sprockets follow ISO 606 (its A series is ANSI B29.1), and splines follow DIN 5480
-  or ANSI B92.1. Timing-pulley grooves are approximations from published belt dimensions (GT2 and
-  HTD are proprietary profiles). Cycloidal gears have epicycloid addenda and hypocycloid dedenda,
-  and the cycloidal drive's disc is an offset epitrochoid. A face gear is cut by its spur pinion.
+- **Other teeth** (command only, see above): sprockets follow ISO 606 (its A series is ANSI B29.1),
+  and splines follow DIN 5480 or ANSI B92.1. Timing-pulley grooves are approximations from
+  published belt dimensions (GT2 and HTD are proprietary profiles). Cycloidal gears have epicycloid
+  addenda and hypocycloid dedenda, and the cycloidal drive's disc is an offset epitrochoid. A face
+  gear is cut by its spur pinion.
 - **Strength:** ISO 6336 Method B (simplified) gives the tooth-root and flank safety factors SF and
   SH of cylindrical gears for a given torque or power. Bevels get a simplified rating on their
   virtual cylindrical gears (in the style of ISO 10300), and worm sets an approximate one.
 
-### Plan, then build
+### From sketch to drivetrain
 
-The gear math is a dependency-free crate (`crates/gear`). `plan(spec)` turns a `Spec` (type, teeth,
-module, angles, bores, shafts…) into a `Plan`:
+The gear math is a dependency-free crate (`crates/gear`).
 
-- **bodies**, each a frame plus a list of solid steps:
-  - `Prism`: an extrude, or a sweep with a twist for helical teeth (a herringbone is one twisted
-    half and its mirror);
-  - `Taper`: bevel teeth narrowing towards the cone apex, built as a loft (two sections for straight
-    teeth, more for spiral teeth, whose turn follows the logarithm of the scale), run past both
-    ends and then intersected with the blank;
-  - `RingTaper`: the internal bevel ring of a bevel planetary set, teeth and rim in one loft;
-  - `Loft`: through generated sections (worm wheels, hypoid members, face gears, helical racks);
-  - `Revolve` (the bevel and hypoid blanks bounded by the back and front cones, edge chamfers, a
-    sprocket's side chamfer, a differential's case, the clearance body) and `Coil` (a worm's
-    thread);
-  - `Placed`: a step in a frame of its own, such as a radial set-screw hole or a part of the
-    clearance body;
-  - each step is `New`, `Join`, `Cut` or `Intersect`;
-- facts, warnings, a refusal when the set can't be made, and the 2D and 3D previews.
-
-The engine (`crates/engine/src/cmd/gear.rs`) maps each step 1:1 onto ordinary SolidCraft sketches and
-features. The whole set is one undo step and one timeline folder. A set is built with the kernel's
-full face-by-face check off, because for gear teeth that check costs about as much as building
-them. The check runs again the next time the features are computed.
+1. **Items.** The dialog sends one item per gear card: its type, the sketch entities it picked (by
+   sketch and id), and each gear's settings; plus the links, module blocks and driver
+   (`gear.create` with `items`). The engine (`crates/engine/src/cmd/gear_items.rs`) reads each
+   entity where it is now and refuses one that is gone, naming it.
+2. **Stages.** `items::stages` splits the drivetrain into stages: trains of gears on parallel
+   shafts, planetary sets, racks, and bevel, hypoid, worm and crossed-helical pairs, joined by
+   shared shafts. `plan::system::plan_items` sizes each stage (`sketch_rules`: the drawn diameters
+   kept, one module per meshing group, profile shift for the drawn centre distances), plans it with
+   its own planner, places it where the drawing puts it, checks that stages don't sweep into each
+   other, and merges everything into one `Plan` with one assembly.
+3. **Plan.** `plan(spec)` gives each body as a frame plus a list of solid steps (`Prism` for spur
+   and helical teeth, `Taper` for bevel teeth, `Loft` for worm wheels and hypoids, `Revolve`,
+   `Coil` for a worm's thread, `Placed`; each `New`, `Join`, `Cut` or `Intersect`), with facts,
+   warnings, or a refusal that says what to change.
+4. **Build.** `crates/engine/src/cmd/gear_feature.rs` stores the request as one native **Gears
+   feature** (`FeatureKind::Gears`) holding the sketches it reads. The document evaluates it like any
+   other feature (`crates/doc/src/eval_gears.rs`): it reads the sketches again, plans the set and
+   builds every body, so a sketch edit recomputes it in place. Bodies are named by item and gear
+   (`Gear A·1`, `Gear B·1+2`), so they keep their names, components and joints through edits.
+   `gear_assembly.rs` makes the components, revolute joints and gear links.
 
 Lofts are checked before the kernel sees them. The kernel restarts each section at the segment that
 best lines up with the previous section, so a steep spiral or worm section turned too far would be
 matched a few segments off, and the walls would cut across the teeth. The planner repeats that
 alignment rule and adds sections until none slips. It also stays inside the kernel's limit of 16,384
-curves per loft (all sections together, counting every spline span). Big multi-start worm wheels
-draw each tooth side with fewer points when they need to.
-
-### Fast to design with
-
-- **Simple mode** designs by what you need. You draw circles (pitch circles), lines (shafts) and a dot
-  (the origin, or a bevel's apex) in one small sketch. The solver picks standard ISO 54 modules,
-  whole tooth counts and profile shift to hit those sizes and ratio, and lists what it chose.
-  (Cycloidal drives, splines and elliptical pairs are not drawn this way: they are in Advanced
-  mode only.)
-- A bevel is drawn as a side view: a shaft line, the apex dot, and a second line at the meeting
-  angle. An 80° bevel is just a line at 80°.
-- The 3D preview is meshed straight from the plan in milliseconds (pitch surfaces, then teeth within
-  a triangle budget), so nothing waits for the kernel while you edit.
-- **Advanced mode** shows every option: tooth form, shift, helix and spiral, backlash, bores, hubs,
-  integral and dual shafts, chamfers, lightening holes, bearing pockets, tip relief and crowning,
-  and a **3D-print** section (print preset, tip rounding, XY compensation, elephant-foot relief).
-- An option that is set but that the gear type can't use gets a warning (one per group of
-  options) instead of being dropped silently.
+curves per loft (all sections together, counting every spline span).
 
 ### Checked, not assumed
 
-- **2D mesh checker:** parallel-axis sets (and a face gear's pinion against the face gear's teeth
-  unrolled at mid length) are turned through a tooth pitch. The checker flags overlap deeper than
-  0.003 × module, or flanks further apart than the backlash plus 0.006 × module (for a cycloidal
-  drive, × the pin radius). The window shows the verdict once the numbers settle.
-- **3D mesh checker:** straight bevel, spiral bevel, hypoid, crossed helical, worm, bevel planetary
-  and differential sets are sampled from the planned solids over the motion and checked against the same limits.
+- **Every pick is checked** as you click it: a circle tilted to its shaft, a pinion not touching
+  its ring, a worm line inside the wheel. The refusal says what is wrong and what to do.
+- **2D mesh checker:** parallel-axis sets are turned through a tooth pitch. The checker flags
+  overlap deeper than 0.003 × module, or flanks further apart than the backlash plus 0.006 × module.
+- **3D mesh checker:** straight bevel, spiral bevel, hypoid, crossed helical and worm sets are
+  sampled from the planned solids over the motion and checked against the same limits.
 - **Kernel check:** sets are built through the real kernel and checked with `inspect.interference`
-  for no overlap or only flank contact (a straight bevel at 100°, for example, shows none). On
-  spiral bevel, hypoid and some differential pairs the kernel's own check fails; the gear crate's
-  mesh checker covers those (see the known issues).
-
-### Editing and parameters
-
-- **`gear.update`** rebuilds a set in place. Bodies keep their names, and sketches and features keep
-  their ids where the steps stay the same, so features built on the gears keep working.
-- **Equation teeth:** for the planar involute types (spur, helical, herringbone, internal, pair,
-  planetary, rack), `tooth_curves: equations` draws one tooth as formula curves (involute flank,
-  trochoid root fillet, tip and root arcs) and patterns it round. Add `parametric: true` and the
-  teeth are driven by design parameters (module, teeth, pressure angle, shift, backlash, face
-  width). Change a tooth count and the teeth regenerate. The mates move to the new centre
-  distance and turn to mesh again, and the clearance body follows.
-- **Assembly:** with `assembly: true` every gear becomes a component of its own on a revolute joint
-  (a slider for a rack; held members such as a cycloidal drive's pin ring grounded), with a gear or
-  rack-and-pinion link per mesh at the set's ratio and direction, so `joint.drive` on one gear turns
-  the others. With a clearance body it goes in as a grounded, see-through keep-out component. All
-  of it is in the set's undo step and History folder, and `gear.update` keeps the same components
-  and joints (moved onto the new shafts, links given the new ratios) and the joints you made to
-  them.
-- **Clearance body:** one closed keep-out solid for the whole set (turning envelopes, shafts, bearing
-  seats from a bearing library), for cutting a housing with a single Boolean.
-- **Sketch-driven sets:** draw the set in a sketch and `gear.create {"sketch": id}` recognises the
-  type, sizes it and places it on the drawn shafts. A sketch line or point can also be a shaft
-  (`axis1`, `axis2`) for `gear.create` and `gear.from_axes`.
+  for no overlap or only flank contact. On spiral bevel, hypoid and some pairs the kernel's own
+  check fails; the gear crate's mesh checker covers those (see the known issues).
 
 ### Scriptable
 
-`gear.create`, `gear.calculate` (facts only), `gear.update`, `gear.inspect` and `gear.from_axes` (how
-two shafts lie and the set solved on them, without building) are normal SolidCraft commands, so they
-run from the CLI, from scripts and through the MCP server:
+`gear.create`, `gear.calculate` (works out the set without building), `gear.update` and `gear.ratio`
+are normal SolidCraft commands, so the same drivetrain can be made from the CLI, from scripts and
+through the MCP server. See [docs/gears/scripting.md](docs/gears/scripting.md); every example in
+[examples/gears/](examples/gears/README.md) has its script in `examples/gears/scripts/`:
 
 ```sh
 cargo build --release -p solidcraft-cli
-echo '[{"command":"gear.create","params":{"type":"pair","assembly":true}}]' > pair.json
-target/release/solidcraft-cli run pair.json --results
-echo '[{"command":"gear.create","params":{"type":"differential",
-         "differential":{"style":"torsen_b","drive":"helical","mount":"bolted"}}}]' > diff.json
-target/release/solidcraft-cli run diff.json --results
+target/release/solidcraft-cli run examples/gears/scripts/01-spur-pair.json --save 01-spur-pair.sc --results
 ```
 
 ### Code map
 
 | Path | |
 |---|---|
-| `crates/gear/src/plan.rs`, `plan/` | `Spec`, `Plan`, every type's planner |
+| `crates/gear/src/items.rs` | gear items: slots, pick checks, suggested links, stages |
+| `crates/gear/src/plan/system.rs` | a whole drivetrain of items planned and merged into one plan |
+| `crates/gear/src/plan.rs`, `plan/` | `Spec`, `Plan`, every type's planner, assemblies (`plan/assembly.rs`) |
 | `involute.rs`, `octoid.rs`, `hypoid.rs`, `worm.rs`, `cycloid.rs` | tooth generation |
-| `simple.rs`, `sketch_rules.rs`, `axes.rs` | design by outputs, the one-sketch rules, placing sets on shafts |
+| `sketch_rules.rs`, `drivetrain.rs`, `axes.rs` | sizing from drawn diameters, reading circles and lines, placing sets on shafts |
 | `mesh2d.rs`, `mesh3d.rs` | the mesh checkers |
-| `diff.rs`, `plan/assembly.rs` | the differential designer; how each set goes together as an assembly |
-| `equations.rs`, `clearance.rs`, `body.rs`, `hub.rs`, `strength.rs` | formula teeth, keep-out body, shafts, chamfers and print tuning, bores and hubs, strength (ISO 6336) |
-| `crates/engine/src/cmd/gear*.rs`, `schema/gear.rs` | the commands, the plan-to-features builder, components and joints (`gear_assembly.rs`) |
-| `crates/ui-egui/src/gear_*.rs` | the window: modes, drawing, 3D preview, clearance UI, differential designer, icons |
+| `clearance.rs`, `hub.rs`, `body.rs`, `strength.rs` | housing cutout and bearing seats, bores and hubs, shafts and print tuning, strength (ISO 6336) |
+| `crates/engine/src/cmd/gear_items.rs`, `gear_feature.rs` | reading items from the sketches, the Gears feature, body names, `gear.ratio` |
+| `crates/engine/src/cmd/gear.rs`, `gear_assembly.rs`, `schema/gear.rs` | the commands, components and joints, the parameter schema |
+| `crates/doc/src/eval_gears.rs` | evaluating a Gears feature in the timeline |
+| `crates/ui-egui/src/dialogs_gear*.rs` | the Gears dialog: cards, settings, drivetrain links, graph, preview |
 
-Build: `cargo run --release -p solidcraft`. Tests: `cargo test --release -p solidcraft-gear` (over
-240 tests on the math) and `cargo test --release -p solidcraft-engine --lib gear`
-(building through the kernel).
+Build: `cargo run --release -p solidcraft`. Tests: `cargo test --release -p solidcraft-gear` (the
+math) and `cargo test --release -p solidcraft-engine --lib gear` (building through the kernel).
 
-**Known issues:** see [GEAR_GENERATOR.md](GEAR_GENERATOR.md#status-and-known-issues).
+**Known issues:** see [examples/gears/README.md](examples/gears/README.md#known-issues) and
+[GEAR_GENERATOR.md](GEAR_GENERATOR.md#status-and-known-issues) (the earlier window's notes).
 
 ---
 

@@ -38,3 +38,37 @@ solidcraft-cli run examples/gears/scripts/01-spur-pair.json --save 01-spur-pair.
 ```sh
 node examples/gears/make-examples.mjs examples/gears
 ```
+
+## What each example teaches
+
+Open an example, double-click the Gears row in the timeline, and click each gear's card to see how
+it is set up. The full guide is in [docs/gears/](../../docs/gears/README.md).
+
+- **01 spur pair**: the basics. Two tangent circles in one sketch become two gears; one Mesh link;
+  one module set once in a Module Block (both gears share it). Also: bore and hub circles drawn on a
+  gear's centre (Ø8 bore, Ø16 hub), a shaft line in a second, upright sketch, two bearing points on
+  it, and the housing cutout with a 608 seat at each. Try changing the Ø60 dimension: B regrows and
+  stays meshed.
+- **02 helical pair, face sides**: helix angle and hand per gear (20°, right and left), and the face
+  presets: A only (16 mm on side A) and Custom (16 mm on A, 4 mm on B). Watch the green side-A arrow
+  on the active gear.
+- **03 compound train**: two sketch planes ("Layer 1", "Layer 2") and a shaft line through both. The
+  Compound item C is one body with a gear in each layer; A meshes C's first gear, C's second gear
+  meshes D. Each compound gear has its own bore circle. Read the ratio A → D under Ratio from / to.
+- **04 bevel side view**: a bevel pair from one side-view sketch: the apex point, two shaft lines
+  from it and a contact line whose angle sets the ratio (1.5 : 1) and whose length sets the cone
+  distance. Without a contact line, the pair needs both gears sized by Teeth, plus a module.
+- **05 worm and wheel**: the wheel circle and the worm's axis line in the wheel's plane, outside the
+  circle. The driver is the worm (gear 1 of the item); the dialog's ratio reads as a speed ratio
+  (worm → wheel 0.05 : 1).
+- **06 planetary**: sun and ring concentric, one planet circle touching both. Planets: 4, Carrier on:
+  the carrier body is generated and the planets ride on it.
+- **07 internal ring**: a Ring Gear item with its pinion: two circles, the smaller touching the
+  larger from inside. Rim 6 mm.
+- **08 herringbone pair**: V teeth (25°, opposite hands) with a symmetric face of 10 mm each side
+  (20 mm in all).
+- **09 everything drivetrain**: many stage types in one Gears feature, joined by Same shaft links
+  across seven sketch planes; two Module Blocks; a Shaft-line sketch with bearing points on A, B, E
+  and F; the housing cutout. Drive the worm and every stage turns.
+- **10 hypoid pair**: the ring circle and the pinion's axis line offset 15 mm from the ring's axis.
+  The pinion isn't drawn, so both tooth counts are given (37 and 9) to set the ratio.

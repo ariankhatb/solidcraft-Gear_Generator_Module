@@ -1,5 +1,13 @@
 # SolidCraft Gear Generator
 
+> [!IMPORTANT]
+> **This page describes the earlier Gear Generator window, which this branch replaced.** Gears are now made with the
+> Gears dialog working on your own sketch: one card per gear, picks in the view, one editable Gears feature for the
+> whole drivetrain. The current user guide is [docs/gears/](docs/gears/README.md). This page is kept for its history,
+> its notes on the tooth math and the types that are now made only by the `gear.create` command (sprockets, pulleys,
+> cycloidal gears and drives, splines, elliptical pairs, face gears, bevel planetary sets, differentials).
+
+
 A gear generator built into [SolidCraft](https://github.com/tangency-labs/solidcraft), the open-source
 parametric CAD app in pure Rust. It is part of the app, not a plugin: you draw the set in an ordinary sketch,
 and the **Gears** button in **Model › Create** opens a command dialog in the right panel (like Thread
@@ -65,7 +73,9 @@ ring gear, and worm wheels cut plane by plane by the worm's thread. Each set rep
 distance, contact ratio, span and over-pins measurements, and a strength rating when you give a load
 (ISO 6336 Method B, simplified, for cylindrical gears; simplified ratings for bevels and worms).
 
-## How you use it
+## How you used the earlier window
+
+For the current Gears dialog see [docs/gears/quick-start.md](docs/gears/quick-start.md).
 
 1. **Draw the set in a sketch** with the normal sketch tools: circles are pitch circles, lines are
    shafts, a point is the origin (a bevel's apex) or a bearing on a shaft line. Dimension them and

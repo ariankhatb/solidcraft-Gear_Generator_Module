@@ -416,6 +416,7 @@ pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemPar
         base.clearance_body = Some(c);
     }
     let mut system = plan_items(&items, &links, &blocks, drive.as_ref(), &Spec { clearance_body: None, ..base.clone() }).map_err(|e| bad(cmd, e))?;
+    loose_sketches(s, cmd, list, &mut system);
     if system.error.is_none() {
         name_bodies(&mut system, &ids);
         if keep_out {
@@ -434,6 +435,34 @@ pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemPar
     }
     let plan = std::mem::take(&mut system.plan);
     Ok((Items { ids, system }, plan, base))
+}
+
+/// Each item that picks geometry from a sketch that isn't fully defined gets a warning on its
+/// first gear's reply: the gears follow the sketch, so a sketch free to move lets them drift.
+fn loose_sketches(s: &dyn Reads, cmd: &str, list: &[GearItemParams], system: &mut SystemPlan) {
+    for (i, it) in list.iter().enumerate() {
+        let mut seen: Vec<u64> = Vec::new();
+        for (k, c) in it.components.iter().enumerate() {
+            let Some(id) = c.sketch.as_ref().and_then(|sk| s.sketch_id(Some(sk), cmd, &format!("items[{i}].components[{k}]")).ok()) else { continue };
+            if seen.contains(&id) {
+                continue;
+            }
+            seen.push(id);
+            let Some(ss) = s.solved(id) else { continue };
+            let dof = ss.report.dof;
+            if dof == 0 {
+                continue;
+            }
+            let w = format!(
+                "sketch '{}' isn't fully defined ({dof} degree{} of freedom): dimension it so the gears can't drift",
+                ss.name,
+                if dof == 1 { "" } else { "s" }
+            );
+            if let Some(g) = system.gears.iter_mut().find(|g| g.item == i && g.gear == 0) {
+                g.warnings.push(w);
+            }
+        }
+    }
 }
 
 fn end_reply(ids: &[String], r: GearRef) -> GearEndReply {

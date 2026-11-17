@@ -345,6 +345,9 @@ fn a_mixed_drivetrain_is_one_feature_with_components_joints_and_links_kept_by_it
     // gear.create's replies carry each meshing spur's contact ratio.
     let a_reply = r["gears"].as_array().unwrap().iter().find(|g| g["item"] == "A").unwrap();
     assert!(a_reply["contact_ratio"].as_f64().is_some_and(|c| c > 1.0), "{a_reply}");
+    // Its sketch isn't dimensioned: the item says so (once, on its first gear).
+    let loose = |g: &Value| g["warnings"].as_array().unwrap().iter().filter(|w| w.as_str().unwrap_or_default().contains("isn't fully defined")).count();
+    assert_eq!(loose(a_reply), 1, "{a_reply}");
     let w = run(&mut s, "gear.ratio", json!({"group": group, "a": a_member, "b": {"item": "D", "gear": 0}}));
     let want = t("A", 0) / t("B", 0) * t("C", 0) / t("C", 1);
     assert!((w["ratio"].as_f64().unwrap().abs() - want).abs() < 1e-9, "{w} vs {want}");
@@ -465,4 +468,29 @@ fn a_sketch_edited_while_rolled_back_is_followed_when_rolled_forward() {
     no_errors(&s);
     assert!(back["gears_followed"].as_array().is_some_and(|g| !g.is_empty()), "{back}");
     assert!(joint_text(&s, b.2.unwrap()).contains("56"), "{}", joint_text(&s, b.2.unwrap()));
+}
+
+/// A bevel pair from one 2D side view: the apex point, two shaft lines from it and the contact
+/// line between them, no circles; and a sketch left free to move is named on the item.
+#[test]
+fn a_bevel_pair_from_a_side_view_sketch() {
+    let mut s = Session::default();
+    let a = (2.0f64).atan();
+    let c = [50.0 * a.sin(), 50.0 * a.cos()];
+    let sk = sketch_on(
+        &mut s,
+        plane([0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+        &[("sketch.point", json!({"point": [0, 0], "id": "apex"})), line([0.0, 0.0], [0.0, 60.0], "s1"), line([0.0, 0.0], [60.0, 0.0], "s2"), line([0.0, 0.0], c, "k")],
+    );
+    let items = json!([{"id": "C", "type": "bevel", "components": [{"sketch": sk, "point": "apex"}, pick(sk, "s1"), pick(sk, "s2"), pick(sk, "k")]}]);
+    let r = run(&mut s, "gear.calculate", json!({"items": items}));
+    assert!(r.get("error").is_none(), "{r}");
+    let gears = r["gears"].as_array().unwrap();
+    assert_eq!(gears.len(), 2, "{r}");
+    let (z1, z2) = (gears[0]["teeth"].as_f64().unwrap(), gears[1]["teeth"].as_f64().unwrap());
+    assert!((z1 / z2 - 2.0).abs() < 0.15, "about 2:1 as drawn: {r}");
+    assert!(gears[0]["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap_or_default().contains("isn't fully defined")), "{r}");
+    let made = run(&mut s, "gear.create", json!({"items": items}));
+    no_errors(&s);
+    assert_eq!(made["bodies"].as_array().map(Vec::len), Some(2), "{made}");
 }

@@ -912,6 +912,22 @@ fn the_housing_cutout_and_bearing_points_on_shaft_lines() {
     let set = solidcraft_engine::schema::gear::GearSet { group: 7, feature: Some(8), name: "Gears".into(), bodies: Vec::new(), features: Vec::new(), request: p, params: json!({}), sketch: None, sketch_changed: false };
     let e = for_set(&set);
     assert!(e.cutout.on && e.cutout.bearing == g.cutout.bearing, "{:?}", e.cutout);
+    // The tooth chamfer: one setting for the set, sent as `tooth_chamfer`, back on Edit, gone
+    // when emptied.
+    assert!(set.request.get("tooth_chamfer").is_none(), "off by default");
+    let mut c = g.clone();
+    c.chamfer = "0.5 mm".into();
+    c.chamfer_faces = 1;
+    d.kind = Kind::Gear(c);
+    let p = apply_commands(&app, &d).unwrap()[0].1.clone();
+    assert_eq!(p["tooth_chamfer"], json!({"size": 0.5, "faces": "a"}), "{p}");
+    let e = for_set(&solidcraft_engine::schema::gear::GearSet { request: p.clone(), ..set.clone() });
+    assert_eq!((e.chamfer.as_str(), e.chamfer_faces), ("0.5 mm", 1));
+    let mut off = e.clone();
+    off.chamfer.clear();
+    d.kind = Kind::Gear(off);
+    let p = apply_commands(&app, &d).unwrap()[0].1.clone();
+    assert!(p.get("tooth_chamfer").is_none(), "{p}");
 }
 
 /// QA round: the sketch defines the details — a gear made here takes the bore and hub circles

@@ -190,6 +190,10 @@ pub struct Gear {
     /// The housing cutout (`clearance_body`): one body holding the space the drivetrain needs to
     /// turn, with a seat of the bearing at every bearing point; off by default.
     pub cutout: Cutout,
+    /// The set's tooth chamfer (`tooth_chamfer`): its size as typed (empty or 0: none) and its
+    /// faces (0 both, 1 side A, 2 side B).
+    pub chamfer: String,
+    pub chamfer_faces: usize,
     /// The cutout's preview: the gears' swept envelopes as rings (drawn translucent) and each
     /// bearing seat as a ring in its gear's colour, in the world, by item.
     pub cutout_rings: Vec<(Option<usize>, Vec<[f64; 3]>)>,
@@ -222,6 +226,9 @@ pub(crate) fn comparable(v: &Value) -> Value {
     }
     norm(v)
 }
+
+/// `tooth_chamfer.faces` by the dialog's choice: Both, Side A, Side B.
+pub const CHAMFER_FACES: [&str; 3] = ["both", "a", "b"];
 
 /// The housing cutout's settings as typed (empty: the default).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -487,6 +494,8 @@ fn new(sketch: Option<u64>) -> Gear {
         built: Vec::new(),
         details_suggested: Vec::new(),
         cutout: Cutout { bearing: default_bearing(), ..Cutout::default() },
+        chamfer: String::new(),
+        chamfer_faces: 0,
         cutout_rings: Vec::new(),
         scroll: Scroll::Top,
         original: None,
@@ -635,6 +644,10 @@ pub fn for_set(set: &solidcraft_engine::schema::gear::GearSet) -> Gear {
     g.operation = r.get("operation").and_then(Value::as_str).and_then(|o| OPS.iter().position(|x| *x == o)).unwrap_or(0);
     g.cut_keep_out = r.get("keep_out_cuts").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
     g.cutout = Cutout::of(r.get("clearance_body"));
+    if let Some(c) = r.get("tooth_chamfer") {
+        g.chamfer = c.get("size").and_then(Value::as_f64).filter(|v| *v > 0.0).map(|v| shown(v, ValueKind::Length)).unwrap_or_default();
+        g.chamfer_faces = CHAMFER_FACES.iter().position(|f| Some(*f) == c.get("faces").and_then(Value::as_str)).unwrap_or(0);
+    }
     g.keep_out_gap = r.get("keep_out_gap").and_then(Value::as_f64).map(|v| shown(v, ValueKind::Length)).unwrap_or_default();
     if r.get("items").is_some_and(Value::is_array) {
         g.items = crate::dialogs_gear_items::items_of(&r, ui.as_ref(), &mut g.graph);
@@ -1023,6 +1036,7 @@ fn owned() -> Vec<&'static str> {
         "assembly",
         "tooth_curves",
         "clearance_body",
+        "tooth_chamfer",
         "operation",
         "targets",
         "keep_out_cuts",
@@ -1080,6 +1094,13 @@ fn output(app: &SolveApp, k: &Gear, inputs: &[SelInput], p: &mut Map<String, Val
     p.insert("assembly".into(), json!(k.assembly));
     if k.cutout.on {
         p.insert("clearance_body".into(), k.cutout.params(app)?);
+    }
+    if let Some(size) = number(app, &k.chamfer, ValueKind::Length, "Tooth chamfer")?.filter(|v| *v != 0.0) {
+        let mut c = json!({"size": size});
+        if k.chamfer_faces != 0 {
+            c["faces"] = json!(CHAMFER_FACES[k.chamfer_faces.min(2)]);
+        }
+        p.insert("tooth_chamfer".into(), c);
     }
     if k.equations {
         p.insert("tooth_curves".into(), json!("equations"));

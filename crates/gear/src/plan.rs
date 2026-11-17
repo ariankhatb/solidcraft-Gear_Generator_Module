@@ -23,6 +23,7 @@ pub mod train;
 pub(crate) mod assembly;
 pub mod solid;
 pub mod system;
+pub mod chamfer;
 
 pub use bevel_planet::BevelPlanetMode;
 pub use train::{LinkKind, SidePreset, Train, TrainGear, TrainLink, TrainShaft};

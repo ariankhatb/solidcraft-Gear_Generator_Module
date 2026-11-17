@@ -467,3 +467,76 @@ fn a_bearing_point_on_a_gears_shaft_line_is_a_seat_of_the_housing_cutout() {
     assert!(moved.contains([10.5, 0.0, -32.0]), "the seat moved with its point");
     assert!(keep.contains([10.5, 0.0, -24.0]) && !moved.contains([10.5, 0.0, -24.0]), "nothing left where it was");
 }
+
+/// The set's tooth chamfer: off the tip edges of every spur gear's end faces (both, or one
+/// side), refused when it would take the addendum, a note for a gear it doesn't go on.
+#[test]
+fn a_tooth_chamfer_goes_on_every_gear_of_the_set() {
+    use crate::mesh3d::Solid;
+    use crate::plan::chamfer::{ChamferFaces, ToothChamfer, tooth_chamfer};
+    let items = vec![item("A", ItemKind::Spur, vec![circ([0.0; 3], Z, 20.0)]), item("B", ItemKind::Spur, vec![circ([50.0, 0.0, 0.0], Z, 30.0)])];
+    let links = vec![mesh(g(0, 0), g(1, 0))];
+    let plain = plan_items(&items, &links, &[], None, &Spec::default()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(plain.error.is_none(), "{:?}", plain.error);
+    let steps = |sp: &SystemPlan| sp.plan.bodies.iter().map(|b| b.steps.len()).collect::<Vec<_>>();
+    // Off: nothing changes.
+    let mut off = plain.clone();
+    tooth_chamfer(&items, &mut off, ToothChamfer::default()).unwrap();
+    assert_eq!(off, plain);
+    let module = plain.gears[0].module;
+    let shape = *plain.plan.shapes.iter().find(|s| s.pitch_diameter < 45.0).expect("A's shape");
+    let (tip, face) = (shape.tip_diameter / 2.0, shape.face);
+    let c = 0.4 * module;
+    let chamfered = |faces| {
+        let mut sp = plain.clone();
+        tooth_chamfer(&items, &mut sp, ToothChamfer { size: c, faces }).unwrap_or_else(|e| panic!("{e}"));
+        sp
+    };
+    let both = chamfered(ChamferFaces::Both);
+    assert_eq!(steps(&both).iter().sum::<usize>(), steps(&plain).iter().sum::<usize>() + 4, "two ends of two gears");
+    let one = chamfered(ChamferFaces::A);
+    assert_eq!(steps(&one).iter().sum::<usize>(), steps(&plain).iter().sum::<usize>() + 2, "side A of each");
+    // At A's tip edge on side A (z = face / 2, symmetric): teeth before, none after.
+    let body = plain.member_of.iter().find(|(r, _)| *r == g(0, 0)).and_then(|(_, m)| plain.plan.members[*m].body).unwrap();
+    let ring = |sp: &SystemPlan, z: f64| {
+        let s = Solid::new(&sp.plan.bodies[body], 0.002);
+        (0..720).map(|k| f64::from(k) * std::f64::consts::TAU / 720.0).filter(|a| s.contains([(tip - 0.25 * c) * a.cos(), (tip - 0.25 * c) * a.sin(), z])).count()
+    };
+    let (top, bottom) = (face / 2.0 - 0.25 * c, -face / 2.0 + 0.25 * c);
+    assert!(ring(&plain, top) > 0 && ring(&plain, bottom) > 0, "the teeth reach the edge");
+    assert_eq!(ring(&both, top), 0, "chamfered on side A");
+    assert_eq!(ring(&both, bottom), 0, "chamfered on side B");
+    assert_eq!(ring(&one, top), 0);
+    assert!(ring(&one, bottom) > 0, "side B left plain");
+    assert_eq!(ring(&both, 0.0), ring(&plain, 0.0), "the middle of the face untouched");
+    // Too big: named.
+    let mut sp = plain.clone();
+    let e = tooth_chamfer(&items, &mut sp, ToothChamfer { size: 1.2 * module, faces: ChamferFaces::Both }).unwrap_err();
+    assert!(e.starts_with("Tooth chamfer") && e.contains("too big for Gear A") && e.contains("addendum"), "{e}");
+    let _ = tip;
+}
+
+/// A worm pair keeps its teeth plain, with a note naming it; a compound's layers are chamfered
+/// except where the smaller layer meets the bigger one.
+#[test]
+fn a_tooth_chamfer_leaves_a_note_where_it_does_not_go() {
+    use crate::plan::chamfer::{ChamferFaces, ToothChamfer, tooth_chamfer};
+    let worm = vec![item("A", ItemKind::Worm, vec![circ([0.0; 3], Z, 30.0), line([-40.0, 40.0, 0.0], [40.0, 40.0, 0.0])])];
+    let mut sp = plan_items(&worm, &[], &[], None, &Spec::default()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(sp.error.is_none(), "{:?}", sp.error);
+    let before = sp.plan.bodies.clone();
+    tooth_chamfer(&worm, &mut sp, ToothChamfer { size: 0.2, faces: ChamferFaces::Both }).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(sp.plan.bodies, before, "a worm pair is left plain");
+    assert!(sp.notes.iter().any(|n| n == "tooth chamfer not applied to Gear A1: worm"), "{:?}", sp.notes);
+    assert!(sp.notes.iter().any(|n| n == "tooth chamfer not applied to Gear A2: worm"), "{:?}", sp.notes);
+    // A compound of two layers, face to face: three of its four ends chamfered.
+    let compound = vec![item("E", ItemKind::Compound, vec![line([0.0, 0.0, -10.0], [0.0, 0.0, 30.0]), circ([0.0; 3], Z, 20.0), circ([0.0, 0.0, 20.0], Z, 12.0)])];
+    let mut sp = plan_items(&compound, &[], &[], None, &Spec::default()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(sp.error.is_none(), "{:?}", sp.error);
+    let count = |sp: &SystemPlan| sp.plan.bodies.iter().map(|b| b.steps.len()).sum::<usize>();
+    let before = count(&sp);
+    let m = sp.gears.iter().map(|x| x.module).fold(f64::INFINITY, f64::min);
+    tooth_chamfer(&compound, &mut sp, ToothChamfer { size: 0.3 * m, faces: ChamferFaces::Both }).unwrap_or_else(|e| panic!("{e}"));
+    eprintln!("compound ends chamfered: {}", count(&sp) - before);
+    assert!(count(&sp) - before >= 3, "each layer's free ends");
+}

@@ -523,6 +523,14 @@ pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemPar
     extra.suggested = suggest_details(s, &ids, &items, &details, &wanted);
     if system.error.is_none() {
         extra.built = apply_details(&items, &wanted, &mut system);
+        if let Some(tc) = &p.tooth_chamfer {
+            use solidcraft_gear::plan::chamfer::{ChamferFaces, ToothChamfer, tooth_chamfer};
+            let faces = ChamferFaces::parse(tc.faces.as_deref().unwrap_or("both")).ok_or_else(|| bad(cmd, "`tooth_chamfer.faces` must be \"both\", \"a\" or \"b\""))?;
+            if !(tc.size.is_finite() && tc.size >= 0.0) {
+                return Err(bad(cmd, "`tooth_chamfer.size` must be 0 or more (mm)"));
+            }
+            tooth_chamfer(&items, &mut system, ToothChamfer { size: tc.size, faces }).map_err(|e| bad(cmd, e))?;
+        }
         name_bodies(&mut system, &ids);
         if keep_out {
             let mut whole = system.plan.clone();

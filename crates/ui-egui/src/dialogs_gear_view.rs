@@ -52,6 +52,7 @@ const TIP_OPERATION: &str = "New Body: separate bodies. Join/Cut/Intersect: comb
 const TIP_KEEP_OUT: &str = "Cut the space the gears sweep (plus the gap) out of the Targets, e.g. a housing.";
 const TIP_GAP: &str = "Extra room around the swept teeth when cutting the housing.";
 const TIP_ASSEMBLY: &str = "Each shaft and its gears become a component on a revolve joint, linked to its mates by the gear ratio.";
+const TIP_CHAMFER: &str = "A 45° chamfer off the tooth tips' edges on the end faces of every gear in the set (mm across, as deep): spur, helical, herringbone (outer ends), compound layers and ring gears. Bevel, worm, hypoid, crossed helical, rack and planetary gears stay plain (a note says so). Empty: none.";
 const TIP_CUTOUT: &str = "One more body, \"Housing cutout\": all the space the drivetrain needs to turn (the teeth's swept envelopes, the shafts through the walls) and a bearing seat at every bearing point. Model a housing block and cut this body out of it.";
 const TIP_BEARING: &str = "One bearing size for every seat (bore × OD × width, mm).";
 const TIP_EQUATIONS: &str = "Exact involute curves instead of fitted splines: slower, smoother.";
@@ -129,6 +130,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
         enter |= settings(ui, k, a);
     }
     enter |= drivetrain(app, ui, k);
+    enter |= all_gears(ui, k);
     enter |= housing_cutout(app, ui, k);
     enter |= output(ui, k, inputs, input);
     results(app, ui, k);
@@ -699,6 +701,18 @@ fn drivetrain(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear) -> bool {
             k.graph_hovered = out.hovered;
         } else {
             k.graph_hovered = None;
+        }
+    });
+    enter
+}
+
+/// All gears (open): what goes on every gear of the set: the tooth chamfer.
+fn all_gears(ui: &mut egui::Ui, k: &mut Gear) -> bool {
+    let mut enter = false;
+    ui_kit::section(ui, "gear_all_gears", "All gears", true, |ui| {
+        enter |= field(ui, "Tooth chamfer", &mut k.chamfer, "off", TIP_CHAMFER);
+        if !k.chamfer.trim().is_empty() {
+            segments(ui, "Chamfer faces", &mut k.chamfer_faces, &["Both", "Side A", "Side B"], "Which end faces of every gear get the chamfer: side A is the green arrow in the view.");
         }
     });
     enter

@@ -59,7 +59,8 @@ Accept the suggestions, or add links by hand. If you build with no links at all,
 are used (the reply notes "no links given: the gears mesh and share shafts as the drawing
 suggests").
 
-Two circles in one plane that **almost** touch (within two modules) and aren't linked get a
+Two circles in one plane that **almost** touch (a gap up to two modules, or a fifth of their
+radii added up) and aren't linked get a
 warning: "A and B are 0.4 mm apart, so they won't mesh. Make them tangent in the sketch to mesh
 them."
 

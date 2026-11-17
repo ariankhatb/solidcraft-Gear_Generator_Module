@@ -56,6 +56,9 @@ impl Reads for Before<'_> {
     fn solved(&self, id: u64) -> Option<solidcraft_doc::SolvedSketch> {
         self.state.sketch(id).cloned()
     }
+    fn sketch_name(&self, id: u64) -> Option<String> {
+        self.doc.feature(id).map(|f| f.name.clone())
+    }
     fn axis_line(&self, p: &Value, cmd: &str) -> Result<(Vec3, Vec3)> {
         match p.get("axis") {
             Some(o @ Value::Object(_)) => super::super::features::axis_line_object(o).map_err(|why| bad(cmd, why)),
@@ -158,6 +161,10 @@ fn frozen(s: &Session, cmd: &str, mut request: Value) -> Result<(Value, Vec<Sket
             if let Some(cs) = item.get_mut("components").and_then(Value::as_array_mut) {
                 for (k, c) in cs.iter_mut().enumerate() {
                     fix(&format!("items[{i}].components[{k}]"), c)?;
+                    // Its sketch's name now, for an error to name it by should it be deleted.
+                    if let Some(name) = c.get("sketch").and_then(Value::as_u64).and_then(|id| s.doc.feature(id)).map(|f| f.name.clone()) {
+                        c["sketch_name"] = json!(name);
+                    }
                 }
             }
         }
@@ -395,6 +402,7 @@ pub(super) fn update(s: &mut Session, cmd: &str, mut rec: Record, request: Value
     let member_names: Vec<String> = rec.bodies.iter().take(members.len()).map(|b| b.name.clone()).collect();
     let keep_out_name = keep_out.as_ref().and_then(|_| rec.bodies.get(members.len()).map(|b| b.name.clone()));
     let mut assembly_made = None;
+    // (Its members' bodies by the names they have now: `records` follows renames.)
     let old_assembly = rec.assembly.take();
     // The set's folder: the one it has (a folder set's, or an assembled set's), else none.
     let mut group = Some(rec.group).filter(|g| s.doc.timeline_groups.iter().any(|t| t.id == *g));

@@ -930,6 +930,10 @@ pub struct GearComponent {
     /// engine fills slots by kind in pick order, so this is a label only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot: Option<String>,
+    /// The sketch's name when the pick was last kept (the feature fills it in; the sketch itself
+    /// is found by its id): what an error names when the sketch is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sketch_name: Option<String>,
 }
 
 /// A gear's face: how far the teeth reach on side A (along the gear's axis: its sketch plane's
@@ -1840,6 +1844,10 @@ pub struct GearResult {
     /// `items`: links the drawing suggests that the request doesn't have (drawn dashed).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggestions: Vec<GearSuggestionReply>,
+    /// `items`: bore and hub circles the drawing suggests for a picked pitch circle (concentric
+    /// circles in its sketch that nothing picks), not used until picked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detail_suggestions: Vec<GearDetailSuggestion>,
     /// `items`: why nothing can be built (`gear.calculate` still says per gear and per link
     /// what was found; `gear.create` refuses with it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1881,6 +1889,33 @@ pub struct GearItemReply {
     /// The body that holds it (`gear.create` / `gear.update`; a compound's gears share one).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// Its side A: the direction along its axis its face's side A reaches (unit, world): its
+    /// pitch circle's sketch normal, or its shaft line's direction from its first point.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub side_a: Option<[f64; 3]>,
+    /// Its bore and hub diameters as built (mm): from a `bore` / `hub` circle picked in its
+    /// sketch, else its settings; none: no bore (or the shaft's), no hub.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bore: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hub: Option<f64>,
+}
+
+/// A detail the drawing suggests for a gear (`GearResult::detail_suggestions`): a circle drawn
+/// concentric with its pitch circle, in the same sketch, that no item picks; inside it the
+/// smallest is a bore, the next a hub. Shown as a suggestion; add it to the item's components
+/// as `{sketch, curve, slot}` to use it.
+#[derive(Debug, Clone, Default, Serialize, JsonSchema, PartialEq)]
+pub struct GearDetailSuggestion {
+    pub item: String,
+    pub gear: usize,
+    /// bore | hub.
+    pub slot: String,
+    /// The circle: its sketch's id and its id there.
+    pub sketch: u64,
+    pub curve: String,
+    /// Its diameter, mm.
+    pub diameter: f64,
 }
 
 /// One link as planned (`GearResult::links`).

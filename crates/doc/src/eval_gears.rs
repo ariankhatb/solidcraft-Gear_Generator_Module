@@ -54,10 +54,19 @@ pub(super) fn eval(doc: &Document, f: &Feature, st: &mut ModelState, warning: &m
     };
     let planner = PLANNER.get().ok_or_else(|| DocError::Invalid("gear sets are planned by the Gear Generator, which is not running here".into()))?;
     let ids: Vec<u64> = sketches.iter().map(|s| s.0).collect();
+    let planned = planner(&GearsInput { doc, state: st, params, sketches: &ids });
+    // A sketch the set reads that isn't there: the planner's error names the picks it held (the
+    // item, its slot, the sketch); else the sketch.
     if let Some(gone) = ids.iter().find(|id| st.sketch(**id).is_none()) {
-        return Err(DocError::Unknown(format!("sketch {gone} (it must come earlier in the timeline)")));
+        return Err(match planned {
+            Err(e) => DocError::Invalid(e),
+            Ok(_) => {
+                let name = doc.feature(*gone).map_or_else(|| format!("sketch {gone}"), |f| format!("sketch '{}'", f.name));
+                DocError::Unknown(format!("{name} (it must come earlier in the timeline)"))
+            }
+        });
     }
-    let plan = planner(&GearsInput { doc, state: st, params, sketches: &ids }).map_err(DocError::Invalid)?;
+    let plan = planned.map_err(DocError::Invalid)?;
     let checks = super::EVAL_VALIDATION.get() != kernel::Validation::Off;
     let mut notes: Vec<String> = Vec::new();
     // Everything inside runs unchecked; what the feature keeps is checked below.

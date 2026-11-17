@@ -15,6 +15,8 @@
 //! others' ([`carry_names`]).
 
 use serde_json::{Value, json};
+use solidcore_record::Vec3;
+use solidcraft_geom::Vec3Geom;
 use solidcraft_gear::analysis::{self, MeshKind, StepKind};
 use solidcraft_gear::drivetrain;
 use solidcraft_gear::items::{self as gi, GearRef};
@@ -23,7 +25,7 @@ use solidcraft_gear::plan::{Plan, Spec, solid};
 
 use super::{GearAxis, Reads, axis_of, bad, sketch_items, spec_of};
 use crate::schema::gear::{
-    GearComponent, GearEndReply, GearItemGear, GearItemParams, GearItemReply, GearLinkReply, GearParams, GearRatioParams, GearRatioResult, GearRatioStep, GearResult, GearSuggestionReply, GearType,
+    GearComponent, GearDetailSuggestion, GearEndReply, GearItemGear, GearItemParams, GearItemReply, GearLinkReply, GearParams, GearRatioParams, GearRatioResult, GearRatioStep, GearResult, GearSuggestionReply, GearType,
 };
 use crate::{Result, Session};
 
@@ -36,6 +38,20 @@ const MAX_ITEMS: usize = 64;
 pub(super) struct Items {
     pub(super) ids: Vec<String>,
     pub(super) system: SystemPlan,
+    /// What the sketch gives beyond the gear crate's plan: side A, bores and hubs.
+    pub(super) extra: Extra,
+}
+
+/// The sketch-driven details of a set of items ([`gear_details`], [`apply_details`]).
+#[derive(Clone, Debug, Default)]
+pub(super) struct Extra {
+    /// Each gear's side A (its axis direction: the pitch circle's sketch normal, or its shaft
+    /// line's direction from its first point).
+    side_a: Vec<(GearRef, [f64; 3])>,
+    /// The bore and hub diameters built on each gear.
+    built: Vec<(GearRef, Option<f64>, Option<f64>)>,
+    /// Concentric circles the drawing suggests as bores and hubs.
+    suggested: Vec<GearDetailSuggestion>,
 }
 
 fn ids_of(items: &[GearItemParams]) -> Vec<String> {
@@ -59,8 +75,35 @@ fn dt_thing(t: drivetrain::Thing) -> gi::Thing {
     }
 }
 
-/// One picked component where it is now.
-fn thing_of(s: &dyn Reads, cmd: &str, what: &str, c: &GearComponent) -> Result<gi::Thing> {
+/// Who a picked component is, for the errors that name it: its item, its slot (as the dialog
+/// labels it, else its place) and where it is in the request.
+struct Pick<'a> {
+    item: &'a str,
+    slot: String,
+    what: String,
+}
+
+impl Pick<'_> {
+    fn new<'a>(item: &'a str, k: usize, c: &GearComponent, what: String) -> Pick<'a> {
+        let slot = c.slot.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| format!("pick {}", k + 1));
+        Pick { item, slot, what }
+    }
+    fn said(&self, why: impl std::fmt::Display) -> String {
+        format!("item {}, {}: {why} (`{}`)", self.item, self.slot, self.what)
+    }
+}
+
+/// Whether a sketch has an entity (a point, curve or 3D wire) with id `entity`, whatever it is.
+fn has_entity(ss: &solidcraft_doc::SolvedSketch, entity: &str) -> bool {
+    let sk = &ss.sketch;
+    sk.points.iter().any(|p| p.id == entity) || sk.curves.iter().any(|c| c.id == entity) || sk.wires.iter().any(|w| w.id == entity)
+}
+
+/// One picked component where it is now. A sketch entity is found by its sketch's id and its own
+/// id only: one that is gone (deleted, its sketch deleted or after the feature) is an error that
+/// names the item, the slot, the sketch and the entity, never another entity read instead.
+fn thing_of(s: &dyn Reads, cmd: &str, who: &Pick, c: &GearComponent) -> Result<gi::Thing> {
+    let what = who.what.as_str();
     let given = [("sketch point", c.point.is_some()), ("sketch curve", c.curve.is_some()), ("edge", c.edge.is_some()), ("face", c.face.is_some()), ("axis", c.axis.is_some())];
     let named: Vec<&str> = given.iter().filter(|(_, g)| *g).map(|(n, _)| *n).collect();
     if named.len() != 1 {
@@ -72,8 +115,18 @@ fn thing_of(s: &dyn Reads, cmd: &str, what: &str, c: &GearComponent) -> Result<g
     }
     let line = |a: &solidcraft_gear::axes::Axis| gi::Thing::line(a.origin, solidcraft_gear::select::bearing_point(a, 1.0));
     if let (Some(sk), Some(entity)) = (&c.sketch, c.curve.as_ref().or(c.point.as_ref())) {
-        let id = s.sketch_id(Some(sk), cmd, what)?;
-        let gs = s.gear_sketch(id).map_err(|e| bad(cmd, format!("`{what}`: {e}")))?;
+        let label = c.sketch_name.clone().map_or_else(|| super::super::features::sketch_key(Some(sk)).unwrap_or_default(), |n| format!("'{n}'"));
+        let id = s.sketch_id(Some(sk), cmd, what).map_err(|_| bad(cmd, who.said(format!("sketch {label} is gone (deleted): pick the {} again", who.slot))))?;
+        let Some(ss) = s.solved(id) else {
+            let name = s.sketch_name(id).map_or(label, |n| format!("'{n}'"));
+            return Err(bad(cmd, who.said(format!("sketch {name} isn't there before the Gears feature (it comes after it in the timeline, or it is suppressed or failed): move it before the Gears feature"))));
+        };
+        let name = ss.name.clone();
+        let kind = if c.point.is_some() { "point" } else { "curve" };
+        if !has_entity(&ss, entity) {
+            return Err(bad(cmd, who.said(format!("{kind} `{entity}` is gone from sketch '{name}': pick the {} again, or draw it again with id `{entity}`", who.slot))));
+        }
+        let gs = s.gear_sketch(id).map_err(|e| bad(cmd, who.said(e)))?;
         if let Some((_, it)) = sketch_items(&gs).into_iter().find(|(k, _)| k == entity) {
             return Ok(dt_thing(it.thing).with_ids(Some(id), entity));
         }
@@ -86,8 +139,12 @@ fn thing_of(s: &dyn Reads, cmd: &str, what: &str, c: &GearComponent) -> Result<g
             return Ok(gi::Thing::line(f.world([ca.c.x, ca.c.y, 0.0]), f.world([cb.c.x, cb.c.y, 0.0])).with_ids(Some(id), entity));
         }
         // The sketch's origin, a construction line: as the sketch has them.
-        let construction = c.curve.as_ref().is_some_and(|k| s.solved(id).is_some_and(|ss| ss.sketch.curves.iter().any(|cv| cv.id == *k && cv.construction)));
-        let a = axis_of(s, &GearAxis(json!({"sketch": id, "point": c.point, "curve": c.curve})), cmd, what)?;
+        let construction = c.curve.as_ref().is_some_and(|k| ss.sketch.curves.iter().any(|cv| cv.id == *k && cv.construction));
+        let a = axis_of(s, &GearAxis(json!({"sketch": id, "point": c.point, "curve": c.curve})), cmd, what).map_err(|_| {
+            let circle = ss.sketch.curves.iter().any(|cv| cv.id == *entity && matches!(cv.kind, crate::sketch::CurveKind::Circle { .. } | crate::sketch::CurveKind::Arc { .. }));
+            let why = if circle && construction { "is construction geometry now: a pitch circle must be drawn geometry" } else { "isn't a circle, line or point the set can read" };
+            bad(cmd, who.said(format!("{kind} `{entity}` in sketch '{name}' {why}")))
+        })?;
         let t = if c.point.is_some() {
             gi::Thing::point(a.origin)
         } else {
@@ -227,9 +284,39 @@ fn settings_of(cmd: &str, what: &str, it: &GearItemParams, g: &GearItemGear) -> 
     })
 }
 
+/// A detail picked for an item's gear (`slot: bore` or `hub`): a circle concentric with one of
+/// its pitch circles; kept by its sketch and id like any pick, read where it is now.
+#[derive(Clone, Debug)]
+struct DetailPick {
+    item: usize,
+    hub: bool,
+    thing: gi::Thing,
+    /// Who it is, for its errors (item and slot).
+    said: String,
+}
+
+/// Whether a component is a detail (`Some(true)` a hub circle, `Some(false)` a bore circle), not
+/// a pick for the gear crate's slots.
+fn detail_slot(c: &GearComponent) -> Option<bool> {
+    match c.slot.as_deref().map(str::trim) {
+        Some(s) if s.eq_ignore_ascii_case("bore") => Some(false),
+        Some(s) if s.eq_ignore_ascii_case("hub") => Some(true),
+        _ => None,
+    }
+}
+
+/// The request read: the items' ids, the items, links, module blocks, drive and detail picks.
+struct ReadItems {
+    ids: Vec<String>,
+    items: Vec<gi::GearItem>,
+    links: Vec<gi::ItemLink>,
+    blocks: Vec<gi::ModuleBlock>,
+    drive: Option<gi::Drive>,
+    details: Vec<DetailPick>,
+}
+
 /// What the request's items, links, module blocks and drive say, as the gear crate takes them.
-#[allow(clippy::type_complexity)]
-fn read_items(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemParams]) -> Result<(Vec<String>, Vec<gi::GearItem>, Vec<gi::ItemLink>, Vec<gi::ModuleBlock>, Option<gi::Drive>)> {
+fn read_items(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemParams]) -> Result<ReadItems> {
     if p.sketch.is_some() || p.selection.is_some() || p.axis1.is_some() || p.axis2.is_some() || p.placement.is_some() {
         return Err(bad(cmd, "give `items`, or `sketch`, `selection`, `axis1` or `placement`: one of them"));
     }
@@ -246,6 +333,7 @@ fn read_items(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemParams])
         }
     }
     let mut items = Vec::with_capacity(list.len());
+    let mut details = Vec::new();
     for (i, it) in list.iter().enumerate() {
         let what = format!("items[{i}]");
         let kind = gi::ItemKind::parse(&it.kind).ok_or_else(|| {
@@ -257,7 +345,17 @@ fn read_items(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemParams])
         }
         let mut item = gi::GearItem::new(&ids[i], kind);
         for (k, c) in it.components.iter().enumerate() {
-            item.things.push(thing_of(s, cmd, &format!("{what}.components[{k}]"), c)?);
+            let who = Pick::new(&ids[i], k, c, format!("{what}.components[{k}]"));
+            let thing = thing_of(s, cmd, &who, c)?;
+            match detail_slot(c) {
+                Some(hub) => {
+                    if !matches!(thing, gi::Thing::Circle { .. }) {
+                        return Err(bad(cmd, who.said("a bore or hub is a circle drawn concentric with the gear's pitch circle")));
+                    }
+                    details.push(DetailPick { item: i, hub, thing, said: format!("item {}, {}", ids[i], who.slot) });
+                }
+                None => item.things.push(thing),
+            }
         }
         let mut gears: Vec<Option<gi::GearSettings>> = Vec::new();
         for (k, g) in it.gears.iter().enumerate() {
@@ -328,7 +426,7 @@ fn read_items(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemParams])
             Some(gi::Drive { item, gear: d.gear, rpm: d.rpm, torque: d.torque })
         }
     };
-    Ok((ids, items, links, blocks, drive))
+    Ok(ReadItems { ids, items, links, blocks, drive, details })
 }
 
 /// The bodies named by item and gear (see the module docs), each name once.
@@ -399,7 +497,7 @@ fn name_bodies(sp: &mut SystemPlan, ids: &[String]) {
 /// The set `items` asks for: the items read, planned whole. `Err` when the request can't be
 /// read; a drivetrain that can't be built comes back with [`SystemPlan::error`] set.
 pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemParams]) -> Result<(Items, Plan, Spec)> {
-    let (ids, items, links, blocks, drive) = read_items(s, cmd, p, list)?;
+    let ReadItems { ids, items, links, blocks, drive, details } = read_items(s, cmd, p, list)?;
     let mut base = spec_of(&GearParams { kind: Some(GearType::Spur), items: None, links: None, module_blocks: None, drive: None, ..p.clone() }).map_err(|e| bad(cmd, e))?;
     if let Some(gap) = p.keep_out_gap
         && !(gap.is_finite() && (0.0..1e3).contains(&gap))
@@ -417,7 +515,11 @@ pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemPar
     }
     let mut system = plan_items(&items, &links, &blocks, drive.as_ref(), &Spec { clearance_body: None, ..base.clone() }).map_err(|e| bad(cmd, e))?;
     loose_sketches(s, cmd, list, &mut system);
+    let mut extra = Extra { side_a: side_a(&items), ..Extra::default() };
+    let wanted = gear_details(cmd, &items, &details)?;
+    extra.suggested = suggest_details(s, &ids, &items, &details, &wanted);
     if system.error.is_none() {
+        extra.built = apply_details(&items, &wanted, &mut system);
         name_bodies(&mut system, &ids);
         if keep_out {
             let mut whole = system.plan.clone();
@@ -434,7 +536,231 @@ pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemPar
         }
     }
     let plan = std::mem::take(&mut system.plan);
-    Ok((Items { ids, system }, plan, base))
+    Ok((Items { ids, system, extra }, plan, base))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Details the sketch gives: side A, bores and hubs
+// ---------------------------------------------------------------------------------------------
+
+/// The items whose gears take bore and hub circles: gears on parallel shafts, whose bodies stand
+/// on their pitch circles' planes (a ring, rack, bevel, hypoid, worm or planetary set keeps its
+/// own bores).
+fn takes_details(k: gi::ItemKind) -> bool {
+    matches!(k, gi::ItemKind::Spur | gi::ItemKind::Helical | gi::ItemKind::Herringbone | gi::ItemKind::Compound)
+}
+
+fn v3(p: [f64; 3]) -> Vec3 {
+    Vec3::new(p[0], p[1], p[2])
+}
+
+/// Whether circle (`c`, `n`) is concentric with gear `g`: the same centre and plane direction.
+fn concentric(g: &gi::GearGeom, c: [f64; 3], n: [f64; 3]) -> bool {
+    let r = g.radius.unwrap_or(1.0);
+    let parallel = match (v3(g.axis).normalized(), v3(n).normalized()) {
+        (Some(a), Some(b)) => a.dot(b).abs() >= 1.0 - 1e-6,
+        _ => false,
+    };
+    v3(g.centre).dist(v3(c)) <= gi::tol(r) && parallel
+}
+
+/// Each gear's side A: the direction of its axis its face's side A reaches (decision 4).
+fn side_a(items: &[gi::GearItem]) -> Vec<(GearRef, [f64; 3])> {
+    let mut out = Vec::new();
+    for (i, it) in items.iter().enumerate() {
+        for (g, geo) in gi::gear_geoms(it).into_iter().enumerate() {
+            if let Some(u) = v3(geo.axis).normalized() {
+                out.push((GearRef::new(i, g), [u.x, u.y, u.z]));
+            }
+        }
+    }
+    out
+}
+
+/// A gear's bore and hub as asked: from its settings, then from the circles picked for it.
+#[derive(Clone, Copy, Debug)]
+struct Wanted {
+    gear: GearRef,
+    bore: Option<f64>,
+    hub: Option<f64>,
+    /// How far the hub reaches past the face on side A and side B (mm; both 0: half the face
+    /// width on side A).
+    len_a: f64,
+    len_b: f64,
+}
+
+/// What each gear's bore and hub are: a `bore` circle picked concentric with its pitch circle
+/// gives its bore Ø, a `hub` circle its hub Ø (the hub's length from its settings), over what its
+/// settings say.
+fn gear_details(cmd: &str, items: &[gi::GearItem], details: &[DetailPick]) -> Result<Vec<Wanted>> {
+    let mut out: Vec<Wanted> = Vec::new();
+    for (i, it) in items.iter().enumerate().filter(|(_, it)| takes_details(it.kind)) {
+        for g in 0..gi::gear_geoms(it).len() {
+            let st = it.settings(g);
+            let bore = match st.bore {
+                gi::Bore::Diameter(d) => Some(d),
+                _ => None,
+            };
+            let (hub, len_a, len_b) = st.hub.map_or((None, 0.0, 0.0), |h| (h.diameter, h.length_a, h.length_b));
+            if bore.is_some() || hub.is_some() {
+                out.push(Wanted { gear: GearRef::new(i, g), bore, hub, len_a, len_b });
+            }
+        }
+    }
+    for d in details {
+        let it = &items[d.item];
+        let gi::Thing::Circle { centre, normal, radius, .. } = d.thing else { continue };
+        if !takes_details(it.kind) {
+            return Err(bad(cmd, format!("{}: bore and hub circles are taken by spur, helical, herringbone and compound gears", d.said)));
+        }
+        let geoms = gi::gear_geoms(it);
+        let g = geoms
+            .iter()
+            .position(|geo| !geo.ring && geo.radius.is_some() && concentric(geo, centre, normal))
+            .ok_or_else(|| bad(cmd, format!("{}: the circle isn't concentric with a pitch circle of item {} (the same centre, in a parallel plane)", d.said, it.id)))?;
+        let pitch = geoms[g].radius.unwrap_or(0.0);
+        if radius >= pitch - 1e-9 {
+            return Err(bad(cmd, format!("{}: Ø{} isn't inside the pitch circle (Ø{})", d.said, num(2.0 * radius), num(2.0 * pitch))));
+        }
+        let at = match out.iter().position(|w| w.gear == GearRef::new(d.item, g)) {
+            Some(k) => k,
+            None => {
+                let h = it.settings(g).hub;
+                out.push(Wanted { gear: GearRef::new(d.item, g), bore: None, hub: None, len_a: h.map_or(0.0, |h| h.length_a), len_b: h.map_or(0.0, |h| h.length_b) });
+                out.len() - 1
+            }
+        };
+        if d.hub {
+            out[at].hub = Some(2.0 * radius);
+        } else {
+            out[at].bore = Some(2.0 * radius);
+        }
+    }
+    for w in &out {
+        if let (Some(b), Some(h)) = (w.bore, w.hub)
+            && b >= h
+        {
+            return Err(bad(cmd, format!("item {}, gear {}: the bore (Ø{}) must be smaller than the hub (Ø{})", items[w.gear.item].id, w.gear.gear + 1, num(b), num(h))));
+        }
+    }
+    Ok(out)
+}
+
+fn num(v: f64) -> String {
+    let s = format!("{v:.3}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
+}
+
+/// Puts each gear's bore and hub on its body: a hub a ring prism on its face's ends (side A, and
+/// side B when asked), then the bore cut through; returns what each gear got. A bore at or past
+/// the teeth's root is left out with a warning on the gear.
+fn apply_details(items: &[gi::GearItem], wanted: &[Wanted], sp: &mut SystemPlan) -> Vec<(GearRef, Option<f64>, Option<f64>)> {
+    use solidcraft_gear::plan::{Frame, Op, Step};
+    use solidcraft_gear::{Outline, Region, V2};
+    let mut out = Vec::new();
+    for w in wanted {
+        let Some(m) = sp.member_of.iter().find(|(r, _)| *r == w.gear).map(|(_, m)| *m) else { continue };
+        let Some(b) = sp.plan.members.get(m).and_then(|x| x.body).filter(|b| *b < sp.plan.bodies.len()) else { continue };
+        let Some(geo) = items.get(w.gear.item).and_then(|it| gi::gear_geoms(it).get(w.gear.gear).copied()) else { continue };
+        let module = sp.gears.iter().find(|g| g.item == w.gear.item && g.gear == w.gear.gear).map_or(1.0, |g| g.module);
+        let (mut a, mut bb) = gi::face_extent(&items[w.gear.item].settings(w.gear.gear), module);
+        let shape = sp.plan.shapes.iter().find(|x| x.member == m);
+        // The face as planned: its sides in the asked proportion.
+        if let Some(f) = shape.map(|x| x.face).filter(|f| *f > 0.0 && a + bb > 0.0) {
+            let k = f / (a + bb);
+            a *= k;
+            bb *= k;
+        }
+        let root = shape.map(|x| x.root_diameter).filter(|d| *d > 0.0);
+        let mut warn = Vec::new();
+        let who = format!("item {}, gear {}", items[w.gear.item].id, w.gear.gear + 1);
+        let bore = match (w.bore, root) {
+            (Some(d), Some(r)) if d >= r - 1e-9 => {
+                warn.push(format!("{who}: the bore (Ø{}) reaches the teeth's root (Ø{}): it is left out", num(d), num(r)));
+                None
+            }
+            (d, _) => d,
+        };
+        if let (Some(h), Some(r)) = (w.hub, root)
+            && h > r
+        {
+            warn.push(format!("{who}: the hub (Ø{}) is wider than the teeth's root (Ø{})", num(h), num(r)));
+        }
+        let (len_a, len_b) = if w.len_a + w.len_b > 0.0 { (w.len_a, w.len_b) } else { (0.5 * (a + bb), 0.0) };
+        // The gear's axis in its body's frame: the pitch circle's centre, side A along +z.
+        let body = &mut sp.plan.bodies[b];
+        let f = body.frame;
+        let (fx, fy, fz) = (v3(f.x), v3(f.y()), v3(f.z));
+        let local = |p: Vec3| Vec3::new(p.dot(fx), p.dot(fy), p.dot(fz));
+        let Some(z) = v3(geo.axis).normalized().map(local) else { continue };
+        let e = if z.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+        let Some(x) = (e - z * e.dot(z)).normalized() else { continue };
+        let o = local(v3(geo.centre) - v3(f.origin));
+        let frame = Frame { origin: [o.x, o.y, o.z], x: [x.x, x.y, x.z], z: [z.x, z.y, z.z] };
+        let prism = |r: f64, z0: f64, height: f64, op: Op| Step::Placed {
+            frame,
+            step: Box::new(Step::Prism { region: Region { outer: vec![Outline::circle(V2::ZERO, r)], holes: Vec::new() }, z0, height, twist: 0.0, op }),
+        };
+        // (The hub reaches half a millimetre into the gear, so the two are one solid.)
+        let into = 0.5f64.min(0.5 * (a + bb));
+        if let Some(h) = w.hub {
+            if len_a > 0.0 {
+                body.steps.push(prism(h / 2.0, a - into, len_a + into, Op::Join));
+            }
+            if len_b > 0.0 {
+                body.steps.push(prism(h / 2.0, -bb - len_b, len_b + into, Op::Join));
+            }
+        }
+        if let Some(d) = bore {
+            let (lo, hi) = (-bb - w.hub.map_or(0.0, |_| len_b) - 1.0, a + w.hub.map_or(0.0, |_| len_a) + 1.0);
+            body.steps.push(prism(d / 2.0, lo, hi - lo, Op::Cut));
+        }
+        if let Some(g) = sp.gears.iter_mut().find(|g| g.item == w.gear.item && g.gear == w.gear.gear) {
+            g.warnings.extend(warn);
+        }
+        out.push((w.gear, bore, w.hub));
+    }
+    out
+}
+
+/// Circles the drawing suggests as a gear's bore and hub: drawn in its pitch circle's sketch,
+/// concentric with it and inside it, picked by nothing; the smallest a bore, the next a hub
+/// (only what the gear doesn't have yet).
+fn suggest_details(s: &dyn Reads, ids: &[String], items: &[gi::GearItem], details: &[DetailPick], wanted: &[Wanted]) -> Vec<GearDetailSuggestion> {
+    let picked: Vec<(u64, String)> = items
+        .iter()
+        .flat_map(|it| it.things.iter())
+        .chain(details.iter().map(|d| &d.thing))
+        .filter_map(|t| Some((t.ids().sketch?, t.ids().entity.clone())))
+        .collect();
+    let mut out = Vec::new();
+    for (i, it) in items.iter().enumerate().filter(|(_, it)| takes_details(it.kind)) {
+        for (g, geo) in gi::gear_geoms(it).into_iter().enumerate() {
+            let Some(r) = geo.radius.filter(|_| !geo.ring) else { continue };
+            let pitch = it.things.iter().find(|t| matches!(t, gi::Thing::Circle { centre, normal, radius, .. } if (radius - r).abs() <= gi::tol(r) && concentric(&geo, *centre, *normal)));
+            let Some(sketch) = pitch.and_then(|t| t.ids().sketch) else { continue };
+            let Ok(gs) = s.gear_sketch(sketch) else { continue };
+            let mut inside: Vec<(String, f64)> = gs
+                .circles
+                .iter()
+                .filter(|(id, c)| c.r < r - gi::tol(r) && !picked.iter().any(|(sk, e)| *sk == sketch && e == id) && concentric(&geo, gs.frame.world([c.c.x, c.c.y, 0.0]), gs.frame.z))
+                .map(|(id, c)| (id.clone(), 2.0 * c.r))
+                .collect();
+            inside.sort_by(|x, y| x.1.total_cmp(&y.1));
+            let has = wanted.iter().find(|w| w.gear == GearRef::new(i, g));
+            let mut slots = Vec::new();
+            if has.is_none_or(|w| w.bore.is_none()) {
+                slots.push("bore");
+            }
+            if has.is_none_or(|w| w.hub.is_none()) {
+                slots.push("hub");
+            }
+            for ((curve, diameter), slot) in inside.into_iter().zip(slots) {
+                out.push(GearDetailSuggestion { item: ids[i].clone(), gear: g, slot: slot.into(), sketch, curve, diameter });
+            }
+        }
+    }
+    out
 }
 
 /// Each item that picks geometry from a sketch that isn't fully defined gets a warning on its
@@ -501,6 +827,9 @@ pub(super) fn fill(r: &mut GearResult, it: &Items, plan: &Plan, names: Option<&[
             profile_shift: g.profile_shift,
             warnings: g.warnings.clone(),
             body: body_of(GearRef::new(g.item, g.gear)),
+            side_a: it.extra.side_a.iter().find(|(r, _)| *r == GearRef::new(g.item, g.gear)).map(|(_, v)| *v),
+            bore: it.extra.built.iter().find(|(r, _, _)| *r == GearRef::new(g.item, g.gear)).and_then(|x| x.1),
+            hub: it.extra.built.iter().find(|(r, _, _)| *r == GearRef::new(g.item, g.gear)).and_then(|x| x.2),
         })
         .collect();
     r.links = sp
@@ -509,6 +838,7 @@ pub(super) fn fill(r: &mut GearResult, it: &Items, plan: &Plan, names: Option<&[
         .map(|l| GearLinkReply { a: end_reply(&it.ids, l.a), b: end_reply(&it.ids, l.b), kind: l.kind.name().into(), ratio: l.ratio, error: l.error.clone(), hint: l.hint.clone() })
         .collect();
     r.suggestions = sp.suggestions.iter().map(|x| GearSuggestionReply { a: end_reply(&it.ids, x.a), b: end_reply(&it.ids, x.b), kind: x.kind.name().into(), why: x.why.clone() }).collect();
+    r.detail_suggestions = it.extra.suggested.clone();
     r.error = sp.error.clone();
     for n in &sp.notes {
         if !r.notes.contains(n) {

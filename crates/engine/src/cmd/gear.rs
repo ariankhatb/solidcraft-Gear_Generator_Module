@@ -1417,6 +1417,10 @@ pub(crate) trait Reads {
     fn gear_sketch(&self, id: u64) -> std::result::Result<GearSketch, String> {
         self.solved(id).map(|ss| entities_of(id, &ss)).ok_or_else(|| format!("no sketch {id}"))
     }
+    /// A sketch's name in the design (also when it isn't solved where the set is read).
+    fn sketch_name(&self, _id: u64) -> Option<String> {
+        None
+    }
 }
 
 impl Reads for Session {
@@ -1431,6 +1435,9 @@ impl Reads for Session {
     }
     fn gear_sketch(&self, id: u64) -> std::result::Result<GearSketch, String> {
         sketch_entities(self, id)
+    }
+    fn sketch_name(&self, id: u64) -> Option<String> {
+        self.doc.feature(id).map(|f| f.name.clone())
     }
 }
 
@@ -2421,7 +2428,30 @@ fn records(doc: &Document) -> Vec<Record> {
         .filter(|(key, _)| key.starts_with(STORE))
         .filter_map(|(_, data)| decode(data))
         .filter(|r| r.features().iter().any(|f| doc.feature(*f).is_some()))
+        .map(|r| renamed(doc, r))
         .collect()
+}
+
+/// A Gears feature's record with its bodies called what the feature calls them now: a body the
+/// user renamed since the set was last made keeps its place, component and joint (the record
+/// names them as they were called then).
+fn renamed(doc: &Document, mut rec: Record) -> Record {
+    let Some(names) = rec.feature.and_then(|f| doc.feature(f)).map(|f| f.body_names.clone()) else { return rec };
+    for (b, now) in rec.bodies.iter_mut().zip(&names) {
+        if now.is_empty() || b.name == *now {
+            continue;
+        }
+        let old = std::mem::replace(&mut b.name, now.clone());
+        if let Some(a) = rec.assembly.as_mut() {
+            for m in a.members.iter_mut().filter(|m| m.body == old) {
+                m.body = now.clone();
+            }
+            if let Some(k) = a.keep_out.as_mut().filter(|k| k.0 == old) {
+                k.0 = now.clone();
+            }
+        }
+    }
+    rec
 }
 
 /// Keeps `rec` with the design, and forgets the sets whose features are all gone.
@@ -3598,3 +3628,7 @@ mod tests;
 #[cfg(test)]
 #[path = "gear_sketch_tests.rs"]
 mod sketch_tests;
+
+#[cfg(test)]
+#[path = "gear_refs_tests.rs"]
+mod refs_tests;

@@ -55,7 +55,7 @@
 
 use std::f64::consts::{PI, TAU};
 
-use crate::axes::Axis;
+use crate::axes::{Axis, num};
 use crate::geom::{Outline, Region, Seg, V2};
 use crate::hub::{Bore, BoreKind};
 use crate::involute::{Involute, external_outline, mesh_external, mesh_phase};
@@ -402,10 +402,6 @@ pub fn pick_bearing(bore: f64) -> Option<(String, (f64, f64, f64))> {
         .map(|(n, d, od, w)| (n.to_string(), (d, od, w)))
 }
 
-fn mm(v: f64) -> String {
-    format!("{v:.3}").trim_end_matches('0').trim_end_matches('.').to_string()
-}
-
 /// Validates a differential's settings.
 pub fn check(s: &Spec) -> Result<(), String> {
     let d = &s.diff;
@@ -656,7 +652,7 @@ fn bevel_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     if c.abs() >= 0.9 {
         return Err(format!(
             "side gears of {za} and {zb} teeth with {zp}-tooth pinions need the pinion axes at cos Σ = ({zb} − {za}) / (2 × {zp}) = {}: too steep; use bigger pinions or side gears closer in size",
-            mm(c)
+            num(c)
         ));
     }
     let sigma = c.acos();
@@ -690,15 +686,15 @@ fn bevel_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     let side_root_small = k_small * (m * fa / 2.0 - probe.rack.dedendum * mn * g.delta_sun.cos());
     let pin = if d.pin_diameter > 0.0 { d.pin_diameter } else { ((1.1 * pinion_root_small) * 2.0).floor() / 2.0 };
     if pin < 1.0 {
-        return Err(format!("the pinions are too small for a pin (small-end roots Ø{}): use a bigger module or more pinion teeth", mm(2.0 * pinion_root_small)));
+        return Err(format!("the pinions are too small for a pin (small-end roots Ø{}): use a bigger module or more pinion teeth", num(2.0 * pinion_root_small)));
     }
     let clr = d.clr();
     let axle = d.axle_diameter;
     if axle / 2.0 >= side_root_small - 0.05 * m {
         return Err(format!(
             "the axle (Ø{}) doesn't fit through side gear A's small end (roots Ø{}): use a bigger module, more side gear teeth or a thinner axle",
-            mm(axle),
-            mm(2.0 * side_root_small)
+            num(axle),
+            num(2.0 * side_root_small)
         ));
     }
     let sub = Spec {
@@ -757,7 +753,7 @@ fn bevel_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     }
     let near_end = (g.re - g.face) * g.delta_sun.cos().min((PI - g.delta_far).cos());
     if pin / 2.0 + clr > near_end * (sigma.sin()).max(0.2) && (sigma - PI / 2.0).abs() < 1e-6 {
-        p.warn(format!("the pinion pins (Ø{}) come within the running clearance of the side gears' small ends", mm(pin)));
+        p.warn(format!("the pinion pins (Ø{}) come within the running clearance of the side gears' small ends", num(pin)));
     }
     bodies.push(Body { name: named(s, "Pinion pins"), frame: Frame::at([0.0; 3]), steps: pin_steps });
     roles.push(Role::Fixed);
@@ -875,7 +871,7 @@ fn torsen_b_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     let m = d.module;
     let beta = d.helix;
     if !(10.0..=50.0).contains(&beta) {
-        return Err(format!("a Torsen Type B needs helical gears: a helix angle of 10° to 50° (not {}°)", mm(beta)));
+        return Err(format!("a Torsen Type B needs helical gears: a helix angle of 10° to 50° (not {}°)", num(beta)));
     }
     let clr = d.clr();
     let base = Spec { module: m, pressure_angle: d.pa(), backlash: d.backlash, ..Spec::default() };
@@ -911,7 +907,7 @@ fn torsen_b_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     }
     let axle = d.axle_diameter;
     if axle / 2.0 >= ga.rf() - 0.5 * m {
-        return Err(format!("the axle (Ø{}) doesn't fit in the side gears (roots Ø{}): use more side gear teeth or a thinner axle", mm(axle), mm(2.0 * ga.rf())));
+        return Err(format!("the axle (Ø{}) doesn't fit in the side gears (roots Ø{}): use more side gear teeth or a thinner axle", num(axle), num(2.0 * ga.rf())));
     }
     let (mut r_hub, l_hub) = hub_size(axle);
     r_hub = r_hub.min(ga.rf() - 0.5 * m);
@@ -943,7 +939,7 @@ fn torsen_b_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
         let (_, _, pb) = phases(*th);
         let off = crate::geom::wrap_period(pb - pb0, pitch_s);
         if off.abs() > 1e-6 {
-            p.warn(format!("element pair at {}°: side gear B is {}° off its mesh (an assembly condition not met)", mm(th.to_degrees()), mm(off.to_degrees())));
+            p.warn(format!("element pair at {}°: side gear B is {}° off its mesh (an assembly condition not met)", num(th.to_degrees()), num(off.to_degrees())));
         }
     }
     // Side B's hub runs up (+z) from its top face: built in a frame turned over.
@@ -1023,8 +1019,8 @@ fn torsen_b_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     p.fact("side gear thrust face friction loss (estimate, fraction)", f_side, Unit::None);
     p.warn(format!(
         "the torque bias ratio {} is an estimate from the helix and pressure angles with μ = {} at the element pockets and thrust faces; measure a built unit",
-        mm((tbr * 100.0).round() / 100.0),
-        mm(d.friction)
+        num((tbr * 100.0).round() / 100.0),
+        num(d.friction)
     ));
     if let Some(e) = [mesh_external(&ga, &e1, w), mesh_external(&e1, &e2, lz)].iter().find(|m| m.contact_ratio < 1.0) {
         p.warn(format!("contact ratio {:.2} under 1", e.contact_ratio));
@@ -1122,7 +1118,7 @@ fn torsen_a_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     let w = if d.face_width > 0.0 { d.face_width } else { 8.0 * m };
     let beta_s = d.helix;
     if !(30.0..=74.0).contains(&beta_s) {
-        return Err(format!("a Torsen Type A's side gears are worms: their helix angle must be 30° to 74° (the lead angle 16° to 60°), not {}°", mm(beta_s)));
+        return Err(format!("a Torsen Type A's side gears are worms: their helix angle must be 30° to 74° (the lead angle 16° to 60°), not {}°", num(beta_s)));
     }
     let sub = Spec {
         kind: Kind::CrossedHelical,
@@ -1248,7 +1244,7 @@ fn torsen_a_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     if n > 1 {
         let half = (y_end.max(l0 + w_sp)).atan2(e - ra_sp.max(ra_e));
         if 2.0 * half > TAU / f64::from(n) {
-            return Err(format!("{n} element pairs don't fit round the side gears (each spans {}° with its spurs and journals): use fewer pairs or smaller elements", mm((2.0 * half).to_degrees())));
+            return Err(format!("{n} element pairs don't fit round the side gears (each spans {}° with its spurs and journals): use fewer pairs or smaller elements", num((2.0 * half).to_degrees())));
         }
     }
     p.fact("element centre distance from the axle", e, Unit::Mm);
@@ -1336,7 +1332,7 @@ fn plan_drive(s: &Spec, core: &Core, r_case: f64, p: &mut Plan) -> Result<Option
     let Some(sub) = drive_spec(s, r_bore) else { return Ok(None) };
     let what = d.drive.label().to_lowercase();
     let mut sp = crate::plan::plan(&sub).map_err(|e| {
-        if e.contains("bore") { format!("the {what}: the ring gear is too small to go round the case (Ø{}): use a bigger ring gear (more teeth or a bigger module)", mm(2.0 * r_case)) } else { format!("the {what}: {e}") }
+        if e.contains("bore") { format!("the {what}: the ring gear is too small to go round the case (Ø{}): use a bigger ring gear (more teeth or a bigger module)", num(2.0 * r_case)) } else { format!("the {what}: {e}") }
     })?;
     if sp.bodies.len() != 2 {
         return Err(format!("the {what} didn't plan its two gears"));
@@ -1414,8 +1410,8 @@ fn plan_drive(s: &Spec, core: &Core, r_case: f64, p: &mut Plan) -> Result<Option
             _ => {
                 p.warn(format!(
                     "no room for ring bolts between the case (Ø{}) and the ring's tooth roots (Ø{}): bolts left out; use a bigger ring gear or the integral mount",
-                    mm(2.0 * r_bore),
-                    mm(2.0 * root)
+                    num(2.0 * r_bore),
+                    num(2.0 * root)
                 ));
             }
         }
@@ -1578,11 +1574,11 @@ fn case_layout(s: &Spec, core: &Core) -> Result<Layout, String> {
     let wall_tr = (0.12 * d.axle_diameter).max(2.0);
     let need = 2.0 * (ax + wall_tr);
     let bearing = if d.bearing.trim().is_empty() {
-        pick_bearing(need).ok_or_else(|| format!("no case bearing in the library has a bore of Ø{} or more: give a smaller axle", mm(need)))?
+        pick_bearing(need).ok_or_else(|| format!("no case bearing in the library has a bore of Ø{} or more: give a smaller axle", num(need)))?
     } else {
         let b = case_bearing(&d.bearing).ok_or_else(|| format!("no bearing is called '{}'", d.bearing.trim()))?;
         if b.0 < need - 1e-9 {
-            return Err(format!("bearing {} has a Ø{} bore: the journal round the axle bore needs Ø{} or more", d.bearing.trim(), mm(b.0), mm(need)));
+            return Err(format!("bearing {} has a Ø{} bore: the journal round the axle bore needs Ø{} or more", d.bearing.trim(), num(b.0), num(need)));
         }
         (d.bearing.trim().to_string(), b)
     };
@@ -1823,7 +1819,7 @@ fn rate(s: &Spec, core: &Core, drive: Option<&Drive>, p: &mut Plan) {
             let tau = 2.0 * ft / (PI * pin * pin / 4.0);
             p.fact("load: pinion pin shear stress (MPa)", tau, Unit::None);
             if tau > 250.0 {
-                p.warn(format!("the pinion pins' shear stress ({} MPa) is over 250 MPa (hardened steel): use bigger pins or more pinions", mm(tau.round())));
+                p.warn(format!("the pinion pins' shear stress ({} MPa) is over 250 MPa (hardened steel): use bigger pins or more pinions", num(tau.round())));
             }
         }
     } else if d.style == Style::TorsenB {
@@ -1876,7 +1872,7 @@ pub(crate) fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
         if gap < d.clr() * 0.5 {
             return Err(format!(
                 "the drive pinion runs into the case ({} mm): use a bigger ring gear, move the ring along the axle (drive position) or a smaller case",
-                mm(gap)
+                num(gap)
             ));
         }
         p.fact("final drive ratio", dr.ratio, Unit::None);
@@ -1903,8 +1899,8 @@ pub(crate) fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
         if d.style == Style::Biased {
             p.warn(format!(
                 "uneven side gears split the case's torque {}:{} (side A : side B) always, at any speed: zA·nA + zB·nB = (zA + zB)·n_case; with equal wheel speeds both sides turn with the case",
-                mm(za),
-                mm(zb)
+                num(za),
+                num(zb)
             ));
         }
     }
@@ -2233,11 +2229,11 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
                     }
                 }
             }
-            let Some((_, za, zb, zp)) = best else { return Err(format!("no tooth counts give a {} torque split with {n} pinions", mm(want))) };
+            let Some((_, za, zb, zp)) = best else { return Err(format!("no tooth counts give a {} torque split with {n} pinions", num(want))) };
             d.side_teeth = za;
             d.side_teeth2 = zb;
             d.pinion_teeth = zp;
-            notes.push(format!("side gears {za} and {zb} with {zp}-tooth pinions: torque split {} (asked {})", mm((f64::from(zb) / f64::from(za) * 1000.0).round() / 1000.0), mm(want)));
+            notes.push(format!("side gears {za} and {zb} with {zp}-tooth pinions: torque split {} (asked {})", num((f64::from(zb) / f64::from(za) * 1000.0).round() / 1000.0), num(want)));
             if goal.bias > 0.0 && goal.bias < 1.0 {
                 notes.push("side B is the bigger one: swap the axles for a split under 1".into());
             }
@@ -2273,10 +2269,10 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
                     }
                     notes.push(format!(
                         "a bias of {} needs friction μ ≈ {} at {}° helix (estimate; the helix alone reaches {}): friction surfaces or washers set it",
-                        mm(goal.bias),
-                        mm(mu),
-                        mm(at),
-                        mm((t * 100.0).round() / 100.0)
+                        num(goal.bias),
+                        num(mu),
+                        num(at),
+                        num((t * 100.0).round() / 100.0)
                     ));
                     d.friction = mu;
                 }
@@ -2308,9 +2304,9 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
             break;
         }
     }
-    let Some((m, case_od)) = chosen else { return Err(format!("no module up to {} fits a Ø{} axle and the load ({last})", mm(MODULES[MODULES.len() - 1]), mm(axle))) };
+    let Some((m, case_od)) = chosen else { return Err(format!("no module up to {} fits a Ø{} axle and the load ({last})", num(MODULES[MODULES.len() - 1]), num(axle))) };
     d.module = m;
-    notes.push(format!("differential gears: module {}", mm(m)));
+    notes.push(format!("differential gears: module {}", num(m)));
     // The drive.
     if d.drive != DriveKind::None {
         let zp = if ratio >= 5.0 { 7 } else if ratio >= 3.5 { 10 } else { 13 };
@@ -2334,7 +2330,7 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
         }
         d.drive_pinion_teeth = zp;
         d.ring_teeth = zr;
-        notes.push(format!("final drive {zr}:{zp} = {}", mm((f64::from(zr) / f64::from(zp) * 1000.0).round() / 1000.0)));
+        notes.push(format!("final drive {zr}:{zp} = {}", num((f64::from(zr) / f64::from(zp) * 1000.0).round() / 1000.0)));
         if d.drive == DriveKind::Hypoid {
             d.drive_spiral = 45.0;
         }
@@ -2359,7 +2355,7 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
             match try_m(dm) {
                 Some(x) => Some((dm, x)),
                 None => {
-                    notes.push(format!("a Ø{} ring gear doesn't fit round the case or carry the load; the smallest that does is used", mm(goal.ring_diameter)));
+                    notes.push(format!("a Ø{} ring gear doesn't fit round the case or carry the load; the smallest that does is used", num(goal.ring_diameter)));
                     search(&mut notes)
                 }
             }
@@ -2368,7 +2364,7 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
         };
         let Some((dm, (s, _))) = found else { return Err("no ring gear size fits round the case and carries the load".into()) };
         d.drive_module = dm;
-        notes.push(format!("ring gear Ø{} (module {})", mm(dm * f64::from(zr)), mm(dm)));
+        notes.push(format!("ring gear Ø{} (module {})", num(dm * f64::from(zr)), num(dm)));
         let _ = s;
     }
     d.keep_out = true;

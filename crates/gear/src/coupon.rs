@@ -21,6 +21,7 @@
 
 use std::f64::consts::{PI, TAU};
 
+use crate::axes::num;
 use crate::geom::{Outline, Region, Seg, V2, wrap};
 use crate::hub::{Bore, Chamfer, Hardware, Shaft};
 use crate::involute::join_ends;
@@ -70,10 +71,6 @@ struct Source<'a> {
     dirs: Vec<f64>,
     ring: bool,
     bore: Option<&'a Bore>,
-}
-
-fn mm(v: f64) -> String {
-    format!("{v:.3}").trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 fn line(a: V2, b: V2) -> Seg {
@@ -522,7 +519,7 @@ pub(crate) fn plan(s: &Spec) -> Result<Plan, String> {
         p.bodies.push(Body { name: base, frame: Frame::at(s.origin), steps });
     }
     if pieces.iter().all(|pc| pc.whole) {
-        p.warn(format!("the gears are too small to cut a {}-tooth coupon from: the coupon is the whole set", mm(f64::from(s.coupon_teeth))));
+        p.warn(format!("the gears are too small to cut a {}-tooth coupon from: the coupon is the whole set", num(f64::from(s.coupon_teeth))));
     }
     if p.bodies.is_empty() {
         return Err("nothing to build with these choices".into());

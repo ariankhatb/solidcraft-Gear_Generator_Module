@@ -3,7 +3,8 @@
 
 use std::f64::consts::{PI, TAU};
 
-use super::{Body, Frame, Op, Plan, PreviewGear, Spec, Step, Unit, hub_steps, hub_steps_tip, mm, name, tooth_warnings, wanted, with_bore};
+use crate::axes::num;
+use super::{Body, Frame, Op, Plan, PreviewGear, Spec, Step, Unit, hub_steps, hub_steps_tip, name, tooth_warnings, wanted, with_bore};
 use crate::face_gear::FaceGear;
 use crate::geom::{Outline, Region, V2};
 use crate::involute::external_outline;
@@ -21,7 +22,7 @@ fn with_module(s: &Spec, module: f64) -> Spec {
 pub(crate) fn chain_of(s: &Spec) -> (String, f64, f64, f64, f64) {
     match chain_by_id(s.chain) {
         Some(c) => (c.label.to_string(), c.pitch, c.roller, c.inner_width, c.strand_pitch),
-        None => (format!("custom {} mm pitch", mm(s.chain_pitch)), s.chain_pitch, s.roller_diameter, s.roller_width, s.strand_pitch),
+        None => (format!("custom {} mm pitch", num(s.chain_pitch)), s.chain_pitch, s.roller_diameter, s.roller_width, s.strand_pitch),
     }
 }
 
@@ -88,19 +89,19 @@ pub(super) fn check(s: &Spec) -> Result<(), String> {
                 return Err("a spline's pressure angle must be between 20° and 45° (30° is standard; ANSI B92.1 also has 37.5° and 45°)".into());
             }
             if s.backlash >= PI * s.module / 8.0 {
-                return Err(format!("the clearance must be under an eighth of the pitch ({} mm)", mm(PI * s.module / 8.0)));
+                return Err(format!("the clearance must be under an eighth of the pitch ({} mm)", num(PI * s.module / 8.0)));
             }
             let sp = spline_of(s);
             let x = sp.shift();
             if !(-0.5..=1.0).contains(&x) {
                 return Err(format!(
                     "a reference diameter of {} mm puts the profile shift at {}: for {} teeth of module {} use {} to {} mm",
-                    mm(s.spline_diameter),
-                    mm(x),
+                    num(s.spline_diameter),
+                    num(x),
                     s.teeth,
-                    mm(s.module),
-                    mm(s.module * (f64::from(s.teeth) + 1.0)),
-                    mm(s.module * (f64::from(s.teeth) + 2.0))
+                    num(s.module),
+                    num(s.module * (f64::from(s.teeth) + 1.0)),
+                    num(s.module * (f64::from(s.teeth) + 2.0))
                 ));
             }
             // The cutter that makes the shaft's teeth must have a tip.
@@ -108,7 +109,7 @@ pub(super) fn check(s: &Spec) -> Result<(), String> {
             if PI / 4.0 - rack.dedendum * sp.pressure_angle.tan() < 0.01 {
                 return Err(format!(
                     "at {}° the shaft's {} root is too deep for its cutter to have a tip: use a {}smaller pressure angle",
-                    mm(s.pressure_angle),
+                    num(s.pressure_angle),
                     if s.fillet_root { "fillet" } else { "flat" },
                     if s.fillet_root { "flat root or a " } else { "" }
                 ));
@@ -154,7 +155,7 @@ pub(super) fn sprocket(s: &Spec, p: &mut Plan) {
         let pre = if z2 == 0 { String::new() } else { format!("{who} ") };
         let (lo, hi) = sp.tip_diameter_range();
         p.fact(format!("{pre}pitch diameter"), sp.pitch_diameter(), Unit::Mm);
-        p.fact(format!("{pre}tip diameter (middle of {}…{})", mm(lo), mm(hi)), 2.0 * t.ra, Unit::Mm);
+        p.fact(format!("{pre}tip diameter (middle of {}…{})", num(lo), num(hi)), 2.0 * t.ra, Unit::Mm);
         p.fact(format!("{pre}root diameter"), sp.root_diameter(), Unit::Mm);
         let how = if z.is_multiple_of(2) { "over opposite roots" } else { "odd teeth: over the nearest opposite roots" };
         p.fact(format!("{pre}caliper diameter ({how})"), sp.caliper_diameter(), Unit::Mm);
@@ -163,7 +164,7 @@ pub(super) fn sprocket(s: &Spec, p: &mut Plan) {
         p.fact(format!("{pre}tooth flank radius"), sp.flank_radius(), Unit::Mm);
         p.fact(format!("{pre}largest hub (shroud) diameter"), sp.shroud_diameter(), Unit::Mm);
         if t.pointed {
-            p.warn(format!("{who}: the teeth come to a point; the tip is lowered to Ø{}", mm(2.0 * t.ra)));
+            p.warn(format!("{who}: the teeth come to a point; the tip is lowered to Ø{}", num(2.0 * t.ra)));
         }
         if z < 9 {
             p.warn(format!("{who}: under 9 teeth the chain runs roughly (chordal action); 17 or more is usual"));
@@ -172,7 +173,7 @@ pub(super) fn sprocket(s: &Spec, p: &mut Plan) {
         }
         let dg = sp.shroud_diameter().min(2.0 * t.r_min - 0.1 * pitch);
         if s.hub_diameter > dg && s.hub_length > 0.0 {
-            p.warn(format!("{who}: a hub over Ø{} fouls the chain's plates", mm(dg)));
+            p.warn(format!("{who}: a hub over Ø{} fouls the chain's plates", num(dg)));
         }
         // One toothed disc a strand, joined by a core that clears the chain's plates.
         let teeth = Region { outer: vec![t.outline.clone()], holes: vec![] };
@@ -253,7 +254,7 @@ pub(super) fn sprocket(s: &Spec, p: &mut Plan) {
         p.warn(format!("the chain wraps only {wrap:.0}° of the smaller sprocket (120° or more is usual)"));
     }
     if a < 30.0 * pitch || a > 80.0 * pitch {
-        p.warn(format!("centre distance {} pitches: 30 to 50 is usual (80 at most without a guide)", mm(a / pitch)));
+        p.warn(format!("centre distance {} pitches: 30 to 50 is usual (80 at most without a guide)", num(a / pitch)));
     }
     let (st2, o2, _) = build(z2, "sprocket 2", &s.bore2, PI, p);
     let tip2 = Sprocket { teeth: z2, pitch, roller }.tip_diameter() / 2.0;
@@ -472,7 +473,7 @@ pub(super) fn spline(s: &Spec, p: &mut Plan) {
     let shaft = sp.shaft();
     let (o_shaft, f) = sp.shaft_outline(0.0);
     if let Some(d) = f.defect() {
-        p.refuse(format!("shaft: {d} ({} teeth, profile shift {}): use more teeth or another reference diameter", s.teeth, mm(sp.shift())));
+        p.refuse(format!("shaft: {d} ({} teeth, profile shift {}): use more teeth or another reference diameter", s.teeth, num(sp.shift())));
         return;
     }
     let hub_teeth = sp.hub_outline(0.0);
@@ -483,15 +484,15 @@ pub(super) fn spline(s: &Spec, p: &mut Plan) {
     let (r_minor, hub_raised) = sp.hub_tip_radius(&f);
     let da2 = da2.max(2.0 * r_minor);
     if hub_raised {
-        p.warn(format!("hub: the minor diameter is raised to Ø{} to clear the shaft's root fillets (more teeth or a larger reference diameter avoid it)", mm(da2)));
+        p.warn(format!("hub: the minor diameter is raised to Ø{} to clear the shaft's root fillets (more teeth or a larger reference diameter avoid it)", num(da2)));
     }
     if hub_pointed {
-        p.warn(format!("hub: the spaces come to a point; the major diameter is lowered to Ø{}", mm(df2)));
+        p.warn(format!("hub: the spaces come to a point; the major diameter is lowered to Ø{}", num(df2)));
     }
     let db = sp.reference_diameter();
     match s.spline_standard {
         SplineStandard::Din5480 => {
-            p.preview_note = format!("DIN 5480 – {} × {} × {}", mm(db), mm(m), s.teeth);
+            p.preview_note = format!("DIN 5480 – {} × {} × {}", num(db), num(m), s.teeth);
             p.fact("reference diameter d_B", db, Unit::Mm);
             p.fact("profile shift x", sp.shift(), Unit::None);
             if !(-0.06..=0.46).contains(&sp.shift()) {
@@ -505,7 +506,7 @@ pub(super) fn spline(s: &Spec, p: &mut Plan) {
             }
         }
         SplineStandard::AnsiB92 => {
-            p.preview_note = format!("ANSI B92.1 – {} teeth, {}/{} pitch, {}°", s.teeth, mm(25.4 / m), mm(50.8 / m), mm(s.pressure_angle));
+            p.preview_note = format!("ANSI B92.1 – {} teeth, {}/{} pitch, {}°", s.teeth, num(25.4 / m), num(50.8 / m), num(s.pressure_angle));
             p.fact("diametral pitch P", 25.4 / m, Unit::None);
             if ![30.0, 37.5, 45.0].iter().any(|a| (s.pressure_angle - a).abs() < 1e-6) {
                 p.warn("ANSI B92.1 uses 30°, 37.5° or 45° pressure angles");
@@ -523,23 +524,23 @@ pub(super) fn spline(s: &Spec, p: &mut Plan) {
     p.fact("shaft tooth thickness (pitch)", shaft.thickness(), Unit::Mm);
     p.fact("hub space width (pitch)", sp.hub_space(), Unit::Mm);
     let (mp, dp) = shaft.over_pins(None);
-    p.fact(format!("shaft over two Ø{} pins", mm(dp)), mp, Unit::Mm);
+    p.fact(format!("shaft over two Ø{} pins", num(dp)), mp, Unit::Mm);
     if f.pointed {
-        p.warn(format!("shaft: the teeth come to a point; the tip is lowered to Ø{}", mm(2.0 * f.ra)));
+        p.warn(format!("shaft: the teeth come to a point; the tip is lowered to Ø{}", num(2.0 * f.ra)));
     }
     if da2 / 2.0 <= f.rf + 0.02 * m || df2 / 2.0 <= f.ra {
         p.warn("the hub's teeth touch the shaft's roots or tips: check the diameters");
     }
     let r_out = if s.hub_diameter > 0.0 { s.hub_diameter / 2.0 } else { df2 / 2.0 + if s.rim > 0.0 { s.rim } else { (3.0 * m).max(0.25 * db) } };
     if r_out < df2 / 2.0 + 0.1 * m {
-        p.refuse(format!("the hub's outside diameter must be over Ø{} (its major diameter and a wall); it is Ø{}", mm(df2 + 0.2 * m), mm(2.0 * r_out)));
+        p.refuse(format!("the hub's outside diameter must be over Ø{} (its major diameter and a wall); it is Ø{}", num(df2 + 0.2 * m), num(2.0 * r_out)));
         return;
     }
     if r_out <= df2 / 2.0 + 0.5 * m {
         p.warn("the hub's wall is thinner than half a module");
     }
     if s.bore.outline().is_some() && s.bore.reach() >= f.rf - 0.05 * m {
-        p.refuse(format!("shaft: the bore (reaching Ø{}) cuts into the tooth roots (Ø{}); use a smaller bore", mm(2.0 * s.bore.reach()), mm(2.0 * f.rf)));
+        p.refuse(format!("shaft: the bore (reaching Ø{}) cuts into the tooth roots (Ø{}); use a smaller bore", num(2.0 * s.bore.reach()), num(2.0 * f.rf)));
         return;
     }
     p.fact("hub outside diameter", 2.0 * r_out, Unit::Mm);
@@ -597,19 +598,19 @@ pub(super) fn face_gear(s: &Spec, p: &mut Plan) {
     let asked = if s.inner_diameter > 0.0 { s.inner_diameter / 2.0 } else { r_min };
     let mut ri = asked;
     if ri < r_min - 1e-9 {
-        p.warn(format!("the teeth's inner end is raised to Ø{}: inside it the pinion undercuts them", mm(2.0 * r_min)));
+        p.warn(format!("the teeth's inner end is raised to Ø{}: inside it the pinion undercuts them", num(2.0 * r_min)));
         ri = r_min;
     }
     let mut ro = ri + s.face_width;
     if ro > r_max + 1e-9 {
-        p.warn(format!("the teeth's outer end is held to Ø{}: past it they come to a point", mm(2.0 * r_max)));
+        p.warn(format!("the teeth's outer end is held to Ø{}: past it they come to a point", num(2.0 * r_max)));
         ro = r_max;
     }
     if ro - ri < m {
         p.refuse(format!(
             "no room for teeth a module long between Ø{} (inside it the pinion undercuts them) and Ø{} (past it they come to a point): use more face gear teeth or fewer pinion teeth{}",
-            mm(2.0 * r_min),
-            mm(2.0 * r_max),
+            num(2.0 * r_min),
+            num(2.0 * r_max),
             if s.inner_diameter > 0.0 { ", or a smaller inner diameter" } else { "" }
         ));
         return;
@@ -630,7 +631,7 @@ pub(super) fn face_gear(s: &Spec, p: &mut Plan) {
     let (o1, f1) = external_outline(&pinion, PI / fg.z1());
     tooth_warnings(p, "pinion", &pinion, &f1);
     if s.bore.outline().is_some() && s.bore.reach() >= ri - 0.05 * m {
-        p.refuse(format!("face gear: the bore (reaching Ø{}) cuts into the teeth (from Ø{}); use a smaller bore", mm(2.0 * s.bore.reach()), mm(2.0 * ri)));
+        p.refuse(format!("face gear: the bore (reaching Ø{}) cuts into the teeth (from Ø{}); use a smaller bore", num(2.0 * s.bore.reach()), num(2.0 * ri)));
         return;
     }
     let (top, bottom) = (fg.top(), fg.bottom());

@@ -4,6 +4,7 @@
 
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
+use crate::axes::num;
 use crate::cycloid::{Cycloidal, CycloidalDrive, cycloidal_outline};
 use crate::geom::{Outline, Region, V2, inv, wrap_period};
 use crate::hub::{Bore, Chamfer, Hardware, Shaft, lightening_holes};
@@ -1247,16 +1248,16 @@ pub fn check(s: &Spec) -> Result<(), String> {
             let most = (PI / 4.0 - 0.01) / s.pressure_angle.to_radians().tan();
             return Err(format!(
                 "a {}° pressure angle with a dedendum of {} modules gives a cutter with pointed teeth: lower the dedendum to {} or less, or the pressure angle",
-                mm(s.pressure_angle),
-                mm(s.rack.dedendum),
-                mm((most * 100.0).floor() / 100.0)
+                num(s.pressure_angle),
+                num(s.rack.dedendum),
+                num((most * 100.0).floor() / 100.0)
             ));
         }
         if s.backlash >= PI * s.module / 4.0 {
-            return Err(format!("backlash must be under a quarter of the pitch ({} mm)", mm(PI * s.module / 4.0)));
+            return Err(format!("backlash must be under a quarter of the pitch ({} mm)", num(PI * s.module / 4.0)));
         }
     } else if s.kind == Kind::Cycloidal && s.backlash >= PI * s.module / 4.0 {
-        return Err(format!("backlash must be under a quarter of the pitch ({} mm)", mm(PI * s.module / 4.0)));
+        return Err(format!("backlash must be under a quarter of the pitch ({} mm)", num(PI * s.module / 4.0)));
     }
     if matches!(s.kind, Kind::SpiralBevel) && s.spiral_angle.abs() > 60.0 {
         return Err("spiral angle must be within ±60°".into());
@@ -1267,7 +1268,7 @@ pub fn check(s: &Spec) -> Result<(), String> {
         }
         let least = (s.rack.dedendum - s.shift + 0.25) * s.module;
         if s.rack_height > 0.0 && s.rack_height < least {
-            return Err(format!("rack height below the pitch line must be over {} mm (the tooth roots plus a quarter module)", mm(least)));
+            return Err(format!("rack height below the pitch line must be over {} mm (the tooth roots plus a quarter module)", num(least)));
         }
     }
     crate::strength::check(&s.load)?;
@@ -1375,14 +1376,10 @@ fn name(s: &Spec, base: &str) -> String {
     if s.name.trim().is_empty() { base.to_string() } else { format!("{} {base}", s.name.trim()) }
 }
 
-fn mm(v: f64) -> String {
-    format!("{v:.3}").trim_end_matches('0').trim_end_matches('.').to_string()
-}
-
 /// Notes about one involute gear's teeth.
 fn tooth_warnings(p: &mut Plan, who: &str, g: &Involute, f: &ToothFlank) {
     if let Some(d) = f.defect() {
-        p.refuse(format!("{who}: {d} ({} teeth, profile shift {}): use more teeth or a larger profile shift", g.teeth, mm(g.shift)));
+        p.refuse(format!("{who}: {d} ({} teeth, profile shift {}): use more teeth or a larger profile shift", g.teeth, num(g.shift)));
         return;
     }
     if f.undercut {
@@ -1393,12 +1390,12 @@ fn tooth_warnings(p: &mut Plan, who: &str, g: &Involute, f: &ToothFlank) {
         ));
     }
     if f.pointed {
-        p.warn(format!("{who}: the teeth come to a point; the tip is lowered to Ø{}", mm(2.0 * f.ra)));
+        p.warn(format!("{who}: the teeth come to a point; the tip is lowered to Ø{}", num(2.0 * f.ra)));
     } else {
         // (The land before any tip rounding, which `f.tip_half` has taken off.)
         let sa = g.thickness_at(f.ra);
         if sa < 0.25 * g.module {
-            p.warn(format!("{who}: thin tooth tips ({} mm; 0.25 × module or more is usual)", mm(sa)));
+            p.warn(format!("{who}: thin tooth tips ({} mm; 0.25 × module or more is usual)", num(sa)));
         }
     }
 }
@@ -1418,7 +1415,7 @@ fn involute_facts(p: &mut Plan, who: &str, g: &Involute, f: &ToothFlank) {
     let (k, w) = g.span();
     p.fact(format!("{pre}span over {k} teeth"), w, Unit::Mm);
     let (m, dp) = g.over_pins(None);
-    p.fact(format!("{pre}over two Ø{} pins", mm(dp)), m, Unit::Mm);
+    p.fact(format!("{pre}over two Ø{} pins", num(dp)), m, Unit::Mm);
 }
 
 /// The steps that add a hub, bore and lightening holes to a gear body from z = 0 to `face`.
@@ -1435,7 +1432,7 @@ fn hub_steps_tip(s: &Spec, bore: &Bore, root_radius: f64, tip: f64, face: f64, s
     let hub_r = s.hub_diameter / 2.0;
     let reach = bore.reach();
     if bore.outline().is_some() && reach >= root_radius - 0.05 * s.module {
-        p.refuse(format!("{who}: the bore (reaching Ø{}) cuts into the tooth roots (Ø{}); use a smaller bore", mm(2.0 * reach), mm(2.0 * root_radius)));
+        p.refuse(format!("{who}: the bore (reaching Ø{}) cuts into the tooth roots (Ø{}); use a smaller bore", num(2.0 * reach), num(2.0 * root_radius)));
         return;
     }
     if hub_r > 0.0 && s.hub_length > 0.0 {
@@ -1460,7 +1457,7 @@ fn hub_steps_tip(s: &Spec, bore: &Bore, root_radius: f64, tip: f64, face: f64, s
         if !(room > s.module) || !(d > 0.0) {
             p.warn(format!("{who}: no room for lightening holes; left out"));
         } else if d > most {
-            p.warn(format!("{who}: {} lightening holes Ø{} don't fit between Ø{} and Ø{} (Ø{} at most); left out", s.holes, mm(d), mm(2.0 * inner), mm(2.0 * rim), mm(most)));
+            p.warn(format!("{who}: {} lightening holes Ø{} don't fit between Ø{} and Ø{} (Ø{} at most); left out", s.holes, num(d), num(2.0 * inner), num(2.0 * rim), num(most)));
         } else {
             let holes = lightening_holes(s.holes, d, at, PI / f64::from(s.holes));
             steps.push(Step::Prism { region: Region { outer: holes, holes: vec![] }, z0: -1.0, height: face + 2.0, twist: 0.0, op: Op::Cut });
@@ -1541,14 +1538,14 @@ fn ring_warnings(p: &mut Plan, who: &str, ring: &Internal, f: &ToothFlank) {
     let g = &ring.gear;
     let tooth_tip = (PI / g.z() - f.root_half) * f.rf;
     if f.defect().is_some() || !(tooth_tip > 0.0) || !f.tip_half.is_finite() {
-        p.refuse(format!("{who}: {} teeth with profile shift {} leave no room for internal teeth: use more teeth or a shift nearer 0", g.teeth, mm(g.shift)));
+        p.refuse(format!("{who}: {} teeth with profile shift {} leave no room for internal teeth: use more teeth or a shift nearer 0", g.teeth, num(g.shift)));
         return;
     }
     if f.rf > ring.r_tip() + 1e-9 * g.module {
-        p.warn(format!("{who}: the teeth come to a point; the inner tips are raised to Ø{}", mm(2.0 * f.rf)));
+        p.warn(format!("{who}: the teeth come to a point; the inner tips are raised to Ø{}", num(2.0 * f.rf)));
     }
     if f.pointed {
-        p.warn(format!("{who}: the tooth spaces close before the root circle; the root is lowered to Ø{}", mm(2.0 * f.ra)));
+        p.warn(format!("{who}: the tooth spaces close before the root circle; the root is lowered to Ø{}", num(2.0 * f.ra)));
     }
 }
 
@@ -1614,7 +1611,7 @@ fn rack(s: &Spec, p: &mut Plan) {
     } else {
         vec![Step::Prism { region: region.clone(), z0: 0.0, height: s.face_width, twist: 0.0, op: Op::New }]
     };
-    p.bodies.push(Body { name: name(s, &format!("Rack m{}", mm(s.module))), frame: Frame::at(s.origin), steps });
+    p.bodies.push(Body { name: name(s, &format!("Rack m{}", num(s.module))), frame: Frame::at(s.origin), steps });
     p.preview.push(PreviewGear { name: "rack".into(), region, center: V2::ZERO, speed: 0.0, slide: 1.0, pitch_radius: 0.0 , orbit: 0.0, period: PI * g.mt()});
 }
 
@@ -1638,7 +1635,7 @@ fn pair(s: &Spec, p: &mut Plan) {
     let dz2 = (s.face_width - face2) / 2.0 + s.face_offset2;
     let shared = s.face_width.min(dz2 + face2) - dz2.max(0.0);
     if !(shared > 0.0) {
-        p.refuse(format!("gear 2's face (offset {} mm) doesn't overlap gear 1's: lower the face offset", mm(s.face_offset2)));
+        p.refuse(format!("gear 2's face (offset {} mm) doesn't overlap gear 1's: lower the face offset", num(s.face_offset2)));
         return;
     }
     // Shifted gears sit closer than their shifts push the tips out: shorten both tips by the
@@ -1802,8 +1799,8 @@ fn planetary(s: &Spec, p: &mut Plan) {
     if (m_pr.center_distance - a).abs() > 0.01 * s.module {
         p.warn(format!(
             "the planets sit at {} from the sun but {} from the ring: use ring teeth = sun + 2 × planet ({}) or adjust shifts",
-            mm(a),
-            mm(m_pr.center_distance),
+            num(a),
+            num(m_pr.center_distance),
             zs + 2 * zp
         ));
     }
@@ -1922,20 +1919,20 @@ pub(crate) fn cone_faces(s: &Spec, re: f64, p: &mut Plan, names: [&str; 2]) -> O
     let (b1, heel2, b2) = (faces[0].width, faces[1].heel, faces[1].width);
     for (f, who) in faces.iter().zip(names) {
         if f.width > f.heel / 3.0 {
-            p.warn(format!("{who}: face width over a third of the cone distance ({}) makes weak small ends", mm(f.heel / 3.0)));
+            p.warn(format!("{who}: face width over a third of the cone distance ({}) makes weak small ends", num(f.heel / 3.0)));
         }
     }
     if !(heel2.is_finite() && b2 > 0.0) || heel2 - b2 < 0.25 * re || heel2 > 1.5 * re {
         p.refuse(format!(
             "{}: a heel {} mm in from the cone distance ({}) puts the teeth too near the apex or too far out; lower the heel offset or the face width",
             names[1],
-            mm(s.face_offset2),
-            mm(re)
+            num(s.face_offset2),
+            num(re)
         ));
         return None;
     }
     if heel2 <= re - b1 + 0.05 * s.module || heel2 - b2 >= re - 0.05 * s.module {
-        p.refuse(format!("{}'s face (heel offset {} mm) doesn't overlap {}'s: lower the heel offset", names[1], mm(s.face_offset2), names[0]));
+        p.refuse(format!("{}'s face (heel offset {} mm) doesn't overlap {}'s: lower the heel offset", names[1], num(s.face_offset2), names[0]));
         return None;
     }
     Some(faces)
@@ -1998,7 +1995,7 @@ fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, face: Con
     let (dc, ds) = (delta.cos(), delta.sin());
     let ha = crown.addendum.max(0.0);
     if ha * ds >= 0.5 * h || crown.dedendum >= 0.9 * re * delta.tan() {
-        p.refuse(format!("{who}: the teeth are too tall for a cone this flat or this slim (pitch cone angle {}°): use a smaller module, more teeth or a different shaft angle", mm(delta.to_degrees())));
+        p.refuse(format!("{who}: the teeth are too tall for a cone this flat or this slim (pitch cone angle {}°): use a smaller module, more teeth or a different shaft angle", num(delta.to_degrees())));
         let none = ConeTeeth { steps: Vec::new(), ends: ConeEnds { back: 0.0, front: 0.0, small_root: 0.0 }, tip_radius: 0.0 };
         return (none, ToothFlank { rf: 0.0, ra: 0.0, root_half: 0.0, tip_half: 0.0, fillet: Vec::new(), flank: Vec::new(), undercut: false, pointed: false });
     }
@@ -2235,8 +2232,8 @@ fn bevel(s: &Spec, p: &mut Plan) {
     if d1.to_degrees() > 85.0 || d2.to_degrees() > 85.0 || d1.to_degrees() < 2.0 || d2.to_degrees() < 2.0 {
         p.refuse(format!(
             "pitch cone angles of {}° and {}°: crown and internal bevels (a cone angle over 85°) aren't built; lower the shaft angle or bring the tooth counts closer",
-            mm(d1.to_degrees()),
-            mm(d2.to_degrees())
+            num(d1.to_degrees()),
+            num(d2.to_degrees())
         ));
         return;
     }
@@ -2336,7 +2333,7 @@ fn bevel_hub(s: &Spec, bore: &Bore, max_r: f64, ends: &ConeEnds, steps: &mut Vec
     if let (Some(root), Some(_)) = (small_root, bore.outline())
         && bore.reach() >= root - 0.05 * s.module
     {
-        p.refuse(format!("{who}: the bore (reaching Ø{}) cuts into the tooth roots at the small end (Ø{}); use a smaller bore", mm(2.0 * bore.reach()), mm(2.0 * root)));
+        p.refuse(format!("{who}: the bore (reaching Ø{}) cuts into the tooth roots at the small end (Ø{}); use a smaller bore", num(2.0 * bore.reach()), num(2.0 * root)));
         return;
     }
     let hub_r = (s.hub_diameter / 2.0).min(max_r);
@@ -2374,9 +2371,9 @@ fn crossed(s: &Spec, p: &mut Plan) {
     if b2.abs() >= 75f64.to_radians() || b1.abs() >= 75f64.to_radians() {
         p.refuse(format!(
             "gear 2's helix angle is the shaft angle less gear 1's: {}° − {}° = {}°; both must be under 75°",
-            mm(s.shaft_angle),
-            mm(s.helix),
-            mm(b2.to_degrees())
+            num(s.shaft_angle),
+            num(s.helix),
+            num(b2.to_degrees())
         ));
         return;
     }
@@ -2513,11 +2510,11 @@ fn worm(s: &Spec, p: &mut Plan) {
         p.warn("lead angle over 30°: use a larger worm diameter or fewer starts");
     }
     if rf1 <= 0.5 * m {
-        p.refuse(format!("the worm's root (Ø{}) is at or near its axis: use a worm diameter over {} mm", mm(2.0 * rf1), mm(2.0 * (hf + 0.5 * m))));
+        p.refuse(format!("the worm's root (Ø{}) is at or near its axis: use a worm diameter over {} mm", num(2.0 * rf1), num(2.0 * (hf + 0.5 * m))));
         return;
     }
     if gamma.to_degrees() > 45.0 {
-        p.refuse(format!("lead angle {}° is over 45°: use a larger worm diameter or fewer starts", mm(gamma.to_degrees())));
+        p.refuse(format!("lead angle {}° is over 45°: use a larger worm diameter or fewer starts", num(gamma.to_degrees())));
         return;
     }
     if a - ra1 - clearance <= 0.5 * m {
@@ -2525,7 +2522,7 @@ fn worm(s: &Spec, p: &mut Plan) {
         return;
     }
     if s.bore2.outline().is_some() && s.bore2.reach() >= rf1 - 0.05 * m {
-        p.refuse(format!("worm: the bore (reaching Ø{}) cuts into the thread roots (Ø{}); use a smaller bore", mm(2.0 * s.bore2.reach()), mm(2.0 * rf1)));
+        p.refuse(format!("worm: the bore (reaching Ø{}) cuts into the thread roots (Ø{}); use a smaller bore", num(2.0 * s.bore2.reach()), num(2.0 * rf1)));
         return;
     }
     // The wheel's face: no wider than the worm's root (beyond it the teeth no longer wrap the
@@ -2543,7 +2540,7 @@ fn worm(s: &Spec, p: &mut Plan) {
     let widest = (1.8 * rf1).min(lean_limit);
     let face = s.face_width.min(widest);
     if face < s.face_width - 1e-9 {
-        p.warn(format!("wheel: the face is narrowed to {} mm, the most this worm's threads wrap without undercutting the teeth", mm(face)));
+        p.warn(format!("wheel: the face is narrowed to {} mm, the most this worm's threads wrap without undercutting the teeth", num(face)));
     }
     p.fact("wheel face width", face, Unit::Mm);
     let length = if s.worm_length > 0.0 { s.worm_length } else { (2.0 * (outside.powi(2) - (r2 - m).powi(2)).max(0.0).sqrt() + lead).max(4.0 * PI * m) };
@@ -2610,7 +2607,7 @@ fn worm(s: &Spec, p: &mut Plan) {
                 match tooth(w) {
                     Some(t) => sections.push((w, t)),
                     None => {
-                        p.refuse(format!("wheel: {zw} teeth are too few for this worm (no tooth is left {} mm off the mid plane): use more teeth, a narrower face or a larger pressure angle", mm(w.abs())));
+                        p.refuse(format!("wheel: {zw} teeth are too few for this worm (no tooth is left {} mm off the mid plane): use more teeth, a narrower face or a larger pressure angle", num(w.abs())));
                         return;
                     }
                 }
@@ -2651,7 +2648,7 @@ fn worm(s: &Spec, p: &mut Plan) {
     if sections.iter().any(|(w, t)| t.ra < tip_at(*w) - 1e-6) {
         p.warn("wheel: the teeth come to a point towards the edges of the face; the tips are lowered there");
     } else if tip_land(&mid_tooth) < 0.25 * m {
-        p.warn(format!("wheel: thin tooth tips ({} mm; 0.25 × module or more is usual)", mm(tip_land(&mid_tooth))));
+        p.warn(format!("wheel: thin tooth tips ({} mm; 0.25 × module or more is usual)", num(tip_land(&mid_tooth))));
     }
     // In the mid plane the wheel is a spur gear of the worm's axial module and pressure angle.
     let mid_gear = Involute { teeth: zw, module: m, pressure_angle: ax, helix: 0.0, shift: s.shift, rack: s.rack, backlash: s.backlash / 2.0, tip_shortening: 0.0, virtual_teeth: 0.0 };
@@ -2766,21 +2763,21 @@ fn drive(s: &Spec, p: &mut Plan) {
     if s.eccentricity >= 0.98 * d.max_eccentricity() {
         p.refuse(format!(
             "eccentricity {} is at or over the most these pins allow ({}): the disc's lobes would loop; lower it, or use fewer pins or a bigger pin circle",
-            mm(s.eccentricity),
-            mm(0.98 * d.max_eccentricity())
+            num(s.eccentricity),
+            num(0.98 * d.max_eccentricity())
         ));
         return;
     }
     let pitch_gap = TAU * d.pin_circle_radius / n - s.pin_diameter;
     if pitch_gap <= 0.02 * s.pin_diameter {
-        p.refuse(format!("the ring pins overlap ({} pins of Ø{} on a Ø{} circle): fewer pins, smaller pins or a bigger pin circle", s.pins, mm(s.pin_diameter), mm(s.pin_circle)));
+        p.refuse(format!("the ring pins overlap ({} pins of Ø{} on a Ø{} circle): fewer pins, smaller pins or a bigger pin circle", s.pins, num(s.pin_diameter), num(s.pin_circle)));
         return;
     }
     let valley = d.valley_radius();
     if valley <= 0.05 * s.pin_circle || d.undercut() {
         p.refuse(format!(
             "pins of Ø{} are too big for lobes this eccentric (the disc's profile would cut back on itself): use smaller pins, less eccentricity or fewer pins",
-            mm(s.pin_diameter)
+            num(s.pin_diameter)
         ));
         return;
     }
@@ -2790,7 +2787,7 @@ fn drive(s: &Spec, p: &mut Plan) {
     let wall = 0.03 * s.pin_circle;
     if let Some(b) = s.bore.outline() {
         if reach >= valley - wall {
-            p.refuse(format!("the bore (reaching Ø{}) leaves no disc inside the lobes (Ø{} at the valleys); use a smaller bore", mm(2.0 * reach), mm(2.0 * valley)));
+            p.refuse(format!("the bore (reaching Ø{}) leaves no disc inside the lobes (Ø{} at the valleys); use a smaller bore", num(2.0 * reach), num(2.0 * valley)));
             return;
         }
         holes.push(b);
@@ -2805,7 +2802,7 @@ fn drive(s: &Spec, p: &mut Plan) {
         let pin = if s.hole_diameter > 0.0 { s.hole_diameter } else { (0.15 * s.pin_circle).min(most - 2.0 * s.eccentricity) };
         let hole = pin + 2.0 * s.eccentricity;
         if !(pin > 0.0) || hole > most {
-            p.warn(format!("{} output holes of Ø{} don't fit between the bore and the lobes (Ø{} at most); left out", s.holes, mm(hole.max(0.0)), mm(most.max(0.0))));
+            p.warn(format!("{} output holes of Ø{} don't fit between the bore and the lobes (Ø{} at most); left out", s.holes, num(hole.max(0.0)), num(most.max(0.0))));
         } else {
             holes.extend(lightening_holes(s.holes, hole, at, 0.0));
             p.fact("output hole diameter", hole, Unit::Mm);

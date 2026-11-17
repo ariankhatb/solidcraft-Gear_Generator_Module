@@ -42,7 +42,7 @@
 
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
-use crate::axes::{self, Axis, Drive, Relation};
+use crate::axes::{self, Axis, Drive, Relation, num};
 use crate::design::{self, Goal, ISO54_SERIES_2};
 use crate::hub::{Bore, BoreKind};
 use crate::involute::{Internal, Involute, mesh_external, shift_sum_for_center};
@@ -644,12 +644,6 @@ impl Ctx<'_> {
 
 fn round_to(v: f64, step: f64) -> f64 {
     (v / step).round() * step
-}
-
-fn num(v: f64) -> String {
-    let s = format!("{v:.3}");
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s == "-0" { "0".into() } else { s.to_string() }
 }
 
 fn gcd(a: u32, b: u32) -> u32 {

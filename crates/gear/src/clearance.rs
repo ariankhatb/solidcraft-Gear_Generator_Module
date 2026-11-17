@@ -26,6 +26,7 @@
 //! The members on one axis share one revolved profile (gear, shaft and seats together), so the
 //! body is a handful of revolves joined, plus the prisms of a rack's slot or a chain's run.
 
+use crate::axes::{cross, dot, len, mul, num, sub};
 use crate::geom::{Outline, Region, Seg, V2};
 use crate::hub::{Bore, BoreKind};
 use crate::mesh3d::Solid;
@@ -197,28 +198,8 @@ pub(crate) fn motions(kind: Kind, bodies: &[Body]) -> Vec<Motion> {
 fn orbit(about: &Frame, f: &Frame) -> Motion {
     let d = sub(f.origin, about.origin);
     let along = dot(d, about.z);
-    let off = sub(d, scale(about.z, along));
+    let off = sub(d, mul(about.z, along));
     Motion::Orbits { about: *about, distance: dot(off, off).sqrt() }
-}
-
-fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-fn scale(a: [f64; 3], k: f64) -> [f64; 3] {
-    [a[0] * k, a[1] * k, a[2] * k]
-}
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-}
-fn norm(a: [f64; 3]) -> f64 {
-    dot(a, a).sqrt()
-}
-
-fn mm(v: f64) -> String {
-    format!("{v:.3}").trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// The point spacing round outlines (`h`) and along sweeps (`hz`) the envelopes are sampled at
@@ -240,10 +221,10 @@ struct Group {
 }
 
 fn coaxial(a: &Frame, b: &Frame) -> bool {
-    let par = norm(cross(a.z, b.z)) < 1e-9;
+    let par = len(cross(a.z, b.z)) < 1e-9;
     let d = sub(b.origin, a.origin);
-    let off = sub(d, scale(a.z, dot(d, a.z)));
-    par && norm(off) < 1e-6
+    let off = sub(d, mul(a.z, dot(d, a.z)));
+    par && len(off) < 1e-6
 }
 
 fn group_of(groups: &mut Vec<Group>, f: &Frame) -> usize {
@@ -506,7 +487,7 @@ fn build(
         // clearances run partly across the group's axis and partly along it, so they are
         // applied in its own frame: the radius grown by the radial one, the points also taken
         // the axial one along its own axis either way (and the group's margins on top).
-        let tilted = orbit > 0.0 && norm(cross(f.z, g.frame.z)) > 1e-9;
+        let tilted = orbit > 0.0 && len(cross(f.z, g.frame.z)) > 1e-9;
         let mut push = |zg: f64, r: f64, margin: f64| {
             zr = (zr.0.min(zg), zr.1.max(zg));
             rmax = rmax.max(r);
@@ -547,7 +528,7 @@ fn build(
                     let t = std::f64::consts::TAU * k as f64 / n as f64;
                     let d = sub(f.world([rho * t.cos(), rho * t.sin(), z]), g.frame.origin);
                     let zg = dot(d, g.frame.z);
-                    let r = norm(sub(d, scale(g.frame.z, zg)));
+                    let r = len(sub(d, mul(g.frame.z, zg)));
                     let b = bands.entry((zg / BAND).floor() as i64).or_insert(0.0);
                     *b = b.max(r);
                 }
@@ -630,7 +611,7 @@ fn build(
                 Seat::Point(pt) => match nearest(&members, *pt) {
                     Some((k, along, off)) => {
                         if off > b.od {
-                            warn.push(format!("clearance: bearing seat {n}'s point is {} mm off {}'s axis; it is moved onto the axis", mm(off), members[k].who));
+                            warn.push(format!("clearance: bearing seat {n}'s point is {} mm off {}'s axis; it is moved onto the axis", num(off), members[k].who));
                         }
                         (k, along)
                     }
@@ -666,18 +647,18 @@ fn build(
                 Some((lo, hi, _)) if z0 >= lo - 1e-9 && z1 <= hi + 1e-9 => {}
                 Some((lo, hi, _)) => warn.push(format!(
                     "clearance: bearing seat {n} ({}…{} mm along {}'s axis) is beyond its shaft ({}…{})",
-                    mm(z0 - centre + along),
-                    mm(z1 - centre + along),
+                    num(z0 - centre + along),
+                    num(z1 - centre + along),
                     m.who,
-                    mm(lo - centre + along),
-                    mm(hi - centre + along)
+                    num(lo - centre + along),
+                    num(hi - centre + along)
                 )),
                 None => warn.push(format!("clearance: bearing seat {n} is on {}, which has no shaft (no bore, integral shaft or bearing bore)", m.who)),
             }
             let (zlo, zhi) = (dot(sub(f.world([0.0, 0.0, m.teeth.0]), g.frame.origin), g.frame.z), dot(sub(f.world([0.0, 0.0, m.teeth.1]), g.frame.origin), g.frame.z));
             let (zlo, zhi) = (zlo.min(zhi), zlo.max(zhi));
             if z1 > zlo + 1e-9 && z0 < zhi - 1e-9 {
-                warn.push(format!("clearance: bearing seat {n} overlaps the teeth of {} (they run {}…{} mm from their middle)", m.who, mm(m.teeth.0 - m.mid), mm(m.teeth.1 - m.mid)));
+                warn.push(format!("clearance: bearing seat {n} overlaps the teeth of {} (they run {}…{} mm from their middle)", m.who, num(m.teeth.0 - m.mid), num(m.teeth.1 - m.mid)));
             }
             if b.bore > 0.0
                 && let Some(d) = m.shaft_d
@@ -685,7 +666,7 @@ fn build(
                 && !mismatched.contains(&mi)
             {
                 mismatched.push(mi);
-                warn.push(format!("clearance: bearing {name} has a {} mm bore but {}'s shaft is Ø{}", mm(b.bore), m.who, mm(d)));
+                warn.push(format!("clearance: bearing {name} has a {} mm bore but {}'s shaft is Ø{}", num(b.bore), m.who, num(d)));
             }
         }
         if c.seats.is_empty() {
@@ -729,7 +710,7 @@ fn nearest(members: &[Member], p: [f64; 3]) -> Option<(usize, f64, f64)> {
             let f = m.body.frame;
             let d = sub(p, f.origin);
             let along = dot(d, f.z);
-            let off = norm(sub(d, scale(f.z, along)));
+            let off = len(sub(d, mul(f.z, along)));
             (k, along - m.mid, off)
         })
         .min_by(|a, b| a.2.total_cmp(&b.2))
@@ -764,13 +745,13 @@ fn chain_run(s: &Spec, c: &Clearance, members: &[Member], preview: &[PreviewGear
         let (m1, m2) = (&members[wheels[0].0], &members[wheels[1].0]);
         let f1 = m1.body.frame;
         let d = sub(m2.body.frame.origin, f1.origin);
-        let across = sub(d, scale(f1.z, dot(d, f1.z)));
-        let a = norm(across);
+        let across = sub(d, mul(f1.z, dot(d, f1.z)));
+        let a = len(across);
         let r2 = wheels[1].1;
         if a > (r1 - r2).abs() + 1e-6
             && let Some(path) = crate::wrap::belt_path(r1, r2, a, off)
         {
-            let x = scale(across, 1.0 / a);
+            let x = mul(across, 1.0 / a);
             let frame = Frame { origin: f1.origin, x, z: f1.z };
             let zs = [m1, m2].iter().flat_map(|m| [m.z.0, m.z.1].map(|z| dot(sub(m.body.frame.world([0.0, 0.0, z]), f1.origin), f1.z))).fold((f64::MAX, f64::MIN), |a, z| (a.0.min(z), a.1.max(z)));
             let (z0, z1) = (zs.0 - side - c.axial, zs.1 + side + c.axial);

@@ -25,24 +25,14 @@ use crate::dialogs_gear_graph::Graph;
 use crate::ui_kit::{self, choice_row, hint_row};
 
 /// An item's id as the engine names it (A, B, … Z, then A2 …).
-pub fn item_id(i: usize) -> String {
-    let letter = char::from(b'A' + (i % 26) as u8);
-    if i < 26 { letter.to_string() } else { format!("{letter}{}", i / 26 + 1) }
-}
+pub use solidcraft_gear::items::item_id;
 
 /// The index of item `id` (an id as [`item_id`] makes it, or a number).
 pub fn item_index(id: &Value) -> Option<usize> {
-    if let Some(n) = id.as_u64() {
-        return Some(n as usize);
+    match id.as_u64() {
+        Some(n) => Some(n as usize),
+        None => items::item_number(id.as_str()?),
     }
-    let s = id.as_str()?;
-    let mut c = s.chars();
-    let letter = c.next()?;
-    if !letter.is_ascii_uppercase() {
-        return None;
-    }
-    let round: usize = c.as_str().parse().unwrap_or(1);
-    Some((round - 1) * 26 + usize::from(letter as u8 - b'A'))
 }
 
 /// A row with its hover guide (§5): the whole row shows it.

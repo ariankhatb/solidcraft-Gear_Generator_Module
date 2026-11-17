@@ -13,7 +13,7 @@
 //! (pair, bevel, worm...) the set itself. Bearings are seats of the clearance body placed by
 //! [`bearing_point`] (see [`crate::clearance`]).
 
-use crate::axes::{self, Axis, Drive, Relation, Solved};
+use crate::axes::{self, Axis, Drive, Relation, Solved, dot, num};
 use crate::geom::V2;
 use crate::plan::{Fact, Frame, Kind, Spec, Unit};
 use crate::sketch_rules::{Circle, fit_module, is_style, train_spec};
@@ -41,15 +41,6 @@ pub struct Ask {
     /// Helix angle for helical and herringbone teeth (default 20°) and gear 1's hand.
     pub helix: Option<f64>,
     pub left_hand: bool,
-}
-
-fn num(v: f64) -> String {
-    let s = format!("{v:.3}");
-    s.trim_end_matches('0').trim_end_matches('.').to_string()
-}
-
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 /// The point `along` mm along `axis` from its origin: where a bearing on a selected shaft goes.

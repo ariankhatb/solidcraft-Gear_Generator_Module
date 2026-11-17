@@ -25,15 +25,19 @@ use crate::plan::{Fact, Frame, Kind, Spec, Unit};
 
 type V = [f64; 3];
 
+#[inline]
 pub(crate) fn add(a: V, b: V) -> V {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
+#[inline]
 pub(crate) fn sub(a: V, b: V) -> V {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
+#[inline]
 pub(crate) fn mul(a: V, k: f64) -> V {
     [a[0] * k, a[1] * k, a[2] * k]
 }
+#[inline]
 pub(crate) fn dot(a: V, b: V) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
@@ -51,12 +55,15 @@ fn feet(p1: V, d1: V, p2: V, d2: V) -> Option<(V, V)> {
     Some((add(p1, mul(d1, t1)), add(p2, mul(d2, t2))))
 }
 
+#[inline]
 pub(crate) fn cross(a: V, b: V) -> V {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
+#[inline]
 pub(crate) fn len(a: V) -> f64 {
     dot(a, a).sqrt()
 }
+#[inline]
 pub(crate) fn unit(a: V) -> Option<V> {
     let l = len(a);
     (l.is_finite() && l > 1e-12).then(|| mul(a, 1.0 / l))
@@ -149,6 +156,7 @@ fn fold(deg: f64) -> f64 {
     if deg > 90.0 { 180.0 - deg } else { deg }
 }
 
+#[inline]
 pub(crate) fn num(v: f64) -> String {
     let s = format!("{v:.3}");
     let s = s.trim_end_matches('0').trim_end_matches('.');

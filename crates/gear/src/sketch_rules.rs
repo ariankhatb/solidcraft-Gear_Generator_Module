@@ -38,7 +38,7 @@
 
 use std::f64::consts::PI;
 
-use crate::axes::{Axis, MODULES, MODULES_2};
+use crate::axes::{Axis, MODULES, MODULES_2, num};
 use crate::geom::V2;
 use crate::involute::{Involute, shift_sum_for_center};
 use crate::plan::{Frame, Kind, SidePreset, Spec};
@@ -379,12 +379,6 @@ impl Measured {
             notes: Vec::new(),
         }
     }
-}
-
-fn num(v: f64) -> String {
-    let s = format!("{v:.3}");
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s == "-0" { "0".into() } else { s.to_string() }
 }
 
 /// Lengths this close (mm, plus this share of the size they are compared at) are equal: a

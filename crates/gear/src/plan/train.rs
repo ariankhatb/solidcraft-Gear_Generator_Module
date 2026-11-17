@@ -16,7 +16,8 @@
 
 use std::f64::consts::{PI, TAU};
 
-use super::{Body, Frame, Kind, Plan, PreviewGear, Spec, Unit, hub_steps, mesh_warnings, mm, name, ring_warnings, tooth_warnings, twist_for, wanted, with_bore};
+use crate::axes::num;
+use super::{Body, Frame, Kind, Plan, PreviewGear, Spec, Unit, hub_steps, mesh_warnings, name, ring_warnings, tooth_warnings, twist_for, wanted, with_bore};
 use crate::geom::{Outline, Region, V2, wrap_period};
 use crate::involute::{Internal, Involute, ToothFlank, contact_ratio_external, mesh_external, mesh_internal, mesh_phase, mesh_phase_internal, shift_sum_for_center, teeth_outline};
 
@@ -312,7 +313,7 @@ pub fn check(t: &Train) -> Result<(), String> {
         match l.kind {
             LinkKind::External | LinkKind::Internal => {
                 if (ga.module - gb.module).abs() > 1e-9 * ga.module {
-                    return Err(format!("{pair} mesh but have different modules ({} and {}): meshing gears share one module", mm(ga.module), mm(gb.module)));
+                    return Err(format!("{pair} mesh but have different modules ({} and {}): meshing gears share one module", num(ga.module), num(gb.module)));
                 }
                 let same_hand = l.kind == LinkKind::Internal;
                 let want = if same_hand { ga.helix } else { -ga.helix };
@@ -385,7 +386,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
     let spans: Vec<(f64, f64)> = t.gears.iter().map(|g| g.span_of(s)).collect();
     let lo: Vec<f64> = spans.iter().map(|s| s.0).collect();
     let shared = |i: usize, j: usize| spans[i].1.min(spans[j].1) - spans[i].0.max(spans[j].0);
-    let span_text = |i: usize| format!("gear {} runs {} to {} mm", i + 1, mm(spans[i].0), mm(spans[i].1));
+    let span_text = |i: usize| format!("gear {} runs {} to {} mm", i + 1, num(spans[i].0), num(spans[i].1));
     // Meshing gears must share face along the shafts; gears on one shaft must not.
     for l in &t.links {
         let (a, b) = (l.a, l.b);
@@ -396,7 +397,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
                     "gears {} and {} share a shaft but their faces overlap along it by {} mm ({}, {}): move one along the shaft, or put one's face on side A and the other's on side B",
                     a + 1,
                     b + 1,
-                    mm(both),
+                    num(both),
                     span_text(a),
                     span_text(b)
                 ));
@@ -420,9 +421,9 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
                         "gears {} and {} share only {} mm of face, less than the narrower gear's {} mm: the mesh carries the load on {} mm; line their face sides up to use the whole face",
                         a + 1,
                         b + 1,
-                        mm(both),
-                        mm(narrow),
-                        mm(both)
+                        num(both),
+                        num(narrow),
+                        num(both)
                     ));
                 }
             }
@@ -445,7 +446,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
                 "gears {} and {}: herringbone teeth mesh only with their V's apexes level, and their faces' mid planes are {} mm apart; give them the same face sides and width",
                 l.a + 1,
                 l.b + 1,
-                mm((mid(l.a) - mid(l.b)).abs())
+                num((mid(l.a) - mid(l.b)).abs())
             ));
         }
     }
@@ -511,8 +512,8 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
                 "gears {} and {} mesh {} mm apart, but their centres are {} mm apart: move one, or change the teeth or profile shifts",
                 l.a + 1,
                 l.b + 1,
-                mm(m.center_distance),
-                mm(drawn)
+                num(m.center_distance),
+                num(drawn)
             ));
             return;
         }
@@ -689,7 +690,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
                     "gears {} and {} overlap by {} mm: they don't mesh (their pitch circles don't touch) but their teeth or rims cross; move them apart or make them touch",
                     i + 1,
                     j + 1,
-                    mm(by)
+                    num(by)
                 ));
                 return;
             }
@@ -739,7 +740,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
             }
             let bar = TrainGear { center: sh.center, ring: false, ..g.clone() };
             if let Some(by) = overlap(&bar, (0.0, sh.diameter / 2.0), g, rims[i]) {
-                p.refuse(format!("shaft {} (Ø{}) runs into gear {} by {} mm: shorten it, or move the gear", k + 1, mm(sh.diameter), i + 1, mm(by)));
+                p.refuse(format!("shaft {} (Ø{}) runs into gear {} by {} mm: shorten it, or move the gear", k + 1, num(sh.diameter), i + 1, num(by)));
                 return;
             }
         }
@@ -786,7 +787,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
         } else {
             format!("Gears {}", gears.iter().map(|i| format!("{} z{}", i + 1, t.gears[*i].teeth)).collect::<Vec<_>>().join(" + "))
         };
-        let label = if let Some(sh) = shaft { format!("{label} on shaft Ø{}", mm(sh.diameter)) } else { label };
+        let label = if let Some(sh) = shaft { format!("{label} on shaft Ø{}", num(sh.diameter)) } else { label };
         let index = p.bodies.len();
         for &i in &gears {
             body[i] = Some(index);

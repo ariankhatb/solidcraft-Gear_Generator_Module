@@ -36,18 +36,16 @@ Every type below is made from the Gears dialog. How to sketch each one is in the
 </table>
 gallery-pending -->
 
-<details>
-<summary>Live previews from the earlier Gear Generator window (replaced in this branch)</summary>
+### Every type turning
 
-These clips were captured from the earlier window's own 3D preview, which the Gears dialog doesn't have. The cycloidal gear is made only by the <code>gear.create</code> command in this build.
+Each gear type turning, captured from the gear math's own 3D preview (made with the earlier Gear Generator window; the cycloidal gear is made only by the <code>gear.create</code> command in this build):
 
 <table align="center">
-<tr><td align="center"><img src="docs/gear-generator/pair.gif" width="220" alt="Gear pair"/><br/><sub>Gear pair</sub></td><td align="center"><img src="docs/gear-generator/helical-clip.gif" width="220" alt="Helical"/><br/><sub>Helical</sub></td><td align="center"><img src="docs/gear-generator/herringbone-clip.gif" width="220" alt="Herringbone"/><br/><sub>Herringbone</sub></td><td align="center"><img src="docs/gear-generator/internal.gif" width="220" alt="Internal ring"/><br/><sub>Internal ring</sub></td></tr>
-<tr><td align="center"><img src="docs/gear-generator/planetary.gif" width="220" alt="Planetary"/><br/><sub>Planetary</sub></td><td align="center"><img src="docs/gear-generator/bevel.gif" width="220" alt="Straight bevel"/><br/><sub>Straight bevel</sub></td><td align="center"><img src="docs/gear-generator/spiral_bevel.gif" width="220" alt="Spiral bevel"/><br/><sub>Spiral bevel</sub></td><td align="center"><img src="docs/gear-generator/hypoid.gif" width="220" alt="Hypoid"/><br/><sub>Hypoid</sub></td></tr>
-<tr><td align="center"><img src="docs/gear-generator/crossed_helical.gif" width="220" alt="Crossed helical"/><br/><sub>Crossed helical</sub></td><td align="center"><img src="docs/gear-generator/worm.gif" width="220" alt="Worm and wheel"/><br/><sub>Worm and wheel</sub></td><td align="center"><img src="docs/gear-generator/cycloidal-clip.gif" width="220" alt="Cycloidal (command only)"/><br/><sub>Cycloidal (command only)</sub></td></tr>
+<tr><td align="center"><img src="docs/gear-generator/pair.gif" width="260" alt="Gear pair turning, rendered by the Gears feature as an assembly"/><br/><sub>Gear pair</sub></td><td align="center"><img src="docs/gear-generator/helical-clip.gif" width="260" alt="Helical turning, rendered by the Gears feature as an assembly"/><br/><sub>Helical</sub></td><td align="center"><img src="docs/gear-generator/herringbone-clip.gif" width="260" alt="Herringbone turning, rendered by the Gears feature as an assembly"/><br/><sub>Herringbone</sub></td></tr>
+<tr><td align="center"><img src="docs/gear-generator/internal.gif" width="260" alt="Internal ring turning, rendered by the Gears feature as an assembly"/><br/><sub>Internal ring</sub></td><td align="center"><img src="docs/gear-generator/planetary.gif" width="260" alt="Planetary turning, rendered by the Gears feature as an assembly"/><br/><sub>Planetary</sub></td><td align="center"><img src="docs/gear-generator/bevel.gif" width="260" alt="Straight bevel turning, rendered by the Gears feature as an assembly"/><br/><sub>Straight bevel</sub></td></tr>
+<tr><td align="center"><img src="docs/gear-generator/spiral_bevel.gif" width="260" alt="Spiral bevel turning, rendered by the Gears feature as an assembly"/><br/><sub>Spiral bevel</sub></td><td align="center"><img src="docs/gear-generator/hypoid.gif" width="260" alt="Hypoid turning, rendered by the Gears feature as an assembly"/><br/><sub>Hypoid</sub></td><td align="center"><img src="docs/gear-generator/crossed_helical.gif" width="260" alt="Crossed helical turning, rendered by the Gears feature as an assembly"/><br/><sub>Crossed helical</sub></td></tr>
+<tr><td align="center"><img src="docs/gear-generator/worm.gif" width="260" alt="Worm and wheel turning, rendered by the Gears feature as an assembly"/><br/><sub>Worm and wheel</sub></td><td align="center"><img src="docs/gear-generator/cycloidal-clip.gif" width="260" alt="Cycloidal turning, rendered by the Gears feature as an assembly"/><br/><sub>Cycloidal</sub></td></tr>
 </table>
-
-</details>
 
 ### What's new: the drivetrain feature
 

@@ -38,14 +38,8 @@ pub(super) struct Items {
     pub(super) system: SystemPlan,
 }
 
-/// An item's id when it gives none: A, B, … Z, then A2 … (as the dialog names them).
-fn letter_id(i: usize) -> String {
-    let letter = char::from(b'A' + (i % 26) as u8);
-    if i < 26 { letter.to_string() } else { format!("{letter}{}", i / 26 + 1) }
-}
-
 fn ids_of(items: &[GearItemParams]) -> Vec<String> {
-    items.iter().enumerate().map(|(i, it)| it.id.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| letter_id(i))).collect()
+    items.iter().enumerate().map(|(i, it)| it.id.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| gi::item_id(i))).collect()
 }
 
 /// The item `v` names: its id, or its index.
@@ -348,7 +342,7 @@ fn name_bodies(sp: &mut SystemPlan, ids: &[String]) {
             refs[b].push(*r);
         }
     }
-    let id = |i: usize| ids.get(i).cloned().unwrap_or_else(|| letter_id(i));
+    let id = |i: usize| ids.get(i).cloned().unwrap_or_else(|| gi::item_id(i));
     let mut names: Vec<Option<String>> = refs
         .iter()
         .map(|rs| {
@@ -443,7 +437,7 @@ pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemPar
 }
 
 fn end_reply(ids: &[String], r: GearRef) -> GearEndReply {
-    GearEndReply { item: ids.get(r.item).cloned().unwrap_or_else(|| letter_id(r.item)), gear: r.gear }
+    GearEndReply { item: ids.get(r.item).cloned().unwrap_or_else(|| gi::item_id(r.item)), gear: r.gear }
 }
 
 /// The feature's body name holding plan body `b` (`names` in the order of the rigid members).
@@ -656,10 +650,25 @@ pub(super) fn ratio(s: &mut Session, p: &Value) -> Result<Value> {
         let k = if feature { rigid.iter().position(|r| r.bodies.contains(&b)) } else { Some(b) };
         k.and_then(|k| names.get(k).cloned()).unwrap_or_else(|| plan.bodies.get(b).map_or_else(String::new, |x| x.name.clone()))
     };
-    let gear_at = |b: usize| -> Option<GearEndReply> {
-        let it = asked.items.as_ref()?;
-        let (r, _) = it.system.member_of.iter().find(|(_, m)| plan.members.get(*m).and_then(|m| m.body) == Some(b))?;
-        Some(end_reply(&it.ids, *r))
+    // The gears (and their members) on plan body `b`, for a set made of items: a compound's
+    // one body holds two or more.
+    let gears_on = |b: usize| -> Vec<(GearRef, usize)> {
+        asked.items.as_ref().map_or_else(Vec::new, |it| it.system.member_of.iter().copied().filter(|(_, m)| analysis::member_of_gear(&plan, *m) == Some(b)).collect())
+    };
+    // The gears at a step's two ends: across a mesh the two that mesh; else the first on each.
+    let ends_of = |from: usize, to: usize, mesh: bool| -> (Option<GearRef>, Option<GearRef>) {
+        let (fa, fb) = (gears_on(from), gears_on(to));
+        let meshing = mesh
+            .then(|| fa.iter().find_map(|(ra, ma)| fb.iter().find(|(_, mb)| plan.members.get(*ma).is_some_and(|x| x.meshes_with.contains(mb))).map(|(rb, _)| (*ra, *rb))))
+            .flatten();
+        meshing.map_or_else(|| (fa.first().map(|g| g.0), fb.first().map(|g| g.0)), |(x, y)| (Some(x), Some(y)))
+    };
+    let reply_of = |r: Option<GearRef>| -> Option<GearEndReply> { Some(end_reply(&asked.items.as_ref()?.ids, r?)) };
+    // The gear asked at an end ({item, gear}).
+    let asked_gear = |v: &Value| -> Option<GearRef> {
+        let (o, it) = (v.as_object()?, asked.items.as_ref()?);
+        let item = o.get("item").and_then(|v| item_index(&it.ids, v))?;
+        Some(GearRef::new(item, o.get("gear").or(o.get("port")).and_then(Value::as_u64).unwrap_or(0) as usize))
     };
     let resolve = |which: &str, v: &Value| -> Result<usize> {
         let by_name = |name: &str| -> Option<usize> {
@@ -686,16 +695,42 @@ pub(super) fn ratio(s: &mut Session, p: &Value) -> Result<Value> {
         plan.assembly.members.iter().position(|m| m.body == b).ok_or_else(|| bad(cmd, format!("`{which}` doesn't turn in the set's assembly")))
     };
     let (a, b) = (resolve("a", &q.a)?, resolve("b", &q.b)?);
-    let report = analysis::plan_ratio_between(&asked.spec, &plan, a, b).map_err(|e| bad(cmd, e))?;
+    // A set made of items: each link analysed as its stage's own kind (a worm as a worm).
+    let e = match asked.items.as_ref() {
+        Some(it) => it.system.efficiencies(&plan.assembly),
+        None => analysis::Efficiencies::for_spec(&asked.spec),
+    };
+    let report = analysis::plan_ratio_between_with(&plan, a, b, &e).map_err(|e| bad(cmd, e))?;
     let body = |m: usize| plan.assembly.members.get(m).map_or(0, |x| x.body);
-    let path = report
-        .path
-        .iter()
-        .map(|st| GearRatioStep {
-            from: name_of(body(st.from)),
-            to: name_of(body(st.to)),
-            from_gear: gear_at(body(st.from)),
-            to_gear: gear_at(body(st.to)),
+    // From one gear of a compound's body to another: a step along its shaft, so the path
+    // names both gears.
+    let along = |b: usize, from: GearRef, to: GearRef| GearRatioStep {
+        from: name_of(b),
+        to: name_of(b),
+        from_gear: reply_of(Some(from)),
+        to_gear: reply_of(Some(to)),
+        kind: "shaft".into(),
+        teeth: None,
+        ratio: 1.0,
+        efficiency: 1.0,
+        self_locking: false,
+    };
+    let mut path = Vec::new();
+    let mut at = asked_gear(&q.a);
+    for st in &report.path {
+        let (fb, tb) = (body(st.from), body(st.to));
+        let (fg, tg) = ends_of(fb, tb, st.kind != StepKind::Shaft);
+        if let (Some(c), Some(f)) = (at, fg)
+            && c != f
+            && gears_on(fb).iter().any(|(g, _)| *g == c)
+        {
+            path.push(along(fb, c, f));
+        }
+        path.push(GearRatioStep {
+            from: name_of(fb),
+            to: name_of(tb),
+            from_gear: reply_of(fg),
+            to_gear: reply_of(tg),
             kind: match st.kind {
                 StepKind::Shaft => "shaft".into(),
                 StepKind::Mesh(k) => mesh_name(k).into(),
@@ -704,8 +739,16 @@ pub(super) fn ratio(s: &mut Session, p: &Value) -> Result<Value> {
             ratio: st.ratio,
             efficiency: st.efficiency,
             self_locking: st.self_locking,
-        })
-        .collect();
+        });
+        at = tg;
+    }
+    if let (Some(c), Some(want)) = (at, asked_gear(&q.b))
+        && c != want
+        && gears_on(body(b)).iter().any(|(g, _)| *g == c)
+        && gears_on(body(b)).iter().any(|(g, _)| *g == want)
+    {
+        path.push(along(body(b), c, want));
+    }
     super::reply(
         cmd,
         GearRatioResult {

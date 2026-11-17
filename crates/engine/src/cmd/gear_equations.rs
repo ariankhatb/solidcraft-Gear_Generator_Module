@@ -458,6 +458,10 @@ impl Drawer<'_> {
 }
 
 fn draw_cell(s: &mut Session, cell: &ToothCell, prefix: Option<&str>) -> Result<()> {
+    // Parametric undercut teeth: formula ranges, so they still close after a parameter change
+    // (numeric ones stop meeting once the tooth count changes).
+    let following = prefix.and(cell.following.as_ref()).map(|(curves, joins)| ToothCell { curves: curves.clone(), joins: joins.clone(), ..cell.clone() });
+    let cell = following.as_ref().unwrap_or(cell);
     let mut d = Drawer { cell, prefix, curves: Vec::new(), points: vec![None; cell.points.len()] };
     for c in &cell.curves {
         let r = s.execute("sketch.equation_curve", &json!({"x": d.text(&c.x), "y": d.text(&c.y), "start": d.text(&c.start), "end": d.text(&c.end), "tolerance": c.tolerance}))?;

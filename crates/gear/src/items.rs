@@ -20,7 +20,7 @@
 
 use crate::axes::{Axis, Relation, add, cross, dot, len, mul, num, relate, sub, unit};
 use crate::drivetrain::{Ask, Circle3, Item, Line3, Role, Thing as DtThing};
-use crate::plan::Kind;
+use crate::plan::{Kind, SidePreset};
 use crate::sketch_rules::TOLERANCE;
 
 /// A point or vector in world coordinates (mm).
@@ -289,6 +289,37 @@ pub struct FaceSides {
     pub preset: FacePreset,
     pub a: Option<f64>,
     pub b: Option<f64>,
+}
+
+impl FaceSides {
+    /// The sides as the planners take them ([`SidePreset`], decision 4): a preset whose reaches
+    /// are Auto stays that preset; reaches given make a custom split (negative ones count as 0).
+    pub fn side_preset(&self) -> SidePreset {
+        let pos = |v: f64| if v.is_finite() { v.max(0.0) } else { 0.0 };
+        match self.preset {
+            FacePreset::Symmetric => self.a.or(self.b).map_or(SidePreset::Symmetric, |v| SidePreset::Custom { a: pos(v), b: pos(v) }),
+            FacePreset::AOnly => self.a.map_or(SidePreset::AOnly, |a| SidePreset::Custom { a: pos(a), b: 0.0 }),
+            FacePreset::BOnly => self.b.map_or(SidePreset::BOnly, |b| SidePreset::Custom { a: 0.0, b: pos(b) }),
+            FacePreset::Custom => match (self.a, self.b) {
+                (None, None) => SidePreset::Symmetric,
+                (a, b) => SidePreset::Custom { a: pos(a.unwrap_or(0.0)), b: pos(b.unwrap_or(0.0)) },
+            },
+        }
+    }
+}
+
+/// An item's id as the engine and the dialog name it when it has none: A, B, … Z, then A2 …
+pub fn item_id(i: usize) -> String {
+    let letter = char::from(b'A' + (i % 26) as u8);
+    if i < 26 { letter.to_string() } else { format!("{letter}{}", i / 26 + 1) }
+}
+
+/// The index [`item_id`] names (`None` for another id).
+pub fn item_number(id: &str) -> Option<usize> {
+    let mut c = id.chars();
+    let letter = c.next().filter(char::is_ascii_uppercase)?;
+    let round: usize = c.as_str().parse().unwrap_or(1);
+    Some(round.checked_sub(1)? * 26 + usize::from(letter as u8 - b'A'))
 }
 
 /// A gear's bore.

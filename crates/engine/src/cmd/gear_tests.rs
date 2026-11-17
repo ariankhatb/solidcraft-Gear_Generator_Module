@@ -980,7 +980,10 @@ fn a_parametric_tooth_count_into_undercut_leaves_one_body() {
 
 /// A parametric set's clearance body follows the parameters: its envelope grows with the tip
 /// and the face, as the clearance of the set made with those numbers.
+// Retired (2026-11-16): the user cancelled the Clearance Body feature (gear-drivetrain-plan.md
+// decision 7); its code stays for now, this test is no longer kept up.
 #[test]
+#[ignore = "the Clearance Body feature was cancelled by the user"]
 fn a_parametric_clearance_body_follows_the_parameters() {
     let base = json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 8, "name": "E", "clearance_body": {}});
     let clearance_of = |p: Value| {

@@ -254,6 +254,11 @@ pub struct ToothCell {
     /// pieces. False for an undercut gear (numeric fillet/flank ranges) or a tip or root limit
     /// reached (a numeric radius).
     pub exact: bool,
+    /// An undercut gear's teeth for parameters that change: its curves (and joins) with every
+    /// range a formula (the whole fillet, the flank from its form circle), so after a change
+    /// the fillet and the flank still cross where they now do, and the extrusion takes the
+    /// gear's own region between the small loops. `None` for an exact cell.
+    pub following: Option<(Vec<Curve>, Vec<(End, End)>)>,
     /// The keys of the face width and helix inputs and of the pitch radius, for extrusions
     /// and twists (helix: none for straight teeth).
     pub face_key: String,
@@ -718,6 +723,24 @@ fn external(src: &TeethSource, g: &Involute, f: &ToothFlank, phase: f64) -> Resu
         Edge::Arc(End::Start(3), End::Point(1)),
     ];
     let joins = if exact { vec![(End::End(0), End::Start(1)), (End::End(3), End::Start(2))] } else { Vec::new() };
+    // Undercut: the same curves over formula ranges, for teeth that follow parameter changes
+    // (the fillet's end meets the flank's start by their formulas where the form circle is
+    // above the base circle; else the flank from the base circle, crossing the fillet).
+    let following = (!exact).then(|| {
+        let (start, joins) = if u0 >= 0.0 {
+            (format!("{{{p}u0}}"), vec![(End::End(0), End::Start(1)), (End::End(3), End::Start(2))])
+        } else {
+            (String::from("0"), Vec::new())
+        };
+        let end = format!("{{{p}tf}}");
+        let curves = vec![
+            polar_curve("lower fillet", &r_fil, &a_fil, &ph, -1.0, "0".into(), end.clone(), tol_fillet),
+            polar_curve("lower flank", &r_inv, &a_inv, &ph, -1.0, start.clone(), format!("{{{p}u1}}"), tol_flank),
+            polar_curve("upper flank", &r_inv, &a_inv, &ph, 1.0, start, format!("{{{p}u1}}"), tol_flank),
+            polar_curve("upper fillet", &r_fil, &a_fil, &ph, 1.0, "0".into(), end, tol_fillet),
+        ];
+        (curves, joins)
+    });
     Ok(ToothCell {
         who: src.who.clone(),
         member: src.member,
@@ -728,6 +751,7 @@ fn external(src: &TeethSource, g: &Involute, f: &ToothFlank, phase: f64) -> Resu
         repeat: Repeat::Circular { count: format!("{{{teeth}}}") },
         closing: Vec::new(),
         exact,
+        following,
         face_key: src.face_key.clone(),
         helix_key: c.helix.clone(),
         radius_key: Some(format!("{p}r")),
@@ -871,6 +895,7 @@ fn internal(src: &TeethSource, ring: &Internal, f: &ToothFlank, phase: f64) -> R
         repeat: Repeat::Circular { count: format!("{{{teeth}}}") },
         closing: Vec::new(),
         exact,
+        following: None,
         face_key: src.face_key.clone(),
         helix_key: c.helix.clone(),
         radius_key: Some(format!("{p}r")),
@@ -951,6 +976,7 @@ fn rack(src: &TeethSource, g: &Involute, count: u32, below: f64) -> Result<Tooth
         repeat: Repeat::Linear { count: "{rack_teeth}".into(), spacing: "{rack_p}".into() },
         closing,
         exact: true,
+        following: None,
         face_key: src.face_key.clone(),
         helix_key: None,
         radius_key: None,

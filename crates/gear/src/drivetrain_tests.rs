@@ -336,3 +336,26 @@ fn chevron_bevels_mesh_at_90_and_60_degrees() {
         crate::mesh3d_tests::measure(label, &s).check();
     }
 }
+
+/// A selected shaft given no size between two gears carries the gear filling the spacing to
+/// them (here Ø60 between a Ø40 gear 50 mm away and a Ø30 one 45 mm away): the three are one
+/// train. A shaft carrying a gear, or asked to be a shaft, stays as it is.
+#[test]
+fn an_unsized_shaft_between_two_gears_gets_the_gear_that_fills_the_spacing() {
+    let mut items = vec![
+        Item { ask: Ask { pitch_diameter: Some(40.0), ..Ask::default() }, ..line([0.0; 3], [0.0, 0.0, 1.0]) },
+        line([50.0, 0.0, 0.0], [50.0, 0.0, 1.0]),
+        circle([50.0, 45.0, 0.0], Z, 15.0),
+        Item { ask: Ask { role: Some(Role::Shaft), ..Ask::default() }, ..line([-60.0, 0.0, 0.0], [-60.0, 0.0, 1.0]) },
+    ];
+    let notes = crate::drivetrain::fill_unsized_shafts(&mut items);
+    assert_eq!(notes, vec!["member 2: Ø60 fills the spacing to member 3".to_string()]);
+    assert_eq!(items[1].ask.pitch_diameter, Some(60.0));
+    assert_eq!(items[3].ask.pitch_diameter, None);
+    let o = read(&items[..3], None, &Simple::default(), &Spec::default());
+    assert!(o.error.is_none(), "{:?}", o.error);
+    assert_eq!(o.members[1].meshes_with.len(), 2, "{:?}", o.members[1]);
+    // Room for no gear (the spacing taken up): nothing filled.
+    let mut tight = vec![circle([0.0; 3], Z, 20.0), line([15.0, 0.0, 0.0], [15.0, 0.0, 1.0])];
+    assert!(crate::drivetrain::fill_unsized_shafts(&mut tight).is_empty());
+}

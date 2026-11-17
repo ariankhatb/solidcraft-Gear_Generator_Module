@@ -332,6 +332,19 @@ fn a_mixed_drivetrain_is_one_feature_with_components_joints_and_links_kept_by_it
     assert!((q["ratio"].as_f64().unwrap().abs() - want).abs() < 1e-9, "{q} vs {want}");
     assert_eq!(q["direction"], "same", "two external meshes: {q}");
     assert_eq!(q["a"], "Gear E·1+2", "E's two gears are one body: {q}");
+    // The path names both of the compound's gears: along its shaft from gear 2 to gear 1,
+    // which meshes A.
+    let p0 = &q["path"][0];
+    assert_eq!((p0["kind"].as_str(), p0["from_gear"].clone(), p0["to_gear"].clone()), (Some("shaft"), json!({"item": "E", "gear": 1}), json!({"item": "E", "gear": 0})), "{q}");
+    assert_eq!(q["path"][1]["from_gear"], json!({"item": "E", "gear": 0}), "{q}");
+    // The worm stage is a worm (its lead-angle efficiency), not a crossed helical pair.
+    let wq = run(&mut s, "gear.ratio", json!({"a": {"item": "A", "gear": 0}, "b": {"item": "D", "gear": 1}}));
+    let last = wq["path"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["kind"], "worm", "{wq}");
+    assert!(last["efficiency"].as_f64().unwrap() < 0.9 || last["self_locking"] == true, "{wq}");
+    // gear.create's replies carry each meshing spur's contact ratio.
+    let a_reply = r["gears"].as_array().unwrap().iter().find(|g| g["item"] == "A").unwrap();
+    assert!(a_reply["contact_ratio"].as_f64().is_some_and(|c| c > 1.0), "{a_reply}");
     let w = run(&mut s, "gear.ratio", json!({"group": group, "a": a_member, "b": {"item": "D", "gear": 0}}));
     let want = t("A", 0) / t("B", 0) * t("C", 0) / t("C", 1);
     assert!((w["ratio"].as_f64().unwrap().abs() - want).abs() < 1e-9, "{w} vs {want}");

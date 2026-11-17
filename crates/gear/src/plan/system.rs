@@ -26,23 +26,19 @@
 
 use std::f64::consts::{PI, TAU};
 
-use crate::analysis::{Efficiencies, drive_table, mesh_checks};
-use crate::axes::{Axis, cross, dot, len, mul, num, square_to, sub, unit};
+use crate::analysis::{Efficiencies, MeshKind, StepKind, classify, drive_table, plan_mesh_checks};
+use crate::axes::{Axis, add, cross, dot, len, mul, num, square_to, sub, unit};
 use crate::drivetrain::{self as dt, Outcome};
 use crate::geom::{Outline, Region, V2};
 use crate::items::{
     BevelStyle, Drive, FacePreset, GearGeom, GearItem, GearReply, GearRef, GearSettings, ItemKind, ItemLink, LinkKind, LinkReply, ModuleBlock, Source, Stage,
     StageFrom, StageKind, Suggestion, effective_links, gear_geoms, resolve_module, stages, suggest_links, to_drivetrain, unlinked, validate_item,
 };
-use crate::plan::{Assembly, AssemblyLink, AssemblyMember, Body, Frame, Kind, Op, Plan, PlanShaft, SetMember, SidePreset, Spec, Step, plan};
+use crate::plan::{Assembly, AssemblyLink, AssemblyMember, Body, Frame, Kind, Op, Plan, PlanShaft, SetMember, Spec, Step, plan};
 use crate::simple::Simple;
 use crate::sketch_rules::{StageGear, auto_module, size_stage};
 
 type V = [f64; 3];
-
-fn add(a: V, b: V) -> V {
-    crate::axes::add(a, b)
-}
 
 /// A whole drivetrain planned from items ([`plan_items`]).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -68,9 +64,44 @@ pub struct SystemPlan {
     /// Why nothing is built: a link or stage that is wrong, stages that collide (what is wrong
     /// and what to do). The replies still say per gear and per link what was found.
     pub error: Option<String>,
+    /// Each mesh's real stage kind (worm, bevel, spiral bevel, hypoid, crossed helical, rack,
+    /// internal, parallel), by the two bodies it joins: what the analysis takes it as
+    /// ([`SystemPlan::efficiencies`]).
+    pub mesh_tags: Vec<MeshTag>,
+}
+
+/// A mesh of a drivetrain of items tagged with the kind of stage it is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MeshTag {
+    /// The bodies it joins (indices into `plan.bodies`), either order.
+    pub bodies: (usize, usize),
+    pub kind: MeshKind,
+    /// A worm's lead angle (degrees), as its stage was planned.
+    pub lead_angle: Option<f64>,
 }
 
 impl SystemPlan {
+    /// The analysis' efficiencies for `asm` (this plan's assembly, or one over the same bodies
+    /// rooted elsewhere): each mesh link its stage's own kind, a worm its own lead angle (so a
+    /// worm gets its lead-angle efficiency and self-locking check whichever end drives it).
+    pub fn efficiencies(&self, asm: &Assembly) -> Efficiencies {
+        let mut e = Efficiencies::default();
+        let body = |m: usize| asm.members.get(m).map(|x| x.body);
+        for (k, l) in asm.links.iter().enumerate() {
+            if matches!(l, AssemblyLink::Rigid { .. }) {
+                continue;
+            }
+            let (a, b) = l.members();
+            let (Some(ba), Some(bb)) = (body(a), body(b)) else { continue };
+            if let Some(t) = self.mesh_tags.iter().find(|t| t.bodies == (ba, bb) || t.bodies == (bb, ba)) {
+                e.kinds.push((k, t.kind));
+                if let Some(lead) = t.lead_angle {
+                    e.worm_leads.push((k, lead));
+                }
+            }
+        }
+        e
+    }
     /// Gear `r`'s member (an index into `plan.members`).
     pub fn member(&self, r: GearRef) -> Option<usize> {
         self.member_of.iter().find(|(g, _)| *g == r).map(|(_, m)| *m)
@@ -109,21 +140,6 @@ fn rename_members(text: &str, names: &[String]) -> String {
     out
 }
 
-/// A gear's face sides as the train sizing takes them (decision 4).
-fn sides_of(s: &GearSettings) -> SidePreset {
-    let f = s.face;
-    let pos = |v: f64| if v.is_finite() { v.max(0.0) } else { 0.0 };
-    match f.preset {
-        FacePreset::Symmetric => f.a.or(f.b).map_or(SidePreset::Symmetric, |v| SidePreset::Custom { a: pos(v), b: pos(v) }),
-        FacePreset::AOnly => f.a.map_or(SidePreset::AOnly, |a| SidePreset::Custom { a: pos(a), b: 0.0 }),
-        FacePreset::BOnly => f.b.map_or(SidePreset::BOnly, |b| SidePreset::Custom { a: 0.0, b: pos(b) }),
-        FacePreset::Custom => match (f.a, f.b) {
-            (None, None) => SidePreset::Symmetric,
-            (a, b) => SidePreset::Custom { a: pos(a.unwrap_or(0.0)), b: pos(b.unwrap_or(0.0)) },
-        },
-    }
-}
-
 /// The text after a refusal's last ": " (what to do), for a link's hint.
 fn hint_of(e: &str) -> Option<String> {
     e.rsplit_once(": ").map(|(_, h)| h.to_string()).filter(|h| !h.is_empty())
@@ -137,6 +153,71 @@ struct Unit {
     refs: Vec<Option<GearRef>>,
     shifts: Vec<Option<f64>>,
     carrier: Option<(usize, usize)>,
+    /// Its meshes' stage kinds (bodies local to `plan`), from [`tagged`].
+    tags: Vec<MeshTag>,
+    /// Its members' contact ratios (member local to `plan`; the least of its meshes').
+    contact: Vec<(usize, f64)>,
+    /// For people (the system's notes).
+    notes: Vec<String>,
+}
+
+/// `u` with its meshes tagged by stage kind (`kind`, else per mesh what `spec` says: a train's
+/// each mesh by its own gears' teeth), a worm's with the lead angle its plan worked out, and
+/// its members' contact ratios from the plan's own checks ([`plan_mesh_checks`]).
+fn tagged(mut u: Unit, spec: &Spec, kind: Option<MeshKind>) -> Unit {
+    let e = Efficiencies::for_spec(spec);
+    let p = &u.plan;
+    let (mut tags, mut contact): (Vec<MeshTag>, Vec<(usize, f64)>) = (Vec::new(), Vec::new());
+    let lead = p.facts.iter().find(|f| f.label == "lead angle").map(|f| f.value);
+    for k in 0..p.assembly.links.len() {
+        let (StepKind::Mesh(mut m), _, _) = classify(&p.assembly, k, &e) else { continue };
+        let (a, b) = p.assembly.links[k].members();
+        let (Some(ba), Some(bb)) = (p.assembly.members.get(a).map(|x| x.body), p.assembly.members.get(b).map(|x| x.body)) else { continue };
+        if let Some(given) = kind {
+            m = given;
+        } else if let Some(t) = &spec.train
+            && m != MeshKind::Internal
+        {
+            // The two gears meshing across these bodies.
+            let pair = p
+                .members
+                .iter()
+                .enumerate()
+                .filter(|(_, x)| x.body == Some(ba))
+                .flat_map(|(i, x)| x.meshes_with.iter().map(move |j| (i, *j)))
+                .find(|(_, j)| p.members.get(*j).and_then(|x| x.body) == Some(bb));
+            if let Some((i, j)) = pair
+                && let (Some(gi), Some(gj)) = (t.gears.get(i), t.gears.get(j))
+            {
+                m = if gi.ring || gj.ring {
+                    MeshKind::Internal
+                } else if gi.herringbone || gj.herringbone {
+                    MeshKind::Herringbone
+                } else if gi.helix.abs() > 1e-9 || gj.helix.abs() > 1e-9 {
+                    MeshKind::Helical
+                } else {
+                    MeshKind::Spur
+                };
+            }
+        }
+        tags.push(MeshTag { bodies: (ba, bb), kind: m, lead_angle: if m == MeshKind::Worm { lead } else { None } });
+    }
+    let member_on = |b: usize| p.members.iter().position(|x| x.body == Some(b));
+    for c in plan_mesh_checks(spec, p) {
+        let Some(cr) = c.contact_ratio else { continue };
+        let ends = match c.gears {
+            Some((ga, gb)) => [Some(ga), Some(gb)],
+            None => [c.members.0, c.members.1].map(|m| p.assembly.members.get(m).and_then(|x| member_on(x.body))),
+        };
+        for k in ends.into_iter().flatten() {
+            match contact.iter_mut().find(|(x, _)| *x == k) {
+                Some(have) => have.1 = have.1.min(cr),
+                None => contact.push((k, cr)),
+            }
+        }
+    }
+    (u.tags, u.contact) = (tags, contact);
+    u
 }
 
 /// The drivetrain the items, links and module blocks describe, every stage planned and merged
@@ -190,7 +271,7 @@ pub fn plan_items(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlock]
     if let Some(e) = collisions(items, &out, &merged.body_units) {
         out.error = Some(e);
     }
-    replies(items, &st, &used, drive, &merged.shifts, &mut out);
+    replies(items, &st, &used, drive, &merged.shifts, &merged.contact, &mut out);
     if out.error.is_some() {
         let keep = std::mem::take(&mut out.gears);
         out.plan = Plan::default();
@@ -212,7 +293,7 @@ fn refused(items: &[GearItem], st: &[Stage], used: &[ItemLink], err: Vec<Option<
     }
     out.error = Some(seen.join("; "));
     let st: Vec<Stage> = st.iter().zip(err).map(|(s, e)| Stage { error: e, ..s.clone() }).collect();
-    replies(items, &st, used, None, &[], &mut out);
+    replies(items, &st, used, None, &[], &[], &mut out);
     out
 }
 
@@ -221,6 +302,8 @@ fn refused(items: &[GearItem], st: &[Stage], used: &[ItemLink], err: Vec<Option<
 struct Merged {
     body_units: Vec<Vec<usize>>,
     shifts: Vec<Option<f64>>,
+    /// Each member's contact ratio.
+    contact: Vec<Option<f64>>,
 }
 
 fn is_pair(k: StageKind) -> bool {
@@ -300,6 +383,20 @@ fn stage_name(k: StageKind) -> &'static str {
         StageKind::Worm => "worm",
         StageKind::CrossedHelical => "crossed helical",
         StageKind::Shaft => "shaft",
+    }
+}
+
+/// The kind of mesh a stage of two gears is (what the analysis takes its link as); `None`: per
+/// mesh, by its gears.
+fn stage_mesh(s: &Stage) -> Option<MeshKind> {
+    match s.kind {
+        StageKind::Bevel if s.bevel_style == BevelStyle::Straight => Some(MeshKind::Bevel),
+        StageKind::Bevel => Some(MeshKind::SpiralBevel),
+        StageKind::Hypoid => Some(MeshKind::Hypoid),
+        StageKind::Worm => Some(MeshKind::Worm),
+        StageKind::Rack => Some(MeshKind::Rack),
+        StageKind::CrossedHelical => Some(MeshKind::CrossedHelical),
+        StageKind::Internal | StageKind::Parallel | StageKind::Planetary | StageKind::Shaft => None,
     }
 }
 
@@ -409,7 +506,7 @@ fn reader_items(items: &[GearItem], gears: &[GearRef], mapped: &crate::items::Ma
     for &r in gears {
         let k = mapped.source.iter().position(|s| *s == Source::Gear(r)).ok_or_else(|| format!("{} can't be planned from its picks", who(items, r)))?;
         let mut it = mapped.items[k];
-        it.ask.sides = items.get(r.item).map(|i| sides_of(&i.settings(r.gear)));
+        it.ask.sides = items.get(r.item).map(|i| i.settings(r.gear).face.side_preset());
         its.push(it);
         names.push(who(items, r));
     }
@@ -464,9 +561,19 @@ fn train_unit(items: &[GearItem], gears: &[GearRef], mapped: &crate::items::Mapp
         ids.dedup();
         format!("train {}", ids.join(", "))
     };
-    let mut u = Unit { label, plan: p, refs, shifts, carrier: None };
+    let mut u = Unit { label, plan: p, refs, shifts, carrier: None, tags: Vec::new(), contact: Vec::new(), notes: Vec::new() };
     u.plan.warnings = u.plan.warnings.iter().map(|w| rename_members(w, &names)).collect();
-    Ok(u)
+    // A gear meshing nothing at a fixed module (decision 3): the closest tooth count at that
+    // module, so its pitch circle is not the drawn one; say both.
+    for &i in &o.gears {
+        let (Some(m), Some(it)) = (o.members.get(i), its.get(i)) else { continue };
+        let (dt::Thing::Circle(c), Some(module), Some(z), Some(d)) = (it.thing, it.ask.module, m.teeth, m.pitch_diameter) else { continue };
+        if m.meshes_with.is_empty() && (d - 2.0 * c.r).abs() > 1e-6 {
+            let name = names.get(i).cloned().unwrap_or_default();
+            u.notes.push(format!("{name} meshes nothing: {z} teeth at module {} make it Ø{} (Ø{} drawn)", num(module), num(d), num(2.0 * c.r)));
+        }
+    }
+    Ok(tagged(u, &solved.spec, None))
 }
 
 /// A bevel, hypoid, worm or crossed helical pair (see the module docs); `planned` the gears
@@ -594,7 +701,8 @@ fn pair_unit(items: &[GearItem], s: &Stage, mapped: &crate::items::Mapped, base:
     p.members = members;
     let refs = refs.iter().map(|r| Some(*r)).collect();
     // The duplicate of a gear planned already is dropped when merging; its member stays (refs).
-    Ok(Unit { label: format!("{} {}", stage_name(s.kind), label.join(", ")), plan: p, refs, shifts: vec![None, None], carrier: None })
+    let u = Unit { label: format!("{} {}", stage_name(s.kind), label.join(", ")), plan: p, refs, shifts: vec![None, None], carrier: None, tags: Vec::new(), contact: Vec::new(), notes: Vec::new() };
+    Ok(tagged(u, &solved.spec, stage_mesh(s)))
 }
 
 /// Whether `frame`'s z lies along the axis through `c` along `u`.
@@ -722,7 +830,7 @@ fn planetary_unit(items: &[GearItem], s: &Stage, blocks: &[ModuleBlock], base: &
         }
         carrier = Some((item_index, body));
     }
-    Ok(Unit { label: format!("planetary {}", item.who()), plan: p, refs, shifts, carrier })
+    Ok(tagged(Unit { label: format!("planetary {}", item.who()), plan: p, refs, shifts, carrier, tags: Vec::new(), contact: Vec::new(), notes: Vec::new() }, &spec, None))
 }
 
 /// How far gear `a`'s centre is from `b`'s axis.
@@ -808,7 +916,8 @@ fn rack_unit(items: &[GearItem], s: &Stage, blocks: &[ModuleBlock], base: &Spec)
         SetMember { source: 0, module: m, teeth: 0, pitch_diameter: 0.0, face_width: face, face_a: fa, face_b: fb, ring: false, meshes_with: vec![1], cluster: None, body: Some(rack_body) },
         SetMember { source: 0, module: m, teeth: z, pitch_diameter: pd, face_width: face, face_a: fa, face_b: fb, ring: false, meshes_with: vec![0], cluster: None, body: Some(0) },
     ];
-    Ok(Unit { label: format!("rack {}", names[0]), plan: p, refs: vec![Some(rr), Some(pr)], shifts: vec![None, Some(x)], carrier: None })
+    let u = Unit { label: format!("rack {}", names[0]), plan: p, refs: vec![Some(rr), Some(pr)], shifts: vec![None, Some(x)], carrier: None, tags: Vec::new(), contact: Vec::new(), notes: Vec::new() };
+    Ok(tagged(u, &pinion, Some(MeshKind::Rack)))
 }
 
 /// The units merged into one plan (see the module docs).
@@ -820,6 +929,9 @@ fn merge(st: &[Stage], units: Vec<Unit>, drive: Option<&Drive>, out: &mut System
     let mut shifts: Vec<Option<f64>> = Vec::new();
     // Each body's units (for the collision check), kept beside the plan.
     let mut body_units: Vec<Vec<usize>> = Vec::new();
+    // Each member's contact ratio (the least of its meshes').
+    let mut contact: Vec<Option<f64>> = Vec::new();
+    let stage_count = units.len();
     for (ui, u) in units.into_iter().enumerate() {
         let lp = u.plan;
         // Bodies: a gear met before keeps its body; the copy is dropped.
@@ -891,6 +1003,22 @@ fn merge(st: &[Stage], units: Vec<Unit>, drive: Option<&Drive>, out: &mut System
                 AssemblyLink::Worm { starts, wheel_teeth, .. } => AssemblyLink::Worm { worm: ga, wheel: gb, starts, wheel_teeth },
                 AssemblyLink::Rigid { .. } => AssemblyLink::Rigid { a: ga, b: gb },
             });
+        }
+        out.notes.extend(u.notes.iter().cloned());
+        for t in &u.tags {
+            if let (Some(a), Some(b)) = (body_map.get(t.bodies.0).copied().flatten(), body_map.get(t.bodies.1).copied().flatten())
+                && !out.mesh_tags.iter().any(|x| x.bodies == (a, b) || x.bodies == (b, a))
+            {
+                out.mesh_tags.push(MeshTag { bodies: (a, b), ..*t });
+            }
+        }
+        for &(k, cr) in &u.contact {
+            if let Some(g) = gm(k) {
+                if contact.len() <= g {
+                    contact.resize(g + 1, None);
+                }
+                contact[g] = Some(contact[g].map_or(cr, |have: f64| have.min(cr)));
+            }
         }
         for c in lp.contacts {
             if let (Some(a), Some(b)) = (gm(c.a), gm(c.b)) {
@@ -967,8 +1095,11 @@ fn merge(st: &[Stage], units: Vec<Unit>, drive: Option<&Drive>, out: &mut System
     p.assembly_issues = issues;
     out.driver = (!p.bodies.is_empty()).then_some(root_body);
     out.plan = p;
-    out.notes.push(format!("{} bodies from {} stages", out.plan.bodies.len(), body_units.iter().flatten().max().map_or(0, |m| m + 1)));
-    Merged { body_units, shifts }
+    // The bodies the feature makes: one per rigid member (a cluster's gears are one body).
+    let made = super::solid::members(&out.plan).len();
+    out.notes.push(format!("{made} {} from {stage_count} {}", if made == 1 { "body" } else { "bodies" }, if stage_count == 1 { "stage" } else { "stages" }));
+    contact.resize(out.plan.members.len(), None);
+    Merged { body_units, shifts, contact }
 }
 
 /// A body's swept volume about an axis: per band along it, the least and most radius its
@@ -1125,15 +1256,14 @@ fn collisions(items: &[GearItem], out: &SystemPlan, units: &[Vec<usize>]) -> Opt
 }
 
 /// The per-gear and per-link replies.
-fn replies(items: &[GearItem], st: &[Stage], used: &[ItemLink], drive: Option<&Drive>, shifts: &[Option<f64>], out: &mut SystemPlan) {
+fn replies(items: &[GearItem], st: &[Stage], used: &[ItemLink], drive: Option<&Drive>, shifts: &[Option<f64>], contact: &[Option<f64>], out: &mut SystemPlan) {
     let p = &out.plan;
     let body = |r: GearRef| out.member_of.iter().find(|(g, _)| *g == r).and_then(|(_, m)| p.members.get(*m)).and_then(|m| m.body);
     let root = out.driver;
     let states = match (drive.and_then(|d| d.rpm), root) {
-        (Some(rpm), Some(r)) if !p.assembly.members.is_empty() => drive_table(&p.assembly, r, rpm, drive.and_then(|d| d.torque).unwrap_or(0.0), &Efficiencies::default()),
+        (Some(rpm), Some(r)) if !p.assembly.members.is_empty() => drive_table(&p.assembly, r, rpm, drive.and_then(|d| d.torque).unwrap_or(0.0), &out.efficiencies(&p.assembly)),
         _ => Vec::new(),
     };
-    let checks = if p.assembly.members.is_empty() { Vec::new() } else { mesh_checks(&p.assembly, &Efficiencies::default()) };
     let mut gears = Vec::new();
     for (i, it) in items.iter().enumerate() {
         for g in 0..gear_geoms(it).len() {
@@ -1144,6 +1274,7 @@ fn replies(items: &[GearItem], st: &[Stage], used: &[ItemLink], drive: Option<&D
             {
                 (reply.teeth, reply.module, reply.pitch_d) = (m.teeth, m.module, m.pitch_diameter);
                 reply.profile_shift = shifts.get(*k).copied().flatten();
+                reply.contact_ratio = contact.get(*k).copied().flatten();
                 if let (Some(b), Some(rt)) = (m.body, root) {
                     reply.ratio = p.assembly.ratio(rt, b);
                     if let Some(s) = states.get(b).filter(|s| s.reached) {
@@ -1151,7 +1282,6 @@ fn replies(items: &[GearItem], st: &[Stage], used: &[ItemLink], drive: Option<&D
                         reply.torque = drive.and_then(|d| d.torque).map(|_| s.torque);
                         reply.warnings.extend(s.note.clone());
                     }
-                    reply.contact_ratio = checks.iter().find(|c| c.members.0 == b || c.members.1 == b).and_then(|c| c.contact_ratio);
                 }
             }
             gears.push(reply);

@@ -18,6 +18,7 @@
 
 use std::f64::consts::TAU;
 
+use crate::axes::dot;
 use crate::plan::{Assembly, AssemblyLink, Kind, Plan, Spec};
 
 /// What kind of mesh a link is (or, for [`StepKind::Shaft`], a shared shaft).
@@ -229,6 +230,9 @@ pub struct Efficiencies {
     pub kinds: Vec<(usize, MeshKind)>,
     /// Per assembly link: its efficiency, overriding everything else (both ways).
     pub per_link: Vec<(usize, f64)>,
+    /// Per assembly link that is a worm: its lead angle (degrees), overriding
+    /// `worm_lead_angle` and the diameter quotient (a drivetrain with several worms).
+    pub worm_leads: Vec<(usize, f64)>,
 }
 
 impl Default for Efficiencies {
@@ -254,6 +258,7 @@ impl Default for Efficiencies {
             skew: MeshKind::CrossedHelical,
             kinds: Vec::new(),
             per_link: Vec::new(),
+            worm_leads: Vec::new(),
         }
     }
 }
@@ -319,6 +324,15 @@ impl Efficiencies {
     /// A worm of `starts` threads: its lead angle (the given one, or tan λ = starts / q) and
     /// efficiencies.
     pub fn worm(&self, starts: u32) -> WormEfficiency {
+        self.worm_of(None, starts)
+    }
+
+    /// [`Efficiencies::worm`] for assembly link `link`: its own lead angle where
+    /// [`Efficiencies::worm_leads`] gives one.
+    pub fn worm_of(&self, link: Option<usize>, starts: u32) -> WormEfficiency {
+        if let Some(lead) = link.and_then(|k| self.worm_leads.iter().rev().find(|(i, _)| *i == k)).map(|(_, l)| *l) {
+            return worm_efficiency(lead, self.worm_friction, self.worm_pressure_angle);
+        }
         let lead = self.worm_lead_angle.unwrap_or_else(|| (f64::from(starts.max(1)) / self.worm_diameter_quotient.max(1e-9)).atan().to_degrees());
         worm_efficiency(lead, self.worm_friction, self.worm_pressure_angle)
     }
@@ -361,10 +375,6 @@ pub fn member_of_gear(p: &Plan, k: usize) -> Option<usize> {
     p.members.get(k)?.body
 }
 
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
 /// A size that is a whole tooth count.
 fn whole(x: f64) -> Option<u32> {
     (x >= 1.0 && (x - x.round()).abs() < 1e-9 && x < f64::from(u32::MAX)).then(|| x.round() as u32)
@@ -384,7 +394,7 @@ fn linear_members(asm: &Assembly) -> Vec<bool> {
 }
 
 /// What a link is, its tooth counts in its member order, and its worm side (when a worm).
-fn classify(asm: &Assembly, k: usize, e: &Efficiencies) -> (StepKind, Option<(u32, u32)>, Option<usize>) {
+pub(crate) fn classify(asm: &Assembly, k: usize, e: &Efficiencies) -> (StepKind, Option<(u32, u32)>, Option<usize>) {
     let l = &asm.links[k];
     let given = e.kinds.iter().rev().find(|(i, _)| *i == k).map(|(_, m)| *m);
     match *l {
@@ -434,7 +444,7 @@ fn step(asm: &Assembly, k: usize, from: usize, e: &Efficiencies) -> Option<Step>
         (StepKind::Shaft, _) => (override_eff.unwrap_or(1.0), false),
         (StepKind::Mesh(MeshKind::Worm), Some(w)) => {
             let starts = teeth.map(|(x, y)| x.min(y)).unwrap_or(1);
-            let we = e.worm(starts);
+            let we = e.worm_of(Some(k), starts);
             let eff = if from == w { we.forward } else { we.back };
             (override_eff.unwrap_or(eff), we.self_locking)
         }
@@ -565,12 +575,18 @@ pub fn ratio_between_with(asm: &Assembly, a: usize, b: usize, e: &Efficiencies) 
 /// loop whose ratios don't agree joined to `a` ([`Plan::assembly_issues`]; the assembly leaves
 /// its closing mesh out, so the links alone would hide it).
 pub fn plan_ratio_between(spec: &Spec, p: &Plan, a: usize, b: usize) -> Result<RatioReport, String> {
+    plan_ratio_between_with(p, a, b, &Efficiencies::for_spec(spec))
+}
+
+/// [`plan_ratio_between`] with the styles and efficiencies of `e` (for a drivetrain of items,
+/// each link's own stage kind: [`crate::plan::system::SystemPlan::efficiencies`]).
+pub fn plan_ratio_between_with(p: &Plan, a: usize, b: usize, e: &Efficiencies) -> Result<RatioReport, String> {
     for issue in &p.assembly_issues {
         if issue.members.iter().any(|&m| m == a || p.assembly.ratio(a, m).is_some()) {
             return Err(format!("the drivetrain can't turn: {}", issue.message));
         }
     }
-    ratio_between_with(&p.assembly, a, b, &Efficiencies::for_spec(spec))
+    ratio_between_with(&p.assembly, a, b, e)
 }
 
 /// The speed, direction, torque and power at every member when member `driver` turns at `rpm`

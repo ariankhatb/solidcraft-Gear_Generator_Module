@@ -1946,9 +1946,17 @@ fn from_selection(s: &dyn Reads, cmd: &str, p: &GearParams, items: &[GearSelecti
         let p = GearParams { spiral_angle: p.spiral_angle.or(spiral), ..p.clone() };
         // Members by their rows.
         let row = |pos: usize| items.get(pos).and_then(|it| it.index).unwrap_or(pos);
+        // A selected shaft given no size between the gears: the gear filling the spacing.
+        let filled = drivetrain::fill_unsized_shafts(&mut read);
         return Ok(match read_drivetrain(cmd, &p, &read, bearing, assembly)? {
-            Got::Set(solved, members, rows) => Got::Set(solved, members.into_iter().map(|m| by_row(m, &row)).collect(), rows.into_iter().map(row).collect()),
-            Got::Wrong { error, members, notes } => Got::Wrong { error, members: members.into_iter().map(|m| by_row(m, &row)).collect(), notes },
+            Got::Set(mut solved, members, rows) => {
+                solved.notes.splice(0..0, filled);
+                Got::Set(solved, members.into_iter().map(|m| by_row(m, &row)).collect(), rows.into_iter().map(row).collect())
+            }
+            Got::Wrong { error, members, mut notes } => {
+                notes.splice(0..0, filled);
+                Got::Wrong { error, members: members.into_iter().map(|m| by_row(m, &row)).collect(), notes }
+            }
         });
     }
     // Shafts with sizes (and bearings on them or at points): the set the shafts make.

@@ -266,3 +266,70 @@ fn the_reader_routes_a_set_with_a_bevel_among_three_gears() {
     assert_eq!(o.members[3].meshes_with, vec![2]);
     assert!(o.members[1].cluster.is_some() && o.members[1].cluster == o.members[2].cluster);
 }
+
+/// Each link of the assembly carries its stage's real kind: the worm stage is a worm (its
+/// lead-angle efficiency and self-locking check, whichever end drives it), the bevel a bevel,
+/// the spur pair spur; the replies' rpm follow from it, each gear has its contact ratio, and the
+/// note counts the bodies the feature makes (one per rigid member).
+#[test]
+fn every_link_is_analysed_as_its_stage_kind() {
+    use crate::analysis::{MeshKind, StepKind, ratio_between_with, worm_efficiency};
+    let (items, links) = chain();
+    let drive = Drive { item: 0, gear: 0, rpm: Some(1000.0), torque: Some(2.0) };
+    let sp = planned(&items, &links, Some(&drive));
+    let e = sp.efficiencies(&sp.plan.assembly);
+    let root = sp.driver.unwrap();
+    let worm = sp.body(g(3, 1)).unwrap();
+    let report = ratio_between_with(&sp.plan.assembly, root, worm, &e).unwrap();
+    let kinds: Vec<StepKind> = report.path.iter().map(|s| s.kind).filter(|k| *k != StepKind::Shaft).collect();
+    assert_eq!(kinds, vec![StepKind::Mesh(MeshKind::Spur), StepKind::Mesh(MeshKind::Bevel), StepKind::Mesh(MeshKind::Worm)], "{:?}", report.path);
+    // The worm step, driven from its wheel: the lead angle the worm stage was planned with.
+    let lead = sp.mesh_tags.iter().find_map(|t| t.lead_angle).expect("the worm's lead angle");
+    let we = worm_efficiency(lead, e.worm_friction, e.worm_pressure_angle);
+    let last = report.path.last().unwrap();
+    assert_eq!(last.teeth.map(|t| t.1), Some(1), "{last:?}");
+    assert_eq!(last.self_locking, we.self_locking);
+    assert!((last.efficiency - we.back).abs() < 1e-12, "{} vs {}", last.efficiency, we.back);
+    // Driven from the worm the other way: the forward efficiency.
+    let wheel = sp.body(g(3, 0)).unwrap();
+    let back = ratio_between_with(&sp.plan.assembly, worm, wheel, &e).unwrap();
+    assert!((back.path[0].efficiency - we.forward).abs() < 1e-12);
+    // The replies: the worm's rpm is the drive table's with these kinds (0 when self-locking).
+    let rpm = sp.gears.iter().find(|x| x.item == 3 && x.gear == 1).and_then(|x| x.rpm).unwrap();
+    let wheel_rpm = sp.gears.iter().find(|x| x.item == 3 && x.gear == 0).and_then(|x| x.rpm).unwrap();
+    if we.self_locking {
+        assert_eq!(rpm, 0.0);
+    } else {
+        assert!(close(rpm, wheel_rpm * -teeth(&sp, g(3, 0))), "{rpm} {wheel_rpm}");
+    }
+    // The spur pair's gears have their contact ratio in their replies (a bevel plan works none out).
+    for r in [g(0, 0), g(1, 0)] {
+        let c = sp.gears.iter().find(|x| x.item == r.item && x.gear == r.gear).and_then(|x| x.contact_ratio);
+        assert!(c.is_some_and(|c| c > 1.0), "{r:?}: {c:?}");
+    }
+    assert!(sp.notes.iter().any(|n| n == "4 bodies from 3 stages"), "{:?}", sp.notes);
+}
+
+/// A gear that meshes nothing, sized by a fixed module (decision 3): the tooth count closest to
+/// its drawn diameter at that module, the module kept, and a note giving the diameter it gets
+/// beside the drawn one.
+#[test]
+fn a_free_gear_at_a_fixed_module_keeps_the_module_with_a_note() {
+    use crate::items::{GearSettings, SizeBy};
+    let mut a = item("A", ItemKind::Spur, vec![circ([0.0; 3], Z, 21.0)]);
+    a.gears = vec![GearSettings { size_by: SizeBy::Module, module: Some(4.0), ..GearSettings::default() }];
+    let pair = vec![item("B", ItemKind::Spur, vec![circ([100.0, 0.0, 0.0], Z, 20.0)]), item("C", ItemKind::Spur, vec![circ([140.0, 0.0, 0.0], Z, 20.0)])];
+    for (items, links) in [(vec![a.clone()], vec![]), ([vec![a.clone()], pair].concat(), vec![mesh(g(1, 0), g(2, 0))])] {
+        let sp = planned(&items, &links, None);
+        let r = &sp.gears[0];
+        // Ø42 at module 4: 10.5 teeth, 11 the closest (rounding up).
+        assert_eq!((r.teeth, r.module), (11, 4.0), "{r:?}");
+        assert!((r.pitch_d - 44.0).abs() < 1e-9);
+        assert!(sp.notes.iter().any(|n| n == "Item A gear 1 meshes nothing: 11 teeth at module 4 make it Ø44 (Ø42 drawn)"), "{:?}", sp.notes);
+    }
+    // At a module that fits the drawing: no note.
+    a.gears[0].module = Some(3.0);
+    let sp = planned(&[a], &[], None);
+    assert_eq!(sp.gears[0].teeth, 14);
+    assert!(!sp.notes.iter().any(|n| n.contains("meshes nothing")), "{:?}", sp.notes);
+}

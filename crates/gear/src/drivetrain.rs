@@ -20,7 +20,7 @@
 //! Meshing gears share one tooth style; gears on one shaft may differ. Anything wrong is said
 //! per member ([`Member::error`]), naming it.
 
-use crate::axes::{Axis, Solved, square_to};
+use crate::axes::{Axis, Solved, add, cross, dot, len, mul, num, square_to, sub, unit};
 use crate::geom::V2;
 use crate::plan::{Frame, Kind, SidePreset, Spec};
 use crate::select::{Ask as ShaftAsk, Shaft, set_on_shafts};
@@ -28,34 +28,6 @@ use crate::simple::Simple;
 use crate::sketch_rules::{Circle, TOLERANCE, TrainCircle, is_style, size_train};
 
 type V = [f64; 3];
-
-fn sub(a: V, b: V) -> V {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-fn add(a: V, b: V) -> V {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-fn mul(a: V, k: f64) -> V {
-    [a[0] * k, a[1] * k, a[2] * k]
-}
-fn dot(a: V, b: V) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-fn cross(a: V, b: V) -> V {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-}
-fn len(a: V) -> f64 {
-    dot(a, a).sqrt()
-}
-fn unit(a: V) -> Option<V> {
-    let l = len(a);
-    (l > 1e-12 && l.is_finite()).then(|| mul(a, 1.0 / l))
-}
-fn num(v: f64) -> String {
-    let s = format!("{v:.3}");
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s == "-0" { "0".into() } else { s.to_string() }
-}
 
 /// A circle in space: centre, the unit normal to its plane, radius (mm).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -235,6 +207,54 @@ fn parallel(a: V, b: V) -> bool {
 /// A member's name for people: its place in what was read.
 fn who(_items: &[Item], i: usize) -> String {
     format!("member {}", i + 1)
+}
+
+/// The gear an item is, where it is one by its geometry and size: a circle (not asked to be a
+/// shaft or bearing), or a line given its gear's pitch diameter (or teeth and module).
+fn sized_gear(it: &Item) -> Option<Circle3> {
+    match it.thing {
+        Thing::Circle(c) if !matches!(it.ask.role, Some(Role::Shaft | Role::Bearing)) => Some(Circle3 { n: unit(c.n)?, ..c }),
+        Thing::Line(l) if !matches!(it.ask.role, Some(Role::Shaft | Role::Bearing)) => {
+            let u = l.dir()?;
+            let d = it.ask.pitch_diameter.or_else(|| Some(it.ask.module? * f64::from(it.ask.teeth?)))?;
+            (d > 0.0 && d.is_finite()).then(|| Circle3 { c: add(l.a, mul(u, it.ask.along.unwrap_or(0.0))), n: u, r: d / 2.0 })
+        }
+        _ => None,
+    }
+}
+
+/// Selected shafts given no size among gears on parallel shafts: each the shaft of a gear whose
+/// pitch circle fills the spacing to the nearest gear (as [`crate::select`] fills a chain of
+/// shafts), in that gear's plane, where that circle crosses no other gear's. A shaft that
+/// carries a gear already, or is asked to be only a shaft, stays as it is. The notes say what
+/// was filled ("member 2: Ø60 fills the spacing to member 1").
+pub fn fill_unsized_shafts(items: &mut [Item]) -> Vec<String> {
+    let gears: Vec<(usize, Circle3)> = items.iter().enumerate().filter_map(|(i, it)| Some((i, sized_gear(it)?))).collect();
+    let mut notes = Vec::new();
+    for (i, slot) in items.iter_mut().enumerate() {
+        let it = *slot;
+        let Thing::Line(l) = it.thing else { continue };
+        if it.ask.role.is_some() || it.ask.pitch_diameter.is_some() || it.ask.teeth.is_some() {
+            continue;
+        }
+        let Some(u) = l.dir() else { continue };
+        let near: Vec<(usize, Circle3, f64)> = gears.iter().filter(|(_, c)| parallel(c.n, u)).map(|(j, c)| (*j, *c, l.distance(c.c))).collect();
+        // A gear on it already: it is that gear's shaft.
+        if near.iter().any(|(_, c, d)| *d <= 1e-6 + TOLERANCE * c.r) {
+            continue;
+        }
+        let Some(&(j, c, d)) = near.iter().min_by(|a, b| a.2.total_cmp(&b.2)) else { continue };
+        let r = d - c.r;
+        if !(r > 0.0) || near.iter().any(|(_, o, e)| e - o.r < r - (1e-6 + TOLERANCE * r)) {
+            continue;
+        }
+        slot.ask.pitch_diameter = Some(2.0 * r);
+        if it.ask.along.is_none() {
+            slot.ask.along = Some(dot(sub(c.c, l.a), u));
+        }
+        notes.push(format!("member {}: Ø{} fills the spacing to member {}", i + 1, num(2.0 * r), j + 1));
+    }
+    notes
 }
 
 /// Reads the items as one drivetrain (see the module docs). `style` is the tooth style of gears

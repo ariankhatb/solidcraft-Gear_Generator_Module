@@ -31,7 +31,7 @@ fn turn_about(p: P3, o: P3, z: P3, a: f64) -> P3 {
 /// (and of the carrier, and along a rack's travel), moved out by the radial clearance and along
 /// the axis by the axial one less `tol`: all must be inside the clearance body. Returns how many
 /// were tried.
-fn contains_every_member(s: &Spec, p: &Plan, tol: f64) -> usize {
+pub(crate) fn contains_every_member(s: &Spec, p: &Plan, tol: f64) -> usize {
     let c = s.clearance_body.clone().unwrap();
     let keep_body = p.clearance.as_ref().unwrap_or_else(|| panic!("{:?}: no clearance body", s.kind));
     let keep = Solid::new(keep_body, 0.002);

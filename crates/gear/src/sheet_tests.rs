@@ -18,7 +18,7 @@ enum Entity {
 /// (group code, value) pairs of a DXF's ENTITIES section, and its header's drawing extents.
 fn read(dxf: &str) -> (Vec<(String, Entity)>, V2, V2) {
     let lines: Vec<&str> = dxf.lines().collect();
-    assert!(lines.len() % 2 == 0, "group codes and values come in pairs");
+    assert!(lines.len().is_multiple_of(2), "group codes and values come in pairs");
     let pairs: Vec<(u32, &str)> = lines.chunks(2).map(|c| (c[0].trim().parse().unwrap_or_else(|_| panic!("group code {:?}", c[0])), c[1].trim())).collect();
     assert_eq!(pairs.last(), Some(&(0, "EOF")));
     assert!(pairs.windows(2).any(|w| w[0] == (9, "$ACADVER") && w[1] == (1, "AC1009")));

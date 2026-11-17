@@ -1,0 +1,176 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "Bevel side view",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.point",
+   "params": {
+    "point": [
+     0,
+     0
+    ],
+    "id": "apex"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "apex",
+    "b": "origin"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      0,
+      0
+     ],
+     [
+      0,
+      -60
+     ]
+    ],
+    "ids": [
+     "pinion_shaft"
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      0,
+      0
+     ],
+     [
+      60,
+      0
+     ]
+    ],
+    "ids": [
+     "gear_shaft"
+    ]
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      0,
+      0
+     ],
+     [
+      30,
+      -45
+     ]
+    ],
+    "ids": [
+     "contact"
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "pinion_shaft.start",
+    "b": "apex"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "gear_shaft.start",
+    "b": "apex"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "contact.start",
+    "b": "apex"
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "pinion_shaft",
+    "mode": "vertical"
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "gear_shaft",
+    "mode": "horizontal"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "pinion_shaft"
+    ],
+    "value": "60 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "gear_shaft"
+    ],
+    "value": "60 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "contact"
+    ],
+    "value": "54 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "pinion_shaft",
+     "contact"
+    ],
+    "type": "angle",
+    "value": "33.69 deg"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  }
+ ]
+}

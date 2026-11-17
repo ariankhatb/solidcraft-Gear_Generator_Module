@@ -1,0 +1,349 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "Layer 1",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     0
+    ],
+    "radius": 15,
+    "id": "a"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     45,
+     0
+    ],
+    "radius": 30,
+    "id": "c1"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "a.center",
+    "b": "origin"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "a"
+    ],
+    "type": "diameter",
+    "value": "30 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "c1"
+    ],
+    "type": "diameter",
+    "value": "60 mm"
+   }
+  },
+  {
+   "command": "sketch.constraint.tangent",
+   "params": {
+    "a": "a",
+    "b": "c1"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "c1.center"
+    ],
+    "type": "vertical",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     45,
+     0
+    ],
+    "radius": 5,
+    "id": "c1bore"
+   }
+  },
+  {
+   "command": "sketch.constraint.concentric",
+   "params": {
+    "a": "c1bore",
+    "b": "c1"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "c1bore"
+    ],
+    "type": "diameter",
+    "value": "10 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      -20
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "Layer 2",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     45,
+     0
+    ],
+    "radius": 15,
+    "id": "c2"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     85,
+     0
+    ],
+    "radius": 25,
+    "id": "d"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "c2.center"
+    ],
+    "type": "horizontal",
+    "value": "45 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "c2.center"
+    ],
+    "type": "vertical",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "c2"
+    ],
+    "type": "diameter",
+    "value": "30 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "d"
+    ],
+    "type": "diameter",
+    "value": "50 mm"
+   }
+  },
+  {
+   "command": "sketch.constraint.tangent",
+   "params": {
+    "a": "c2",
+    "b": "d"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "d.center"
+    ],
+    "type": "vertical",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     45,
+     0
+    ],
+    "radius": 5,
+    "id": "c2bore"
+   }
+  },
+  {
+   "command": "sketch.constraint.concentric",
+   "params": {
+    "a": "c2bore",
+    "b": "c2"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "c2bore"
+    ],
+    "type": "diameter",
+    "value": "10 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "Compound shaft",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      45,
+      -30
+     ],
+     [
+      45,
+      10
+     ]
+    ],
+    "ids": [
+     "s"
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "s",
+    "mode": "vertical"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "s.start"
+    ],
+    "type": "horizontal",
+    "value": "45 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "s.end"
+    ],
+    "type": "vertical",
+    "value": "10 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "s"
+    ],
+    "value": "40 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  }
+ ]
+}

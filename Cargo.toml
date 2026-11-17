@@ -14,6 +14,8 @@ authors = ["SolidCraft contributors"]
 repository = "https://github.com/bherbruck/solidcraft"
 
 [workspace.dependencies]
+# Node graphs (the Gears dialog), vendored on egui 0.37 (vendor/README.md).
+egui-snarl = { path = "vendor/egui-snarl" }
 robust = "1.2"
 # internal
 craft-plugin = { path = "crates/craft-plugin" }

@@ -1,0 +1,196 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "Pitch circles",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     0
+    ],
+    "radius": 18,
+    "id": "a"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "a.center",
+    "b": "origin"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "a"
+    ],
+    "type": "diameter",
+    "value": "36 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     48,
+     0
+    ],
+    "radius": 30,
+    "id": "b"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "b"
+    ],
+    "type": "diameter",
+    "value": "60 mm"
+   }
+  },
+  {
+   "command": "sketch.constraint.tangent",
+   "params": {
+    "a": "a",
+    "b": "b"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "b.center"
+    ],
+    "type": "vertical",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "gear.create",
+   "params": {
+    "name": "Herringbone pair",
+    "assembly": true,
+    "items": [
+     {
+      "id": "A",
+      "type": "herringbone",
+      "components": [
+       {
+        "sketch": "Pitch circles",
+        "curve": "a",
+        "slot": "pitch"
+       }
+      ],
+      "module_block": "M",
+      "gears": [
+       {
+        "gear": 0,
+        "helix_angle": 25,
+        "hand": "right",
+        "herringbone": true,
+        "face": {
+         "preset": "symmetric",
+         "a": 10,
+         "b": 10
+        }
+       }
+      ]
+     },
+     {
+      "id": "B",
+      "type": "herringbone",
+      "components": [
+       {
+        "sketch": "Pitch circles",
+        "curve": "b",
+        "slot": "pitch"
+       }
+      ],
+      "module_block": "M",
+      "gears": [
+       {
+        "gear": 0,
+        "helix_angle": 25,
+        "hand": "left",
+        "herringbone": true,
+        "face": {
+         "preset": "symmetric",
+         "a": 10,
+         "b": 10
+        }
+       }
+      ]
+     }
+    ],
+    "links": [
+     {
+      "a": {
+       "item": "A",
+       "gear": 0
+      },
+      "b": {
+       "item": "B",
+       "gear": 0
+      },
+      "kind": "mesh"
+     }
+    ],
+    "module_blocks": [
+     {
+      "id": "M",
+      "module": 1.5
+     }
+    ],
+    "drive": {
+     "item": "A",
+     "gear": 0,
+     "rpm": 1000,
+     "torque": 2
+    }
+   }
+  },
+  {
+   "command": "gear.ratio",
+   "params": {
+    "a": {
+     "item": "A",
+     "gear": 0
+    },
+    "b": {
+     "item": "B",
+     "gear": 0
+    }
+   }
+  }
+ ]
+}

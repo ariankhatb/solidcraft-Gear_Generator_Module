@@ -5,9 +5,9 @@
 
 # Gear Generator for SolidCraft
 
-A gear generator that is part of the app, not a plugin. **Model › Create › Gears** opens a window where
-you lay out the shafts, see the set mesh in 2D and 3D as you type, and build solid gears into the
-parametric timeline. It covers parallel, intersecting and crossed shafts, from a spur gear to a
+A gear generator that is part of the app, not a plugin. You draw the set in an ordinary sketch, and
+**Model › Create › Gears** opens a native command dialog that turns it into solid gears in the
+parametric timeline, linked to the sketch. It covers parallel, intersecting and crossed shafts, from a spur gear to a
 hypoid final drive, a multi-start worm or a complete differential with its case and drive gear,
 and it can make any set an assembly whose gears turn each other.
 

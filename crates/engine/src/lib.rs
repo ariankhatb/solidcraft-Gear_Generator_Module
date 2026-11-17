@@ -827,6 +827,8 @@ impl Session {
     pub fn opened_validating(mut doc: Document, saved: Option<&solidcraft_doc::SavedModel>, validation: solidcraft_kernel::Validation) -> Self {
         // A design's font files are checked like its other paths before it is evaluated.
         solidcraft_io::vfs::install_checks();
+        // Gears features are planned by the Gear Generator's reading of the design.
+        cmd::install_gears_feature();
         // The session keeps what is hidden (an undo step of its own); the design file carries it.
         let visibility = std::mem::take(&mut doc.visibility);
         let mut doc = Arc::new(doc);
@@ -856,6 +858,7 @@ impl Session {
 
     /// A session on `doc` evaluated as `model`, with what it hides.
     pub(crate) fn with_model(doc: Arc<Document>, visibility: Visibility, model: Model) -> Self {
+        cmd::install_gears_feature();
         Session {
             stop: Default::default(),
             is_copy: false,
@@ -1936,6 +1939,21 @@ impl Session {
                 Err(e)
             }
         };
+        // Gear sets made from a sketch follow it: a command that left their sketch reading
+        // differently (a dimension or parameter changed, an edit finished) regenerates them in
+        // place, inside this command and so in its undo step (`gear::follow_sketches`).
+        let result = match result {
+            Ok(mut v) if outermost && (changed || spec.id == "sketch.finish") && self.replacements == replacements && follows_sketches(spec.id) => {
+                let followed = cmd::gear_follow_sketches(self);
+                if !followed.is_empty()
+                    && let Some(o) = v.as_object_mut()
+                {
+                    o.insert("gears_followed".into(), Value::Array(followed));
+                }
+                Ok(v)
+            }
+            r => r,
+        };
         // A sketch open for editing that failed (a projected edge lost by name) is still shown, its
         // lost link marked, so it can be repaired from inside it (#12085).
         if outermost {
@@ -2569,6 +2587,13 @@ pub(crate) type SketchValues = std::collections::BTreeMap<u64, std::collections:
 
 /// The values of a sketch's driving dimensions that come from parameters: what a value edit
 /// changes in it (as opposed to geometry it projects or links from upstream).
+/// Whether a gear set should follow its sketch after command `id`: not after the Gear
+/// Generator's own commands (they read the sketch themselves), nor after Undo and Redo (which
+/// bring back a set and its sketch together), nor after opening, starting or recovering a design.
+fn follows_sketches(id: &str) -> bool {
+    !(id.starts_with("gear.") || matches!(id, "edit.undo" | "edit.redo") || id.starts_with("file."))
+}
+
 fn own_values(sk: &solidcraft_sketch::Sketch) -> std::collections::BTreeMap<String, f64> {
     let mut values: std::collections::BTreeMap<_, _> =
         sk.constraints.iter().filter(|c| c.param.is_some() && !c.driven).filter_map(|c| Some((c.id.clone(), c.kind.value()?))).collect();

@@ -26,6 +26,7 @@
 //! The members on one axis share one revolved profile (gear, shaft and seats together), so the
 //! body is a handful of revolves joined, plus the prisms of a rack's slot or a chain's run.
 
+use crate::axes::{cross, dot, len, mul, num, sub};
 use crate::geom::{Outline, Region, Seg, V2};
 use crate::hub::{Bore, BoreKind};
 use crate::mesh3d::Solid;
@@ -75,11 +76,31 @@ pub struct Clearance {
     /// A rack's travel: how far it slides in all (mm; 0: its own length), its slot that much
     /// longer than the rack.
     pub travel: f64,
+    /// Make the keep-out body itself (`Plan::clearance`); false places the bearing seats only
+    /// (for `bearing_bodies`).
+    pub keep_out: bool,
+    /// Also build each seat's bearing as two bodies, its outer and inner ring (see
+    /// [`add_bearing_bodies`]).
+    pub bearing_bodies: bool,
+}
+
+/// A bearing placed at a seat ([`Plan::bearings`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacedBearing {
+    /// The seat (1-based, as the warnings count them).
+    pub seat: usize,
+    /// The member (an index into the plan's bodies) whose shaft it carries.
+    pub member: usize,
+    /// Where it is (world): its middle on the member's axis, z along the axis.
+    pub frame: Frame,
+    /// The bearing's name ("608"; "custom" for a size given) and size.
+    pub name: String,
+    pub size: BearingSize,
 }
 
 impl Default for Clearance {
     fn default() -> Self {
-        Self { radial: 0.5, axial: 0.5, shaft_extension: 0.0, ring_as_housing: true, bearing: None, bearing_size: None, bearing_fit: 0.0, seats: Vec::new(), travel: 0.0 }
+        Self { radial: 0.5, axial: 0.5, shaft_extension: 0.0, ring_as_housing: true, bearing: None, bearing_size: None, bearing_fit: 0.0, seats: Vec::new(), travel: 0.0, keep_out: true, bearing_bodies: false }
     }
 }
 
@@ -177,28 +198,8 @@ pub(crate) fn motions(kind: Kind, bodies: &[Body]) -> Vec<Motion> {
 fn orbit(about: &Frame, f: &Frame) -> Motion {
     let d = sub(f.origin, about.origin);
     let along = dot(d, about.z);
-    let off = sub(d, scale(about.z, along));
+    let off = sub(d, mul(about.z, along));
     Motion::Orbits { about: *about, distance: dot(off, off).sqrt() }
-}
-
-fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-fn scale(a: [f64; 3], k: f64) -> [f64; 3] {
-    [a[0] * k, a[1] * k, a[2] * k]
-}
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-}
-fn norm(a: [f64; 3]) -> f64 {
-    dot(a, a).sqrt()
-}
-
-fn mm(v: f64) -> String {
-    format!("{v:.3}").trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// The point spacing round outlines (`h`) and along sweeps (`hz`) the envelopes are sampled at
@@ -220,10 +221,10 @@ struct Group {
 }
 
 fn coaxial(a: &Frame, b: &Frame) -> bool {
-    let par = norm(cross(a.z, b.z)) < 1e-9;
+    let par = len(cross(a.z, b.z)) < 1e-9;
     let d = sub(b.origin, a.origin);
-    let off = sub(d, scale(a.z, dot(d, a.z)));
-    par && norm(off) < 1e-6
+    let off = sub(d, mul(a.z, dot(d, a.z)));
+    par && len(off) < 1e-6
 }
 
 fn group_of(groups: &mut Vec<Group>, f: &Frame) -> usize {
@@ -362,8 +363,10 @@ pub fn clearance_body(s: &Spec, p: &mut Plan) -> Result<Body, String> {
     let mut warnings = Vec::new();
     // (Following the formulas: only for the whole set, whose plan holds the bodies' own teeth.)
     let follows = if s.only == 0 { member_follows(s, p, bodies) } else { vec![None; bodies.len()] };
-    let (body, follow) = build(s, &c, bodies, preview, &follows, &mut facts, &mut warnings)?;
+    let mut placed = Vec::new();
+    let (body, follow) = build(s, &c, bodies, preview, &follows, &mut facts, &mut warnings, &mut placed)?;
     p.clearance_follow = follow;
+    p.bearings = placed;
     for (label, value, unit) in facts {
         p.fact(label, value, unit);
     }
@@ -402,6 +405,7 @@ fn build(
     follows: &[Option<MemberFollow>],
     facts: &mut Vec<(String, f64, Unit)>,
     warn: &mut Vec<String>,
+    placed: &mut Vec<PlacedBearing>,
 ) -> Result<(Body, Vec<Vec<VertexFollow>>), String> {
     if bodies.is_empty() {
         return Err("clearance: the set has no bodies".into());
@@ -483,7 +487,7 @@ fn build(
         // clearances run partly across the group's axis and partly along it, so they are
         // applied in its own frame: the radius grown by the radial one, the points also taken
         // the axial one along its own axis either way (and the group's margins on top).
-        let tilted = orbit > 0.0 && norm(cross(f.z, g.frame.z)) > 1e-9;
+        let tilted = orbit > 0.0 && len(cross(f.z, g.frame.z)) > 1e-9;
         let mut push = |zg: f64, r: f64, margin: f64| {
             zr = (zr.0.min(zg), zr.1.max(zg));
             rmax = rmax.max(r);
@@ -524,7 +528,7 @@ fn build(
                     let t = std::f64::consts::TAU * k as f64 / n as f64;
                     let d = sub(f.world([rho * t.cos(), rho * t.sin(), z]), g.frame.origin);
                     let zg = dot(d, g.frame.z);
-                    let r = norm(sub(d, scale(g.frame.z, zg)));
+                    let r = len(sub(d, mul(g.frame.z, zg)));
                     let b = bands.entry((zg / BAND).floor() as i64).or_insert(0.0);
                     *b = b.max(r);
                 }
@@ -607,7 +611,7 @@ fn build(
                 Seat::Point(pt) => match nearest(&members, *pt) {
                     Some((k, along, off)) => {
                         if off > b.od {
-                            warn.push(format!("clearance: bearing seat {n}'s point is {} mm off {}'s axis; it is moved onto the axis", mm(off), members[k].who));
+                            warn.push(format!("clearance: bearing seat {n}'s point is {} mm off {}'s axis; it is moved onto the axis", num(off), members[k].who));
                         }
                         (k, along)
                     }
@@ -637,23 +641,24 @@ fn build(
                 rule.anchors.extend([(z0, 0.5), (z1, 0.5)]);
             }
             g.bands.push((z0, z1, r));
+            placed.push(PlacedBearing { seat: n, member: mi, frame: Frame { origin: f.world([0.0, 0.0, m.mid + along]), x: f.x, z: f.z }, name: name.clone(), size: *b });
             facts.push((format!("clearance: bearing seat {n} on {} at", m.who), along, Unit::Mm));
             match m.shaft {
                 Some((lo, hi, _)) if z0 >= lo - 1e-9 && z1 <= hi + 1e-9 => {}
                 Some((lo, hi, _)) => warn.push(format!(
                     "clearance: bearing seat {n} ({}…{} mm along {}'s axis) is beyond its shaft ({}…{})",
-                    mm(z0 - centre + along),
-                    mm(z1 - centre + along),
+                    num(z0 - centre + along),
+                    num(z1 - centre + along),
                     m.who,
-                    mm(lo - centre + along),
-                    mm(hi - centre + along)
+                    num(lo - centre + along),
+                    num(hi - centre + along)
                 )),
                 None => warn.push(format!("clearance: bearing seat {n} is on {}, which has no shaft (no bore, integral shaft or bearing bore)", m.who)),
             }
             let (zlo, zhi) = (dot(sub(f.world([0.0, 0.0, m.teeth.0]), g.frame.origin), g.frame.z), dot(sub(f.world([0.0, 0.0, m.teeth.1]), g.frame.origin), g.frame.z));
             let (zlo, zhi) = (zlo.min(zhi), zlo.max(zhi));
             if z1 > zlo + 1e-9 && z0 < zhi - 1e-9 {
-                warn.push(format!("clearance: bearing seat {n} overlaps the teeth of {} (they run {}…{} mm from their middle)", m.who, mm(m.teeth.0 - m.mid), mm(m.teeth.1 - m.mid)));
+                warn.push(format!("clearance: bearing seat {n} overlaps the teeth of {} (they run {}…{} mm from their middle)", m.who, num(m.teeth.0 - m.mid), num(m.teeth.1 - m.mid)));
             }
             if b.bore > 0.0
                 && let Some(d) = m.shaft_d
@@ -661,7 +666,7 @@ fn build(
                 && !mismatched.contains(&mi)
             {
                 mismatched.push(mi);
-                warn.push(format!("clearance: bearing {name} has a {} mm bore but {}'s shaft is Ø{}", mm(b.bore), m.who, mm(d)));
+                warn.push(format!("clearance: bearing {name} has a {} mm bore but {}'s shaft is Ø{}", num(b.bore), m.who, num(d)));
             }
         }
         if c.seats.is_empty() {
@@ -705,7 +710,7 @@ fn nearest(members: &[Member], p: [f64; 3]) -> Option<(usize, f64, f64)> {
             let f = m.body.frame;
             let d = sub(p, f.origin);
             let along = dot(d, f.z);
-            let off = norm(sub(d, scale(f.z, along)));
+            let off = len(sub(d, mul(f.z, along)));
             (k, along - m.mid, off)
         })
         .min_by(|a, b| a.2.total_cmp(&b.2))
@@ -740,13 +745,13 @@ fn chain_run(s: &Spec, c: &Clearance, members: &[Member], preview: &[PreviewGear
         let (m1, m2) = (&members[wheels[0].0], &members[wheels[1].0]);
         let f1 = m1.body.frame;
         let d = sub(m2.body.frame.origin, f1.origin);
-        let across = sub(d, scale(f1.z, dot(d, f1.z)));
-        let a = norm(across);
+        let across = sub(d, mul(f1.z, dot(d, f1.z)));
+        let a = len(across);
         let r2 = wheels[1].1;
         if a > (r1 - r2).abs() + 1e-6
             && let Some(path) = crate::wrap::belt_path(r1, r2, a, off)
         {
-            let x = scale(across, 1.0 / a);
+            let x = mul(across, 1.0 / a);
             let frame = Frame { origin: f1.origin, x, z: f1.z };
             let zs = [m1, m2].iter().flat_map(|m| [m.z.0, m.z.1].map(|z| dot(sub(m.body.frame.world([0.0, 0.0, z]), f1.origin), f1.z))).fold((f64::MAX, f64::MIN), |a, z| (a.0.min(z), a.1.max(z)));
             let (z0, z1) = (zs.0 - side - c.axial, zs.1 + side + c.axial);
@@ -914,4 +919,38 @@ fn close(v: Vec<V2>) -> Vec<V2> {
     }
     out.dedup_by(|a, b| (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6);
     out
+}
+
+/// Builds each placed bearing ([`Plan::bearings`]) as two bodies, its outer ring and its inner
+/// ring (plain rectangular sections, each a third of the bearing's wall; no balls), and adds
+/// them to the assembly: the outer ring held (it sits in the housing), the inner ring joined
+/// rigidly to the member whose shaft it carries. Only for the whole set (`Spec::only` 0).
+pub(crate) fn add_bearing_bodies(s: &Spec, p: &mut Plan) {
+    if p.bearings.is_empty() {
+        p.warn("bearing bodies: no bearing seats placed, so no bearings are built");
+        return;
+    }
+    if s.only != 0 {
+        p.warn("bearing bodies are built with the whole set only");
+        return;
+    }
+    let pre = if s.name.trim().is_empty() { String::new() } else { format!("{} ", s.name.trim()) };
+    for b in p.bearings.clone() {
+        let (ri, ro, w) = (b.size.bore.max(0.0) / 2.0, b.size.od / 2.0, b.size.width);
+        // A bore not known: an inner ring at 0.4 of the outside radius.
+        let ri = if ri > 0.0 { ri } else { 0.4 * ro };
+        let t = (ro - ri) / 3.0;
+        let ring = |r0: f64, r1: f64| Step::Revolve { profile: vec![V2::new(r0, -w / 2.0), V2::new(r1, -w / 2.0), V2::new(r1, w / 2.0), V2::new(r0, w / 2.0)], op: Op::New };
+        let axis = crate::axes::Axis { origin: b.frame.origin, dir: b.frame.z };
+        for (part, r0, r1) in [("outer", ro - t, ro), ("inner", ri, ri + t)] {
+            let index = p.bodies.len();
+            p.bodies.push(Body { name: format!("{pre}Bearing {} {} {part} ring", b.seat, b.name), frame: b.frame, steps: vec![ring(r0, r1)] });
+            let grounded = part == "outer";
+            p.assembly.members.push(crate::plan::AssemblyMember { body: index, axis, grounded, carrier: None });
+            if !grounded && b.member < p.assembly.members.len() {
+                let m = p.assembly.members.len() - 1;
+                p.assembly.links.push(crate::plan::AssemblyLink::Rigid { a: b.member, b: m });
+            }
+        }
+    }
 }

@@ -425,6 +425,8 @@ crate::dialog_descriptor::dialog_descriptors! {
             InsertAirfoil(crate::dialogs_insert_airfoil::Airfoil),
             /// Plastic features (`dialogs_plastic`).
             Plastic(crate::dialogs_plastic::Pl),
+            /// Gears drawn in a sketch (`dialogs_gear`).
+            Gear(crate::dialogs_gear::Gear),
             /// Frame members (`dialogs_frame`).
             Frame(crate::dialogs_frame::Member),
             /// End caps on frame members (`dialogs_end_cap`).
@@ -1183,6 +1185,7 @@ impl Dialog {
                     .or_else(|| crate::dialogs_view_dxf::start(app, id))
                     .or_else(|| crate::view_gizmo::start(app, id))
                     .or_else(|| crate::dialogs_plastic::start(app, id))
+                    .or_else(|| crate::dialogs_gear::start(app, id))
                     .or_else(|| crate::dialogs_frame::start(app, id))
                     .or_else(|| crate::dialogs_end_cap::start(app, id))
                     .or_else(|| crate::dialogs_appearance::start(app, id))
@@ -1417,6 +1420,11 @@ impl Dialog {
     /// An Extrude or Revolve started from inside a sketch takes that sketch's profile, as it would
     /// had the sketch stayed open, and keeps the sketch shown while it is open (#14128).
     pub(crate) fn take_sketch_profile(&mut self, s: &Session, sketch: u64) {
+        // Gears: the sketch being finished is the one the set is drawn in.
+        if let Kind::Gear(g) = &mut self.kind {
+            g.sketch = Some(sketch);
+            return;
+        }
         if !matches!(self.kind, Kind::Extrude { .. } | Kind::Revolve { .. }) {
             return;
         }
@@ -1446,6 +1454,7 @@ impl Dialog {
             Kind::Surface(_) => return true,
             Kind::SketchModify(k) => return k.previews(),
             Kind::Plastic(k) => return k.previews(),
+            Kind::Gear(k) => return k.previews(),
             Kind::Frame(_) | Kind::EndCap(_) => return true,
             Kind::Part(_) | Kind::PartSize(_) | Kind::InsertDrawing(_) | Kind::InsertAirfoil(_) => return true,
             // Web previews run synchronously; a modelled thread can take seconds.
@@ -2897,6 +2906,7 @@ fn title(k: &Kind) -> &'static str {
         Kind::InsertDrawing(p) => crate::dialogs_insert_drawing::title(p),
         Kind::InsertAirfoil(_) => crate::dialogs_insert_airfoil::title(),
         Kind::Plastic(k) => k.title(),
+        Kind::Gear(k) => k.title(),
         Kind::Frame(_) => "FRAME MEMBER",
         Kind::EndCap(_) => "ui.end_cap_title",
         Kind::Appearance(_) => "APPEARANCE",
@@ -6588,6 +6598,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
         Kind::InsertDrawing(p) => return crate::dialogs_insert_drawing::commands(p),
         Kind::InsertAirfoil(a) => return crate::dialogs_insert_airfoil::commands(a),
         Kind::Plastic(k) => return crate::dialogs_plastic::commands(app, k, &d.inputs, &d.extra),
+        Kind::Gear(k) => return crate::dialogs_gear::commands(app, k, &d.inputs, &d.extra),
         Kind::Frame(k) => return crate::dialogs_frame::commands(app, k, &d.inputs, &d.extra),
         Kind::EndCap(k) => return crate::dialogs_end_cap::commands(app, k, &d.inputs, &d.extra),
         Kind::Appearance(k) => return Ok(crate::dialogs_appearance::commands(k, &d.inputs)),

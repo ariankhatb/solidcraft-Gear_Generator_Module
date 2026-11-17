@@ -40,6 +40,7 @@
 //! Pure math with no dependencies: the engine turns a plan into sketches and features, the
 //! window draws its preview from the same plan.
 
+pub mod analysis;
 pub mod axes;
 pub mod body;
 pub mod clearance;
@@ -49,10 +50,12 @@ pub mod elliptic;
 pub mod face_gear;
 pub mod design;
 pub mod diff;
+pub mod drivetrain;
 pub mod equations;
 pub mod geom;
 pub mod hub;
 pub mod hypoid;
+pub mod items;
 pub mod involute;
 pub mod mesh2d;
 pub mod mesh3d;
@@ -63,6 +66,7 @@ pub mod pulley;
 pub mod spline;
 pub mod sprocket;
 pub mod sheet;
+pub mod select;
 pub mod simple;
 pub mod sketch_rules;
 pub mod strength;
@@ -71,10 +75,12 @@ pub mod wrap;
 
 pub use geom::{Outline, Region, Seg, V2};
 pub use mesh2d::{MeshPair, MeshResult, Verdict, check_mesh};
-pub use plan::{Assembly, AssemblyLink, AssemblyMember, Body, Fact, Frame, Kind, Op, Plan, PreviewGear, Spec, Step, Unit, plan};
+pub use plan::{Assembly, AssemblyIssue, AssemblyLink, AssemblyMember, Body, Fact, Frame, Kind, Op, Plan, PreviewGear, SetMember, Spec, Step, Unit, plan};
 
 #[cfg(test)]
 mod bevel_planet_tests;
+#[cfg(test)]
+mod analysis_tests;
 #[cfg(test)]
 mod diff_tests;
 #[cfg(test)]
@@ -108,3 +114,17 @@ mod tools_tests;
 mod loft_slip_tests;
 #[cfg(test)]
 mod flat_bevel_tests;
+#[cfg(test)]
+mod train_tests;
+#[cfg(test)]
+mod system_tests;
+#[cfg(test)]
+mod select_tests;
+#[cfg(test)]
+mod drivetrain_tests;
+#[cfg(test)]
+mod items_tests;
+#[cfg(test)]
+mod solid_tests;
+#[cfg(test)]
+mod system_compose_tests;

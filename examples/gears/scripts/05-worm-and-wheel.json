@@ -1,0 +1,161 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "Worm stage",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     0
+    ],
+    "radius": 30,
+    "id": "w"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -40,
+      38
+     ],
+     [
+      40,
+      38
+     ]
+    ],
+    "ids": [
+     "axis"
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "w.center",
+    "b": "origin"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "w"
+    ],
+    "type": "diameter",
+    "value": "60 mm"
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "axis",
+    "mode": "horizontal"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "axis"
+    ],
+    "value": "80 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "axis.start",
+     "origin"
+    ],
+    "type": "horizontal",
+    "value": "40 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "axis.start"
+    ],
+    "type": "vertical",
+    "value": "38 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "gear.create",
+   "params": {
+    "name": "Worm drive",
+    "items": [
+     {
+      "id": "W",
+      "type": "worm",
+      "starts": 1,
+      "components": [
+       {
+        "sketch": "Worm stage",
+        "curve": "w",
+        "slot": "pitch"
+       },
+       {
+        "sketch": "Worm stage",
+        "curve": "axis",
+        "slot": "axis"
+       }
+      ]
+     }
+    ],
+    "links": [],
+    "assembly": true,
+    "drive": {
+     "item": "W",
+     "gear": 1,
+     "rpm": 1500
+    }
+   }
+  },
+  {
+   "command": "gear.ratio",
+   "params": {
+    "a": {
+     "item": "W",
+     "gear": 1
+    },
+    "b": {
+     "item": "W",
+     "gear": 0
+    }
+   }
+  }
+ ]
+}

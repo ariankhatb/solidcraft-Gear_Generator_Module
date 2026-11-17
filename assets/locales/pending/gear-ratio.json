@@ -1,0 +1,26 @@
+{
+  "ar": {
+    "cmd.gear_ratio": "نسبة التروس"
+  },
+  "de": {
+    "cmd.gear_ratio": "Übersetzung"
+  },
+  "en": {
+    "cmd.gear_ratio": "Gear Ratio"
+  },
+  "he": {
+    "cmd.gear_ratio": "יחס תמסורת"
+  },
+  "ja": {
+    "cmd.gear_ratio": "歯車比"
+  },
+  "ko": {
+    "cmd.gear_ratio": "기어비"
+  },
+  "vi": {
+    "cmd.gear_ratio": "Tỉ số truyền"
+  },
+  "zh": {
+    "cmd.gear_ratio": "齿轮比"
+  }
+}

@@ -1,9 +1,9 @@
 # SolidCraft Gear Generator
 
 A gear generator built into [SolidCraft](https://github.com/tangency-labs/solidcraft), the open-source
-parametric CAD app in pure Rust. It is part of the app, not a plugin: a **Gears** button in
-**Model › Create** opens a window where you lay out the shafts, see the set mesh in 2D and 3D straight
-away, and build real solid gears into the timeline.
+parametric CAD app in pure Rust. It is part of the app, not a plugin: you draw the set in an ordinary sketch,
+and the **Gears** button in **Model › Create** opens a command dialog in the right panel (like Thread
+or Extrude) that turns the sketch into real solid gears in the timeline, linked to the sketch.
 
 This branch (`gear-generator` on [ariankhatb/solidcraft](https://github.com/ariankhatb/solidcraft/tree/gear-generator))
 is a work in progress shared for testing and feedback. It tracks SolidCraft `main` (currently
@@ -67,35 +67,33 @@ distance, contact ratio, span and over-pins measurements, and a strength rating 
 
 ## How you use it
 
-- **Simple mode (default): design by what you need.** Pick a type, then drag or type sizes on a
-  small drawing. Circles are pitch circles, lines are shafts, and a dot is the origin (a bevel's apex).
-  A bevel is drawn as a side view: a shaft line, the apex dot, and a second line at the meeting angle
-  (an 80° bevel is just a line at 80°). The 3D preview is drawn from the math in milliseconds, with
-  no kernel build while you edit. Cycloidal drives, splines and elliptical pairs are in Advanced
-  mode only. A differential in Simple mode is designed from what it must do instead: style, axle
-  diameter, final drive ratio, torque, drive gear and mount, then **Design**.
-- **Bevel faces.** In the drawing, each bevel gear's toe and heel lines can be dragged to set its
-  face width and heel offset; Advanced mode has the same as rows per gear.
-- **Advanced mode: every setting.** Tooth form (basic rack, clearance, tip shortening), profile shift,
-  helix and spiral angles, backlash, bores (round, keyway, D, hex, square), hubs, integral and dual
-  shafts, chamfers, lightening holes, bearing pockets, tip relief and crowning, and a **3D-printing**
-  section (print preset, tip rounding, XY compensation, elephant-foot relief).
-- **From one sketch.** Draw the set in a sketch in the model (circles and lines as above), pick it
-  with **Use selected**, and the Gear Generator reads its sizes from it. From a script,
-  `gear.create {"sketch": id}` also recognises the type from what is drawn.
-- **Edit in place.** Right-click the set's folder in the History and choose **Edit Gears**, double-click
-  the folder, or select one of the set's bodies or components and click **Gears**. **Update**
-  rebuilds the bodies under the same names, so features that use them keep working.
-- **Assembly (optional).** *Assembly (components + joints)* makes the set into components on joints
-  with gear and rack-and-pinion links, ready to drive. Edits keep them.
-- **Parametric teeth (optional).** For spur, helical, herringbone, internal, pair, planetary and rack
-  sets, *Tooth curves: Equations* draws the teeth as formula curves, and *parametric* drives them
-  from design parameters: change the tooth count or module and the gears, their mates and the
-  clearance body follow.
-- **Clearance body.** One solid keep-out volume for the whole set (turning envelopes, shafts, bearing
-  seats from a bearing library), for cutting a housing with a single Boolean.
-- **Colour-coded members.** Each gear has a colour and a label in the drawing, the previews and the
-  settings, and hovering one lights it up everywhere.
+1. **Draw the set in a sketch** with the normal sketch tools: circles are pitch circles, lines are
+   shafts, a point is the origin (a bevel's apex) or a bearing on a shaft line. Dimension them and
+   make the meshing circles **Tangent**. Construction lines and points are helpers: they are never
+   gears or shafts. A line from one circle's centre to another's says the two mesh.
+2. **Start Gears** (Model › Create › Gears) with the sketch open or its curves selected: the sketch
+   is taken as Extrude takes a profile.
+3. **Pick and assign.** Every circle, line, point, 3D sketch curve, model edge or face you pick is a
+   numbered row with its icon and name, lit in the view while hovered. Give each row its role:
+   Spur, Helical, Herringbone, Bevel, Worm, Wheel, Rack, Ring Gear, Face Gear, **Shaft** (one solid
+   shaft through the gears on it) or **Bearing** (a point that lies on a picked shaft line; sized
+   from the bearing library). Rows move up or are removed with their buttons.
+4. **Size** by Module or by Teeth (per row); Face Width is Auto unless you give one. The other
+   families read the sketch as one drawing (hypoid, crossed helicals, bevel planetary, sprocket,
+   pulley, cycloidal); spline, elliptical gears, cycloidal drive and the differential are made from
+   their rows alone (the differential with its style, drive and which parts to build, as a plain
+   case). The rest of the settings are in the collapsed **Advanced** section.
+5. **Preview.** The set's abstract shape is drawn in the viewport at once: shafts and pitch surfaces
+   in each member's colour, no teeth (tick *Preview Teeth* to build them). Each row shows what it
+   came to (module, teeth, Ø, what it meshes with, the shaft it shares) or what is wrong with it,
+   and a refused circle is drawn in red ("circle c3 touches no other gear: make it tangent").
+6. **OK** builds the set, linked to its sketch: change a dimension of the sketch and the set is
+   regenerated in place, in the same undo step.
+7. **Edit Gears** (right-click the set's folder in the History, or double-click it) reopens the dialog
+   on the set; OK updates it in place, keeping its bodies, components and joints.
+
+- **Assembly (optional):** each gear a component on a joint, linked to its mates, ready to drive.
+- **Clearance body (optional):** one keep-out solid for the whole set, with the bearings' seats.
 
 Everything is also scriptable: `gear.create`, `gear.calculate` (facts only, builds nothing),
 `gear.update`, `gear.from_axes` and `gear.inspect` are ordinary SolidCraft commands, available from
@@ -135,7 +133,7 @@ Tests: `cargo test --release -p solidcraft-gear` (the gear math, over 240 tests)
 | `crates/engine/src/cmd/gear.rs`, `crates/engine/src/schema/gear.rs` | the commands, and turning a plan into sketches and features |
 | `crates/engine/src/cmd/gear_equations.rs` | formula-driven teeth and design parameters |
 | `crates/engine/src/cmd/gear_assembly.rs` | components, joints and links for `assembly: true` |
-| `crates/ui-egui/src/gear_*.rs` | the window: Simple/Advanced modes, drawing, 3D preview, clearance UI, differential designer (`gear_diff.rs`), icons |
+| `crates/ui-egui/src/dialogs_gear.rs` | the Gears command dialog: pick rows and roles, settings, the viewport preview, Edit Gears |
 | `crates/gear/UI_FIELDS.md`, `crates/gear/CLEARANCE_UI.md` | which setting does what, per gear type |
 | `GEAR_GENERATOR_NOTES.md` | the running design notes and status |
 

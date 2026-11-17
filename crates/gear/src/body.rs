@@ -19,6 +19,7 @@
 
 use std::f64::consts::{FRAC_PI_2, PI};
 
+use crate::axes::num;
 use crate::geom::{Outline, Region, Seg, V2};
 use crate::hub::{Bore, BoreKind, Hardware, Shaft, ShaftEnd, din6885};
 use crate::involute::{BasicRack, Involute, ToothFlank, external_flank, shape_tips, teeth_outline};
@@ -26,10 +27,6 @@ use crate::plan::{Frame, Kind, Op, Plan, Spec, Step};
 
 /// How far a cut runs past the surface it opens onto (into the air), in mm.
 const OVER: f64 = 1.0;
-
-fn mm(v: f64) -> String {
-    format!("{v:.3}").trim_end_matches('0').trim_end_matches('.').to_string()
-}
 
 // ---------------------------------------------------------------------------------------------
 // The spec's side of it.
@@ -224,14 +221,14 @@ pub(crate) fn check(s: &Spec) -> Result<(), String> {
     if s.xy_compensation > 0.25 * m || s.elephant_foot > 0.25 * m {
         return Err(format!(
             "horizontal-expansion compensation and elephant-foot relief must each be a quarter module ({} mm) or less",
-            mm(0.25 * m)
+            num(0.25 * m)
         ));
     }
     if s.tip_shortening > 0.5 * s.rack.addendum * m {
-        return Err(format!("tip shortening must be half the addendum ({} mm) or less", mm(0.5 * s.rack.addendum * m)));
+        return Err(format!("tip shortening must be half the addendum ({} mm) or less", num(0.5 * s.rack.addendum * m)));
     }
     if s.tip_relief > 0.1 * m || s.crowning > 0.1 * m {
-        return Err(format!("tip relief and crowning must each be a tenth of the module ({} mm) or less", mm(0.1 * m)));
+        return Err(format!("tip relief and crowning must each be a tenth of the module ({} mm) or less", num(0.1 * m)));
     }
     // (A spline has its own tooth proportions and ignores the rack: `plan::extras::check`.)
     if s.kind.involute() && s.kind != Kind::Spline {
@@ -242,8 +239,8 @@ pub(crate) fn check(s: &Spec) -> Result<(), String> {
         if PI / 4.0 - dedendum * tan < 0.01 {
             return Err(format!(
                 "a {}° pressure angle with a root {} modules deep (clearance, horizontal-expansion compensation and elephant-foot relief included) gives a cutter with pointed teeth: lower one of them",
-                mm(s.pressure_angle),
-                mm(dedendum)
+                num(s.pressure_angle),
+                num(dedendum)
             ));
         }
         let widest = s.backlash.max(s.backlash_of2())
@@ -251,13 +248,13 @@ pub(crate) fn check(s: &Spec) -> Result<(), String> {
         if widest >= PI * m / 4.0 {
             return Err(format!(
                 "backlash, horizontal-expansion compensation and elephant-foot relief together must thin the teeth by less than a quarter of the pitch ({} mm)",
-                mm(PI * m / 4.0)
+                num(PI * m / 4.0)
             ));
         }
         if s.kind == Kind::Rack && s.rack_height > 0.0 && s.rack_height < (dedendum - s.shift + 0.25) * m {
             return Err(format!(
                 "rack height below the pitch line must be over {} mm (the tooth roots plus a quarter module)",
-                mm((dedendum - s.shift + 0.25) * m)
+                num((dedendum - s.shift + 0.25) * m)
             ));
         }
     }
@@ -276,7 +273,7 @@ pub(crate) fn flank(s: &Spec, g: &Involute, p: &mut Plan, who: &str) -> ToothFla
     if s.nozzle > 0.0 {
         let land = if f.pointed { 0.0 } else { g.thickness_at(f.ra) };
         if land < 2.0 * s.nozzle {
-            p.warn(format!("{who}: the tip land ({} mm) is under two nozzle widths ({} mm), too thin to print cleanly: use a larger module, a lower addendum, less profile shift or fewer teeth", mm(land), mm(2.0 * s.nozzle)));
+            p.warn(format!("{who}: the tip land ({} mm) is under two nozzle widths ({} mm), too thin to print cleanly: use a larger module, a lower addendum, less profile shift or fewer teeth", num(land), num(2.0 * s.nozzle)));
         }
     }
     shape(s, g, &mut f, p, who);
@@ -292,7 +289,7 @@ fn shape(s: &Spec, g: &Involute, f: &mut ToothFlank, p: &mut Plan, who: &str) {
     let used = shape_tips(f, g, s.tip_relief, height, round);
     if round >= 0.01 * s.module && used < 0.999 * round && !f.pointed {
         if used > 0.0 {
-            p.warn(format!("{who}: the tips are too thin for a {} mm rounding; {} mm is used", mm(round), mm(used)));
+            p.warn(format!("{who}: the tips are too thin for a {} mm rounding; {} mm is used", num(round), num(used)));
         } else {
             p.warn(format!("{who}: the tips are too thin to round"));
         }
@@ -319,14 +316,14 @@ pub(crate) fn tip_override(s: &Spec, g: &mut Involute, second: bool, p: &mut Pla
         if want > now + 1e-9 {
             p.warn(format!(
                 "{who}: a tip diameter of {} is over the teeth's own (Ø{}); it is left as it is",
-                mm(d),
-                mm(2.0 * (now + s.xy_compensation))
+                num(d),
+                num(2.0 * (now + s.xy_compensation))
             ));
         }
         return;
     }
     if want <= g.r() - 0.25 * g.module {
-        p.warn(format!("{who}: a tip diameter of {} leaves no addendum (pitch Ø{}); it is left as it is", mm(d), mm(2.0 * g.r())));
+        p.warn(format!("{who}: a tip diameter of {} leaves no addendum (pitch Ø{}); it is left as it is", num(d), num(2.0 * g.r())));
         return;
     }
     g.tip_shortening += now - want;
@@ -379,7 +376,7 @@ pub(crate) fn tooth_body(s: &Spec, g: &Involute, f: &ToothFlank, phase: f64, fac
             let end = teeth_outline(&f.thinned(d), g.teeth, phase);
             if d > 0.0 && same_pieces(&end, &outline) {
                 if d < 0.999 * s.crowning / g.rb() {
-                    p.warn(format!("{who}: the tips are too thin for {} mm of crowning; {} mm is used", mm(s.crowning), mm(d * g.rb())));
+                    p.warn(format!("{who}: the tips are too thin for {} mm of crowning; {} mm is used", num(s.crowning), num(d * g.rb())));
                 }
                 if s.elephant_foot > 0.0 {
                     p.warn(format!("{who}: elephant-foot relief is left out on crowned teeth"));
@@ -549,8 +546,8 @@ fn usable(sh: &Shaft, bore: &Bore, limit: f64, p: &mut Plan, who: &str, side: &s
         if reach >= 0.9 * sh.min_diameter() / 2.0 {
             p.warn(format!(
                 "{who}: the bore (reaching Ø{}) leaves no wall in the {side} shaft (Ø{}); the shaft is left out",
-                mm(2.0 * reach),
-                mm(sh.min_diameter())
+                num(2.0 * reach),
+                num(sh.min_diameter())
             ));
             return None;
         }
@@ -559,8 +556,8 @@ fn usable(sh: &Shaft, bore: &Bore, limit: f64, p: &mut Plan, who: &str, side: &s
     if sh.max_diameter() / 2.0 > limit {
         p.warn(format!(
             "{who}: the {side} shaft (Ø{}) is bigger than the root circle (Ø{}) and buries the ends of the teeth",
-            mm(sh.max_diameter()),
-            mm(2.0 * limit)
+            num(sh.max_diameter()),
+            num(2.0 * limit)
         ));
     }
     Some(*sh)
@@ -613,7 +610,7 @@ fn shaft_end(sh: &Shaft, base: f64, dir: f64, buried: f64, reach: f64, steps: &m
         ShaftEnd::DFlat => {
             let across = if sh.end_size > 0.0 { sh.end_size } else { 0.9 * d };
             if across >= 0.999 * d || across <= 0.5 * d || across - r <= reach {
-                left_out(p, &format!("a flat {} across doesn't fit a Ø{} shaft (over half the diameter, under all of it)", mm(across), mm(d)));
+                left_out(p, &format!("a flat {} across doesn't fit a Ø{} shaft (over half the diameter, under all of it)", num(across), num(d)));
             } else {
                 let (z0, h) = span(len);
                 steps.push(cut(Region { outer: vec![rect(-big, across - r, big, big)], holes: vec![] }, z0, h));
@@ -623,7 +620,7 @@ fn shaft_end(sh: &Shaft, base: f64, dir: f64, buried: f64, reach: f64, steps: &m
             let w = if sh.end_size > 0.0 { sh.end_size } else { din6885(d).map_or(d / 4.0, |k| k.0) };
             let t = (0.6 * w).min(0.3 * d);
             if w >= 0.7 * d || r - t <= reach {
-                left_out(p, &format!("a key slot {} wide doesn't fit a Ø{} shaft", mm(w), mm(d)));
+                left_out(p, &format!("a key slot {} wide doesn't fit a Ø{} shaft", num(w), num(d)));
             } else {
                 let (z0, h) = span(len);
                 steps.push(cut(Region { outer: vec![rect(-w / 2.0, r - t, w / 2.0, big)], holes: vec![] }, z0, h));
@@ -638,7 +635,7 @@ fn shaft_end(sh: &Shaft, base: f64, dir: f64, buried: f64, reach: f64, steps: &m
                     let (z0, h) = span(len);
                     steps.push(cut(Region { outer: vec![Outline::circle(V2::ZERO, 1.2 * r.max(corner) + 0.1)], holes: vec![o] }, z0, h));
                 }
-                _ => left_out(p, &format!("a hexagon {} across flats doesn't fit a Ø{} shaft", mm(af), mm(d))),
+                _ => left_out(p, &format!("a hexagon {} across flats doesn't fit a Ø{} shaft", num(af), num(d))),
             }
         }
         ShaftEnd::Cross => {
@@ -646,7 +643,7 @@ fn shaft_end(sh: &Shaft, base: f64, dir: f64, buried: f64, reach: f64, steps: &m
             if w >= 0.9 * d || w <= 0.05 * d || reach > 0.0 {
                 left_out(
                     p,
-                    &format!("a cross with arms {} wide doesn't fit a Ø{} shaft{}", mm(w), mm(d), if reach > 0.0 { " with a bore" } else { "" }),
+                    &format!("a cross with arms {} wide doesn't fit a Ø{} shaft{}", num(w), num(d), if reach > 0.0 { " with a bore" } else { "" }),
                 );
             } else {
                 let (a, b) = (w / 2.0, big);
@@ -659,7 +656,7 @@ fn shaft_end(sh: &Shaft, base: f64, dir: f64, buried: f64, reach: f64, steps: &m
             let dc = if sh.end_size > 0.0 { sh.end_size } else { 0.3 * d };
             let depth = (if sh.end_length > 0.0 { sh.end_length } else { 1.5 * dc }).min(total);
             if dc >= 0.8 * d || reach > 0.0 {
-                left_out(p, &format!("a Ø{} centre hole doesn't fit a Ø{} shaft{}", mm(dc), mm(d), if reach > 0.0 { " with a bore" } else { "" }));
+                left_out(p, &format!("a Ø{} centre hole doesn't fit a Ø{} shaft{}", num(dc), num(d), if reach > 0.0 { " with a bore" } else { "" }));
             } else {
                 let (z0, h) = span(depth);
                 steps.push(cut(disc(dc / 2.0), z0, h));
@@ -769,7 +766,7 @@ pub(crate) fn add_solids(s: &Spec, m: &Member, steps: &mut Vec<Step>, p: &mut Pl
             continue;
         }
         if size < c.size || depth < 0.999 * size * c.angle.to_radians().tan() {
-            p.warn(format!("{who}: the {side} tooth chamfer is cut down to {} × {} mm to fit", mm(size), mm(depth)));
+            p.warn(format!("{who}: the {side} tooth chamfer is cut down to {} × {} mm to fit", num(size), num(depth)));
         }
         depth_left -= depth;
         steps.push(revolve_cut(corner_cut(m.tip, z, -1.0, dz, size, depth)));
@@ -799,16 +796,16 @@ pub(crate) fn pockets(s: &Spec, m: &Member, steps: &mut Vec<Step>, p: &mut Plan)
     match pocket(s, m) {
         Some((r, w)) => {
             if m.bore.outline().is_some() && m.bore.reach() >= r {
-                p.warn(format!("{who}: the bore is as big as the bearing pocket (Ø{})", mm(2.0 * r)));
+                p.warn(format!("{who}: the bore is as big as the bearing pocket (Ø{})", num(2.0 * r)));
             }
             steps.push(cut(disc(r), -OVER, w + OVER));
         }
         None if s.shaft(m.second, false).exists() => p.warn(format!("{who}: the bearing pocket is where the back shaft is; left out")),
         None => p.warn(format!(
             "{who}: a Ø{} × {} bearing pocket doesn't fit inside the root circle (Ø{}, less a module of wall) and the gear's depth; left out",
-            mm(h.bearing_od + h.bearing_fit),
-            mm(h.bearing_width),
-            mm(2.0 * m.root)
+            num(h.bearing_od + h.bearing_fit),
+            num(h.bearing_width),
+            num(2.0 * m.root)
         )),
     }
 }
@@ -874,7 +871,7 @@ pub(crate) fn add_details(s: &Spec, m: &Member, b: &Built, steps: &mut Vec<Step>
     let frames: Vec<Frame> = (0..count).map(|k| radial_frame(FRAC_PI_2 + FRAC_PI_2 * f64::from(k), zc)).collect();
     if h.set_screw > 0.0 {
         if h.set_screw >= 0.9 * hl {
-            p.warn(format!("{who}: a Ø{} set screw doesn't fit a hub {} long; left out", mm(h.set_screw), mm(hl)));
+            p.warn(format!("{who}: a Ø{} set screw doesn't fit a hub {} long; left out", num(h.set_screw), num(hl)));
         } else {
             for f in &frames {
                 steps.push(placed(*f, cut(disc(h.set_screw / 2.0), 0.0, hr + OVER)));
@@ -884,7 +881,7 @@ pub(crate) fn add_details(s: &Spec, m: &Member, b: &Built, steps: &mut Vec<Step>
     if h.insert_diameter > 0.0 {
         let depth = (if h.insert_depth > 0.0 { h.insert_depth } else { 0.8 * wall }).min(wall);
         if h.insert_diameter >= 0.95 * hl {
-            p.warn(format!("{who}: a Ø{} insert pocket doesn't fit a hub {} long; left out", mm(h.insert_diameter), mm(hl)));
+            p.warn(format!("{who}: a Ø{} insert pocket doesn't fit a hub {} long; left out", num(h.insert_diameter), num(hl)));
         } else {
             for f in &frames {
                 steps.push(placed(*f, cut(disc(h.insert_diameter / 2.0), hr - depth, depth + OVER)));
@@ -894,7 +891,7 @@ pub(crate) fn add_details(s: &Spec, m: &Member, b: &Built, steps: &mut Vec<Step>
     if h.nut_width > 0.0 {
         let (w, t) = (h.nut_width, if h.nut_thickness > 0.0 { h.nut_thickness } else { 0.45 * h.nut_width });
         if t >= 0.7 * wall {
-            p.warn(format!("{who}: a nut {} thick doesn't fit the hub's {} wall; the nut trap is left out", mm(t), mm(wall)));
+            p.warn(format!("{who}: a nut {} thick doesn't fit the hub's {} wall; the nut trap is left out", num(t), num(wall)));
         } else {
             // The slot the nut drops into from the hub's end, across the set screw's hole.
             let mid = reach + wall / 2.0;
@@ -918,7 +915,7 @@ pub(crate) fn add_details(s: &Spec, m: &Member, b: &Built, steps: &mut Vec<Step>
             ));
             if h.clamp_screw > 0.0 {
                 if h.clamp_screw >= 0.8 * hl.min(wall) {
-                    p.warn(format!("{who}: a Ø{} clamp screw doesn't fit the hub's wall; left out", mm(h.clamp_screw)));
+                    p.warn(format!("{who}: a Ø{} clamp screw doesn't fit the hub's wall; left out", num(h.clamp_screw)));
                 } else {
                     let frame = Frame { origin: [-(hr + OVER), -(reach + wall / 2.0), zc], x: [0.0, 1.0, 0.0], z: [1.0, 0.0, 0.0] };
                     steps.push(placed(frame, cut(disc(h.clamp_screw / 2.0), 0.0, 2.0 * (hr + OVER))));

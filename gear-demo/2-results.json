@@ -1,0 +1,1743 @@
+[
+  {
+    "display_value": 34.0,
+    "errors": [],
+    "expression": "34 mm",
+    "gears_followed": [
+      {
+        "group": 8,
+        "name": "Drivetrain",
+        "updated": "in_place"
+      }
+    ],
+    "name": "d_e2",
+    "recomputed": 7,
+    "restored": 4,
+    "value": 34.0
+  },
+  {
+    "sets": [
+      {
+        "bodies": [
+          "Gear A·1",
+          "Gear B·1 + Gear C·1",
+          "Gear E·1+2",
+          "Gear C·2 + Gear D·1",
+          "Gear D·2"
+        ],
+        "feature": 7,
+        "features": [
+          7
+        ],
+        "group": 8,
+        "name": "Drivetrain",
+        "params": {
+          "backlash": 0.0,
+          "eccentricity": 1.5,
+          "face_width": 10.0,
+          "helix_angle": 0.0,
+          "material": "steel_through_hardened",
+          "material2": "steel_through_hardened",
+          "module": 2.0,
+          "name": "Drivetrain",
+          "pin_circle": 60.0,
+          "pin_diameter": 6.0,
+          "pins": 12,
+          "planets": 3,
+          "pressure_angle": 20.0,
+          "profile_shift": 0.0,
+          "profile_shift2": 0.0,
+          "rack": "iso53_a",
+          "rack_teeth": 10,
+          "shaft_angle": 90.0,
+          "spiral_angle": 35.0,
+          "starts": 1,
+          "teeth": 20,
+          "teeth2": 30,
+          "type": "spur"
+        },
+        "request": {
+          "assembly": true,
+          "body_keys": [
+            "Gear A·1",
+            "Gear B·1 + Gear C·1",
+            "Gear E·1+2",
+            "Gear C·2 + Gear D·1",
+            "Gear D·2"
+          ],
+          "drive": {
+            "gear": 0,
+            "item": "A",
+            "rpm": 1000,
+            "torque": 2
+          },
+          "items": [
+            {
+              "components": [
+                {
+                  "curve": "a",
+                  "sketch": 1,
+                  "slot": "pitch"
+                }
+              ],
+              "gears": [
+                {
+                  "bore": "auto",
+                  "face": {
+                    "a": null,
+                    "b": null,
+                    "preset": "symmetric"
+                  },
+                  "gear": 0,
+                  "profile_shift": "auto",
+                  "size_by": "module"
+                }
+              ],
+              "id": "A",
+              "module_block": "M1",
+              "type": "spur"
+            },
+            {
+              "components": [
+                {
+                  "curve": "b",
+                  "sketch": 1,
+                  "slot": "pitch"
+                }
+              ],
+              "id": "B",
+              "module_block": "M1",
+              "type": "spur"
+            },
+            {
+              "bevel_style": "straight",
+              "components": [
+                {
+                  "curve": "c1",
+                  "sketch": 4,
+                  "slot": "pitch"
+                },
+                {
+                  "curve": "c2",
+                  "sketch": 5,
+                  "slot": "pitch2"
+                }
+              ],
+              "id": "C",
+              "type": "bevel"
+            },
+            {
+              "components": [
+                {
+                  "curve": "d1",
+                  "sketch": 6,
+                  "slot": "pitch"
+                },
+                {
+                  "curve": "worm",
+                  "sketch": 6,
+                  "slot": "axis"
+                }
+              ],
+              "id": "D",
+              "starts": 1,
+              "type": "worm"
+            },
+            {
+              "components": [
+                {
+                  "curve": "shaft_e",
+                  "sketch": 3,
+                  "slot": "axis"
+                },
+                {
+                  "curve": "e1",
+                  "sketch": 1,
+                  "slot": "pitch"
+                },
+                {
+                  "curve": "e2",
+                  "sketch": 2,
+                  "slot": "pitch2"
+                }
+              ],
+              "id": "E",
+              "module_block": "M1",
+              "type": "compound"
+            }
+          ],
+          "links": [
+            {
+              "a": {
+                "item": "A",
+                "port": 0
+              },
+              "b": {
+                "item": "B",
+                "port": 0
+              },
+              "kind": "mesh"
+            },
+            {
+              "a": {
+                "gear": 0,
+                "item": "B"
+              },
+              "b": {
+                "gear": 0,
+                "item": "C"
+              },
+              "kind": "shaft"
+            },
+            {
+              "a": {
+                "gear": 1,
+                "item": "C"
+              },
+              "b": {
+                "gear": 0,
+                "item": "D"
+              },
+              "kind": "shaft"
+            },
+            {
+              "a": {
+                "item": "A",
+                "port": 0
+              },
+              "b": {
+                "item": "E",
+                "port": 0
+              },
+              "kind": "mesh"
+            }
+          ],
+          "module_blocks": [
+            {
+              "id": "M1",
+              "module": 2
+            }
+          ],
+          "name": "Drivetrain"
+        },
+        "sketch": 1,
+        "sketch_changed": false
+      }
+    ]
+  },
+  {
+    "assembly": {
+      "driver": 1,
+      "joints": [
+        24,
+        25,
+        26,
+        27,
+        28
+      ],
+      "links": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "members": [
+        {
+          "axis": [
+            [
+              0.0,
+              0.0,
+              -10.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body": "Gear A·1",
+          "component": 9,
+          "grounded": false,
+          "joint": 24,
+          "occurrence": 10
+        },
+        {
+          "axis": [
+            [
+              50.0,
+              0.0,
+              -10.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body": "Gear B·1 + Gear C·1",
+          "component": 11,
+          "grounded": false,
+          "joint": 25,
+          "occurrence": 12
+        },
+        {
+          "axis": [
+            [
+              -50.0,
+              0.0,
+              -35.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body": "Gear E·1+2",
+          "component": 13,
+          "grounded": false,
+          "joint": 26,
+          "occurrence": 14
+        },
+        {
+          "axis": [
+            [
+              65.0,
+              0.0,
+              60.0
+            ],
+            [
+              -1.0,
+              0.0,
+              0.0
+            ]
+          ],
+          "body": "Gear C·2 + Gear D·1",
+          "component": 15,
+          "grounded": false,
+          "joint": 27,
+          "occurrence": 16
+        },
+        {
+          "axis": [
+            [
+              110.0,
+              0.0,
+              98.0
+            ],
+            [
+              6.123233995736766e-17,
+              -1.0,
+              0.0
+            ]
+          ],
+          "body": "Gear D·2",
+          "component": 17,
+          "grounded": false,
+          "joint": 28,
+          "occurrence": 18
+        }
+      ]
+    },
+    "bodies": [
+      "Gear A·1",
+      "Gear B·1 + Gear C·1",
+      "Gear E·1+2",
+      "Gear C·2 + Gear D·1",
+      "Gear D·2"
+    ],
+    "facts": [
+      {
+        "label": "train A, B, E: gear 1 pitch diameter",
+        "unit": "mm",
+        "value": 40.0
+      },
+      {
+        "label": "train A, B, E: gear 1 tip diameter",
+        "unit": "mm",
+        "value": 44.0
+      },
+      {
+        "label": "train A, B, E: gear 1 root diameter",
+        "unit": "mm",
+        "value": 35.0
+      },
+      {
+        "label": "train A, B, E: gear 1 base diameter",
+        "unit": "mm",
+        "value": 37.58770483143634
+      },
+      {
+        "label": "train A, B, E: gear 1 tooth thickness (pitch)",
+        "unit": "mm",
+        "value": 3.141592653589793
+      },
+      {
+        "label": "train A, B, E: gear 1 tip land",
+        "unit": "mm",
+        "value": 1.3897599691424858
+      },
+      {
+        "label": "train A, B, E: gear 1 span over 3 teeth",
+        "unit": "mm",
+        "value": 15.32087875196761
+      },
+      {
+        "label": "train A, B, E: gear 1 over two Ø3.456 pins",
+        "unit": "mm",
+        "value": 44.780036429085925
+      },
+      {
+        "label": "train A, B, E: gear 2 pitch diameter",
+        "unit": "mm",
+        "value": 60.0
+      },
+      {
+        "label": "train A, B, E: gear 2 tip diameter",
+        "unit": "mm",
+        "value": 64.0
+      },
+      {
+        "label": "train A, B, E: gear 2 root diameter",
+        "unit": "mm",
+        "value": 55.0
+      },
+      {
+        "label": "train A, B, E: gear 2 base diameter",
+        "unit": "mm",
+        "value": 56.381557247154504
+      },
+      {
+        "label": "train A, B, E: gear 2 tooth thickness (pitch)",
+        "unit": "mm",
+        "value": 3.141592653589793
+      },
+      {
+        "label": "train A, B, E: gear 2 tip land",
+        "unit": "mm",
+        "value": 1.4747999160057024
+      },
+      {
+        "label": "train A, B, E: gear 2 span over 4 teeth",
+        "unit": "mm",
+        "value": 21.50525241090464
+      },
+      {
+        "label": "train A, B, E: gear 2 over two Ø3.456 pins",
+        "unit": "mm",
+        "value": 64.82039910520285
+      },
+      {
+        "label": "train A, B, E: gear 3 pitch diameter",
+        "unit": "mm",
+        "value": 60.0
+      },
+      {
+        "label": "train A, B, E: gear 3 tip diameter",
+        "unit": "mm",
+        "value": 64.0
+      },
+      {
+        "label": "train A, B, E: gear 3 root diameter",
+        "unit": "mm",
+        "value": 55.0
+      },
+      {
+        "label": "train A, B, E: gear 3 base diameter",
+        "unit": "mm",
+        "value": 56.381557247154504
+      },
+      {
+        "label": "train A, B, E: gear 3 tooth thickness (pitch)",
+        "unit": "mm",
+        "value": 3.141592653589793
+      },
+      {
+        "label": "train A, B, E: gear 3 tip land",
+        "unit": "mm",
+        "value": 1.4747999160057024
+      },
+      {
+        "label": "train A, B, E: gear 3 span over 4 teeth",
+        "unit": "mm",
+        "value": 21.50525241090464
+      },
+      {
+        "label": "train A, B, E: gear 3 over two Ø3.456 pins",
+        "unit": "mm",
+        "value": 64.82039910520285
+      },
+      {
+        "label": "train A, B, E: gear 4 pitch diameter",
+        "unit": "mm",
+        "value": 34.0
+      },
+      {
+        "label": "train A, B, E: gear 4 tip diameter",
+        "unit": "mm",
+        "value": 38.0
+      },
+      {
+        "label": "train A, B, E: gear 4 root diameter",
+        "unit": "mm",
+        "value": 29.0
+      },
+      {
+        "label": "train A, B, E: gear 4 base diameter",
+        "unit": "mm",
+        "value": 31.949549106720887
+      },
+      {
+        "label": "train A, B, E: gear 4 tooth thickness (pitch)",
+        "unit": "mm",
+        "value": 3.141592653589793
+      },
+      {
+        "label": "train A, B, E: gear 4 tip land",
+        "unit": "mm",
+        "value": 1.348157374849862
+      },
+      {
+        "label": "train A, B, E: gear 4 span over 2 teeth",
+        "unit": "mm",
+        "value": 9.332582646555533
+      },
+      {
+        "label": "train A, B, E: gear 4 over two Ø3.456 pins",
+        "unit": "mm",
+        "value": 38.610544709009005
+      },
+      {
+        "label": "train A, B, E: gears 1–2 ratio",
+        "unit": "",
+        "value": 1.5
+      },
+      {
+        "label": "train A, B, E: gears 1–2 centre distance",
+        "unit": "mm",
+        "value": 50.0
+      },
+      {
+        "label": "train A, B, E: gears 1–2 contact ratio",
+        "unit": "",
+        "value": 1.6051760921390599
+      },
+      {
+        "label": "train A, B, E: gears 1–3 ratio",
+        "unit": "",
+        "value": 1.5
+      },
+      {
+        "label": "train A, B, E: gears 1–3 centre distance",
+        "unit": "mm",
+        "value": 50.0
+      },
+      {
+        "label": "train A, B, E: gears 1–3 contact ratio",
+        "unit": "",
+        "value": 1.6051760921390599
+      },
+      {
+        "label": "train A, B, E: train ratio gear 1 → gear 2",
+        "unit": "",
+        "value": -1.5
+      },
+      {
+        "label": "train A, B, E: train ratio gear 1 → gear 3",
+        "unit": "",
+        "value": -1.5
+      },
+      {
+        "label": "train A, B, E: train ratio gear 1 → gear 4",
+        "unit": "",
+        "value": -1.5
+      },
+      {
+        "label": "train A, B, E: shaft 1 diameter",
+        "unit": "mm",
+        "value": 14.5
+      },
+      {
+        "label": "train A, B, E: shaft 1 length",
+        "unit": "mm",
+        "value": 45.0
+      },
+      {
+        "label": "bevel Item C: ratio",
+        "unit": "",
+        "value": 1.35
+      },
+      {
+        "label": "bevel Item C: shaft angle",
+        "unit": "deg",
+        "value": 90.0
+      },
+      {
+        "label": "bevel Item C: gear 1 pitch cone angle",
+        "unit": "deg",
+        "value": 36.52885536698517
+      },
+      {
+        "label": "bevel Item C: gear 1 outer pitch diameter",
+        "unit": "mm",
+        "value": 30.0
+      },
+      {
+        "label": "bevel Item C: gear 1 outer tip diameter",
+        "unit": "mm",
+        "value": 32.41067158003424
+      },
+      {
+        "label": "bevel Item C: gear 1 cone distance",
+        "unit": "mm",
+        "value": 25.200446424617166
+      },
+      {
+        "label": "bevel Item C: gear 1 face width",
+        "unit": "mm",
+        "value": 10.0
+      },
+      {
+        "label": "bevel Item C: gear 1 virtual teeth",
+        "unit": "",
+        "value": 24.889329802091027
+      },
+      {
+        "label": "bevel Item C: gear 2 pitch cone angle",
+        "unit": "deg",
+        "value": 53.47114463301483
+      },
+      {
+        "label": "bevel Item C: gear 2 outer pitch diameter",
+        "unit": "mm",
+        "value": 40.5
+      },
+      {
+        "label": "bevel Item C: gear 2 outer tip diameter",
+        "unit": "mm",
+        "value": 42.28568265187722
+      },
+      {
+        "label": "bevel Item C: gear 2 cone distance",
+        "unit": "mm",
+        "value": 25.200446424617162
+      },
+      {
+        "label": "bevel Item C: gear 2 face width",
+        "unit": "mm",
+        "value": 10.0
+      },
+      {
+        "label": "bevel Item C: gear 2 virtual teeth",
+        "unit": "",
+        "value": 45.36080356431089
+      },
+      {
+        "label": "worm Item D: ratio",
+        "unit": "",
+        "value": 20.0
+      },
+      {
+        "label": "worm Item D: centre distance",
+        "unit": "mm",
+        "value": 38.0
+      },
+      {
+        "label": "worm Item D: lead angle",
+        "unit": "deg",
+        "value": 10.619655276155134
+      },
+      {
+        "label": "worm Item D: lead",
+        "unit": "mm",
+        "value": 9.42477796076938
+      },
+      {
+        "label": "worm Item D: axial pitch",
+        "unit": "mm",
+        "value": 9.42477796076938
+      },
+      {
+        "label": "worm Item D: worm pitch diameter",
+        "unit": "mm",
+        "value": 16.0
+      },
+      {
+        "label": "worm Item D: worm tip diameter",
+        "unit": "mm",
+        "value": 22.0
+      },
+      {
+        "label": "worm Item D: worm root diameter",
+        "unit": "mm",
+        "value": 8.5
+      },
+      {
+        "label": "worm Item D: wheel pitch diameter",
+        "unit": "mm",
+        "value": 60.0
+      },
+      {
+        "label": "worm Item D: wheel tip diameter",
+        "unit": "mm",
+        "value": 66.0
+      },
+      {
+        "label": "worm Item D: diameter quotient q",
+        "unit": "",
+        "value": 5.333333333333333
+      },
+      {
+        "label": "worm Item D: wheel face width",
+        "unit": "mm",
+        "value": 7.65
+      },
+      {
+        "label": "worm Item D: worm length",
+        "unit": "mm",
+        "value": 52.37824115059844
+      },
+      {
+        "label": "worm Item D: wheel outside diameter",
+        "unit": "mm",
+        "value": 68.50374352527534
+      },
+      {
+        "label": "worm Item D: wheel loft sections",
+        "unit": "",
+        "value": 9.0
+      }
+    ],
+    "feature": 7,
+    "gears": [
+      {
+        "body": "Gear A·1",
+        "gear": 0,
+        "item": "A",
+        "module": 2.0,
+        "pitch_d": 40.0,
+        "profile_shift": 0.0,
+        "ratio": 1.0,
+        "rpm": 999.9999999999999,
+        "teeth": 20,
+        "torque": 2.0,
+        "warnings": []
+      },
+      {
+        "body": "Gear B·1 + Gear C·1",
+        "gear": 0,
+        "item": "B",
+        "module": 2.0,
+        "pitch_d": 60.0,
+        "profile_shift": 0.0,
+        "ratio": -0.6666666666666666,
+        "rpm": -666.6666666666665,
+        "teeth": 30,
+        "torque": -2.97,
+        "warnings": []
+      },
+      {
+        "body": "Gear B·1 + Gear C·1",
+        "gear": 0,
+        "item": "C",
+        "module": 1.5,
+        "pitch_d": 30.0,
+        "ratio": -0.6666666666666666,
+        "rpm": -666.6666666666665,
+        "teeth": 20,
+        "torque": -2.97,
+        "warnings": []
+      },
+      {
+        "body": "Gear C·2 + Gear D·1",
+        "gear": 1,
+        "item": "C",
+        "module": 1.5,
+        "pitch_d": 40.5,
+        "ratio": 0.49382716049382713,
+        "rpm": 493.82716049382714,
+        "teeth": 27,
+        "torque": 3.8892149999999996,
+        "warnings": []
+      },
+      {
+        "body": "Gear C·2 + Gear D·1",
+        "gear": 0,
+        "item": "D",
+        "module": 3.0,
+        "pitch_d": 60.0,
+        "ratio": 0.49382716049382713,
+        "rpm": 493.82716049382714,
+        "teeth": 20,
+        "torque": 3.8892149999999996,
+        "warnings": []
+      },
+      {
+        "body": "Gear D·2",
+        "gear": 1,
+        "item": "D",
+        "module": 3.0,
+        "pitch_d": 16.0,
+        "ratio": -9.876543209876543,
+        "rpm": -9876.543209876543,
+        "teeth": 1,
+        "torque": -0.175014675,
+        "warnings": []
+      },
+      {
+        "body": "Gear E·1+2",
+        "gear": 0,
+        "item": "E",
+        "module": 2.0,
+        "pitch_d": 60.0,
+        "profile_shift": 0.0,
+        "ratio": -0.6666666666666666,
+        "rpm": -666.6666666666665,
+        "teeth": 30,
+        "torque": -2.97,
+        "warnings": []
+      },
+      {
+        "body": "Gear E·1+2",
+        "gear": 1,
+        "item": "E",
+        "module": 2.0,
+        "pitch_d": 34.0,
+        "profile_shift": 0.0,
+        "ratio": -0.6666666666666666,
+        "rpm": -666.6666666666665,
+        "teeth": 17,
+        "torque": -2.97,
+        "warnings": []
+      }
+    ],
+    "group": 8,
+    "links": [
+      {
+        "a": {
+          "gear": 0,
+          "item": "A"
+        },
+        "b": {
+          "gear": 0,
+          "item": "B"
+        },
+        "kind": "mesh",
+        "ratio": -0.6666666666666666
+      },
+      {
+        "a": {
+          "gear": 0,
+          "item": "B"
+        },
+        "b": {
+          "gear": 0,
+          "item": "C"
+        },
+        "kind": "shaft",
+        "ratio": 1.0
+      },
+      {
+        "a": {
+          "gear": 1,
+          "item": "C"
+        },
+        "b": {
+          "gear": 0,
+          "item": "D"
+        },
+        "kind": "shaft",
+        "ratio": 1.0
+      },
+      {
+        "a": {
+          "gear": 0,
+          "item": "A"
+        },
+        "b": {
+          "gear": 0,
+          "item": "E"
+        },
+        "kind": "mesh",
+        "ratio": -0.6666666666666666
+      }
+    ],
+    "notes": [
+      "7 bodies from 3 stages"
+    ],
+    "updated": "in_place",
+    "warnings": [
+      "train A, B, E: gear 4: undercut (17 teeth; about 17.1 or more avoid it at this shift, or raise the profile shift)",
+      "bevel Item C: gear 1: face width over a third of the cone distance (8.4) makes weak small ends",
+      "bevel Item C: gear 2: face width over a third of the cone distance (8.4) makes weak small ends",
+      "worm Item D: wheel: the face is narrowed to 7.65 mm, the most this worm's threads wrap without undercutting the teeth"
+    ]
+  },
+  {
+    "assembly": {
+      "driver": 1,
+      "joints": [
+        24,
+        25,
+        26,
+        27,
+        28
+      ],
+      "links": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "members": [
+        {
+          "axis": [
+            [
+              0.0,
+              0.0,
+              -11.25
+            ],
+            [
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body": "Gear A·1",
+          "component": 9,
+          "grounded": false,
+          "joint": 24,
+          "occurrence": 10
+        },
+        {
+          "axis": [
+            [
+              50.0,
+              0.0,
+              -11.25
+            ],
+            [
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body": "Gear B·1 + Gear C·1",
+          "component": 11,
+          "grounded": false,
+          "joint": 25,
+          "occurrence": 12
+        },
+        {
+          "axis": [
+            [
+              -50.0,
+              0.0,
+              -35.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body": "Gear E·1+2",
+          "component": 13,
+          "grounded": false,
+          "joint": 26,
+          "occurrence": 14
+        },
+        {
+          "axis": [
+            [
+              65.0,
+              0.0,
+              60.0
+            ],
+            [
+              -1.0,
+              0.0,
+              0.0
+            ]
+          ],
+          "body": "Gear C·2 + Gear D·1",
+          "component": 15,
+          "grounded": false,
+          "joint": 27,
+          "occurrence": 16
+        },
+        {
+          "axis": [
+            [
+              110.0,
+              0.0,
+              98.0
+            ],
+            [
+              6.123233995736766e-17,
+              -1.0,
+              0.0
+            ]
+          ],
+          "body": "Gear D·2",
+          "component": 17,
+          "grounded": false,
+          "joint": 28,
+          "occurrence": 18
+        }
+      ]
+    },
+    "bodies": [
+      "Gear A·1",
+      "Gear B·1 + Gear C·1",
+      "Gear E·1+2",
+      "Gear C·2 + Gear D·1",
+      "Gear D·2"
+    ],
+    "facts": [
+      {
+        "label": "train A, B, E: gear 1 pitch diameter",
+        "unit": "mm",
+        "value": 40.0
+      },
+      {
+        "label": "train A, B, E: gear 1 tip diameter",
+        "unit": "mm",
+        "value": 45.10696295412652
+      },
+      {
+        "label": "train A, B, E: gear 1 root diameter",
+        "unit": "mm",
+        "value": 33.85696295412652
+      },
+      {
+        "label": "train A, B, E: gear 1 base diameter",
+        "unit": "mm",
+        "value": 37.58770483143634
+      },
+      {
+        "label": "train A, B, E: gear 1 tooth thickness (pitch)",
+        "unit": "mm",
+        "value": 3.965922148458476
+      },
+      {
+        "label": "train A, B, E: gear 1 tip land",
+        "unit": "mm",
+        "value": 1.6413417525875102
+      },
+      {
+        "label": "train A, B, E: gear 1 span over 2 teeth",
+        "unit": "mm",
+        "value": 11.667297944251564
+      },
+      {
+        "label": "train A, B, E: gear 1 over two Ø4.32 pins",
+        "unit": "mm",
+        "value": 46.02693262598578
+      },
+      {
+        "label": "train A, B, E: gear 1 profile shift",
+        "unit": "",
+        "value": 0.021392590825304054
+      },
+      {
+        "label": "train A, B, E: gear 2 pitch diameter",
+        "unit": "mm",
+        "value": 60.0
+      },
+      {
+        "label": "train A, B, E: gear 2 tip diameter",
+        "unit": "mm",
+        "value": 64.89303704587348
+      },
+      {
+        "label": "train A, B, E: gear 2 root diameter",
+        "unit": "mm",
+        "value": 53.64303704587348
+      },
+      {
+        "label": "train A, B, E: gear 2 base diameter",
+        "unit": "mm",
+        "value": 56.381557247154504
+      },
+      {
+        "label": "train A, B, E: gear 2 tooth thickness (pitch)",
+        "unit": "mm",
+        "value": 3.8880594855160067
+      },
+      {
+        "label": "train A, B, E: gear 2 tip land",
+        "unit": "mm",
+        "value": 1.804931729783975
+      },
+      {
+        "label": "train A, B, E: gear 2 span over 3 teeth",
+        "unit": "mm",
+        "value": 19.254570350433593
+      },
+      {
+        "label": "train A, B, E: gear 2 over two Ø4.32 pins",
+        "unit": "mm",
+        "value": 65.908646638858
+      },
+      {
+        "label": "train A, B, E: gear 2 profile shift",
+        "unit": "",
+        "value": -0.021392590825304054
+      },
+      {
+        "label": "train A, B, E: gear 3 pitch diameter",
+        "unit": "mm",
+        "value": 60.0
+      },
+      {
+        "label": "train A, B, E: gear 3 tip diameter",
+        "unit": "mm",
+        "value": 64.89303704587348
+      },
+      {
+        "label": "train A, B, E: gear 3 root diameter",
+        "unit": "mm",
+        "value": 53.64303704587348
+      },
+      {
+        "label": "train A, B, E: gear 3 base diameter",
+        "unit": "mm",
+        "value": 56.381557247154504
+      },
+      {
+        "label": "train A, B, E: gear 3 tooth thickness (pitch)",
+        "unit": "mm",
+        "value": 3.8880594855160067
+      },
+      {
+        "label": "train A, B, E: gear 3 tip land",
+        "unit": "mm",
+        "value": 1.804931729783975
+      },
+      {
+        "label": "train A, B, E: gear 3 span over 3 teeth",
+        "unit": "mm",
+        "value": 19.254570350433593
+      },
+      {
+        "label": "train A, B, E: gear 3 over two Ø4.32 pins",
+        "unit": "mm",
+        "value": 65.908646638858
+      },
+      {
+        "label": "train A, B, E: gear 3 profile shift",
+        "unit": "",
+        "value": -0.021392590825304054
+      },
+      {
+        "label": "train A, B, E: gear 4 pitch diameter",
+        "unit": "mm",
+        "value": 35.0
+      },
+      {
+        "label": "train A, B, E: gear 4 tip diameter",
+        "unit": "mm",
+        "value": 40.0
+      },
+      {
+        "label": "train A, B, E: gear 4 root diameter",
+        "unit": "mm",
+        "value": 28.75
+      },
+      {
+        "label": "train A, B, E: gear 4 base diameter",
+        "unit": "mm",
+        "value": 32.88924172750679
+      },
+      {
+        "label": "train A, B, E: gear 4 tooth thickness (pitch)",
+        "unit": "mm",
+        "value": 3.9269908169872414
+      },
+      {
+        "label": "train A, B, E: gear 4 tip land",
+        "unit": "mm",
+        "value": 1.6149521467062988
+      },
+      {
+        "label": "train A, B, E: gear 4 span over 2 teeth",
+        "unit": "mm",
+        "value": 11.560686761663192
+      },
+      {
+        "label": "train A, B, E: gear 4 over two Ø4.32 pins",
+        "unit": "mm",
+        "value": 40.920703632806536
+      },
+      {
+        "label": "train A, B, E: gears 1–2 ratio",
+        "unit": "",
+        "value": 1.5
+      },
+      {
+        "label": "train A, B, E: gears 1–2 centre distance",
+        "unit": "mm",
+        "value": 50.0
+      },
+      {
+        "label": "train A, B, E: gears 1–2 contact ratio",
+        "unit": "",
+        "value": 1.5488628075743278
+      },
+      {
+        "label": "train A, B, E: gears 1–3 ratio",
+        "unit": "",
+        "value": 1.5
+      },
+      {
+        "label": "train A, B, E: gears 1–3 centre distance",
+        "unit": "mm",
+        "value": 50.0
+      },
+      {
+        "label": "train A, B, E: gears 1–3 contact ratio",
+        "unit": "",
+        "value": 1.5488628075743278
+      },
+      {
+        "label": "train A, B, E: train ratio gear 1 → gear 2",
+        "unit": "",
+        "value": -1.5
+      },
+      {
+        "label": "train A, B, E: train ratio gear 1 → gear 3",
+        "unit": "",
+        "value": -1.5
+      },
+      {
+        "label": "train A, B, E: train ratio gear 1 → gear 4",
+        "unit": "",
+        "value": -1.5
+      },
+      {
+        "label": "train A, B, E: shaft 1 diameter",
+        "unit": "mm",
+        "value": 14.0
+      },
+      {
+        "label": "train A, B, E: shaft 1 length",
+        "unit": "mm",
+        "value": 45.0
+      },
+      {
+        "label": "bevel Item C: ratio",
+        "unit": "",
+        "value": 1.35
+      },
+      {
+        "label": "bevel Item C: shaft angle",
+        "unit": "deg",
+        "value": 90.0
+      },
+      {
+        "label": "bevel Item C: gear 1 pitch cone angle",
+        "unit": "deg",
+        "value": 36.52885536698517
+      },
+      {
+        "label": "bevel Item C: gear 1 outer pitch diameter",
+        "unit": "mm",
+        "value": 30.0
+      },
+      {
+        "label": "bevel Item C: gear 1 outer tip diameter",
+        "unit": "mm",
+        "value": 32.41067158003424
+      },
+      {
+        "label": "bevel Item C: gear 1 cone distance",
+        "unit": "mm",
+        "value": 25.200446424617166
+      },
+      {
+        "label": "bevel Item C: gear 1 face width",
+        "unit": "mm",
+        "value": 10.0
+      },
+      {
+        "label": "bevel Item C: gear 1 virtual teeth",
+        "unit": "",
+        "value": 24.889329802091027
+      },
+      {
+        "label": "bevel Item C: gear 2 pitch cone angle",
+        "unit": "deg",
+        "value": 53.47114463301483
+      },
+      {
+        "label": "bevel Item C: gear 2 outer pitch diameter",
+        "unit": "mm",
+        "value": 40.5
+      },
+      {
+        "label": "bevel Item C: gear 2 outer tip diameter",
+        "unit": "mm",
+        "value": 42.28568265187722
+      },
+      {
+        "label": "bevel Item C: gear 2 cone distance",
+        "unit": "mm",
+        "value": 25.200446424617162
+      },
+      {
+        "label": "bevel Item C: gear 2 face width",
+        "unit": "mm",
+        "value": 10.0
+      },
+      {
+        "label": "bevel Item C: gear 2 virtual teeth",
+        "unit": "",
+        "value": 45.36080356431089
+      },
+      {
+        "label": "worm Item D: ratio",
+        "unit": "",
+        "value": 20.0
+      },
+      {
+        "label": "worm Item D: centre distance",
+        "unit": "mm",
+        "value": 38.0
+      },
+      {
+        "label": "worm Item D: lead angle",
+        "unit": "deg",
+        "value": 10.619655276155134
+      },
+      {
+        "label": "worm Item D: lead",
+        "unit": "mm",
+        "value": 9.42477796076938
+      },
+      {
+        "label": "worm Item D: axial pitch",
+        "unit": "mm",
+        "value": 9.42477796076938
+      },
+      {
+        "label": "worm Item D: worm pitch diameter",
+        "unit": "mm",
+        "value": 16.0
+      },
+      {
+        "label": "worm Item D: worm tip diameter",
+        "unit": "mm",
+        "value": 22.0
+      },
+      {
+        "label": "worm Item D: worm root diameter",
+        "unit": "mm",
+        "value": 8.5
+      },
+      {
+        "label": "worm Item D: wheel pitch diameter",
+        "unit": "mm",
+        "value": 60.0
+      },
+      {
+        "label": "worm Item D: wheel tip diameter",
+        "unit": "mm",
+        "value": 66.0
+      },
+      {
+        "label": "worm Item D: diameter quotient q",
+        "unit": "",
+        "value": 5.333333333333333
+      },
+      {
+        "label": "worm Item D: wheel face width",
+        "unit": "mm",
+        "value": 7.65
+      },
+      {
+        "label": "worm Item D: worm length",
+        "unit": "mm",
+        "value": 52.37824115059844
+      },
+      {
+        "label": "worm Item D: wheel outside diameter",
+        "unit": "mm",
+        "value": 68.50374352527534
+      },
+      {
+        "label": "worm Item D: wheel loft sections",
+        "unit": "",
+        "value": 9.0
+      }
+    ],
+    "feature": 7,
+    "gears": [
+      {
+        "body": "Gear A·1",
+        "gear": 0,
+        "item": "A",
+        "module": 2.5,
+        "pitch_d": 40.0,
+        "profile_shift": 0.021392590825304054,
+        "ratio": 1.0,
+        "rpm": 999.9999999999999,
+        "teeth": 16,
+        "torque": 2.0,
+        "warnings": []
+      },
+      {
+        "body": "Gear B·1 + Gear C·1",
+        "gear": 0,
+        "item": "B",
+        "module": 2.5,
+        "pitch_d": 60.0,
+        "profile_shift": -0.021392590825304054,
+        "ratio": -0.6666666666666666,
+        "rpm": -666.6666666666665,
+        "teeth": 24,
+        "torque": -2.97,
+        "warnings": []
+      },
+      {
+        "body": "Gear B·1 + Gear C·1",
+        "gear": 0,
+        "item": "C",
+        "module": 1.5,
+        "pitch_d": 30.0,
+        "ratio": -0.6666666666666666,
+        "rpm": -666.6666666666665,
+        "teeth": 20,
+        "torque": -2.97,
+        "warnings": []
+      },
+      {
+        "body": "Gear C·2 + Gear D·1",
+        "gear": 1,
+        "item": "C",
+        "module": 1.5,
+        "pitch_d": 40.5,
+        "ratio": 0.49382716049382713,
+        "rpm": 493.82716049382714,
+        "teeth": 27,
+        "torque": 3.8892149999999996,
+        "warnings": []
+      },
+      {
+        "body": "Gear C·2 + Gear D·1",
+        "gear": 0,
+        "item": "D",
+        "module": 3.0,
+        "pitch_d": 60.0,
+        "ratio": 0.49382716049382713,
+        "rpm": 493.82716049382714,
+        "teeth": 20,
+        "torque": 3.8892149999999996,
+        "warnings": []
+      },
+      {
+        "body": "Gear D·2",
+        "gear": 1,
+        "item": "D",
+        "module": 3.0,
+        "pitch_d": 16.0,
+        "ratio": -9.876543209876543,
+        "rpm": -9876.543209876543,
+        "teeth": 1,
+        "torque": -0.175014675,
+        "warnings": []
+      },
+      {
+        "body": "Gear E·1+2",
+        "gear": 0,
+        "item": "E",
+        "module": 2.5,
+        "pitch_d": 60.0,
+        "profile_shift": -0.021392590825304054,
+        "ratio": -0.6666666666666666,
+        "rpm": -666.6666666666665,
+        "teeth": 24,
+        "torque": -2.97,
+        "warnings": []
+      },
+      {
+        "body": "Gear E·1+2",
+        "gear": 1,
+        "item": "E",
+        "module": 2.5,
+        "pitch_d": 35.0,
+        "profile_shift": 0.0,
+        "ratio": -0.6666666666666666,
+        "rpm": -666.6666666666665,
+        "teeth": 14,
+        "torque": -2.97,
+        "warnings": []
+      }
+    ],
+    "group": 8,
+    "links": [
+      {
+        "a": {
+          "gear": 0,
+          "item": "A"
+        },
+        "b": {
+          "gear": 0,
+          "item": "B"
+        },
+        "kind": "mesh",
+        "ratio": -0.6666666666666666
+      },
+      {
+        "a": {
+          "gear": 0,
+          "item": "B"
+        },
+        "b": {
+          "gear": 0,
+          "item": "C"
+        },
+        "kind": "shaft",
+        "ratio": 1.0
+      },
+      {
+        "a": {
+          "gear": 1,
+          "item": "C"
+        },
+        "b": {
+          "gear": 0,
+          "item": "D"
+        },
+        "kind": "shaft",
+        "ratio": 1.0
+      },
+      {
+        "a": {
+          "gear": 0,
+          "item": "A"
+        },
+        "b": {
+          "gear": 0,
+          "item": "E"
+        },
+        "kind": "mesh",
+        "ratio": -0.6666666666666666
+      }
+    ],
+    "notes": [
+      "7 bodies from 3 stages"
+    ],
+    "updated": "in_place",
+    "warnings": [
+      "train A, B, E: gear 1: undercut (16 teeth; about 16.7 or more avoid it at this shift, or raise the profile shift)",
+      "train A, B, E: gear 4: undercut (14 teeth; about 17.1 or more avoid it at this shift, or raise the profile shift)",
+      "bevel Item C: gear 1: face width over a third of the cone distance (8.4) makes weak small ends",
+      "bevel Item C: gear 2: face width over a third of the cone distance (8.4) makes weak small ends",
+      "worm Item D: wheel: the face is narrowed to 7.65 mm, the most this worm's threads wrap without undercutting the teeth"
+    ]
+  },
+  {
+    "a": "Gear A·1",
+    "b": "Gear D·2",
+    "direction": "opposite",
+    "efficiency": 0.86427,
+    "group": 8,
+    "notes": [],
+    "path": [
+      {
+        "efficiency": 0.99,
+        "from": "Gear A·1",
+        "from_gear": {
+          "gear": 0,
+          "item": "A"
+        },
+        "kind": "spur",
+        "ratio": -0.6666666666666666,
+        "teeth": [
+          16,
+          24
+        ],
+        "to": "Gear B·1 + Gear C·1",
+        "to_gear": {
+          "gear": 0,
+          "item": "B"
+        }
+      },
+      {
+        "efficiency": 1.0,
+        "from": "Gear B·1 + Gear C·1",
+        "from_gear": {
+          "gear": 0,
+          "item": "B"
+        },
+        "kind": "shaft",
+        "ratio": 1.0,
+        "to": "Gear B·1 + Gear C·1",
+        "to_gear": {
+          "gear": 0,
+          "item": "C"
+        }
+      },
+      {
+        "efficiency": 0.97,
+        "from": "Gear B·1 + Gear C·1",
+        "from_gear": {
+          "gear": 0,
+          "item": "C"
+        },
+        "kind": "bevel",
+        "ratio": -0.7407407407407407,
+        "teeth": [
+          20,
+          27
+        ],
+        "to": "Gear C·2 + Gear D·1",
+        "to_gear": {
+          "gear": 1,
+          "item": "C"
+        }
+      },
+      {
+        "efficiency": 1.0,
+        "from": "Gear C·2 + Gear D·1",
+        "from_gear": {
+          "gear": 1,
+          "item": "C"
+        },
+        "kind": "shaft",
+        "ratio": 1.0,
+        "to": "Gear C·2 + Gear D·1",
+        "to_gear": {
+          "gear": 0,
+          "item": "D"
+        }
+      },
+      {
+        "efficiency": 0.9,
+        "from": "Gear C·2 + Gear D·1",
+        "from_gear": {
+          "gear": 0,
+          "item": "D"
+        },
+        "kind": "crossed_helical",
+        "ratio": -20.0,
+        "teeth": [
+          20,
+          1
+        ],
+        "to": "Gear D·2",
+        "to_gear": {
+          "gear": 1,
+          "item": "D"
+        }
+      }
+    ],
+    "ratio": -9.876543209876543,
+    "reduction": 0.10125
+  },
+  {
+    "a": "Gear A·1",
+    "b": "Gear E·1+2",
+    "direction": "opposite",
+    "efficiency": 0.99,
+    "group": 8,
+    "notes": [],
+    "path": [
+      {
+        "efficiency": 0.99,
+        "from": "Gear A·1",
+        "from_gear": {
+          "gear": 0,
+          "item": "A"
+        },
+        "kind": "spur",
+        "ratio": -0.6666666666666666,
+        "teeth": [
+          16,
+          24
+        ],
+        "to": "Gear E·1+2",
+        "to_gear": {
+          "gear": 0,
+          "item": "E"
+        }
+      }
+    ],
+    "ratio": -0.6666666666666666,
+    "reduction": 1.5
+  },
+  {
+    "boolean_ms": 6777.51,
+    "budget_exceeded": false,
+    "budget_s": 240.0,
+    "checked": 5,
+    "count": 0,
+    "interferences": [],
+    "ms": 2876.355,
+    "pairs_candidate": 4,
+    "pairs_cleared": 0,
+    "pairs_excluded": 0,
+    "pairs_intersected": 4,
+    "pairs_not_checked": 0,
+    "skipped_pairs": 0,
+    "slowest": [
+      {
+        "a": "Gear A·1",
+        "b": "Gear E·1+2",
+        "boolean_ms": 2008.704,
+        "ms": 2008.708,
+        "tessellate_ms": 0.0
+      },
+      {
+        "a": "Gear A·1",
+        "b": "Gear B·1 + Gear C·1",
+        "boolean_ms": 1937.273,
+        "ms": 1937.276,
+        "tessellate_ms": 0.0
+      },
+      {
+        "a": "Gear B·1 + Gear C·1",
+        "b": "Gear C·2 + Gear D·1",
+        "boolean_ms": 1497.432,
+        "ms": 1497.434,
+        "tessellate_ms": 0.0
+      },
+      {
+        "a": "Gear C·2 + Gear D·1",
+        "b": "Gear D·2",
+        "boolean_ms": 1334.101,
+        "ms": 1334.11,
+        "tessellate_ms": 0.0
+      }
+    ],
+    "tessellate_ms": 0.0,
+    "threads": 4,
+    "truncated": false,
+    "unchecked": [
+      {
+        "a": "Gear C·2 + Gear D·1",
+        "a_part": {
+          "component": "Gear C·2 + Gear D·1",
+          "path": [
+            "Gear C·2 + Gear D·1:1"
+          ],
+          "path_ids": [
+            16
+          ]
+        },
+        "b": "Gear D·2",
+        "b_part": {
+          "component": "Gear D·2",
+          "path": [
+            "Gear D·2:1"
+          ],
+          "path_ids": [
+            18
+          ]
+        },
+        "reason": "the operation failed: SMLib boolean: operation: SMLib's result is not a closed solid"
+      }
+    ]
+  }
+]

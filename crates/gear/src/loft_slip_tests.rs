@@ -24,10 +24,7 @@ fn lofted(step: &Step) -> Option<Vec<Outline>> {
         }),
         Step::Taper { outline, scale, .. } => Some(vec![outline.clone(), outline.scaled(*scale)]),
         // Its rim circle is the same in every section: the toothed loop is what lines up.
-        Step::RingTaper { outline, twist, scale, z0, height, rim, op } => lofted(&Step::Taper { outline: outline.clone(), z0: *z0, height: *height, twist: *twist, scale: *scale, op: *op }).map(|v| {
-            let _ = rim;
-            v
-        }),
+        Step::RingTaper { outline, twist, scale, z0, height, rim: _, op } => lofted(&Step::Taper { outline: outline.clone(), z0: *z0, height: *height, twist: *twist, scale: *scale, op: *op }),
         Step::Placed { step, .. } => lofted(step),
         _ => None,
     }
@@ -41,7 +38,7 @@ fn teeth_of(s: &Spec, sections: &[Outline], body: &str) -> usize {
     // divide the corners too (17 those of a z34 gear), and would allow only restarts by two of
     // its teeth.
     let named = body.rsplit(" z").next().and_then(|t| t.split_whitespace().next()).and_then(|t| t.parse::<usize>().ok());
-    if let Some(z) = named.filter(|z| *z > 1 && corners % z == 0) {
+    if let Some(z) = named.filter(|z| *z > 1 && corners.is_multiple_of(*z)) {
         return z;
     }
     // A bevel planetary set's second sun or ring has the count its cone angle gives (teeth3 0).
@@ -49,7 +46,7 @@ fn teeth_of(s: &Spec, sections: &[Outline], body: &str) -> usize {
     // A differential's members: its side gears, pinions, ring and drive pinion.
     let d = &s.diff;
     let diff: Vec<u32> = if s.kind == Kind::Differential { vec![d.side_teeth2, d.side_teeth, d.pinion_teeth, d.ring_teeth, d.drive_pinion_teeth] } else { Vec::new() };
-    diff.into_iter().chain([far, s.teeth3, s.teeth, s.teeth2]).map(|z| z as usize).find(|z| *z > 1 && corners % z == 0).unwrap_or(0)
+    diff.into_iter().chain([far, s.teeth3, s.teeth, s.teeth2]).map(|z| z as usize).find(|z| *z > 1 && corners.is_multiple_of(*z)).unwrap_or(0)
 }
 
 fn check(s: &Spec, label: &str, bad: &mut Vec<String>) {

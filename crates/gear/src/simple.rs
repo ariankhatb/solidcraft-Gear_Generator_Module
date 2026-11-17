@@ -42,7 +42,7 @@
 
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
-use crate::axes::{self, Axis, Drive, Relation};
+use crate::axes::{self, Axis, Drive, Relation, num};
 use crate::design::{self, Goal, ISO54_SERIES_2};
 use crate::hub::{Bore, BoreKind};
 use crate::involute::{Internal, Involute, mesh_external, shift_sum_for_center};
@@ -646,12 +646,6 @@ fn round_to(v: f64, step: f64) -> f64 {
     (v / step).round() * step
 }
 
-fn num(v: f64) -> String {
-    let s = format!("{v:.3}");
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s == "-0" { "0".into() } else { s.to_string() }
-}
-
 fn gcd(a: u32, b: u32) -> u32 {
     if b == 0 { a } else { gcd(b, a % b) }
 }
@@ -1177,7 +1171,7 @@ fn internal(c: &mut Ctx) -> Result<(), String> {
     let outer = move |m: f64, z: u32| m * f64::from(z) / cb + 2.0 * (rack.dedendum * m + rim_k.map_or(rim_mm, |k| k * m));
     let pitch = move |m: f64, z: u32| m * f64::from(z) / cb;
     // The pinion inside, for its size and the ring's teeth from a ratio.
-    let ring_d = s.ring_diameter.filter(|d| *d > 0.0).or_else(|| match (s.pitch_diameter, s.ratio) {
+    let ring_d = s.ring_diameter.filter(|d| *d > 0.0).or(match (s.pitch_diameter, s.ratio) {
         (Some(p), Some(r)) => Some(p * r),
         _ => None,
     });
@@ -1306,7 +1300,7 @@ fn planetary(c: &mut Ctx) -> Result<(), String> {
                 if n > 1 && 2.0 * a * (PI / f64::from(n)).sin() <= 2.0 * ra_p + 0.5 * m {
                     continue;
                 }
-                let even = (zs + zr) % n == 0;
+                let even = (zs + zr).is_multiple_of(n);
                 let got = 1.0 + f64::from(zr) / f64::from(zs);
                 let mut score = 40.0 * (got / ratio).ln().abs() + if even { 0.0 } else { 3.0 } + if second { 0.3 } else { 0.0 };
                 for (have, want) in size_of(m, zs, zp) {
@@ -1463,7 +1457,7 @@ fn bevel(c: &mut Ctx, kind: Kind) -> Result<(), String> {
             };
             for z1 in firsts {
                 let z2 = (f64::from(z1) * ratio).round() as u32;
-                if z1 < zl.min(s.teeth.unwrap_or(zl)) || z2 < 6 || z2 > 2000 || cones(sigma, f64::from(z1), f64::from(z2)).is_none() {
+                if z1 < zl.min(s.teeth.unwrap_or(zl)) || !(6..=2000).contains(&z2) || cones(sigma, f64::from(z1), f64::from(z2)).is_none() {
                     continue;
                 }
                 let got = m * f64::from(z1);
@@ -1572,7 +1566,7 @@ fn bevel_planetary(c: &mut Ctx) -> Result<(), String> {
         };
         for z1 in firsts {
             let z2 = (f64::from(z1) * ratio).round() as u32;
-            if z1 < zl.min(s.teeth.unwrap_or(zl)) || z2 < 6 || z2 > 2000 {
+            if z1 < zl.min(s.teeth.unwrap_or(zl)) || !(6..=2000).contains(&z2) {
                 continue;
             }
             let cand = Spec { module: m, teeth: z1, teeth2: z2, teeth3: 0, ..c.spec.clone() };
@@ -2755,6 +2749,10 @@ pub fn schematic(spec: &Spec) -> Schematic {
         return crate::diff::schematic(spec);
     }
     let mut b = Build { s: spec, out: Schematic::default(), next_body: 0 };
+    if let Some(t) = &spec.train {
+        train_schematic(&mut b, t);
+        return b.out;
+    }
     let s = spec;
     let o = s.origin;
     let at = |d: [f64; 3]| Frame::at([o[0] + d[0], o[1] + d[1], o[2] + d[2]]);
@@ -3376,6 +3374,24 @@ pub fn schematic_of(simple: &Simple, base: &Spec) -> (Solved, Schematic) {
     let solved = solve(simple, base);
     let sch = if solved.error.is_none() { schematic(&solved.spec) } else { shafts_only(simple, solved.error.clone()) };
     (solved, sch)
+}
+
+/// A gear train: each gear's pitch cylinder (a ring's rim round it) on its own shaft, at its
+/// centre and layer, in the order of the train's gears (its bodies').
+fn train_schematic(b: &mut Build, t: &crate::plan::Train) {
+    let s = b.s;
+    let o = s.origin;
+    for (i, g) in t.gears.iter().enumerate() {
+        let r = g.module * f64::from(g.teeth) / 2.0 / g.helix.to_radians().cos().max(1e-6);
+        let (z0, z1) = (g.z, g.z + s.face_width);
+        let mut parts = vec![cyl(Role::Pitch, r, z0, z1)];
+        if g.ring {
+            let rim = if s.rim > 0.0 { s.rim } else { 3.0 * g.module };
+            parts.push(Part { role: Role::Body, shape: Shape::Tube { r_in: r, r_out: r + 1.25 * g.module + rim, z0, z1 } });
+        }
+        let member = u8::try_from(i + 1).unwrap_or(u8::MAX);
+        b.add(&format!("gear {}", i + 1), member, Frame::at([o[0] + g.center.x, o[1] + g.center.y, o[2]]), 2.0 * r, parts);
+    }
 }
 
 /// Two shafts and their relation, without gears.

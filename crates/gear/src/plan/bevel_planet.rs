@@ -62,7 +62,8 @@
 
 use std::f64::consts::{PI, TAU};
 
-use super::{Body, ConeEnds, ConeFace, Frame, Op, Plan, PreviewGear, Spec, Step, Unit, bevel_hub, cone_faces, lined_up_cone_teeth, mm, name, tooth_warnings, wanted};
+use crate::axes::num;
+use super::{Body, ConeEnds, ConeFace, Frame, Op, Plan, PreviewGear, Spec, Step, Unit, bevel_hub, cone_faces, lined_up_cone_teeth, name, tooth_warnings, wanted};
 use crate::geom::{Outline, Region, V2};
 use crate::involute::{Internal, Involute, PROFILE_TOLERANCE, ToothSides, external_outline, mesh_phase, mesh_phase_internal, side_points, sided_outline, teeth_outline};
 use crate::mesh3d::MeshPair3;
@@ -134,7 +135,7 @@ pub struct Geometry {
 }
 
 fn deg(v: f64) -> String {
-    mm(v.to_degrees())
+    num(v.to_degrees())
 }
 
 /// The geometry of a bevel planetary spec, or why it can't be built.
@@ -154,9 +155,9 @@ pub fn geometry(s: &Spec) -> Result<Geometry, String> {
         if c.abs() >= 0.996 {
             return Err(format!(
                 "a {what} of {z_far} teeth needs a cone angle with cos Σ = ({z_far} − {zs}) / (2 × {zp}) = {}: out of reach; {what} teeth = sun + 2 × planet × cos Σ ({} at {}°)",
-                mm(c),
-                mm(fs + 2.0 * fp * asked.cos()),
-                mm(s.shaft_angle)
+                num(c),
+                num(fs + 2.0 * fp * asked.cos()),
+                num(s.shaft_angle)
             ));
         }
         sigma = c.acos();
@@ -170,8 +171,8 @@ pub fn geometry(s: &Spec) -> Result<Geometry, String> {
             warnings.push(format!(
                 "the cone angle is {}° (not {}°): a {what} of {z_far} teeth fits only there ({what} teeth = sun + 2 × planet × cos Σ = {}){}",
                 deg(sigma),
-                mm(s.shaft_angle),
-                mm(exact),
+                num(s.shaft_angle),
+                num(exact),
                 if options.is_empty() { String::new() } else { format!("; other choices: {}", options.join(", ")) }
             ));
         }
@@ -622,7 +623,7 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
             {
                 p.warn(format!(
                     "ring and planet virtual teeth differ by {} (under 10): their tips may meet going in and out of mesh",
-                    mm(f.zv - planet.zv)
+                    num(f.zv - planet.zv)
                 ));
             }
         }
@@ -725,7 +726,7 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
         }
         BevelPlanetMode::Ring => {
             let vf = virt(zf, g.delta_far, 0.0);
-            let ring = Internal { gear: vf.clone() };
+            let ring = Internal { gear: vf };
             let flank = ring.space_flank();
             let ph = mesh_phase_internal(vp.teeth, php, vf.teeth, 0.0);
             let rim = if s.rim > 0.0 { s.rim } else { 3.0 * s.module };

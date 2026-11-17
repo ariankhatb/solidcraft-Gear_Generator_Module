@@ -64,7 +64,9 @@ fn measurable(sel: &Sel) -> bool {
 
 /// Each frame: start measuring a selection that changed, take a measurement that is in.
 pub(crate) fn poll(app: &mut SolveApp, ctx: &egui::Context) {
-    let selection: Vec<Sel> = app.session.selection.iter().filter(|s| measurable(s)).cloned().collect();
+    // Two gear bodies of one Gears feature: the ratio between them (`gear.ratio`).
+    let gears = crate::dialogs_gear::ratio_bodies(&app.session, &app.session.selection).is_some();
+    let selection: Vec<Sel> = app.session.selection.iter().filter(|s| gears || measurable(s)).cloned().collect();
     if !wanted(app) || selection.is_empty() || selection.len() != app.session.selection.len() {
         app.quick_measure = QuickMeasure::default();
         return;
@@ -87,11 +89,11 @@ pub(crate) fn poll(app: &mut SolveApp, ctx: &egui::Context) {
 
 /// Measure `selection` on a copy of the session, off the window thread.
 fn start(app: &SolveApp, selection: &[Sel]) -> Option<std::sync::mpsc::Receiver<Option<Value>>> {
-    let session = app.session.scratch();
+    let mut session = app.session.scratch();
     let selection = selection.to_vec();
     let (tx, rx) = std::sync::mpsc::channel();
     let measure = move || {
-        let _ = tx.send(measure(&session, &selection));
+        let _ = tx.send(measure(&mut session, &selection));
     };
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -104,7 +106,11 @@ fn start(app: &SolveApp, selection: &[Sel]) -> Option<std::sync::mpsc::Receiver<
 
 /// One or two items as the Measure tool measures them; more, their count and total length (edges
 /// and sketch curves) or area (faces and sketch regions). `None`: nothing to show.
-fn measure(session: &solidcraft_engine::Session, selection: &[Sel]) -> Option<Value> {
+fn measure(session: &mut solidcraft_engine::Session, selection: &[Sel]) -> Option<Value> {
+    if let Some(p) = crate::dialogs_gear::ratio_bodies(session, selection) {
+        let r = session.execute("gear.ratio", &p).ok()?;
+        return r.get("ratio").is_some().then(|| json!({"gear_ratio": r}));
+    }
     if selection.len() <= 2 {
         let r = session.measure_items(selection);
         return r.get("error").is_none().then_some(r);
@@ -198,6 +204,9 @@ pub(crate) fn centre_distance_label(r: &Value) -> &'static str {
 
 /// The readout's rows for a measurement.
 fn lines(app: &SolveApp, r: &Value) -> Vec<(String, String)> {
+    if let Some(g) = r.get("gear_ratio") {
+        return crate::dialogs_gear::ratio_lines(g, &crate::dialogs_gear::len_of(app));
+    }
     let split = |line: String| match line.split_once("  ") {
         Some((label, value)) => (label.to_string(), value.to_string()),
         None => (String::new(), line),

@@ -48,6 +48,14 @@ pub(super) struct MemberRecord {
     pub(super) a_inv: Mat,
     #[serde(default = "identity")]
     pub(super) b_inv: Mat,
+    /// The shaft it turned about when last made or updated (origin, direction; world): a member
+    /// whose body is named afresh is found again by its shaft.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) axis: Option<[[f64; 3]; 2]>,
+    /// The generated shaft it is (an index into `Plan::shafts`, the dialog's `shafts[].index`):
+    /// a member keeps its component and joint by it when its body is named afresh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) shaft: Option<usize>,
 }
 
 fn identity() -> Mat {
@@ -81,6 +89,11 @@ impl AssemblyRecord {
 /// Whether the request asks for the set as an assembly.
 pub(super) fn wanted(request: &Value) -> bool {
     request.get("assembly").and_then(Value::as_bool) == Some(true)
+}
+
+/// The member the request drives the assembly from (`assembly_driver`, 1-based), 0-based.
+pub(super) fn driver(request: &Value) -> Option<usize> {
+    request.get("assembly_driver").and_then(Value::as_u64).filter(|d| *d >= 1).and_then(|d| usize::try_from(d - 1).ok())
 }
 
 /// The keep-out component's colour and opacity.
@@ -138,10 +151,21 @@ fn base_of(a: &Assembly, i: usize) -> Option<usize> {
     })
 }
 
+/// Whether two shafts (origin, direction) are one line.
+fn same_shaft(a: &[[f64; 3]; 2], b: &Axis) -> bool {
+    coaxial(&Axis { origin: a[0], dir: a[1] }, b)
+}
+
 /// Makes the assembly of a set just built, or brings the one it had (`old`) up to date with it in
 /// place: `names` are its gear bodies' names in plan order, `keep_out` its clearance body's
-/// name, `set` its name, `group` its timeline folder.
-#[allow(clippy::too_many_arguments)]
+/// name, `set` its name, `group` its timeline folder, `driver` the member the user drives
+/// (0-based; `None`: the plan's own driver, member 1).
+///
+/// The whole system is one tree of joints: one revolute joint per shaft (the member of a compound
+/// cluster nearest the driver; the others rigid on it), and a motion link per mesh, each driven
+/// from the end nearer the driver. Loops of meshes whose ratios don't agree
+/// (`Plan::assembly_issues`) are left out and named in the warnings.
+#[allow(clippy::too_many_arguments, clippy::needless_range_loop)]
 pub(super) fn sync(
     s: &mut Session,
     plan: &Plan,
@@ -151,9 +175,23 @@ pub(super) fn sync(
     keep_out: Option<&str>,
     group: Option<u64>,
     old: Option<AssemblyRecord>,
+    driver: Option<usize>,
     warnings: &mut Vec<String>,
 ) -> Result<(AssemblyRecord, GearAssembly)> {
-    let a = &plan.assembly;
+    // Driven from the member asked for: the tree turned to point away from it.
+    let rerooted;
+    let a: &Assembly = match driver.filter(|d| *d > 0 && *d < plan.assembly.members.len()) {
+        Some(d) => {
+            rerooted = plan.assembly.rooted(d);
+            &rerooted
+        }
+        None => &plan.assembly,
+    };
+    if driver.is_some_and(|d| d >= plan.assembly.members.len()) {
+        warnings.push(format!("assembly: there is no member {} to drive: member 1 drives", driver.map_or(0, |d| d + 1)));
+    }
+    let issues: Vec<String> = plan.assembly_issues.iter().map(|i| format!("assembly: {}", i.message)).collect();
+    warnings.extend(issues.iter().cloned());
     let n = a.members.len();
     let mut bodies: Vec<String> = Vec::new();
     for m in &a.members {
@@ -185,25 +223,53 @@ pub(super) fn sync(
             kept[i] = slot.take();
         }
     }
-    // Bodies named afresh move into the component of the member they take the place of.
+    // Bodies named afresh move into the component of the member they take the place of: the one
+    // on the same shaft (a gear added or taken away elsewhere in the system leaves the others
+    // where they are), else the one at the same place among the members.
     let mut rehoused: Vec<(usize, u64)> = Vec::new();
-    for (i, slot) in left.iter_mut().enumerate() {
-        if i < n && kept[i].is_none() && !bodies.iter().any(|b| slot.as_ref().is_some_and(|m| m.body == *b)) {
-            if let Some(m) = slot.take() {
-                let (home, old_body) = (m.component, m.body.clone());
-                rehoused.push((i, home));
-                kept[i] = Some(MemberRecord { body: bodies[i].clone(), ..m });
-                // The transfer that moved the old body in has nothing to move now.
-                let stale: Vec<u64> = s
-                    .doc
-                    .features
-                    .iter()
-                    .filter(|f| matches!(&f.kind, solidcraft_doc::FeatureKind::BodyTransfer { to, bodies, .. } if *to == home && bodies.iter().any(|b| *b == old_body.as_str())))
-                    .map(|f| f.id)
-                    .collect();
-                if !stale.is_empty() {
-                    s.execute("timeline.delete", &json!({"features": stale}))?;
-                }
+    let mut claim: Vec<Option<usize>> = vec![None; left.len()];
+    // The shaft each new member is (`Plan::shafts`), the dialog's stable index for it.
+    let shaft_of = |i: usize| plan.shafts.iter().position(|sh| sh.body == a.members[i].body);
+    for i in (0..n).filter(|i| kept[*i].is_none()) {
+        let Some(k_shaft) = shaft_of(i) else { continue };
+        let same = left.iter().enumerate().position(|(k, slot)| claim[k].is_none() && slot.as_ref().is_some_and(|m| !bodies.contains(&m.body) && m.shaft == Some(k_shaft)));
+        if let Some(k) = same {
+            claim[k] = Some(i);
+        }
+    }
+    for i in 0..n {
+        if kept[i].is_some() || claim.contains(&Some(i)) {
+            continue;
+        }
+        let on_shaft = left.iter().enumerate().position(|(k, slot)| {
+            claim[k].is_none() && slot.as_ref().is_some_and(|m| !bodies.contains(&m.body) && m.axis.as_ref().is_some_and(|x| same_shaft(x, &a.members[i].axis)))
+        });
+        if let Some(k) = on_shaft {
+            claim[k] = Some(i);
+        }
+    }
+    for i in 0..n {
+        if kept[i].is_none() && !claim.contains(&Some(i)) && i < left.len() && claim[i].is_none() && left[i].as_ref().is_some_and(|m| !bodies.contains(&m.body)) {
+            claim[i] = Some(i);
+        }
+    }
+    for (k, slot) in left.iter_mut().enumerate() {
+        if let Some(i) = claim[k]
+            && let Some(m) = slot.take()
+        {
+            let (home, old_body) = (m.component, m.body.clone());
+            rehoused.push((i, home));
+            kept[i] = Some(MemberRecord { body: bodies[i].clone(), ..m });
+            // The transfer that moved the old body in has nothing to move now.
+            let stale: Vec<u64> = s
+                .doc
+                .features
+                .iter()
+                .filter(|f| matches!(&f.kind, solidcraft_doc::FeatureKind::BodyTransfer { to, bodies, .. } if *to == home && bodies.iter().any(|b| *b == old_body.as_str())))
+                .map(|f| f.id)
+                .collect();
+            if !stale.is_empty() {
+                s.execute("timeline.delete", &json!({"features": stale}))?;
             }
         }
     }
@@ -322,9 +388,13 @@ pub(super) fn sync(
             base: 0,
             a_inv: identity(),
             b_inv: identity(),
+            axis: None,
+            shaft: None,
         });
         rec.body = bodies[i].clone();
         rec.component = components[i];
+        rec.axis = Some([m.axis.origin, m.axis.dir]);
+        rec.shaft = plan.shafts.iter().position(|sh| sh.body == m.body);
         if m.grounded {
             rec.joint = None;
             records.push(rec);
@@ -384,8 +454,20 @@ pub(super) fn sync(
 
     // A motion link per mesh, b driven by a: one between the same two joints keeps its place
     // and takes the new ratio; ours that no mesh wants any more go.
-    let joint: Vec<Option<u64>> = records.iter().map(|r| r.joint).collect();
-    let ours: BTreeSet<u64> = joint.iter().flatten().copied().collect();
+    // A member rigid on another (a gear of a cluster built as a body of its own) turns with the
+    // member that holds the cluster's revolute joint: its meshes are linked to that joint.
+    let own_joint: Vec<Option<u64>> = records.iter().map(|r| r.joint).collect();
+    let turning_member = |mut i: usize| {
+        for _ in 0..n {
+            match rigid_to.get(i).copied().flatten() {
+                Some(on) if on != i => i = on,
+                _ => break,
+            }
+        }
+        i
+    };
+    let joint: Vec<Option<u64>> = (0..n).map(|i| own_joint[turning_member(i)]).collect();
+    let ours: BTreeSet<u64> = own_joint.iter().flatten().copied().collect();
     let wanted_pairs: Vec<(u64, u64)> = a
         .links
         .iter()
@@ -395,12 +477,28 @@ pub(super) fn sync(
             Some((joint.get(x).copied().flatten()?, joint.get(y).copied().flatten()?))
         })
         .collect();
+    // A link between our joints that the tree doesn't have (no mesh there now, or one driven
+    // from its other end since the driver changed) goes; the others are redefined in place.
     s.doc_mut().assembly.links.retain(|l| !(ours.contains(&l.a) && ours.contains(&l.b)) || wanted_pairs.contains(&(l.a, l.b)));
+    // Members the motion has reached, from the driver on: a rack and pinion is driven from the
+    // end reached first.
+    let mut reached = vec![false; n];
+    if let Some(r) = driver.filter(|d| *d < n).or(Some(0)).filter(|_| n > 0) {
+        reached[r] = true;
+    }
+    let mut links_made = Vec::new();
     for l in &a.links {
+        let (x0, y0) = l.members();
+        let rack_first = matches!(l, AssemblyLink::RackPinion { .. }) && reached.get(y0).copied().unwrap_or(false) && !reached.get(x0).copied().unwrap_or(false);
+        for e in [x0, y0] {
+            if let Some(r) = reached.get_mut(e) {
+                *r = true;
+            }
+        }
         if matches!(l, AssemblyLink::Rigid { .. }) {
             continue;
         }
-        let (x, y) = l.members();
+        let (x, y) = if rack_first { (y0, x0) } else { (x0, y0) };
         let (Some(ja), Some(jb)) = (joint.get(x).copied().flatten(), joint.get(y).copied().flatten()) else {
             warnings.push(format!(
                 "assembly: {} and {} are not linked: one of them has no joint",
@@ -419,11 +517,12 @@ pub(super) fn sync(
             p["link"] = json!(i);
         }
         let cmd = if matches!(l, AssemblyLink::RackPinion { .. }) { "joint.rack_pinion" } else { "joint.gear" };
-        if let Err(e) = s.execute(cmd, &p) {
-            warnings.push(format!("assembly: {} and {} could not be linked ({e})", bodies[x], bodies[y]));
+        match s.execute(cmd, &p) {
+            Ok(_) => links_made.push((ja, jb)),
+            Err(e) => warnings.push(format!("assembly: {} and {} could not be linked ({e})", bodies[x], bodies[y])),
         }
     }
-    let links: Vec<usize> = wanted_pairs.iter().filter_map(|(ja, jb)| s.doc.assembly.links.iter().position(|k| k.a == *ja && k.b == *jb)).collect();
+    let links: Vec<usize> = links_made.iter().filter_map(|(ja, jb)| s.doc.assembly.links.iter().position(|k| k.a == *ja && k.b == *jb)).collect();
 
     // What the joints can't show.
     match kind {
@@ -447,12 +546,12 @@ pub(super) fn sync(
         .members
         .iter()
         .enumerate()
-        .map(|(i, m)| GearAssemblyMember { body: bodies[i].clone(), component: components[i], occurrence: occs[i], joint: records[i].joint, grounded: m.grounded })
+        .map(|(i, m)| GearAssemblyMember { body: bodies[i].clone(), component: components[i], occurrence: occs[i], joint: records[i].joint, grounded: m.grounded, axis: [m.axis.origin, m.axis.dir] })
         .collect();
     let keep_out_record = keep_out_component.and_then(|c| keep_out.map(|b| (b.to_string(), c)));
     let joints = records.iter().filter_map(|r| r.joint).collect();
     let record = AssemblyRecord { members: records, keep_out: keep_out_record };
-    Ok((record, GearAssembly { members, keep_out: keep_out_component, joints, links }))
+    Ok((record, GearAssembly { members, keep_out: keep_out_component, joints, links, driver: driver.filter(|d| *d < n).unwrap_or(0) + 1, issues }))
 }
 
 /// Takes a set's assembly down (`assembly` switched off on an update): its joints (with their

@@ -65,29 +65,12 @@
 
 use std::f64::consts::{PI, TAU};
 
+use crate::axes::{add, cross, dot, len, mul, num, sub};
 use crate::geom::{Outline, Region, Seg, V2, wrap_period};
 use crate::plan::{Body, Frame, Op, Plan, PreviewGear, Spec, Step, Unit};
 
 type V3 = [f64; 3];
 
-fn add(a: V3, b: V3) -> V3 {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-fn sub(a: V3, b: V3) -> V3 {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-fn mul(a: V3, k: f64) -> V3 {
-    [a[0] * k, a[1] * k, a[2] * k]
-}
-fn dot(a: V3, b: V3) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-fn cross(a: V3, b: V3) -> V3 {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-}
-fn len(a: V3) -> f64 {
-    dot(a, a).sqrt()
-}
 fn unit(a: V3) -> V3 {
     let l = len(a);
     if l > 1e-300 { mul(a, 1.0 / l) } else { [0.0, 0.0, 1.0] }
@@ -309,23 +292,23 @@ pub fn design(s: &Spec) -> Result<Design, String> {
     Err(if most > 0.0 {
         format!(
             "offset too large: use at most {} mm with these sizes ({} mm asked): the ring gear's spiral angle would be {}°, under the {}° it needs (a larger pinion spiral angle allows more)",
-            mm(most),
-            mm(s.offset),
-            mm(d.beta2.to_degrees()),
-            mm(LEAST_RING_SPIRAL)
+            num(most),
+            num(s.offset),
+            num(d.beta2.to_degrees()),
+            num(LEAST_RING_SPIRAL)
         )
     } else if s.spiral_angle < LEAST_RING_SPIRAL + 1.0 {
         format!(
             "a pinion spiral angle of {}° leaves no room for an offset: any offset takes the ring gear's spiral angle under {}°; raise the spiral angle, or use offset 0 (a spiral bevel pair)",
-            mm(s.spiral_angle),
-            mm(LEAST_RING_SPIRAL)
+            num(s.spiral_angle),
+            num(LEAST_RING_SPIRAL)
         )
     } else {
         format!(
             "offset too large: no offset works with these sizes ({} mm asked; the ring gear's spiral angle would be {}°, under the {}° it needs): use offset 0 (a spiral bevel pair) or a larger pinion spiral angle",
-            mm(s.offset),
-            mm(d.beta2.to_degrees()),
-            mm(LEAST_RING_SPIRAL)
+            num(s.offset),
+            num(d.beta2.to_degrees()),
+            num(LEAST_RING_SPIRAL)
         )
     })
 }
@@ -353,7 +336,7 @@ fn design_iso(s: &Spec) -> Result<Design, String> {
         let d = design_with(s, Some((d2, (de2 - b2 * d2.sin()) / 2.0))).ok()?;
         let r = rho_lim(&d);
         let own = d.cone_m2 / d.beta2.sin().abs().max(1e-6);
-        (r.is_finite() && r > 0.0).then(|| (r - own, d))
+        (r.is_finite() && r > 0.0).then_some((r - own, d))
     };
     // From the bevel estimate a degree at a time towards the crossing (the limit radius grows
     // with the wheel pitch angle, the spiral's own falls), then halving.
@@ -426,9 +409,9 @@ fn design_with(s: &Spec, fix: Option<(f64, f64)>) -> Result<Design, String> {
         };
         let (least, most) = (edge(10f64.to_radians()).ceil(), edge(85f64.to_radians()).floor());
         return Err(if d2 > 85f64.to_radians() {
-            format!("shaft angle too large: use at most {most}° with these teeth (the ring gear would be a crown gear, pitch cone {}°)", mm(d2.to_degrees()))
+            format!("shaft angle too large: use at most {most}° with these teeth (the ring gear would be a crown gear, pitch cone {}°)", num(d2.to_degrees()))
         } else {
-            format!("shaft angle too small: use at least {least}° with these teeth (ring gear pitch cone {}°)", mm(d2.to_degrees()))
+            format!("shaft angle too small: use at least {least}° with these teeth (ring gear pitch cone {}°)", num(d2.to_degrees()))
         });
     }
     let de2 = s.module * z2;
@@ -436,7 +419,7 @@ fn design_with(s: &Spec, fix: Option<(f64, f64)>) -> Result<Design, String> {
     let cone_e2 = re2 / d2.sin();
     let b2 = s.face_width.min(0.45 * cone_e2);
     if s.face_width > cone_e2 * 0.34 {
-        warnings.push(format!("the face width is over a third of the ring gear's cone distance ({} mm), which makes weak toes", mm(cone_e2 / 3.0)));
+        warnings.push(format!("the face width is over a third of the ring gear's cone distance ({} mm), which makes weak toes", num(cone_e2 / 3.0)));
     }
     let rm2 = fix.map_or((de2 - b2 * d2.sin()) / 2.0, |f| f.1);
     let setup = Setup { z1, z2, sigma, rm2, d2, beta1: s.spiral_angle.to_radians() };
@@ -453,8 +436,8 @@ fn design_with(s: &Spec, fix: Option<(f64, f64)>) -> Result<Design, String> {
         }
         return Err(format!(
             "offset too large: use at most {} mm here ({} mm asked; a larger ring gear or spiral angle allows more)",
-            mm((lo * 100.0).floor() / 100.0),
-            mm(e)
+            num((lo * 100.0).floor() / 100.0),
+            num(e)
         ));
     };
     let beta1 = setup.beta1;
@@ -537,10 +520,6 @@ impl Design {
     pub fn g2(&self) -> V3 {
         unit(sub(self.apex2, self.p))
     }
-}
-
-fn mm(v: f64) -> String {
-    format!("{v:.3}").trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 fn wanted(s: &Spec, member: u8) -> bool {
@@ -636,7 +615,7 @@ pub(crate) fn corners(o: &Outline) -> Vec<V2> {
 pub(crate) fn restarts(sections: &[Outline], teeth: usize) -> Vec<usize> {
     let rings: Vec<Vec<V2>> = sections.iter().map(corners).collect();
     let m = rings[0].len();
-    let per = if teeth > 0 && m % teeth == 0 { m / teeth } else { m };
+    let per = if teeth > 0 && m.is_multiple_of(teeth) { m / teeth } else { m };
     let mut dirs: Vec<V2> = rings[rings.len() - 1].clone();
     let mut out = Vec::with_capacity(rings.len());
     for r in &rings {
@@ -666,8 +645,8 @@ pub(crate) fn restarts(sections: &[Outline], teeth: usize) -> Vec<usize> {
 /// would then cut across the flanks.
 pub(crate) fn slips(sections: &[Outline], teeth: usize) -> bool {
     let m = corners(&sections[0]).len();
-    let per = if teeth > 0 && m % teeth == 0 { m / teeth } else { m };
-    let bad = |k: &[usize]| k.iter().any(|v| *v == usize::MAX) || k.windows(2).any(|w| (w[1] + m - w[0]) % per != 0);
+    let per = if teeth > 0 && m.is_multiple_of(teeth) { m / teeth } else { m };
+    let bad = |k: &[usize]| k.contains(&usize::MAX) || k.windows(2).any(|w| !(w[1] + m - w[0]).is_multiple_of(per));
     let rev: Vec<Outline> = sections.iter().rev().cloned().collect();
     bad(&restarts(sections, teeth)) || bad(&restarts(&rev, teeth))
 }
@@ -761,8 +740,8 @@ impl Form {
         if (ha + c) * sd > 0.5 * hap || hf * cd > 0.5 * d.rm2 {
             return Err(format!(
                 "teeth too tall: use a smaller module or more teeth (ring gear pitch cone {}°, mean cone distance {} mm)",
-                mm(d.delta2.to_degrees()),
-                mm(d.cone_m2)
+                num(d.delta2.to_degrees()),
+                num(d.cone_m2)
             ));
         }
         // The limit pressure angle comes off the gear's convex flank (the drive side) and goes on
@@ -780,7 +759,7 @@ impl Form {
         if most < least {
             return Err(format!(
                 "teeth come to a point: use a smaller pressure angle or a stub tooth form ({}° is too much here)",
-                mm(s.pressure_angle)
+                num(s.pressure_angle)
             ));
         }
         let thick = (pn / 2.0).clamp(least, most) - s.backlash.max(0.0);
@@ -1331,8 +1310,8 @@ impl PinionFace {
         if toe < 0.25 * d.cone_m1 {
             return Err(format!(
                 "the pinion's face reaches too near its pitch apex: at most {} mm wide here (its toe {} mm from the apex)",
-                mm(2.0 * (mid - 0.25 * d.cone_m1).max(0.0)),
-                mm(toe)
+                num(2.0 * (mid - 0.25 * d.cone_m1).max(0.0)),
+                num(toe)
             ));
         }
         if toe >= heel0 || heel <= toe0 || heel - toe < 0.1 * (heel0 - toe0) {
@@ -1458,7 +1437,7 @@ pub(crate) fn work_out(s: &Spec) -> Result<Set, String> {
     for _ in 0..8 {
         t.face_width *= 0.8;
         if let Ok(mut set) = work_out_at(&t) {
-            set.d.warnings.push(format!("face width cut to {} mm: wider teeth twist too fast to loft", mm(set.d.b2)));
+            set.d.warnings.push(format!("face width cut to {} mm: wider teeth twist too fast to loft", num(set.d.b2)));
             return Ok(set);
         }
     }
@@ -1747,7 +1726,7 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
             let nose = face.at(face.toe, face.under).x;
             let most = 0.8 * shank_r.min(toe_root).min(nose);
             if s.bore.reach() > most {
-                p.refuse(format!("pinion: the bore (reaching Ø{}) leaves no wall in the shank; at most Ø{}", mm(2.0 * s.bore.reach()), mm(2.0 * most)));
+                p.refuse(format!("pinion: the bore (reaching Ø{}) leaves no wall in the shank; at most Ø{}", num(2.0 * s.bore.reach()), num(2.0 * most)));
             }
             let (lo, hi) = (z0.min(0.0) - 1.0, (z0 + shank_l + lap).max(length) + 1.0);
             steps.push(Step::Prism { region: Region { outer: vec![b], holes: vec![] }, z0: lo, height: hi - lo, twist: 0.0, op: Op::Cut });
@@ -1765,7 +1744,7 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
             // Through the flat faces only (inside the front face under the toe).
             let most = form.blank(back)[1].x * 0.95;
             if s.bore2.reach() > most {
-                p.refuse(format!("gear: the bore (reaching Ø{}) cuts into the tooth roots; at most Ø{}", mm(2.0 * s.bore2.reach()), mm(2.0 * most)));
+                p.refuse(format!("gear: the bore (reaching Ø{}) cuts into the tooth roots; at most Ø{}", num(2.0 * s.bore2.reach()), num(2.0 * most)));
             }
             steps.push(Step::Prism { region: Region { outer: vec![b], holes: vec![] }, z0: -1.0, height: form.z_hi - back + 2.0, twist: 0.0, op: Op::Cut });
         }
@@ -1816,8 +1795,8 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
     });
     p.preview_note = format!(
         "middle sections of the pinion and the ring gear, side by side at their speeds (the axes are {} mm apart at {}° and don't meet: {hand}-hand pinion)",
-        mm(d.offset),
-        mm(d.sigma.to_degrees())
+        num(d.offset),
+        num(d.sigma.to_degrees())
     );
     Ok(())
 }
@@ -2980,7 +2959,7 @@ mod tests {
                     let k = loft_shifts(&b.frame, sections);
                     let per = corners(&sections[0].0).len() / teeth as usize;
                     eprintln!("{}: Σ {sigma} {} sections, {per} corners a tooth, restarts {:?}", b.name, sections.len(), k);
-                    assert!(k.windows(2).all(|w| (w[1] + per * teeth as usize - w[0]) % per == 0), "{}: the kernel would slip a section: {k:?}", b.name);
+                    assert!(k.windows(2).all(|w| (w[1] + per * teeth as usize - w[0]).is_multiple_of(per)), "{}: the kernel would slip a section: {k:?}", b.name);
                 }
             }
         }
@@ -3106,7 +3085,7 @@ mod tests {
                 let Step::Loft { sections, .. } = &b.steps[0] else { panic!() };
                 let k = loft_shifts(&b.frame, sections);
                 let per = corners(&sections[0].0).len() / teeth as usize;
-                assert!(k.windows(2).all(|w| (w[1] + per * teeth as usize - w[0]) % per == 0), "Σ {sigma}: {} would slip", b.name);
+                assert!(k.windows(2).all(|w| (w[1] + per * teeth as usize - w[0]).is_multiple_of(per)), "Σ {sigma}: {} would slip", b.name);
             }
         }
         for sigma in [105.0, 120.0] {

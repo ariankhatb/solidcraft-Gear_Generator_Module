@@ -217,7 +217,7 @@ fn dump_trim_scripts() {
         let (x, y, z) = (f.x, f.y(), f.z);
         let mut cmds = vec![r#"{"command":"diagnostics.validation","params":{"mode":"each_step"}}"#.to_string()];
         let mut sketch = 0;
-        let mut outline_cmds = |cmds: &mut Vec<String>, o: &Outline, h: f64| {
+        let outline_cmds = |cmds: &mut Vec<String>, o: &Outline, h: f64| {
             cmds.push(format!(r#"{{"command":"sketch.create","params":{{"plane":{{"origin":{},"x_dir":{},"y_dir":{}}},"project_edges":false}}}}"#, v3(f.world([0.0, 0.0, h])), v3(x), v3(y)));
             for sg in &o.segs {
                 cmds.push(match sg {

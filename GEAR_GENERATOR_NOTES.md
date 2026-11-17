@@ -467,3 +467,20 @@ clearance. The ring is a plain ring fitted on the case (no flange, no bolts); `w
 `ring_bolts` are opt-in. The 895 mm³ case/side gear overlap the kernel found came from the
 flat-cone bevel merge (side gears now end below their frame origin); the plan-level collision
 test catches it on the merged planner.
+
+## Whole gear systems: motion and keep-out (`gear-motion`, 2026-11-15)
+
+- `Assembly::from_graph(members, edges, root)`: any mesh graph (loops allowed) becomes a tree
+  driven from `root`; a compound cluster's shaft is `Rigid` edges (one revolute per shaft in the
+  engine, the rest rigid on it); a closing mesh whose ratio disagrees is left out and reported in
+  `Plan::assembly_issues` (members round the loop). `Assembly::rooted`, `AssemblyLink::reversed`.
+- Trains use it (`train::assembly_edges`); a set read from a sketch (`Plan::members` /
+  `clusters`, gear-sketch3d) uses `plan::assembly::from_members`: teeth for the ratio, sign from
+  where the shafts lie (parallel / ring / bevel axes towards or away from the apex).
+- Engine: `assembly_driver` (1-based) re-roots the tree; reply `assembly.driver`, `assembly.issues`;
+  a rack and pinion is driven from the end reached first; members whose bodies are named afresh
+  are matched by shaft before position (gear added/removed elsewhere keeps the others).
+- Keep-out: one clearance body over every member (coaxial members share a profile).
+- Tests: `system_tests.rs` (10-gear train with two clusters: angles from any driver, 2D mesh check
+  at the assembly's speeds, loops, keep-out; a 3D bevel/compound/ring graph); engine tests in
+  `gear_tests.rs` (ten-gear sketch system, adding/removing a gear).

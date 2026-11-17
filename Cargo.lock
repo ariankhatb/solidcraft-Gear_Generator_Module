@@ -1992,6 +1992,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui-scale"
+version = "0.6.1"
+dependencies = [
+ "egui",
+]
+
+[[package]]
+name = "egui-snarl"
+version = "0.12.0"
+dependencies = [
+ "ahash",
+ "egui",
+ "egui-scale",
+ "slab",
+ "smallvec",
+]
+
+[[package]]
 name = "egui-wgpu"
 version = "0.37.0"
 dependencies = [
@@ -5862,6 +5880,7 @@ dependencies = [
  "solidcraft-derive",
  "solidcraft-display-units",
  "solidcraft-format",
+ "solidcraft-gear",
  "solidcraft-geom",
  "solidcraft-kernel",
  "solidcraft-profile",
@@ -6143,6 +6162,7 @@ version = "0.42.0"
 dependencies = [
  "arboard",
  "egui",
+ "egui-snarl",
  "egui-wgpu",
  "image",
  "log",

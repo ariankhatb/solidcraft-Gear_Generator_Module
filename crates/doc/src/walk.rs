@@ -37,6 +37,7 @@ pub(crate) trait Walk {
 impl Walk for String {}
 impl Walk for std::sync::Arc<str> {}
 impl Walk for bool {}
+impl Walk for serde_json::Value {}
 impl Walk for u64 {}
 impl Walk for i8 {}
 impl Walk for f64 {}

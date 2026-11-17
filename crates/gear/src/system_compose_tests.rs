@@ -367,3 +367,56 @@ fn a_bevel_pair_from_one_side_view() {
     let off = item("U", ItemKind::Bevel, vec![Thing::point([0.0; 3]), line([5.0, 0.0, 0.0], [5.0, 0.0, 60.0]), line([0.0; 3], [60.0, 0.0, 0.0]), line([0.0; 3], c)]);
     assert!(validate_item(&off).unwrap_err().contains("doesn't run through the apex"));
 }
+
+/// A ring gear whose pinion shares a shaft with a gear of another train (a cluster across
+/// items, as 09-everything-drivetrain draws it): the ring keeps its teeth inside, and no point of
+/// the pinion's outline lies in the ring's material where they are planned.
+#[test]
+fn a_ring_whose_pinion_is_in_a_cluster_keeps_its_space_for_the_pinion() {
+    use crate::items::{GearSettings, Hand, ModuleBlock};
+    use crate::mesh2d::{Member, Motion, polygon};
+    use crate::plan::Step;
+    let at = |x: f64, h: f64| [x, 0.0, h];
+    let helical = |hand: Hand| vec![GearSettings { helix: Some(20.0), hand: Some(hand), ..GearSettings::default() }];
+    let mut e = item("E", ItemKind::Helical, vec![circ(at(87.0, -60.0), Z, 12.0)]);
+    e.gears = helical(Hand::Right);
+    let mut f = item("F", ItemKind::Helical, vec![circ(at(123.0, -60.0), Z, 24.0)]);
+    f.gears = helical(Hand::Left);
+    let mut r = item("R", ItemKind::Internal, vec![circ(at(153.0, -90.0), Z, 50.0), circ(at(123.0, -90.0), Z, 20.0)]);
+    r.gears = vec![GearSettings { rim: Some(6.0), ..GearSettings::default() }];
+    let links = vec![mesh(g(0, 0), g(1, 0)), shaft(g(1, 0), g(2, 1))];
+    let blocks = vec![ModuleBlock { id: "M".into(), module: Some(1.5), members: vec![0, 1] }, ModuleBlock { id: "M2".into(), module: Some(2.0), members: vec![2] }];
+    let sp = plan_items(&[e, f, r], &links, &blocks, None, &Spec::default()).unwrap();
+    assert!(sp.error.is_none(), "{:?}", sp.error);
+    let (ring, cluster) = (sp.body(g(2, 0)).unwrap(), sp.body(g(2, 1)).unwrap());
+    assert_eq!(sp.body(g(1, 0)), Some(cluster), "F and the pinion are one rigid body");
+    let ring_m = &sp.plan.members[sp.member(g(2, 0)).unwrap()];
+    assert!(ring_m.ring);
+    let rb = &sp.plan.bodies[ring];
+    let Some(Step::Prism { region: ring_region, .. }) = rb.steps.first() else { panic!("{:?}", rb.steps) };
+    assert!(!ring_region.holes.is_empty(), "the ring has its toothed hole");
+    let ring_mat = Member::new(ring_region, Motion::turning(crate::V2::ZERO, 0.0), 0.5, 0.01);
+    // The pinion's prism: the cluster body's step at the ring's height.
+    let cb = &sp.plan.bodies[cluster];
+    let pinion = cb
+        .steps
+        .iter()
+        .find_map(|s| match s {
+            Step::Prism { region, z0, .. } if (cb.frame.origin[2] + z0 - rb.frame.origin[2]).abs() < 1e-6 => Some(region),
+            _ => None,
+        })
+        .expect("the pinion's prism level with the ring");
+    let (rx, ry) = (rb.frame.x, rb.frame.y());
+    let (cx, cy) = (cb.frame.x, cb.frame.y());
+    let mut inside = 0;
+    for o in &pinion.outer {
+        for q in polygon(o, 0.01) {
+            let w = [0, 1, 2].map(|k| cb.frame.origin[k] + cx[k] * q.x + cy[k] * q.y - rb.frame.origin[k]);
+            let local = crate::V2::new(w[0] * rx[0] + w[1] * rx[1] + w[2] * rx[2], w[0] * ry[0] + w[1] * ry[1] + w[2] * ry[2]);
+            if ring_mat.inside(local) && ring_mat.dist(local) > 0.05 {
+                inside += 1;
+            }
+        }
+    }
+    assert_eq!(inside, 0, "pinion outline points inside the ring's material");
+}

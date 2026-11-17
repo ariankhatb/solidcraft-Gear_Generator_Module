@@ -32,7 +32,7 @@ use crate::drivetrain::{self as dt, Outcome};
 use crate::geom::{Outline, Region, V2};
 use crate::items::{
     BevelStyle, Drive, FacePreset, GearGeom, GearItem, GearReply, GearRef, GearSettings, ItemKind, ItemLink, LinkKind, LinkReply, ModuleBlock, Source, Stage,
-    StageFrom, StageKind, Suggestion, effective_links, gear_geoms, resolve_module, stages, suggest_links, to_drivetrain, unlinked, validate_item,
+    StageFrom, StageKind, Suggestion, effective_links, gear_geoms, resolve_module, stages, suggest_links, to_drivetrain, unlinked, validate_item, who,
 };
 use crate::plan::{Assembly, AssemblyLink, AssemblyMember, Body, Frame, Kind, Op, Plan, PlanShaft, SetMember, Spec, Step, plan};
 use crate::simple::Simple;
@@ -110,11 +110,6 @@ impl SystemPlan {
     pub fn body(&self, r: GearRef) -> Option<usize> {
         self.plan.members.get(self.member(r)?)?.body
     }
-}
-
-fn who(items: &[GearItem], r: GearRef) -> String {
-    let item = items.get(r.item).map_or_else(|| format!("Item {}", r.item + 1), GearItem::who);
-    format!("{item} gear {}", r.gear + 1)
 }
 
 /// `text` with the drivetrain reader's "member N" named as `names[N - 1]`.

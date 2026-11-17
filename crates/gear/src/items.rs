@@ -1547,7 +1547,8 @@ pub struct Stage {
     pub error: Option<String>,
 }
 
-fn who(items: &[GearItem], r: GearRef) -> String {
+/// A gear for people: "Item A gear 2".
+pub(crate) fn who(items: &[GearItem], r: GearRef) -> String {
     let item = items.get(r.item).map_or_else(|| format!("Item {}", r.item + 1), GearItem::who);
     format!("{item} gear {}", r.gear + 1)
 }

@@ -759,7 +759,17 @@ fn apply_details(items: &[gi::GearItem], wanted: &[Wanted], sp: &mut SystemPlan)
             }
         }
         if let Some(d) = bore {
-            let (lo, hi) = (-bb - w.hub.map_or(0.0, |_| len_b) - 1.0, a + w.hub.map_or(0.0, |_| len_a) + 1.0);
+            // Through the gear and its hub, and on through any shaft stub the gear was built with
+            // (a bore is for a shaft through it), but not into another layer of its compound.
+            let others: Vec<f64> = gi::gear_geoms(&items[w.gear.item])
+                .iter()
+                .enumerate()
+                .filter(|(g, _)| *g != w.gear.gear)
+                .map(|(_, o)| (v3(o.centre) - v3(geo.centre)).dot(v3(geo.axis).normalized().unwrap_or(Vec3::Z)))
+                .collect();
+            let far = 1000.0;
+            let lo = if others.iter().any(|t| *t < -1e-6) { -bb - w.hub.map_or(0.0, |_| len_b) - 1.0 } else { -bb - far };
+            let hi = if others.iter().any(|t| *t > 1e-6) { a + w.hub.map_or(0.0, |_| len_a) + 1.0 } else { a + far };
             body.steps.push(prism(d / 2.0, lo, hi - lo, Op::Cut));
         }
         if let Some(g) = sp.gears.iter_mut().find(|g| g.item == w.gear.item && g.gear == w.gear.gear) {

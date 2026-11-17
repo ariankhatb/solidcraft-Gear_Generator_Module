@@ -412,6 +412,15 @@
    }
   },
   {
+   "command": "browser.visibility",
+   "params": {
+    "visible": false,
+    "items": [
+     "Housing cutout"
+    ]
+   }
+  },
+  {
    "command": "gear.ratio",
    "params": {
     "a": {

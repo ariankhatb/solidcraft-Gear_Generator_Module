@@ -116,6 +116,10 @@ ex['10-hypoid-pair'] = [
 ];
 
 for (const [name, cmds] of Object.entries(ex)) {
+  // A housing cutout surrounds the gears: made, then hidden, so the file opens on the gears
+  // (its eye in the Browser shows it).
+  const at = cmds.findIndex((c) => c.command === 'gear.create' && c.params.clearance_body);
+  if (at >= 0) cmds.splice(at + 1, 0, { command: 'browser.visibility', params: { visible: false, items: ['Housing cutout'] } });
   fs.writeFileSync(path.join(out, 'scripts', name + '.json'), JSON.stringify({ commands: cmds }, null, 1));
 }
 console.log(Object.keys(ex).join('\n'));

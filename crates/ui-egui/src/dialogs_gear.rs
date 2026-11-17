@@ -183,6 +183,86 @@ pub struct Gear {
     /// Whether the last reply gave the outlines and the suggestions itself.
     pub from_engine: (bool, bool),
     pub action: Option<Action>,
+    /// What the engine says each gear is built with (side A, bore, hub), and the bore and hub
+    /// circles the drawing suggests.
+    pub built: Vec<Built>,
+    pub details_suggested: Vec<DetailSuggested>,
+}
+
+/// One gear as the engine plans it (`gear.calculate`'s `gears[]`): its side A (unit, world) and
+/// its bore and hub diameters (mm).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Built {
+    pub item: usize,
+    pub gear: usize,
+    pub side_a: Option<[f64; 3]>,
+    pub bore: Option<f64>,
+    pub hub: Option<f64>,
+}
+
+/// A bore or hub circle the drawing suggests for a gear (`detail_suggestions[]`): a circle
+/// concentric with its pitch circle, inside it, that nothing picks.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DetailSuggested {
+    pub item: usize,
+    pub gear: usize,
+    pub hub: bool,
+    pub sel: Sel,
+    pub diameter: f64,
+}
+
+/// `gear.calculate`'s per-gear side A, bore and hub.
+pub(crate) fn built_of(r: &Value) -> Vec<Built> {
+    let p3 = |v: Option<&Value>| -> Option<[f64; 3]> {
+        let a = v?.as_array()?;
+        Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2)?.as_f64()?])
+    };
+    r.get("gears")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|g| {
+            Some(Built {
+                item: g.get("item").and_then(crate::dialogs_gear_graph::item_index)?,
+                gear: g.get("gear").and_then(Value::as_u64).unwrap_or(0) as usize,
+                side_a: p3(g.get("side_a")),
+                bore: g.get("bore").and_then(Value::as_f64),
+                hub: g.get("hub").and_then(Value::as_f64),
+            })
+        })
+        .collect()
+}
+
+/// `gear.calculate`'s `detail_suggestions`.
+pub(crate) fn details_suggested_of(r: &Value) -> Vec<DetailSuggested> {
+    r.get("detail_suggestions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|d| {
+            Some(DetailSuggested {
+                item: d.get("item").and_then(crate::dialogs_gear_graph::item_index)?,
+                gear: d.get("gear").and_then(Value::as_u64).unwrap_or(0) as usize,
+                hub: d.get("slot").and_then(Value::as_str) == Some("hub"),
+                sel: Sel::SketchCurve { id: d.get("curve")?.as_str()?.to_string(), sketch: Some(d.get("sketch")?.as_u64()?) },
+                diameter: d.get("diameter").and_then(Value::as_f64)?,
+            })
+        })
+        .collect()
+}
+
+/// A suggested bore or hub circle taken (its Use button): into its gear's item.
+pub(crate) fn use_detail(app: &SolveApp, k: &mut Gear, d: &DetailSuggested, inputs: &mut [SelInput]) {
+    let Some(it) = k.items.get_mut(d.item) else { return };
+    if let Some(Err(e)) = it.take_detail(app, &d.sel) {
+        k.refused = Some((Some(d.item), e));
+    }
+    k.calc = None;
+    if k.active == Some(d.item)
+        && let Some(input) = inputs.first_mut()
+    {
+        input.items = k.items[d.item].all_picks();
+    }
 }
 
 impl Gear {
@@ -257,6 +337,8 @@ fn new(sketch: Option<u64>) -> Gear {
         arrows: Vec::new(),
         from_engine: (false, false),
         action: None,
+        built: Vec::new(),
+        details_suggested: Vec::new(),
     }
 }
 
@@ -646,7 +728,7 @@ pub(crate) fn make_active(k: &mut Gear, i: usize, inputs: &mut [SelInput]) {
     k.active = Some(i);
     k.refused = None;
     if let Some(input) = inputs.first_mut() {
-        input.items = k.items[i].picks.clone();
+        input.items = k.items[i].all_picks();
     }
 }
 
@@ -663,7 +745,7 @@ pub(crate) fn remove_item(k: &mut Gear, i: usize, inputs: &mut [SelInput]) {
     k.ratio_pick = k.ratio_pick.map(|p| p.filter(|(d, _)| *d != i).map(|(d, g)| (shift(d), g)));
     k.refused = None;
     if let Some(input) = inputs.first_mut() {
-        input.items = k.active.map(|a| k.items[a].picks.clone()).unwrap_or_default();
+        input.items = k.active.map(|a| k.items[a].all_picks()).unwrap_or_default();
     }
 }
 
@@ -674,21 +756,31 @@ pub(crate) fn remove_item(k: &mut Gear, i: usize, inputs: &mut [SelInput]) {
 /// the input holds the active gear's picks.
 pub(crate) fn sync_picks(app: &SolveApp, k: &mut Gear, inputs: &mut [SelInput]) {
     let Some(input) = inputs.first_mut() else { return };
-    let current: Vec<Sel> = k.active.and_then(|a| k.items.get(a)).map(|it| it.picks.clone()).unwrap_or_default();
+    let current: Vec<Sel> = k.active.and_then(|a| k.items.get(a)).map(GearItem::all_picks).unwrap_or_default();
     if let Some(a) = k.active.filter(|a| *a < k.items.len()) {
         // (A pick that no longer reads stays: the card names it until it is re-picked.)
         k.items[a].picks.retain(|p| input.items.contains(p) || thing_of(app, p).is_none());
+        k.items[a].details.retain(|(p, _)| input.items.contains(p) || thing_of(app, p).is_none());
     }
     let fresh: Vec<Sel> = input.items.iter().filter(|s| !current.contains(s)).cloned().collect();
     for sel in fresh {
         take_pick(app, k, sel);
     }
-    input.items = k.active.and_then(|a| k.items.get(a)).map(|it| it.picks.clone()).unwrap_or_default();
+    input.items = k.active.and_then(|a| k.items.get(a)).map(GearItem::all_picks).unwrap_or_default();
 }
 
 fn take_pick(app: &SolveApp, k: &mut Gear, sel: Sel) {
     let others = |k: &Gear, skip: Option<usize>| -> Vec<(usize, GearItem)> { k.items.iter().enumerate().filter(|(i, _)| Some(*i) != skip).map(|(i, it)| (i, it.clone())).collect() };
     let mut why_active = None;
+    // A small circle drawn inside one of the active gear's pitch circles, on its centre: its
+    // bore (the smaller) or hub circle.
+    if let Some(a) = k.active.filter(|a| *a < k.items.len())
+        && !k.items.iter().any(|it| it.all_picks().contains(&sel))
+        && let Some(done) = k.items[a].take_detail(app, &sel)
+    {
+        k.refused = done.err().map(|e| (Some(a), e));
+        return;
+    }
     if let Some(a) = k.active.filter(|a| *a < k.items.len()) {
         let list = others(k, Some(a));
         let refs: Vec<(usize, &GearItem)> = list.iter().map(|(i, it)| (*i, it)).collect();
@@ -1081,6 +1173,8 @@ pub(crate) fn refresh(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput]) {
                 k.notes = r.as_ref().map(notes_of).unwrap_or_default();
                 k.results = r.as_ref().map(|r| results_of(r, &len)).unwrap_or_default();
                 k.contacts = r.as_ref().map(contacts_of).unwrap_or_default();
+                k.built = r.as_ref().map(built_of).unwrap_or_default();
+                k.details_suggested = r.as_ref().map(details_suggested_of).unwrap_or_default();
                 k.calc = Some((key, status_of(r)));
             }
         }
@@ -1234,6 +1328,12 @@ fn picked_geometry(app: &SolveApp, k: &Gear) -> Vec<(usize, Vec<[f64; 3]>, Strin
                 gi::Thing::Point { p, .. } => out.push((i, vec![p], label)),
             }
         }
+        // Its bore and hub circles ("A · bore").
+        for (_, hub, t, _) in it.detail_things(app) {
+            if let gi::Thing::Circle { centre, normal, radius, .. } = t {
+                out.push((i, ring_points(centre, normal, radius, 0.0), format!("{} · {}", crate::dialogs_gear_graph::item_id(i), if hub { "hub" } else { "bore" })));
+            }
+        }
     }
     out
 }
@@ -1268,7 +1368,10 @@ fn items_preview(app: &SolveApp, k: &Gear) -> (Vec<(usize, Vec<[f64; 3]>)>, Vec<
             faces.insert((i, g), (fa, fb));
             let Some(ax) = unit(geo.axis) else { continue };
             let reach = geo.radius.unwrap_or(5.0 * m);
-            arrows.push((i, [geo.centre, at(geo.centre, ax, (0.6 * reach).max(fa + 2.0 * m))]));
+            // Side A as the engine says it (its side_a), else the axis read from the picks.
+            let side = k.built.iter().find(|b| (b.item, b.gear) == (i, g)).and_then(|b| b.side_a).and_then(unit).unwrap_or(ax);
+            arrows.push((i, [geo.centre, at(geo.centre, side, (0.6 * reach).max(fa + 2.0 * m))]));
+            let ax = side;
             let Some(r) = geo.radius else {
                 // A rack or a worm: its line.
                 if let Some((a, b)) = geo.line {

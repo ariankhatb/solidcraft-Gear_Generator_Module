@@ -327,6 +327,62 @@
    }
   },
   {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     0
+    ],
+    "radius": 4,
+    "id": "abore"
+   }
+  },
+  {
+   "command": "sketch.constraint.concentric",
+   "params": {
+    "a": "abore",
+    "b": "a"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "abore"
+    ],
+    "type": "diameter",
+    "value": "8 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     45,
+     0
+    ],
+    "radius": 4,
+    "id": "bbore"
+   }
+  },
+  {
+   "command": "sketch.constraint.concentric",
+   "params": {
+    "a": "bbore",
+    "b": "b"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "bbore"
+    ],
+    "type": "diameter",
+    "value": "8 mm"
+   }
+  },
+  {
    "command": "sketch.finish",
    "params": {}
   },
@@ -437,6 +493,62 @@
    }
   },
   {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     45,
+     0
+    ],
+    "radius": 4,
+    "id": "cbore"
+   }
+  },
+  {
+   "command": "sketch.constraint.concentric",
+   "params": {
+    "a": "cbore",
+    "b": "c"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "cbore"
+    ],
+    "type": "diameter",
+    "value": "8 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     87,
+     0
+    ],
+    "radius": 4,
+    "id": "dbore"
+   }
+  },
+  {
+   "command": "sketch.constraint.concentric",
+   "params": {
+    "a": "dbore",
+    "b": "d"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "dbore"
+    ],
+    "type": "diameter",
+    "value": "8 mm"
+   }
+  },
+  {
    "command": "sketch.finish",
    "params": {}
   },
@@ -544,6 +656,62 @@
     ],
     "type": "vertical",
     "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     87,
+     0
+    ],
+    "radius": 4,
+    "id": "ebore"
+   }
+  },
+  {
+   "command": "sketch.constraint.concentric",
+   "params": {
+    "a": "ebore",
+    "b": "e"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "ebore"
+    ],
+    "type": "diameter",
+    "value": "8 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     123,
+     0
+    ],
+    "radius": 4,
+    "id": "fbore"
+   }
+  },
+  {
+   "command": "sketch.constraint.concentric",
+   "params": {
+    "a": "fbore",
+    "b": "f"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "fbore"
+    ],
+    "type": "diameter",
+    "value": "8 mm"
    }
   },
   {
@@ -781,10 +949,6 @@
   },
   {
    "command": "sketch.finish",
-   "params": {}
-  },
-  {
-   "command": "inspect.interference",
    "params": {}
   }
  ]

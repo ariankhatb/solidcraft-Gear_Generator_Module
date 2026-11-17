@@ -92,6 +92,34 @@
    }
   },
   {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     45,
+     0
+    ],
+    "radius": 5,
+    "id": "c1bore"
+   }
+  },
+  {
+   "command": "sketch.constraint.concentric",
+   "params": {
+    "a": "c1bore",
+    "b": "c1"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "c1bore"
+    ],
+    "type": "diameter",
+    "value": "10 mm"
+   }
+  },
+  {
    "command": "sketch.finish",
    "params": {}
   },
@@ -199,6 +227,34 @@
     ],
     "type": "vertical",
     "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     45,
+     0
+    ],
+    "radius": 5,
+    "id": "c2bore"
+   }
+  },
+  {
+   "command": "sketch.constraint.concentric",
+   "params": {
+    "a": "c2bore",
+    "b": "c2"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "c2bore"
+    ],
+    "type": "diameter",
+    "value": "10 mm"
    }
   },
   {
@@ -324,6 +380,16 @@
         "sketch": "Layer 2",
         "curve": "c2",
         "slot": "pitch2"
+       },
+       {
+        "sketch": "Layer 1",
+        "curve": "c1bore",
+        "slot": "bore"
+       },
+       {
+        "sketch": "Layer 2",
+        "curve": "c2bore",
+        "slot": "bore"
        }
       ],
       "module_block": "M"

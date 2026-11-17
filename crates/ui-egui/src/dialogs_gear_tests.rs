@@ -793,3 +793,55 @@ fn a_gear_double_clicked_or_its_component_active_opens_its_set() {
         check(&app, "a gear's component active + Gears");
     }
 }
+
+/// Bore and hub circles: a circle drawn on a spur's centre inside its pitch circle, picked while
+/// the gear is active, is its bore (the smaller) or hub (the larger) — not a new gear; sent as
+/// components with slot bore / hub; the engine's detail suggestions are offered and Use takes
+/// them; Edit gets them back; the reply's bore, hub and side A are read.
+#[test]
+fn bore_and_hub_circles_from_picks_and_suggestions() {
+    let mut app = app();
+    let s = app.session.execute("sketch.create", &json!({"plane": "XY"})).unwrap()["sketch"].as_u64().unwrap();
+    for (id, x, r) in [("a", 0.0, 20.0), ("b", 50.0, 30.0), ("bore", 0.0, 4.0), ("hub", 0.0, 8.0), ("bbore", 50.0, 4.0)] {
+        app.session.execute("sketch.circle.center", &json!({"center": [x, 0], "radius": r, "id": id})).unwrap();
+    }
+    app.session.execute("sketch.finish", &json!({})).unwrap();
+    let at = |id: &str| Sel::SketchCurve { id: id.into(), sketch: Some(s) };
+    let (mut g, mut inputs) = opened(&mut app);
+    click(&app, &mut g, &mut inputs, at("a"));
+    // The hub first, then the bore: the smaller is the bore whichever came first.
+    click(&app, &mut g, &mut inputs, at("hub"));
+    click(&app, &mut g, &mut inputs, at("bore"));
+    assert_eq!(g.items.len(), 1, "no new gear for a circle inside: {:?}", g.refused);
+    assert_eq!(g.items[0].details, vec![(at("bore"), false), (at("hub"), true)]);
+    assert_eq!(inputs[0].items.len(), 3, "the input holds the gear's pitch circle, bore and hub");
+    assert!(g.items[0].take_detail(&app, &at("bbore")).is_none(), "another gear's circle is no detail of this one");
+    // Gear B by a pick, then the request.
+    click(&app, &mut g, &mut inputs, at("b"));
+    assert_eq!(g.items.len(), 2);
+    let mut d = app.dialog.clone().unwrap();
+    d.kind = Kind::Gear(g.clone());
+    d.inputs = inputs.clone();
+    let p = apply_commands(&app, &d).unwrap()[0].1.clone();
+    let slots: Vec<&str> = p["items"][0]["components"].as_array().unwrap().iter().map(|c| c["slot"].as_str().unwrap()).collect();
+    assert_eq!(slots, ["pitch", "bore", "hub"], "{p}");
+    // The engine's reply: B's bore circle suggested; A's bore and hub as built, and side A.
+    let r = app.session.execute("gear.calculate", &p).unwrap();
+    let offers = details_suggested_of(&r);
+    let offer = offers.iter().find(|o| o.item == 1).unwrap_or_else(|| panic!("B's bore offered: {r}"));
+    assert!(!offer.hub && (offer.diameter - 8.0).abs() < 1e-6 && offer.sel == at("bbore"), "{offer:?}");
+    let built = built_of(&r);
+    let a = built.iter().find(|b| b.item == 0).unwrap_or_else(|| panic!("{r}"));
+    assert_eq!((a.bore, a.hub), (Some(8.0), Some(16.0)), "{r}");
+    assert!(a.side_a.is_some_and(|v| (v[2].abs() - 1.0).abs() < 1e-9), "{a:?}");
+    // Use: B's bore taken.
+    use_detail(&app, &mut g, offer, &mut inputs);
+    assert_eq!(g.items[1].details, vec![(at("bbore"), false)]);
+    // Edit restores them.
+    d.kind = Kind::Gear(g.clone());
+    let p = apply_commands(&app, &d).unwrap()[0].1.clone();
+    let set = solidcraft_engine::schema::gear::GearSet { group: 7, feature: Some(8), name: "Gears".into(), bodies: Vec::new(), features: Vec::new(), request: p, params: json!({}), sketch: None, sketch_changed: false };
+    let e = for_set(&set);
+    assert_eq!(e.items[0].details, g.items[0].details);
+    assert_eq!(e.items[1].details, g.items[1].details);
+}

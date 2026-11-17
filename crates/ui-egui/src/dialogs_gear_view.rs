@@ -64,7 +64,7 @@ fn needs(kind: ItemKind) -> &'static str {
         ItemKind::Rack => "Needs: the rack's pitch line. Optional: its pinion's circle.",
         ItemKind::Compound => "Needs: a shaft line and two or more circles on it (in parallel sketches).",
         ItemKind::Planetary => "Needs: the sun's and the ring's circles, then one planet's circle.",
-        ItemKind::Bevel => "Needs: two circles on crossing axes, or two axis lines and a circle, or (side view) its two shaft lines, then the apex point where they meet.",
+        ItemKind::Bevel => "Needs: two circles on crossing axes, or two axis lines and a circle, or (side view) the apex point and the two shaft lines from it, in any order.",
         ItemKind::Hypoid => "Needs: the ring gear's circle and the pinion's (offset) axis line.",
         ItemKind::Worm => "Needs: the wheel's pitch circle and the worm's axis line.",
         ItemKind::CrossedHelical => "Needs: two circles on skew axes.",
@@ -240,7 +240,10 @@ fn summary(k: &Gear, i: usize) -> String {
             let r = k.graph.replies().iter().find(|r| (r.item, r.gear) == (i, g))?;
             (r.teeth > 0).then(|| {
                 let name = if n > 1 { format!("{} ", k.gear_name((i, g))) } else { String::new() };
-                format!("{name}z{} m{}", r.teeth, dg::fmt(r.module))
+                let b = k.built.iter().find(|b| (b.item, b.gear) == (i, g));
+                let bore = b.and_then(|b| b.bore).map(|d| format!(" · bore {}", dg::fmt(d))).unwrap_or_default();
+                let hub = b.and_then(|b| b.hub).map(|d| format!(" · hub {}", dg::fmt(d))).unwrap_or_default();
+                format!("{name}z{} m{}{bore}{hub}", r.teeth, dg::fmt(r.module))
             })
         })
         .collect();
@@ -251,7 +254,7 @@ fn summary(k: &Gear, i: usize) -> String {
 fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], input: &mut usize, hover: &mut Option<(usize, Sel)>) {
     let t = Tokens::get();
     let len = dg::len_of(app);
-    let (mut activate, mut remove, mut edit) = (None, None, None);
+    let (mut activate, mut remove, mut edit, mut use_detail) = (None, None, None, None);
     let mut hovered = None;
     let clicked_at = ui.input(|i| if i.pointer.primary_clicked() { i.pointer.interact_pos() } else { None });
     for i in 0..k.items.len() {
@@ -324,6 +327,39 @@ fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput
                         });
                     }
                 }
+                // Its gears' bore and hub circles (optional): picked, suggested by the drawing (Use),
+                // or still open.
+                if (active || !complete) && solidcraft_gear::items::takes_details(it.kind) && it.gear_count(app) > 0 {
+                    let picked = it.detail_things(app);
+                    let n = it.gear_count(app);
+                    for g in 0..n {
+                        for (slot, what) in solidcraft_gear::items::DETAIL_SLOTS {
+                            let hub = slot == "hub";
+                            let name = if n > 1 { format!("{} {what}", k.gear_name((i, g))) } else { what.to_string() };
+                            let mine = picked.iter().find(|d| d.0 == g && d.1 == hub);
+                            let offer = k.details_suggested.iter().find(|d| (d.item, d.gear, d.hub) == (i, g, hub));
+                            ui.horizontal(|ui| {
+                                ui.add_space(t.space_10);
+                                let (mark, ink) = if mine.is_some() { ("✓", t.form_success) } else { ("○", t.form_dim) };
+                                ui.label(egui::RichText::new(mark).size(t.font_label).color(ink).strong());
+                                let label = if mine.is_some() { name.clone() } else { format!("{name} (optional)") };
+                                ui.label(egui::RichText::new(label).size(t.font_label).color(t.form_ink))
+                                    .backing_on_hover_text("A circle drawn on the gear's centre, inside its pitch circle: the smaller is its bore (a hole through it), the larger its hub. Click one in the view.");
+                                if let Some((_, _, th, _)) = mine {
+                                    ui.add(egui::Label::new(egui::RichText::new(crate::dialogs_gear_items::thing_label(app, th, &len)).size(t.font_small).color(t.form_dim)).truncate());
+                                } else if let Some(d) = offer {
+                                    let b = ui_kit::button(ui, format!("Use Ø{}", len(d.diameter)), ui_kit::Button::Normal)
+                                        .backing_on_hover_text("The drawing has this circle on the gear's centre: use it.");
+                                    solidcraft_ui_registry::publish_target(&format!("gear:use:{}:{g}:{slot}", item_id(i)), b.rect);
+                                    button_hit |= b.hovered();
+                                    if b.clicked() {
+                                        use_detail = Some(d.clone());
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
                 // A pick whose geometry is gone: named in red, kept until it is re-picked.
                 for gone in it.missing(app) {
                     message(ui, &Msg { text: format!("Missing: {gone} (deleted or renamed?). Click this card, then its replacement in the view."), error: true });
@@ -362,6 +398,9 @@ fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput
     } else if let Some(i) = activate {
         dg::make_active(k, i, inputs);
         *input = 0;
+    }
+    if let Some(d) = use_detail {
+        dg::use_detail(app, k, &d, inputs);
     }
     if let Some(sk) = edit {
         k.action = Some(dg::Action::EditSketch(sk));

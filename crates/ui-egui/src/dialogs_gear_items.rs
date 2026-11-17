@@ -89,6 +89,19 @@ pub struct SlotRow {
     pub next: bool,
 }
 
+/// A circle's radius (0 for anything else).
+fn radius(t: &Thing) -> f64 {
+    match t {
+        Thing::Circle { radius, .. } => *radius,
+        _ => 0.0,
+    }
+}
+
+/// Whether a `selection` component is a bore or hub circle (slot `bore` / `hub`).
+fn is_detail(c: &Value) -> bool {
+    matches!(c.get("slot").and_then(Value::as_str), Some("bore" | "hub"))
+}
+
 /// A picked thing named for its slot row: its sketch and its size ("Layer 1 · Ø40",
 /// "Shaft · 120 long", "Side view · point"). `len` shows a length in the design's units.
 pub fn thing_label(app: &SolveApp, t: &Thing, len: &dyn Fn(f64) -> String) -> String {
@@ -277,6 +290,10 @@ pub fn gear_json(gear: usize, s: &items::GearSettings) -> Value {
 pub struct GearItem {
     pub kind: ItemKind,
     pub picks: Vec<Sel>,
+    /// Its gears' bore and hub circles (`true`: a hub), picked beside its slots
+    /// ([`items::DETAIL_SLOTS`]): sent as components with slot `bore` / `hub`; the engine reads
+    /// which gear each belongs to from where it is drawn.
+    pub details: Vec<(Sel, bool)>,
     pub gears: Vec<GearSettings>,
     /// Ring gear: rim; worm: starts and a throated wheel; bevel and hypoid: style (an index into
     /// `BEVEL_STYLES`) and spiral angle; rack: back height; planetary: planets and a carrier;
@@ -306,6 +323,7 @@ impl GearItem {
         let mut it = GearItem {
             kind,
             picks: Vec::new(),
+            details: Vec::new(),
             gears: Vec::new(),
             rim: String::new(),
             starts: String::new(),
@@ -345,7 +363,55 @@ impl GearItem {
     /// deleted): each named, so the card can say which is gone. They are kept (never swapped for
     /// something else) until a new pick replaces one or the gear is removed.
     pub fn missing(&self, app: &SolveApp) -> Vec<String> {
-        self.picks.iter().filter(|s| crate::dialogs_gear::thing_of(app, s).is_none()).map(|s| pick_name(app, s)).collect()
+        let details = self.details.iter().map(|(s, _)| s);
+        self.picks.iter().chain(details).filter(|s| crate::dialogs_gear::thing_of(app, s).is_none()).map(|s| pick_name(app, s)).collect()
+    }
+
+    /// Everything picked into it: its slots' picks, then its bore and hub circles.
+    pub fn all_picks(&self) -> Vec<Sel> {
+        self.picks.iter().cloned().chain(self.details.iter().map(|(s, _)| s.clone())).collect()
+    }
+
+    /// Its bore and hub circles as they are now: (gear, hub?, the circle, the pick), each by the
+    /// gear whose pitch circle it sits in ([`items::detail_gear`]); one that no longer reads, or
+    /// sits in no gear now, is left out (see [`GearItem::missing`]).
+    pub fn detail_things(&self, app: &SolveApp) -> Vec<(usize, bool, Thing, Sel)> {
+        let it = self.crate_item(app, "");
+        self.details
+            .iter()
+            .filter_map(|(sel, hub)| {
+                let t = crate::dialogs_gear::thing_of(app, sel)?;
+                Some((items::detail_gear(&it, &t)?, *hub, t, sel.clone()))
+            })
+            .collect()
+    }
+
+    /// `sel` taken as a bore or hub circle when it is one for one of this item's gears (a circle
+    /// concentric with its pitch circle, inside it): the smaller of a gear's two is its bore, the
+    /// larger its hub. `None`: not such a circle (it goes to the slots); `Some(Err)`: that gear
+    /// has both already.
+    pub fn take_detail(&mut self, app: &SolveApp, sel: &Sel) -> Option<Result<(), String>> {
+        if !items::takes_details(self.kind) || self.details.iter().any(|(s, _)| s == sel) {
+            return None;
+        }
+        let t = crate::dialogs_gear::thing_of(app, sel)?;
+        let g = items::detail_gear(&self.crate_item(app, ""), &t)?;
+        let mut mine: Vec<(Sel, f64)> = self
+            .detail_things(app)
+            .into_iter()
+            .filter(|d| d.0 == g)
+            .map(|(_, _, t, s)| (s, radius(&t)))
+            .collect();
+        if mine.len() >= 2 {
+            return Some(Err("this gear has a bore and a hub circle already: click one of them to take it out first".into()));
+        }
+        mine.push((sel.clone(), radius(&t)));
+        mine.sort_by(|a, b| a.1.total_cmp(&b.1));
+        self.details.retain(|(s, _)| !mine.iter().any(|m| m.0 == *s));
+        for (k, (s, _)) in mine.into_iter().enumerate() {
+            self.details.push((s, k == 1));
+        }
+        Some(Ok(()))
     }
 
     /// A new pick taken in: it replaces the first missing pick, if any (a re-pick).
@@ -428,7 +494,7 @@ impl GearItem {
     /// not geometry an item takes, or the gear crate's check on the slot it would fill
     /// ([`items::validate_slot`]: what is wrong and what to do).
     pub fn refusal(&self, app: &SolveApp, sel: &Sel, others: &[(usize, &GearItem)]) -> Option<String> {
-        if let Some((i, _)) = others.iter().find(|(_, it)| it.picks.contains(sel)) {
+        if let Some((i, _)) = others.iter().find(|(_, it)| it.all_picks().contains(sel)) {
             return Some(format!("already used by Gear {}: click its card to change it", item_id(*i)));
         }
         let Some(thing) = crate::dialogs_gear::thing_of(app, sel) else {
@@ -488,6 +554,15 @@ pub fn items_request(app: &SolveApp, items: &[GearItem], graph: &Graph) -> Resul
             c["slot"] = json!(slot.name);
             components.push(c);
         }
+        // Its gears' bore and hub circles (the engine finds the gear each sits in).
+        for (sel, hub) in &it.details {
+            if crate::dialogs_gear::thing_of(app, sel).is_none() {
+                return Err(format!("{who}: its {} is missing (deleted or renamed in its sketch): click its replacement in the view", pick_name(app, sel)));
+            }
+            let mut c = crate::dialogs_gear::locate(app, sel).ok_or_else(|| format!("{who}: a bore or hub pick that can't be read: click the gear's card and pick it again"))?;
+            c["slot"] = json!(if *hub { "hub" } else { "bore" });
+            components.push(c);
+        }
         let mut gears = Vec::new();
         for g in 0..items::gear_count(it.kind, &things) {
             let s = it.typed(g).read(app, &|f: &str| format!("{who} gear {}: {f}", g + 1))?;
@@ -544,7 +619,8 @@ pub fn items_request(app: &SolveApp, items: &[GearItem], graph: &Graph) -> Resul
     p.insert("items".into(), Value::Array(list));
     p.insert("links".into(), Value::Array(links));
     p.insert("module_blocks".into(), Value::Array(blocks));
-    p.insert("ui".into(), json!({"gear_items": picks}));
+    let details: Vec<Value> = items.iter().map(|it| serde_json::to_value(&it.details).unwrap_or(Value::Null)).collect();
+    p.insert("ui".into(), json!({"gear_items": picks, "gear_details": details}));
     Ok(p)
 }
 
@@ -559,8 +635,19 @@ pub fn items_of(r: &Map<String, Value>, ui: Option<&Value>, graph: &mut Graph) -
         let mut it = GearItem::new(kind);
         it.picks = match picks_ui.and_then(|p| p.get(i)).and_then(|p| serde_json::from_value::<Vec<Sel>>(p.clone()).ok()) {
             Some(p) => p,
-            None => v.get("components").and_then(Value::as_array).into_iter().flatten().filter_map(sel_of).collect(),
+            None => v.get("components").and_then(Value::as_array).into_iter().flatten().filter(|c| !is_detail(c)).filter_map(sel_of).collect(),
         };
+        // Its bore and hub circles: as the dialog kept them, else the components so named.
+        let details_ui = ui.and_then(|u| u.get("gear_details")).and_then(|d| d.get(i)).and_then(|d| serde_json::from_value::<Vec<(Sel, bool)>>(d.clone()).ok());
+        it.details = details_ui.unwrap_or_else(|| {
+            v.get("components")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|c| is_detail(c))
+                .filter_map(|c| Some((sel_of(c)?, c.get("slot").and_then(Value::as_str) == Some("hub"))))
+                .collect()
+        });
         it.gears = v.get("gears").and_then(Value::as_array).into_iter().flatten().map(GearSettings::from_json).collect();
         let s = |k: &str, kind: ValueKind| shown(v.get(k).and_then(Value::as_f64), kind);
         it.rim = s("rim", ValueKind::Length);

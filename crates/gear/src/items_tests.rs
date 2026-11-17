@@ -572,3 +572,65 @@ fn mapped_rack_and_planetary_note_their_stage() {
     assert_eq!(m.meshes.len(), 2);
     assert!(!m.notes.is_empty());
 }
+
+/// Three gears on one axis (in three planes) are one shaft: two shaft links are suggested (a
+/// chain), not one between every pair; a fourth gear elsewhere on the axis joins with one more.
+#[test]
+fn gears_on_one_axis_suggest_a_chain_of_shaft_links() {
+    let items = vec![
+        item("A", ItemKind::Spur, vec![circ([0.0; 3], Z, 10.0)]),
+        item("B", ItemKind::Spur, vec![circ([0.0, 0.0, 15.0], Z, 20.0)]),
+        item("C", ItemKind::Spur, vec![circ([0.0, 0.0, 30.0], Z, 12.0)]),
+    ];
+    let s = suggest_links(&items);
+    let shafts: Vec<&Suggestion> = s.iter().filter(|x| x.kind == LinkKind::Shaft).collect();
+    assert_eq!(shafts.len(), 2, "{s:?}");
+    // The two links join all three.
+    let joined = |i: usize| shafts.iter().any(|x| x.a.item == i || x.b.item == i);
+    assert!(joined(0) && joined(1) && joined(2), "{s:?}");
+    let mut four = items.clone();
+    four.push(item("D", ItemKind::Spur, vec![circ([0.0, 0.0, 45.0], Z, 8.0)]));
+    assert_eq!(suggest_links(&four).iter().filter(|x| x.kind == LinkKind::Shaft).count(), 3);
+}
+
+/// A bevel pair drawn in a side view takes its picks in any order: the apex first, a shaft line
+/// first, or the contact line between them; a line off the apex is still refused.
+#[test]
+fn a_bevel_side_view_in_any_order() {
+    let apex = Thing::point([0.0; 3]);
+    let (s1, s2) = (line([0.0; 3], [60.0, 0.0, 0.0]), line([0.0; 3], [0.0, 0.0, 40.0]));
+    let contact = line([0.0; 3], [30.0, 0.0, 20.0]);
+    for order in [
+        vec![apex.clone(), s1.clone(), s2.clone()],
+        vec![s1.clone(), apex.clone(), s2.clone()],
+        vec![s1.clone(), s2.clone(), apex.clone()],
+        vec![apex.clone(), s1.clone(), s2.clone(), contact.clone()],
+    ] {
+        let slots = picked(ItemKind::Bevel, &order);
+        let names: Vec<&str> = slots.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"apex") && names.contains(&"axis") && names.contains(&"axis2"), "{names:?}");
+        assert_eq!(next_slot(ItemKind::Bevel, &order), None, "{names:?}");
+    }
+    // A shaft line that misses the apex, picked right after it.
+    refused(ItemKind::Bevel, &[apex], line([5.0, 5.0, 0.0], [60.0, 5.0, 0.0]), "apex");
+}
+
+/// A bore or hub circle is one drawn concentric with a gear's pitch circle and inside it: which
+/// gear of a compound it belongs to; one off-centre, too big or on a ring is no detail.
+#[test]
+fn bore_and_hub_circles_belong_to_the_gear_they_sit_in() {
+    let spur = GearItem::new("A", ItemKind::Spur).with(vec![circ([0.0; 3], Z, 20.0)]);
+    assert_eq!(detail_gear(&spur, &circ([0.0; 3], Z, 4.0)), Some(0));
+    assert_eq!(detail_gear(&spur, &circ([1.0, 0.0, 0.0], Z, 4.0)), None, "off centre");
+    assert_eq!(detail_gear(&spur, &circ([0.0; 3], Z, 25.0)), None, "outside the pitch circle");
+    assert_eq!(detail_gear(&spur, &circ([0.0, 0.0, 3.0], Z, 4.0)), None, "another plane");
+    let compound = GearItem::new("B", ItemKind::Compound).with(vec![
+        line([0.0, 0.0, -5.0], [0.0, 0.0, 25.0]),
+        circ([0.0; 3], Z, 20.0),
+        circ([0.0, 0.0, 12.0], Z, 10.0),
+    ]);
+    assert_eq!(detail_gear(&compound, &circ([0.0, 0.0, 12.0], Z, 3.0)), Some(1));
+    let ring = GearItem::new("C", ItemKind::Internal).with(vec![circ([0.0; 3], Z, 40.0)]);
+    assert_eq!(detail_gear(&ring, &circ([0.0; 3], Z, 4.0)), None);
+    assert!(takes_details(ItemKind::Herringbone) && !takes_details(ItemKind::Worm));
+}

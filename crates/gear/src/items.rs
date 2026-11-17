@@ -908,9 +908,12 @@ fn check_geometry(kind: ItemKind, things: &[Thing]) -> Result<(), String> {
             }
         }
         ItemKind::Planetary => planetary_geometry(&cs)?,
-        ItemKind::Bevel if cs.is_empty() && !ps.is_empty() => {
+        // A side view, in any order: checked whole once both shaft lines are there, else what is
+        // there so far (an apex picked first is fine).
+        ItemKind::Bevel if cs.is_empty() && !ps.is_empty() && ls.len() >= 2 => {
             bevel_side(things)?;
         }
+        ItemKind::Bevel if cs.is_empty() && !ps.is_empty() => bevel_side_so_far(things)?,
         ItemKind::Bevel => bevel_geometry(&cs, &ls)?,
         ItemKind::Hypoid => {
             if let (Some(c), Some(l)) = (cs.first(), ls.first()) {
@@ -1315,6 +1318,21 @@ struct SideView {
     contact: Option<(V, f64)>,
 }
 
+/// A side view picked so far (the apex and fewer than two lines): each line runs through the apex.
+fn bevel_side_so_far(things: &[Thing]) -> Result<(), String> {
+    let Some(apex) = points(things).first().copied() else { return Ok(()) };
+    for k in 0..2 {
+        let Some((a, b)) = line_ends(things, k) else { break };
+        let (near, far) = if len(sub(a, apex)) <= len(sub(b, apex)) { (a, b) } else { (b, a) };
+        let Some(u) = unit(sub(far, near)) else { return Err("a shaft line has no length".into()) };
+        let off = dist_to_line(apex, near, u);
+        if off > tol(len(sub(far, apex)).max(1.0)) {
+            return Err(format!("this line doesn't run through the apex point ({} mm off): draw the shaft lines from the apex", num(off)));
+        }
+    }
+    Ok(())
+}
+
 fn bevel_side(things: &[Thing]) -> Result<SideView, String> {
     let apex = *points(things).first().ok_or("pick the apex point, where the shafts meet")?;
     let ends: Vec<(V, V)> = (0..3).filter_map(|k| line_ends(things, k)).collect();
@@ -1406,12 +1424,25 @@ fn bevel_mate(c: &Circ, other: &Ln, ends: (V, V)) -> Option<GearGeom> {
 /// one axis → Shaft. Links already in the graph are not removed here: see [`unlinked`].
 pub fn suggest_links(items: &[GearItem]) -> Vec<Suggestion> {
     let geoms: Vec<Vec<GearGeom>> = items.iter().map(gear_geoms).collect();
+    // Gears already joined on one shaft by the suggestions so far (a union–find by gear): a
+    // third gear on a shaft is suggested to one of the others, not to each of them, so three
+    // gears on one axis get two shaft links, not three.
+    let at: Vec<(usize, usize)> = geoms.iter().enumerate().flat_map(|(i, g)| (0..g.len()).map(move |k| (i, k))).collect();
+    let mut root: Vec<usize> = (0..at.len()).collect();
+    let index = |i: usize, g: usize| at.iter().position(|p| *p == (i, g)).unwrap_or(0);
     let mut out = Vec::new();
     for (i, gi) in geoms.iter().enumerate() {
         for (j, gj) in geoms.iter().enumerate().skip(i + 1) {
             for (ga, a) in gi.iter().enumerate() {
                 for (gb, b) in gj.iter().enumerate() {
                     if let Some((kind, why)) = suggest(a, b) {
+                        if kind == LinkKind::Shaft {
+                            let (x, y) = (find(&mut root, index(i, ga)), find(&mut root, index(j, gb)));
+                            if x == y {
+                                continue;
+                            }
+                            root[y] = x;
+                        }
                         out.push(Suggestion { a: GearRef::new(i, ga), b: GearRef::new(j, gb), kind, why });
                     }
                 }
@@ -1419,6 +1450,37 @@ pub fn suggest_links(items: &[GearItem]) -> Vec<Suggestion> {
         }
     }
     out
+}
+
+/// A gear's details picked as circles (`gear.create` component slots `bore` and `hub`, beside
+/// its item's slots): the slot name and what it is, for a checklist.
+pub const DETAIL_SLOTS: [(&str, &str); 2] = [("bore", "bore circle"), ("hub", "hub circle")];
+
+/// Whether an item's gears take a bore and a hub circle: the parallel-axis gears and a
+/// compound's.
+pub fn takes_details(kind: ItemKind) -> bool {
+    matches!(kind, ItemKind::Spur | ItemKind::Helical | ItemKind::Herringbone | ItemKind::Compound)
+}
+
+/// Which of `item`'s gears circle `t` can be a bore or hub circle for: drawn concentric with
+/// that gear's pitch circle (same centre and plane) and inside it. `None`: none of them.
+pub fn detail_gear(item: &GearItem, t: &Thing) -> Option<usize> {
+    let Thing::Circle { centre, normal, radius, .. } = t else { return None };
+    if !takes_details(item.kind) {
+        return None;
+    }
+    gear_geoms(item).iter().position(|g| {
+        g.radius.is_some_and(|r| !g.ring && *radius < r - tol(r) && len(sub(g.centre, *centre)) <= tol(r) && parallel(g.axis, *normal))
+    })
+}
+
+/// The set gear `x` is in, of the shaft sets in `root` (a union–find).
+fn find(root: &mut [usize], mut x: usize) -> usize {
+    while root[x] != x {
+        root[x] = root[root[x]];
+        x = root[x];
+    }
+    x
 }
 
 /// The suggestions not already in `links`.

@@ -20,6 +20,8 @@ const tangent = (a, b) => C('sketch.constraint.tangent', { a, b });
 const concentric = (a, b) => C('sketch.constraint.concentric', { a, b });
 const hv = (l, mode) => C('sketch.constraint.horizontal_vertical', { line: l, mode });
 const pick = (sketch, curve, slot) => ({ sketch, curve, slot });
+// A bore or hub circle: drawn on a pitch circle's centre (Concentric) with its diameter (0 DOF).
+const detail = (id, of, at, d) => [circle(id, at, d / 2), concentric(id, of), dia(id, d)];
 const gears = (name, items, links, extra = {}) => C('gear.create', { name, items, links, assembly: true, ...extra });
 const mesh = (a, ag, b, bg) => ({ a: { item: a, gear: ag }, b: { item: b, gear: bg }, kind: 'mesh' });
 const ratio = (a, ag, b, bg) => C('gear.ratio', { a: { item: a, gear: ag }, b: { item: b, gear: bg } });
@@ -33,10 +35,11 @@ const touchingPair = (a, da, b, db) => [
 const ex = {};
 
 ex['01-spur-pair'] = [
-  ...sketch('Pitch circles', XY(), touchingPair('a', 40, 'b', 60)),
+  // Bores Ø8 on both gears and a Ø16 hub on A, drawn as circles on their centres.
+  ...sketch('Pitch circles', XY(), [...touchingPair('a', 40, 'b', 60), ...detail('abore', 'a', [0, 0], 8), ...detail('ahub', 'a', [0, 0], 16), ...detail('bbore', 'b', [50, 0], 8)]),
   gears('Spur pair', [
-    { id: 'A', type: 'spur', components: [pick('Pitch circles', 'a', 'pitch')], module_block: 'M' },
-    { id: 'B', type: 'spur', components: [pick('Pitch circles', 'b', 'pitch')], module_block: 'M' },
+    { id: 'A', type: 'spur', components: [pick('Pitch circles', 'a', 'pitch'), pick('Pitch circles', 'abore', 'bore'), pick('Pitch circles', 'ahub', 'hub')], module_block: 'M' },
+    { id: 'B', type: 'spur', components: [pick('Pitch circles', 'b', 'pitch'), pick('Pitch circles', 'bbore', 'bore')], module_block: 'M' },
   ], [mesh('A', 0, 'B', 0)], { module_blocks: [{ id: 'M', module: 2 }], drive: { item: 'A', gear: 0, rpm: 1000, torque: 2 } }),
   ratio('A', 0, 'B', 0),
 ];
@@ -54,18 +57,19 @@ ex['02-helical-pair-face-sides'] = [
 
 // Compound gear: big gear in layer 1, small gear in layer 2 (20 mm below), joined by a shaft line.
 ex['03-compound-train'] = [
-  ...sketch('Layer 1', XY(0), touchingPair('a', 30, 'c1', 60)),
+  // The compound gear's two gears each have a Ø10 bore circle on their centres.
+  ...sketch('Layer 1', XY(0), [...touchingPair('a', 30, 'c1', 60), ...detail('c1bore', 'c1', [45, 0], 10)]),
   ...sketch('Layer 2', XY(-20), [
     circle('c2', [45, 0], 15), circle('d', [85, 0], 25),
     hdim('origin', 'c2.center', 45), vdim('origin', 'c2.center', 0), dia('c2', 30), dia('d', 50),
-    tangent('c2', 'd'), vdim('origin', 'd.center', 0),
+    tangent('c2', 'd'), vdim('origin', 'd.center', 0), ...detail('c2bore', 'c2', [45, 0], 10),
   ]),
   ...sketch('Compound shaft', XZ, [
     line('s', [45, -30], [45, 10]), hv('s', 'vertical'), hdim('origin', 's.start', 45), vdim('origin', 's.end', 10), len('s', 40),
   ]),
   gears('Compound train', [
     { id: 'A', type: 'spur', components: [pick('Layer 1', 'a', 'pitch')], module_block: 'M' },
-    { id: 'C', type: 'compound', components: [pick('Compound shaft', 's', 'axis'), pick('Layer 1', 'c1', 'pitch'), pick('Layer 2', 'c2', 'pitch2')], module_block: 'M' },
+    { id: 'C', type: 'compound', components: [pick('Compound shaft', 's', 'axis'), pick('Layer 1', 'c1', 'pitch'), pick('Layer 2', 'c2', 'pitch2'), pick('Layer 1', 'c1bore', 'bore'), pick('Layer 2', 'c2bore', 'bore')], module_block: 'M' },
     { id: 'D', type: 'spur', components: [pick('Layer 2', 'd', 'pitch')], module_block: 'M' },
   ], [mesh('A', 0, 'C', 0), mesh('C', 1, 'D', 0)], { module_blocks: [{ id: 'M', module: 1.5 }], drive: { item: 'A', gear: 0, rpm: 1000, torque: 1 } }),
   ratio('A', 0, 'D', 0),

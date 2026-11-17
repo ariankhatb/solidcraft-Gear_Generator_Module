@@ -20,6 +20,8 @@ const tangent = (a, b) => C('sketch.constraint.tangent', { a, b });
 const concentric = (a, b) => C('sketch.constraint.concentric', { a, b });
 const hv = (l, mode) => C('sketch.constraint.horizontal_vertical', { line: l, mode });
 const pick = (sketch, curve, slot) => ({ sketch, curve, slot });
+// A bore circle: drawn on a pitch circle's centre (Concentric) with its diameter (0 DOF).
+const bore = (id, of, x, d) => [circle(id, [x, 0], d / 2), concentric(id, of), dia(id, d)];
 const link = (kind, a, ag, b, bg) => ({ a: { item: a, gear: ag }, b: { item: b, gear: bg }, kind });
 const ratio = (a, ag, b, bg) => C('gear.ratio', { a: { item: a, gear: ag }, b: { item: b, gear: bg } });
 // A circle whose centre sits on the X axis at x (fully placed).
@@ -38,7 +40,7 @@ ex['08-herringbone-pair'] = [
   ratio('A', 0, 'B', 0),
 ];
 
-// The big drivetrain. Shafts (world X): 0, 45, 87, 123, 153. Layers (world Z) step 30 mm.
+// The big drivetrain (each spur, herringbone and helical gear with a Ø8 bore circle on its centre). Shafts (world X): 0, 45, 87, 123, 153. Layers (world Z) step 30 mm.
 //  L+60  worm W (wheel on shaft 0) driven by its worm along a line at y = 38
 //  L+30  rack pinion G (shaft 45) on a rack line below it
 //  L 0   spur A (shaft 0) -> spur B (shaft 45)
@@ -50,21 +52,21 @@ const S = n => `L${n}`;
 const big = [
   ...sketch(S('+60 worm'), XY(60), [...onX('w', 0, 60), line('worm', [-40, 38], [40, 38]), hv('worm', 'horizontal'), len('worm', 80), hdim('worm.start', 'origin', 40), vdim('origin', 'worm.start', 38)]),
   ...sketch(S('+30 rack'), XY(30), [...onX('g', 45, 30), line('rack', [5, -15], [85, -15]), hv('rack', 'horizontal'), len('rack', 80), tangent('rack', 'g'), hdim('origin', 'rack.start', 5)]),
-  ...sketch(S('0 spur'), XY(0), [...onX('a', 0, 30), circle('b', [45, 0], 30), dia('b', 60), tangent('a', 'b'), vdim('origin', 'b.center', 0)]),
-  ...sketch(S('-30 herringbone'), XY(-30), [...onX('c', 45, 30), circle('d', [87, 0], 27), dia('d', 54), tangent('c', 'd'), vdim('origin', 'd.center', 0)]),
-  ...sketch(S('-60 helical'), XY(-60), [...onX('e', 87, 24), circle('f', [123, 0], 24), dia('f', 48), tangent('e', 'f'), vdim('origin', 'f.center', 0)]),
+  ...sketch(S('0 spur'), XY(0), [...onX('a', 0, 30), circle('b', [45, 0], 30), dia('b', 60), tangent('a', 'b'), vdim('origin', 'b.center', 0), ...bore('abore', 'a', 0, 8), ...bore('bbore', 'b', 45, 8)]),
+  ...sketch(S('-30 herringbone'), XY(-30), [...onX('c', 45, 30), circle('d', [87, 0], 27), dia('d', 54), tangent('c', 'd'), vdim('origin', 'd.center', 0), ...bore('cbore', 'c', 45, 8), ...bore('dbore', 'd', 87, 8)]),
+  ...sketch(S('-60 helical'), XY(-60), [...onX('e', 87, 24), circle('f', [123, 0], 24), dia('f', 48), tangent('e', 'f'), vdim('origin', 'f.center', 0), ...bore('ebore', 'e', 87, 8), ...bore('fbore', 'f', 123, 8)]),
   ...sketch(S('+90 planetary'), XY(90), [...onX('sun', 0, 27), circle('planet', [27, 0], 13.5), circle('pring', [0, 0], 40.5), dia('planet', 27), dia('pring', 81), concentric('pring', 'sun'), tangent('planet', 'sun'), vdim('origin', 'planet.center', 0)]),
   ...sketch(S('-90 internal'), XY(-90), [...onX('rp', 123, 40), circle('ring', [153, 0], 50), dia('ring', 100), tangent('rp', 'ring'), vdim('origin', 'ring.center', 0)]),
   C('gear.create', { name: 'Everything drivetrain', assembly: true,
     items: [
       { id: 'W', type: 'worm', starts: 2, components: [pick(S('+60 worm'), 'w', 'pitch'), pick(S('+60 worm'), 'worm', 'axis')] },
       { id: 'G', type: 'rack', components: [pick(S('+30 rack'), 'rack', 'axis'), pick(S('+30 rack'), 'g', 'pitch')], module_block: 'M' },
-      { id: 'A', type: 'spur', components: [pick(S('0 spur'), 'a', 'pitch')], module_block: 'M' },
-      { id: 'B', type: 'spur', components: [pick(S('0 spur'), 'b', 'pitch')], module_block: 'M' },
-      { id: 'C', type: 'herringbone', components: [pick(S('-30 herringbone'), 'c', 'pitch')], module_block: 'M', gears: [{ gear: 0, helix_angle: 25, hand: 'right', herringbone: true }] },
-      { id: 'D', type: 'herringbone', components: [pick(S('-30 herringbone'), 'd', 'pitch')], module_block: 'M', gears: [{ gear: 0, helix_angle: 25, hand: 'left', herringbone: true }] },
-      { id: 'E', type: 'helical', components: [pick(S('-60 helical'), 'e', 'pitch')], module_block: 'M', gears: [{ gear: 0, helix_angle: 20, hand: 'right' }] },
-      { id: 'F', type: 'helical', components: [pick(S('-60 helical'), 'f', 'pitch')], module_block: 'M', gears: [{ gear: 0, helix_angle: 20, hand: 'left' }] },
+      { id: 'A', type: 'spur', components: [pick(S('0 spur'), 'a', 'pitch'), pick(S('0 spur'), 'abore', 'bore')], module_block: 'M' },
+      { id: 'B', type: 'spur', components: [pick(S('0 spur'), 'b', 'pitch'), pick(S('0 spur'), 'bbore', 'bore')], module_block: 'M' },
+      { id: 'C', type: 'herringbone', components: [pick(S('-30 herringbone'), 'c', 'pitch'), pick(S('-30 herringbone'), 'cbore', 'bore')], module_block: 'M', gears: [{ gear: 0, helix_angle: 25, hand: 'right', herringbone: true }] },
+      { id: 'D', type: 'herringbone', components: [pick(S('-30 herringbone'), 'd', 'pitch'), pick(S('-30 herringbone'), 'dbore', 'bore')], module_block: 'M', gears: [{ gear: 0, helix_angle: 25, hand: 'left', herringbone: true }] },
+      { id: 'E', type: 'helical', components: [pick(S('-60 helical'), 'e', 'pitch'), pick(S('-60 helical'), 'ebore', 'bore')], module_block: 'M', gears: [{ gear: 0, helix_angle: 20, hand: 'right' }] },
+      { id: 'F', type: 'helical', components: [pick(S('-60 helical'), 'f', 'pitch'), pick(S('-60 helical'), 'fbore', 'bore')], module_block: 'M', gears: [{ gear: 0, helix_angle: 20, hand: 'left' }] },
       { id: 'P', type: 'planetary', planets: 3, carrier: true, components: [pick(S('+90 planetary'), 'sun', 'sun'), pick(S('+90 planetary'), 'pring', 'ring'), pick(S('+90 planetary'), 'planet', 'planet')], module_block: 'M' },
       { id: 'R', type: 'internal', rim: 6, components: [pick(S('-90 internal'), 'ring', 'pitch'), pick(S('-90 internal'), 'rp', 'pitch2')], module_block: 'M2' },
     ],

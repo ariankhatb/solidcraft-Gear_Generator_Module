@@ -92,6 +92,90 @@
    }
   },
   {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     0
+    ],
+    "radius": 4,
+    "id": "abore"
+   }
+  },
+  {
+   "command": "sketch.constraint.concentric",
+   "params": {
+    "a": "abore",
+    "b": "a"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "abore"
+    ],
+    "type": "diameter",
+    "value": "8 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     0
+    ],
+    "radius": 8,
+    "id": "ahub"
+   }
+  },
+  {
+   "command": "sketch.constraint.concentric",
+   "params": {
+    "a": "ahub",
+    "b": "a"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "ahub"
+    ],
+    "type": "diameter",
+    "value": "16 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     50,
+     0
+    ],
+    "radius": 4,
+    "id": "bbore"
+   }
+  },
+  {
+   "command": "sketch.constraint.concentric",
+   "params": {
+    "a": "bbore",
+    "b": "b"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "bbore"
+    ],
+    "type": "diameter",
+    "value": "8 mm"
+   }
+  },
+  {
    "command": "sketch.finish",
    "params": {}
   }

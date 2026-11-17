@@ -972,6 +972,9 @@ pub struct GearFaceParams {
 pub struct GearHubParams {
     #[serde(default)]
     pub diameter: Option<f64>,
+    /// The Ø worked out when none is given or drawn: 1.6 × the bore, or half the root Ø.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto: Option<bool>,
     #[serde(default)]
     pub length_a: Option<f64>,
     #[serde(default)]

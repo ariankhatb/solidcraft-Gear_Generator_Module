@@ -339,6 +339,9 @@ pub struct Hub {
     pub diameter: Option<f64>,
     pub length_a: f64,
     pub length_b: f64,
+    /// Its Ø worked out when none is given or drawn (the dialog's Hub Ø left on auto): 1.6 × the
+    /// bore, or half the root Ø. Off, a hub with no Ø only gives a drawn hub circle its lengths.
+    pub auto: bool,
 }
 
 /// One gear's own settings (GEAR_UI_SPEC §3, §6); `None`: Auto.

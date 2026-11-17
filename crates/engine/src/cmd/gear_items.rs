@@ -266,7 +266,7 @@ fn settings_of(cmd: &str, what: &str, it: &GearItemParams, g: &GearItemGear) -> 
                     Some(_) => Err(bad(cmd, format!("`{what}.hub.length_{side}` must be 0 or more (mm)"))),
                 }
             };
-            Some(gi::Hub { diameter: positive(cmd, &format!("{what}.hub.diameter"), h.diameter)?, length_a: len("a", h.length_a)?, length_b: len("b", h.length_b)? })
+            Some(gi::Hub { diameter: positive(cmd, &format!("{what}.hub.diameter"), h.diameter)?, length_a: len("a", h.length_a)?, length_b: len("b", h.length_b)?, auto: h.auto == Some(true) })
         }
     };
     let style = match bevel_style(cmd, what, g.bevel_style.as_deref().or(it.bevel_style.as_deref()))? {
@@ -370,7 +370,7 @@ fn read_items(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemParams])
                     if !matches!(thing, gi::Thing::Circle { .. }) {
                         return Err(bad(cmd, who.said("a bore or hub is a circle drawn concentric with the gear's pitch circle")));
                     }
-                    details.push(DetailPick { item: i, hub, thing, said: format!("item {}, {}", ids[i], who.slot) });
+                    details.push(DetailPick { item: i, hub, thing, said: format!("Gear {}, {}", ids[i], slot_label(&who.slot)) });
                 }
                 None => item.things.push(thing),
             }
@@ -632,7 +632,7 @@ fn gear_details(cmd: &str, items: &[gi::GearItem], details: &[DetailPick]) -> Re
                 _ => None,
             };
             let (hub, len_a, len_b) = st.hub.map_or((None, 0.0, 0.0), |h| (h.diameter, h.length_a, h.length_b));
-            let hub_auto = st.hub.is_some_and(|h| h.diameter.is_none());
+            let hub_auto = st.hub.is_some_and(|h| h.auto && h.diameter.is_none());
             if bore.is_some() || hub.is_some() || hub_auto {
                 out.push(Wanted { gear: GearRef::new(i, g), bore, hub, hub_auto, len_a, len_b });
             }

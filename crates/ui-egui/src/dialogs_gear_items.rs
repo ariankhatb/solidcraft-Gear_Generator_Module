@@ -227,7 +227,8 @@ impl GearSettings {
             _ => Bore::Auto,
         };
         let hub = if self.hub {
-            Some(Hub { diameter: len(&self.hub_d, "hub Ø")?, length_a: len(&self.hub_a, "hub length A")?.unwrap_or(0.0), length_b: len(&self.hub_b, "hub length B")?.unwrap_or(0.0) })
+            let diameter = len(&self.hub_d, "hub Ø")?;
+            Some(Hub { diameter, length_a: len(&self.hub_a, "hub length A")?.unwrap_or(0.0), length_b: len(&self.hub_b, "hub length B")?.unwrap_or(0.0), auto: diameter.is_none() })
         } else {
             None
         };
@@ -323,6 +324,9 @@ pub fn gear_json(gear: usize, s: &items::GearSettings) -> Value {
     };
     if let Some(h) = s.hub {
         e["hub"] = json!({"diameter": h.diameter, "length_a": h.length_a, "length_b": h.length_b});
+        if h.auto {
+            e["hub"]["auto"] = json!(true);
+        }
     }
     e
 }

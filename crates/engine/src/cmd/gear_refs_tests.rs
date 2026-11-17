@@ -358,7 +358,7 @@ fn spur_a_deleted_pick_fails_by_name_and_a_redrawn_one_recovers() {
     run(&mut f.s, "sketch.delete", json!({"entities": ["b"]}));
     run(&mut f.s, "sketch.finish", json!({}));
     let e = feature_error(&f.s, gears).unwrap_or_else(|| panic!("a set missing gear B's circle must fail: {:?}", ids(&f.s)));
-    for want in ["B", "pitch", "Pitch circles", "`b`"] {
+    for want in ["Gear B", "pitch circle", "Pitch circles", "curve b"] {
         assert!(e.contains(want), "the error names {want}: {e}");
     }
     // The record keeps its components and joints (nothing was rebuilt from another pick).

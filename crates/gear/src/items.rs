@@ -593,6 +593,15 @@ const PLANETARY: &[Slot] = &[
 const BEVEL_CIRCLES: &[Slot] = &[slot(C, "pitch", "pitch circle 1", true, false), slot(C, "pitch2", "pitch circle 2", true, false)];
 const BEVEL_LINES: &[Slot] =
     &[slot(L, "axis", "axis line 1", true, false), slot(L, "axis2", "axis line 2", true, false), slot(C, "pitch", "pitch circle", true, false)];
+/// A bevel pair from one side view: the apex where the shafts meet, the two shaft lines from it,
+/// and optionally the contact line between them (its angle sets the ratio, its length the cone
+/// distance; without it the gears' teeth and module do).
+const BEVEL_SIDE: &[Slot] = &[
+    slot(P, "apex", "apex point (where the shafts meet)", true, false),
+    slot(L, "axis", "shaft line 1", true, false),
+    slot(L, "axis2", "shaft line 2", true, false),
+    slot(L, "contact", "contact line", false, false),
+];
 const HYPOID: &[Slot] = &[slot(C, "pitch", "ring's pitch circle", true, false), slot(L, "axis2", "pinion's axis line", true, false)];
 const WORM: &[Slot] = &[slot(C, "pitch", "wheel's pitch circle", true, false), slot(L, "axis2", "worm's axis line", true, false)];
 const CROSSED: &[Slot] = &[slot(C, "pitch", "pitch circle 1", true, false), slot(C, "pitch2", "pitch circle 2", true, false)];
@@ -607,7 +616,7 @@ pub fn slots(kind: ItemKind) -> &'static [&'static [Slot]] {
         ItemKind::Rack => &[RACK],
         ItemKind::Compound => &[COMPOUND],
         ItemKind::Planetary => &[PLANETARY],
-        ItemKind::Bevel => &[BEVEL_CIRCLES, BEVEL_LINES],
+        ItemKind::Bevel => &[BEVEL_CIRCLES, BEVEL_LINES, BEVEL_SIDE],
         ItemKind::Hypoid => &[HYPOID],
         ItemKind::Worm => &[WORM],
         ItemKind::CrossedHelical => &[CROSSED],
@@ -684,7 +693,7 @@ fn no_room(kind: ItemKind, things: &[Thing]) -> String {
     let layouts = slots(kind);
     let fitting = layouts.iter().enumerate().find_map(|(i, l)| fill(i, l, before).map(|f| (l, f)));
     let alt =
-        if layouts.len() > 1 { " (or remove a pick to use the other layout: two pitch circles, or two axis lines and one pitch circle)" } else { "" };
+        if layouts.len() > 1 { " (or remove a pick to use another layout: two pitch circles; two axis lines and one pitch circle; or a side view: the apex point, two shaft lines and an optional contact line)" } else { "" };
     if let Some((list, filled)) = fitting {
         let taken: Vec<usize> = filled.iter().map(|s| s.slot).collect();
         if let Some(want) = list.iter().enumerate().find(|(i, s)| s.required && !taken.contains(i)) {
@@ -754,7 +763,14 @@ pub fn validate_item(item: &GearItem) -> Result<(), String> {
     if let Some(want) = next_slot(item.kind, &item.things) {
         return Err(format!("{} still needs a {want}: click one in the view", item.who()));
     }
-    check_geometry(item.kind, &item.things).map_err(|e| format!("{}: {e}", item.who()))
+    check_geometry(item.kind, &item.things).map_err(|e| format!("{}: {e}", item.who()))?;
+    if item.kind == ItemKind::Bevel && circles(&item.things).is_empty() && gear_geoms(item).len() < 2 {
+        return Err(format!(
+            "{}: a side view without a contact line takes its sizes from the gears: give both gears their teeth (Size by Teeth) and a module, or draw the contact line from the apex",
+            item.who()
+        ));
+    }
+    Ok(())
 }
 
 struct Circ {
@@ -892,6 +908,9 @@ fn check_geometry(kind: ItemKind, things: &[Thing]) -> Result<(), String> {
             }
         }
         ItemKind::Planetary => planetary_geometry(&cs)?,
+        ItemKind::Bevel if cs.is_empty() && !ps.is_empty() => {
+            bevel_side(things)?;
+        }
         ItemKind::Bevel => bevel_geometry(&cs, &ls)?,
         ItemKind::Hypoid => {
             if let (Some(c), Some(l)) = (cs.first(), ls.first()) {
@@ -1255,6 +1274,7 @@ pub fn gear_geoms(item: &GearItem) -> Vec<GearGeom> {
             };
             vec![GearGeom::circle(sun), GearGeom { ring: true, ..GearGeom::circle(ring) }, planet]
         }
+        ItemKind::Bevel if cs.is_empty() && !points(&item.things).is_empty() => bevel_side_gears(item),
         ItemKind::Bevel => match (&cs[..], &ls[..]) {
             (_, [l1, l2, ..]) => {
                 let Some(c) = cs.first() else { return Vec::new() };
@@ -1283,6 +1303,84 @@ pub fn gear_geoms(item: &GearItem) -> Vec<GearGeom> {
         ItemKind::CrossedHelical => cs.iter().take(2).map(GearGeom::circle).collect(),
         ItemKind::Shaft => Vec::new(),
     }
+}
+
+/// A bevel pair drawn as a side view ([`BEVEL_SIDE`]), read: the apex, each shaft's direction
+/// away from it (toward its line's far end) with the line's ends, and the contact line's
+/// direction and length when one is drawn. Checks that both shaft lines run through the apex
+/// at an angle and that the contact line starts at the apex between them.
+struct SideView {
+    apex: V,
+    shafts: [(V, (V, V)); 2],
+    contact: Option<(V, f64)>,
+}
+
+fn bevel_side(things: &[Thing]) -> Result<SideView, String> {
+    let apex = *points(things).first().ok_or("pick the apex point, where the shafts meet")?;
+    let ends: Vec<(V, V)> = (0..3).filter_map(|k| line_ends(things, k)).collect();
+    if ends.len() < 2 {
+        return Err("pick the two shaft lines from the apex".into());
+    }
+    // A line's direction away from the apex, its length from it, and how far it passes it.
+    let away = |(a, b): (V, V)| -> Option<(V, f64, f64)> {
+        let (near, far) = if len(sub(a, apex)) <= len(sub(b, apex)) { (a, b) } else { (b, a) };
+        let u = unit(sub(far, near))?;
+        Some((u, len(sub(far, apex)), dist_to_line(apex, near, u)))
+    };
+    let scale = ends.iter().map(|(a, b)| len(sub(*a, apex)).max(len(sub(*b, apex)))).fold(1.0f64, f64::max);
+    let t = tol(scale);
+    let mut shafts = [([0.0; 3], ([0.0; 3], [0.0; 3])); 2];
+    for (k, e) in ends.iter().take(2).enumerate() {
+        let (u, _, off) = away(*e).ok_or("a shaft line has no length")?;
+        if off > t {
+            return Err(format!("shaft line {} doesn't run through the apex point ({} mm off): draw both shaft lines from the apex", k + 1, num(off)));
+        }
+        shafts[k] = (u, *e);
+    }
+    let (u1, u2) = (shafts[0].0, shafts[1].0);
+    if parallel(u1, u2) {
+        return Err("the shaft lines are parallel: a bevel pair's shafts meet at an angle (parallel shafts are a spur pair)".into());
+    }
+    let contact = match ends.get(2) {
+        Some(e) => {
+            let (c, r, off) = away(*e).ok_or("the contact line has no length")?;
+            let near = len(sub(e.0, apex)).min(len(sub(e.1, apex)));
+            if off > t || near > t {
+                return Err("the contact line must start at the apex point: draw it from the apex, between the two shaft lines".into());
+            }
+            let angle = |a: V, b: V| dot(a, b).clamp(-1.0, 1.0).acos();
+            let (d1, d2, sigma) = (angle(u1, c), angle(u2, c), angle(u1, u2));
+            if (d1 + d2 - sigma).abs() > 1e-3 || d1 < 1e-3 || d2 < 1e-3 {
+                return Err("the contact line must lie between the two shaft lines, in their plane: its angle to each sets the ratio".into());
+            }
+            Some((c, r))
+        }
+        None => None,
+    };
+    Ok(SideView { apex, shafts, contact })
+}
+
+/// The two bevel gears of a side view: the cone angles from the contact line (else from the
+/// gears' tooth counts against the shaft angle), the cone distance from the contact line's
+/// length (else from the module and teeth). Fewer than two while that can't be worked out.
+fn bevel_side_gears(item: &GearItem) -> Vec<GearGeom> {
+    let Ok(v) = bevel_side(&item.things) else { return Vec::new() };
+    let [(u1, e1), (u2, e2)] = v.shafts;
+    let angle = |a: V, b: V| dot(a, b).clamp(-1.0, 1.0).acos();
+    let sigma = angle(u1, u2);
+    let (d1, d2, cone) = match v.contact {
+        Some((c, r)) => (angle(u1, c), angle(u2, c), r),
+        None => {
+            let (s1, s2) = (item.settings(0), item.settings(1));
+            let (Some(z1), Some(z2)) = (s1.teeth.filter(|z| *z > 0), s2.teeth.filter(|z| *z > 0)) else { return Vec::new() };
+            let Some(m) = s1.module.or(s2.module).filter(|m| *m > 0.0 && m.is_finite()) else { return Vec::new() };
+            let d1 = sigma.sin().atan2(f64::from(z2) / f64::from(z1) + sigma.cos());
+            let r1 = m * f64::from(z1) / 2.0;
+            (d1, sigma - d1, r1 / d1.sin().max(1e-12))
+        }
+    };
+    let gear = |u: V, d: f64, ends: (V, V)| GearGeom { centre: add(v.apex, mul(u, cone * d.cos())), axis: u, radius: Some(cone * d.sin()), ring: false, rack: false, line: Some(ends) };
+    vec![gear(u1, d1, e1), gear(u2, d2, e2)]
 }
 
 /// A bevel gear's mate on axis line `other` (`ends` its picked ends): the circle around the

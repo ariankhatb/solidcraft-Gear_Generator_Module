@@ -333,3 +333,37 @@ fn a_free_gear_at_a_fixed_module_keeps_the_module_with_a_note() {
     assert_eq!(sp.gears[0].teeth, 14);
     assert!(!sp.notes.iter().any(|n| n.contains("meshes nothing")), "{:?}", sp.notes);
 }
+
+/// A bevel pair from one side view (no circles): the apex point, two shaft lines from it at the
+/// shaft angle, and a contact line between them (its angles set the ratio, its length the cone
+/// distance); or, without the contact line, sizes from the gears' teeth and module.
+#[test]
+fn a_bevel_pair_from_one_side_view() {
+    use crate::items::{GearSettings, SizeBy, validate_item};
+    // In the XZ plane: shafts along +x and +z from the origin (90°); the contact line at
+    // atan(2) from z, 50 mm long: pitch radii 50 sin δ.
+    let d1 = (2.0f64).atan(); // from the z shaft
+    let c = [50.0 * d1.sin(), 0.0, 50.0 * d1.cos()];
+    let side = item("S", ItemKind::Bevel, vec![Thing::point([0.0; 3]), line([0.0; 3], [0.0, 0.0, 60.0]), line([0.0; 3], [60.0, 0.0, 0.0]), line([0.0; 3], c)]);
+    validate_item(&side).unwrap();
+    let geo = crate::items::gear_geoms(&side);
+    assert_eq!(geo.len(), 2);
+    let (r1, r2) = (geo[0].radius.unwrap(), geo[1].radius.unwrap());
+    assert!(close(r1, 50.0 * d1.sin()) && close(r2, 50.0 * d1.cos()), "{r1} {r2}");
+    let sp = planned(&[side], &[], None);
+    assert_eq!(sp.plan.bodies.len(), 2, "{:?}", sp.error);
+    let (z1, z2) = (teeth(&sp, g(0, 0)), teeth(&sp, g(0, 1)));
+    assert!((z1 / z2 - 2.0).abs() < 0.15, "about 2:1 as drawn: {z1} {z2}");
+    assert!(sp.mesh_tags.iter().any(|t| t.kind == crate::analysis::MeshKind::Bevel));
+    // Without the contact line: from the gears' teeth and module.
+    let mut bare = item("T", ItemKind::Bevel, vec![Thing::point([0.0; 3]), line([0.0; 3], [0.0, 0.0, 60.0]), line([0.0; 3], [60.0, 0.0, 0.0])]);
+    assert!(validate_item(&bare).unwrap_err().contains("contact line"));
+    let by = |z: u32| GearSettings { size_by: SizeBy::Teeth, teeth: Some(z), module: Some(2.0), ..GearSettings::default() };
+    bare.gears = vec![by(30), by(15)];
+    validate_item(&bare).unwrap();
+    let sp = planned(&[bare], &[], None);
+    assert_eq!((teeth(&sp, g(0, 0)), teeth(&sp, g(0, 1))), (30.0, 15.0), "{:?}", sp.gears);
+    // A shaft line that misses the apex is refused, naming it.
+    let off = item("U", ItemKind::Bevel, vec![Thing::point([0.0; 3]), line([5.0, 0.0, 0.0], [5.0, 0.0, 60.0]), line([0.0; 3], [60.0, 0.0, 0.0]), line([0.0; 3], c)]);
+    assert!(validate_item(&off).unwrap_err().contains("doesn't run through the apex"));
+}

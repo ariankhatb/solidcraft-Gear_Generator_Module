@@ -952,6 +952,370 @@
    "params": {}
   },
   {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "Shafts",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      0,
+      -18
+     ],
+     [
+      0,
+      18
+     ]
+    ],
+    "ids": [
+     "sa"
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "sa",
+    "mode": "vertical"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "sa.start"
+    ],
+    "type": "horizontal",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "sa.start"
+    ],
+    "type": "vertical",
+    "value": "18 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "sa"
+    ],
+    "value": "36 mm"
+   }
+  },
+  {
+   "command": "sketch.point",
+   "params": {
+    "point": [
+     0,
+     -14
+    ],
+    "id": "pa"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "pa",
+    "b": "sa"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "pa"
+    ],
+    "type": "vertical",
+    "value": "14 mm"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      45,
+      -18
+     ],
+     [
+      45,
+      18
+     ]
+    ],
+    "ids": [
+     "sb"
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "sb",
+    "mode": "vertical"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "sb.start"
+    ],
+    "type": "horizontal",
+    "value": "45 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "sb.start"
+    ],
+    "type": "vertical",
+    "value": "18 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "sb"
+    ],
+    "value": "36 mm"
+   }
+  },
+  {
+   "command": "sketch.point",
+   "params": {
+    "point": [
+     45,
+     -14
+    ],
+    "id": "pb"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "pb",
+    "b": "sb"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "pb"
+    ],
+    "type": "vertical",
+    "value": "14 mm"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      87,
+      -78
+     ],
+     [
+      87,
+      -42
+     ]
+    ],
+    "ids": [
+     "se"
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "se",
+    "mode": "vertical"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "se.start"
+    ],
+    "type": "horizontal",
+    "value": "87 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "se.start"
+    ],
+    "type": "vertical",
+    "value": "78 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "se"
+    ],
+    "value": "36 mm"
+   }
+  },
+  {
+   "command": "sketch.point",
+   "params": {
+    "point": [
+     87,
+     -74
+    ],
+    "id": "pe"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "pe",
+    "b": "se"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "pe"
+    ],
+    "type": "vertical",
+    "value": "74 mm"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      123,
+      -78
+     ],
+     [
+      123,
+      -42
+     ]
+    ],
+    "ids": [
+     "sf"
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "sf",
+    "mode": "vertical"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "sf.start"
+    ],
+    "type": "horizontal",
+    "value": "123 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "sf.start"
+    ],
+    "type": "vertical",
+    "value": "78 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "sf"
+    ],
+    "value": "36 mm"
+   }
+  },
+  {
+   "command": "sketch.point",
+   "params": {
+    "point": [
+     123,
+     -74
+    ],
+    "id": "pf"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "pf",
+    "b": "sf"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "pf"
+    ],
+    "type": "vertical",
+    "value": "74 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
    "command": "gear.create",
    "params": {
     "name": "Everything drivetrain",
@@ -1004,6 +1368,16 @@
         "sketch": "L0 spur",
         "curve": "abore",
         "slot": "bore"
+       },
+       {
+        "sketch": "Shafts",
+        "curve": "sa",
+        "slot": "axis"
+       },
+       {
+        "sketch": "Shafts",
+        "point": "pa",
+        "slot": "bearing"
        }
       ],
       "module_block": "M"
@@ -1021,6 +1395,16 @@
         "sketch": "L0 spur",
         "curve": "bbore",
         "slot": "bore"
+       },
+       {
+        "sketch": "Shafts",
+        "curve": "sb",
+        "slot": "axis"
+       },
+       {
+        "sketch": "Shafts",
+        "point": "pb",
+        "slot": "bearing"
        }
       ],
       "module_block": "M"
@@ -1088,6 +1472,16 @@
         "sketch": "L-60 helical",
         "curve": "ebore",
         "slot": "bore"
+       },
+       {
+        "sketch": "Shafts",
+        "curve": "se",
+        "slot": "axis"
+       },
+       {
+        "sketch": "Shafts",
+        "point": "pe",
+        "slot": "bearing"
        }
       ],
       "module_block": "M",
@@ -1112,6 +1506,16 @@
         "sketch": "L-60 helical",
         "curve": "fbore",
         "slot": "bore"
+       },
+       {
+        "sketch": "Shafts",
+        "curve": "sf",
+        "slot": "axis"
+       },
+       {
+        "sketch": "Shafts",
+        "point": "pf",
+        "slot": "bearing"
        }
       ],
       "module_block": "M",
@@ -1282,6 +1686,10 @@
      "gear": 1,
      "rpm": 3000,
      "torque": 0.5
+    },
+    "clearance_body": {
+     "bearing": "608",
+     "bearing_fit": 0.15
     }
    }
   },

@@ -77,3 +77,26 @@ if (which === 'all' || which === 'edit09') {
   console.log('gears features', (doc.timeline ?? []).filter((x) => x.type === 'GearsFeature').map((x) => x.id), 'errors', (doc.timeline ?? []).filter((x) => x.error).map((x) => x.name));
   sc.close();
 }
+
+if (which === 'all' || which === 'cutout') {
+  // 01 as built (bores, hub, shaft lines, bearing points and the housing cutout), then Edit: the
+  // Housing cutout section and the seats in the preview.
+  const sc = await w.begin(null);
+  await sc.call('ui.file', { path: path.resolve('..', '..', 'examples', 'gears', '01-spur-pair.sc') });
+  for (let i = 0; i < 60; i++) { await w.sleep(1000); if (!(await sc.call('ui.inspect', {})).file_busy) break; }
+  await w.sleep(2500);
+  await w.frame(sc, 'iso', 1.3);
+  await sc.shot('final-06a-01-with-housing-cutout');
+  const f = await w.gearsFeature(sc);
+  await sc.call('ui.editFeature', { feature: f.id });
+  await w.sleep(3000);
+  await sc.clickHandle('gear:card:A');
+  await w.sleep(1000);
+  await sc.shot('final-06b-01-edit-card-with-bearing-point');
+  await w.sleep(800);
+  let h = await sc.handles('dialog:section:Housing'); h = Array.isArray(h) ? h : h.handles ?? [];
+  if (h[0]) { await sc.call('ui.scroll', { x: 1300, y: 600, delta: -(h[0].y - 300) }); await w.sleep(600); }
+  await sc.shot('final-07-housing-cutout-section');
+  console.log(JSON.stringify((await w.request(sc))?.params?.clearance_body));
+  sc.close();
+}

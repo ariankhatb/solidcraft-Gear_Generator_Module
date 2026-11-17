@@ -418,9 +418,9 @@ impl GearItem {
     pub fn gear_count(&self) -> usize {
         gear_count(self.kind, &self.things)
     }
-    /// "Item A".
+    /// "Gear A" (as the dialog, the timeline and the bodies name it).
     pub fn who(&self) -> String {
-        format!("Item {}", self.id)
+        format!("Gear {}", self.id)
     }
 }
 
@@ -580,11 +580,17 @@ const fn slot(kind: SlotKind, name: &'static str, what: &'static str, required: 
 
 use SlotKind::{Circle as C, Line as L, Point as P};
 
-const SPUR: &[Slot] = &[slot(C, "pitch", "pitch circle", true, false), slot(L, "axis", "shaft line", false, false)];
+/// A gear's optional bearing points: on its shaft line, for the housing cutout's bearing seats.
+const SPUR: &[Slot] =
+    &[slot(C, "pitch", "pitch circle", true, false), slot(L, "axis", "shaft line", false, false), slot(P, "bearing", "bearing point", false, true)];
 const INTERNAL: &[Slot] = &[slot(C, "pitch", "ring's pitch circle", true, false), slot(C, "pitch2", "pinion's pitch circle", false, false)];
 const RACK: &[Slot] = &[slot(L, "axis", "rack's pitch line", true, false), slot(C, "pitch", "pinion's pitch circle", false, false)];
-const COMPOUND: &[Slot] =
-    &[slot(L, "axis", "shaft line", true, false), slot(C, "pitch", "pitch circle", true, false), slot(C, "pitch2", "pitch circle", true, true)];
+const COMPOUND: &[Slot] = &[
+    slot(L, "axis", "shaft line", true, false),
+    slot(C, "pitch", "pitch circle", true, false),
+    slot(C, "pitch2", "pitch circle", true, true),
+    slot(P, "bearing", "bearing point", false, true),
+];
 const PLANETARY: &[Slot] = &[
     slot(C, "sun", "sun's pitch circle", true, false),
     slot(C, "ring", "ring's pitch circle", true, false),
@@ -598,6 +604,12 @@ const BEVEL_LINES: &[Slot] =
 /// distance; without it the gears' teeth and module do).
 const BEVEL_SIDE: &[Slot] = &[
     slot(P, "apex", "apex point (where the shafts meet)", true, false),
+    slot(L, "axis", "shaft line 1", true, false),
+    slot(L, "axis2", "shaft line 2", true, false),
+    slot(L, "contact", "contact line", false, false),
+];
+/// A side view by its two shaft lines alone, meeting at a common end: that end is the apex.
+const BEVEL_MEET: &[Slot] = &[
     slot(L, "axis", "shaft line 1", true, false),
     slot(L, "axis2", "shaft line 2", true, false),
     slot(L, "contact", "contact line", false, false),
@@ -616,7 +628,7 @@ pub fn slots(kind: ItemKind) -> &'static [&'static [Slot]] {
         ItemKind::Rack => &[RACK],
         ItemKind::Compound => &[COMPOUND],
         ItemKind::Planetary => &[PLANETARY],
-        ItemKind::Bevel => &[BEVEL_CIRCLES, BEVEL_LINES, BEVEL_SIDE],
+        ItemKind::Bevel => &[BEVEL_CIRCLES, BEVEL_LINES, BEVEL_SIDE, BEVEL_MEET],
         ItemKind::Hypoid => &[HYPOID],
         ItemKind::Worm => &[WORM],
         ItemKind::CrossedHelical => &[CROSSED],
@@ -659,9 +671,36 @@ fn fill(layout: usize, list: &[Slot], things: &[Thing]) -> Option<Vec<SlotIndex>
 
 /// Every thing's slot (role-based for a ring gear and a planetary set: the larger of the
 /// first two circles is the ring), or why they don't fit the type.
-pub fn assign(kind: ItemKind, things: &[Thing]) -> Result<Vec<SlotIndex>, String> {
+/// The order the layouts of `kind` are tried in for `things`: as listed, except that a bevel
+/// pair's two shaft lines meeting at a common end (no circle, no point) are a side view first.
+fn layout_order(kind: ItemKind, things: &[Thing]) -> Vec<usize> {
+    let n = slots(kind).len();
+    if kind == ItemKind::Bevel && circles(things).is_empty() && points(things).is_empty() && lines_meet(things).is_some() {
+        return std::iter::once(n - 1).chain(0..n - 1).collect();
+    }
+    (0..n).collect()
+}
+
+/// The first layout (in [`layout_order`]) the things fill: its index and the slots.
+fn first_fit(kind: ItemKind, things: &[Thing]) -> Option<(usize, Vec<SlotIndex>)> {
     let layouts = slots(kind);
-    let Some(mut out) = layouts.iter().enumerate().find_map(|(i, l)| fill(i, l, things)) else {
+    layout_order(kind, things).into_iter().find_map(|i| fill(i, layouts[i], things).map(|f| (i, f)))
+}
+
+/// Where the first two lines meet, end to end (within the tolerance): a side view's apex.
+fn lines_meet(things: &[Thing]) -> Option<V> {
+    let (a, b) = (line_ends(things, 0)?, line_ends(things, 1)?);
+    let scale = [a.0, a.1, b.0, b.1].iter().map(|p| len(*p)).fold(1.0f64, f64::max).max(len(sub(a.1, a.0))).max(len(sub(b.1, b.0)));
+    [a.0, a.1].into_iter().find_map(|p| [b.0, b.1].into_iter().find(|q| len(sub(p, *q)) <= tol(scale)).map(|_| p))
+}
+
+/// A side view's apex: the point picked, else where its two shaft lines meet.
+fn side_apex(things: &[Thing]) -> Option<V> {
+    points(things).first().copied().or_else(|| lines_meet(things))
+}
+
+pub fn assign(kind: ItemKind, things: &[Thing]) -> Result<Vec<SlotIndex>, String> {
+    let Some((_, mut out)) = first_fit(kind, things) else {
         return Err(no_room(kind, things));
     };
     let circles: Vec<usize> = (0..things.len()).filter(|i| matches!(things[*i], Thing::Circle { .. })).collect();
@@ -691,7 +730,7 @@ fn no_room(kind: ItemKind, things: &[Thing]) -> String {
     let label = kind.label();
     // What the picks so far still need, in the first layout they fit.
     let layouts = slots(kind);
-    let fitting = layouts.iter().enumerate().find_map(|(i, l)| fill(i, l, before).map(|f| (l, f)));
+    let fitting = first_fit(kind, before).map(|(i, f)| (layouts[i], f));
     let alt =
         if layouts.len() > 1 { " (or remove a pick to use another layout: two pitch circles; two axis lines and one pitch circle; or a side view: the apex point, two shaft lines and an optional contact line)" } else { "" };
     if let Some((list, filled)) = fitting {
@@ -726,7 +765,7 @@ pub fn gear_count(kind: ItemKind, things: &[Thing]) -> usize {
 /// The next slot the picks still need ("pitch circle 2"), `None` when complete.
 pub fn next_slot(kind: ItemKind, things: &[Thing]) -> Option<&'static str> {
     let layouts = slots(kind);
-    let (li, filled) = layouts.iter().enumerate().find_map(|(i, l)| fill(i, l, things).map(|f| (i, f)))?;
+    let (li, filled) = first_fit(kind, things)?;
     let taken: Vec<usize> = filled.iter().map(|s| s.slot).collect();
     layouts[li].iter().enumerate().find(|(i, s)| s.required && !taken.contains(i)).map(|(_, s)| s.what)
 }
@@ -841,6 +880,7 @@ fn check_geometry(kind: ItemKind, things: &[Thing]) -> Result<(), String> {
             if let (Some(c), Some(l)) = (cs.first(), ls.first()) {
                 circle_on_line(c, l, "pitch circle")?;
             }
+            bearings_on_shaft(&ls, &ps)?;
         }
         ItemKind::Internal => {
             if let [a, b, ..] = &cs[..] {
@@ -878,6 +918,7 @@ fn check_geometry(kind: ItemKind, things: &[Thing]) -> Result<(), String> {
             }
         }
         ItemKind::Compound => {
+            bearings_on_shaft(&ls, &ps)?;
             if let Some(l) = ls.first() {
                 for (k, c) in cs.iter().enumerate() {
                     circle_on_line(c, l, &format!("pitch circle {}", k + 1))?;
@@ -914,6 +955,10 @@ fn check_geometry(kind: ItemKind, things: &[Thing]) -> Result<(), String> {
             bevel_side(things)?;
         }
         ItemKind::Bevel if cs.is_empty() && !ps.is_empty() => bevel_side_so_far(things)?,
+        // Two shaft lines meeting end to end: a side view, its apex where they meet.
+        ItemKind::Bevel if cs.is_empty() && lines_meet(things).is_some() => {
+            bevel_side(things)?;
+        }
         ItemKind::Bevel => bevel_geometry(&cs, &ls)?,
         ItemKind::Hypoid => {
             if let (Some(c), Some(l)) = (cs.first(), ls.first()) {
@@ -966,23 +1011,35 @@ fn check_geometry(kind: ItemKind, things: &[Thing]) -> Result<(), String> {
                 }
             }
         }
-        ItemKind::Shaft => {
-            if let Some(l) = ls.first() {
-                for p in &ps {
-                    let d = dist_to_line(*p, l.a, l.u);
-                    if d > tol(1.0) {
-                        return Err(format!(
-                            "this point is {} mm off the shaft line: a bearing sits on the shaft; put the point on the line (Coincident)",
-                            num(d)
-                        ));
-                    }
-                }
-            } else if !ps.is_empty() {
-                return Err("pick the shaft line first, then the bearing points on it".into());
-            }
+        ItemKind::Shaft => bearings_on_shaft(&ls, &ps)?,
+    }
+    Ok(())
+}
+
+/// Bearing points (a Shaft item's, or a gear's on its own shaft line) sit on the shaft line: the
+/// line picked first, each point on it.
+fn bearings_on_shaft(ls: &[Ln], ps: &[V]) -> Result<(), String> {
+    if ps.is_empty() {
+        return Ok(());
+    }
+    let Some(l) = ls.first() else { return Err("pick the shaft line first, then the bearing points on it".into()) };
+    for p in ps {
+        let d = dist_to_line(*p, l.a, l.u);
+        if d > tol(1.0) {
+            return Err(format!("this point is {} mm off the shaft line: a bearing sits on the shaft; put the point on the line (Coincident)", num(d)));
         }
     }
     Ok(())
+}
+
+/// Every bearing point picked (a Shaft item's, a gear's on its shaft line), in the world: the
+/// housing cutout's bearing seats ([`crate::clearance::Seat::Point`]), read where they are now.
+pub fn bearing_points(items: &[GearItem]) -> Vec<V> {
+    items
+        .iter()
+        .filter(|it| matches!(it.kind, ItemKind::Spur | ItemKind::Helical | ItemKind::Herringbone | ItemKind::Compound | ItemKind::Shaft))
+        .flat_map(|it| points(&it.things))
+        .collect()
 }
 
 fn rack_tangent(l: &Ln, c: &Circ) -> Result<(), String> {
@@ -1277,7 +1334,7 @@ pub fn gear_geoms(item: &GearItem) -> Vec<GearGeom> {
             };
             vec![GearGeom::circle(sun), GearGeom { ring: true, ..GearGeom::circle(ring) }, planet]
         }
-        ItemKind::Bevel if cs.is_empty() && !points(&item.things).is_empty() => bevel_side_gears(item),
+        ItemKind::Bevel if cs.is_empty() && side_apex(&item.things).is_some() => bevel_side_gears(item),
         ItemKind::Bevel => match (&cs[..], &ls[..]) {
             (_, [l1, l2, ..]) => {
                 let Some(c) = cs.first() else { return Vec::new() };
@@ -1334,7 +1391,7 @@ fn bevel_side_so_far(things: &[Thing]) -> Result<(), String> {
 }
 
 fn bevel_side(things: &[Thing]) -> Result<SideView, String> {
-    let apex = *points(things).first().ok_or("pick the apex point, where the shafts meet")?;
+    let apex = side_apex(things).ok_or("pick the apex point, where the shafts meet")?;
     let ends: Vec<(V, V)> = (0..3).filter_map(|k| line_ends(things, k)).collect();
     if ends.len() < 2 {
         return Err("pick the two shaft lines from the apex".into());
@@ -1609,10 +1666,14 @@ pub struct Stage {
     pub error: Option<String>,
 }
 
-/// A gear for people: "Item A gear 2".
+/// A gear for people, as the dialog names it: "Gear A" for an item of one gear, "Gear B2" for a
+/// compound's or a pair's second.
 pub(crate) fn who(items: &[GearItem], r: GearRef) -> String {
-    let item = items.get(r.item).map_or_else(|| format!("Item {}", r.item + 1), GearItem::who);
-    format!("{item} gear {}", r.gear + 1)
+    match items.get(r.item) {
+        Some(it) if it.gear_count() <= 1 => it.who(),
+        Some(it) => format!("{}{}", it.who(), r.gear + 1),
+        None => format!("Gear {}{}", item_id(r.item), r.gear + 1),
+    }
 }
 
 fn style_of(items: &[GearItem], gears: &[GearRef]) -> Kind {
@@ -1786,9 +1847,11 @@ fn classify(items: &[GearItem], ra: GearRef, rb: GearRef, a: &GearGeom, b: &Gear
                 });
                 (StageKind::Internal, err)
             } else {
-                let err = ((distance - r1 - r2).abs() > t).then(|| {
+                let gap = distance - r1 - r2;
+                let err = (gap.abs() > t).then(|| {
+                    let what = if gap < 0.0 { format!("overlap by {} mm", num(-gap)) } else { format!("are {} mm apart", num(gap)) };
                     format!(
-                        "{} don't touch: their centres are {} mm apart and their radii add up to {} mm; make the circles Tangent or remove the link",
+                        "{} {what}: their centres are {} mm apart and their radii add up to {} mm; make the circles Tangent or remove the link",
                         names(),
                         num(distance),
                         num(r1 + r2)

@@ -68,8 +68,8 @@ fn the_flow_new_gear_click_pieces_card_per_gear() {
     // The checklist: each slot with what fills it (its sketch and size).
     let len = |v: f64| fmt(v);
     let rows = g.items[0].slot_rows(&app, &len);
-    assert_eq!(rows.iter().map(|r| r.what).collect::<Vec<_>>(), ["shaft line", "pitch circle", "pitch circle"]);
-    assert!(rows.iter().all(|r| r.filled.is_some()), "{rows:?}");
+    assert_eq!(rows.iter().map(|r| r.what).collect::<Vec<_>>(), ["shaft line", "pitch circle", "pitch circle", "bearing point"]);
+    assert!(rows.iter().take(3).all(|r| r.filled.is_some()) && rows[3].repeats && !rows[3].required, "{rows:?}");
     assert!(rows[1].filled.as_deref().is_some_and(|f| f.ends_with("Ø20")), "{rows:?}");
     // The input holds the active gear's picks.
     assert_eq!(inputs[0].items, g.items[0].picks);
@@ -325,7 +325,7 @@ fn picks_are_checked_by_the_gear_crates_slots() {
     compound.picks.push(at(s2, "c3"));
     assert!(compound.complete(&app), "{:?}", compound.checklist(&app));
     assert_eq!(compound.gear_count(&app), 2);
-    assert_eq!(compound.checklist(&app), vec![("shaft line", true, true), ("pitch circle", true, true), ("pitch circle", true, true)]);
+    assert_eq!(compound.checklist(&app), vec![("shaft line", true, true), ("pitch circle", true, true), ("pitch circle", true, true), ("bearing point", false, false)]);
     // Bearings: a point off the shaft line is refused with how far off it is.
     let shaft = GearItem { picks: vec![at(s3, "s")], ..GearItem::new(ItemKind::Shaft) };
     let q = Sel::ExternalSketchPoint { sketch: s3, id: "q".into() };
@@ -844,4 +844,115 @@ fn bore_and_hub_circles_from_picks_and_suggestions() {
     let e = for_set(&set);
     assert_eq!(e.items[0].details, g.items[0].details);
     assert_eq!(e.items[1].details, g.items[1].details);
+}
+
+/// The housing cutout: off by default; switched on, a bearing point picked on a gear's shaft line
+/// joins that gear (not refused) and is shown as an optional repeating row, the request carries
+/// `clearance_body` with the bearing, the preview has the swept envelope and a seat ring at the
+/// point, and Edit gets the settings back.
+#[test]
+fn the_housing_cutout_and_bearing_points_on_shaft_lines() {
+    let mut app = app();
+    let s1 = app.session.execute("sketch.create", &json!({"plane": "XY"})).unwrap()["sketch"].as_u64().unwrap();
+    app.session.execute("sketch.circle.center", &json!({"center": [0, 0], "radius": 20.0, "id": "a"})).unwrap();
+    app.session.execute("sketch.circle.center", &json!({"center": [50, 0], "radius": 30.0, "id": "b"})).unwrap();
+    app.session.execute("sketch.finish", &json!({})).unwrap();
+    let s2 = app.session.execute("sketch.create", &json!({"plane": {"origin": [0, 0, 0], "x_dir": [1, 0, 0], "y_dir": [0, 0, 1]}})).unwrap()["sketch"].as_u64().unwrap();
+    app.session.execute("sketch.line", &json!({"points": [[0, -40], [0, 40]], "ids": ["s1"]})).unwrap();
+    app.session.execute("sketch.point", &json!({"point": [0, -25], "id": "p1"})).unwrap();
+    app.session.execute("sketch.point", &json!({"point": [8, -25], "id": "off"})).unwrap();
+    app.session.execute("sketch.finish", &json!({})).unwrap();
+    let (mut g, mut inputs) = opened(&mut app);
+    assert!(!g.cutout.on, "off by default");
+    click(&app, &mut g, &mut inputs, Sel::SketchCurve { id: "a".into(), sketch: Some(s1) });
+    click(&app, &mut g, &mut inputs, Sel::SketchCurve { id: "s1".into(), sketch: Some(s2) });
+    click(&app, &mut g, &mut inputs, Sel::ExternalSketchPoint { sketch: s2, id: "p1".into() });
+    assert_eq!((g.items.len(), g.items[0].picks.len()), (1, 3), "the point joins gear A: {:?}", g.refused);
+    // A point off the shaft line: refused with why.
+    click(&app, &mut g, &mut inputs, Sel::ExternalSketchPoint { sketch: s2, id: "off".into() });
+    assert!(next_step(&app, &g).0.contains("off the shaft line"), "{:?}", next_step(&app, &g));
+    let len = |v: f64| fmt(v);
+    let rows = g.items[0].slot_rows(&app, &len);
+    assert!(rows.iter().any(|r| r.what == "bearing point" && r.filled.is_some() && r.repeats), "{rows:?}");
+    click(&app, &mut g, &mut inputs, Sel::SketchCurve { id: "b".into(), sketch: Some(s1) });
+    g.cutout.on = true;
+    let mut d = app.dialog.clone().unwrap();
+    d.kind = Kind::Gear(g.clone());
+    d.inputs = inputs.clone();
+    let p = apply_commands(&app, &d).unwrap()[0].1.clone();
+    assert_eq!(p["clearance_body"]["bearing"], json!("608"), "{p}");
+    let slots: Vec<&str> = p["items"][0]["components"].as_array().unwrap().iter().map(|c| c["slot"].as_str().unwrap()).collect();
+    assert_eq!(slots, ["pitch", "axis", "bearing"], "{p}");
+    refresh(&mut app, &mut g, &inputs);
+    assert!(g.cutout_rings.iter().any(|(i, _)| i.is_none()), "the swept envelope");
+    let seat = g.cutout_rings.iter().find(|(i, _)| *i == Some(0)).expect("a seat ring for gear A");
+    // A 608's seat: 11 mm round A's axis at the point.
+    let p0 = seat.1[0];
+    assert!(((p0[0] * p0[0] + p0[1] * p0[1]).sqrt() - 11.0).abs() < 1e-6, "{p0:?}");
+    // Edit: the settings come back.
+    let set = solidcraft_engine::schema::gear::GearSet { group: 7, feature: Some(8), name: "Gears".into(), bodies: Vec::new(), features: Vec::new(), request: p, params: json!({}), sketch: None, sketch_changed: false };
+    let e = for_set(&set);
+    assert!(e.cutout.on && e.cutout.bearing == g.cutout.bearing, "{:?}", e.cutout);
+}
+
+/// QA round: the sketch defines the details — a gear made here takes the bore and hub circles
+/// drawn on its centre by itself (× takes one out for good); a side view clicked as its two shaft
+/// lines is complete; a collision the drawing's suggestion resolves isn't said; two circles a
+/// little apart get a note; an Edit with nothing changed runs nothing.
+#[test]
+fn qa_details_by_themselves_side_view_by_lines_and_quiet_edits() {
+    let mut app = app();
+    let s = app.session.execute("sketch.create", &json!({"plane": "XY"})).unwrap()["sketch"].as_u64().unwrap();
+    for (id, x, r) in [("a", 0.0, 20.0), ("abore", 0.0, 4.0), ("ahub", 0.0, 8.0), ("b", 50.0, 30.0), ("bbore", 50.0, 5.0), ("c", 0.0, 0.0)] {
+        if r > 0.0 {
+            app.session.execute("sketch.circle.center", &json!({"center": [x, 0], "radius": r, "id": id})).unwrap();
+        }
+    }
+    app.session.execute("sketch.circle.center", &json!({"center": [-58, 0], "radius": 30.0, "id": "near"})).unwrap();
+    app.session.execute("sketch.finish", &json!({})).unwrap();
+    let at = |id: &str| Sel::SketchCurve { id: id.into(), sketch: Some(s) };
+    let (mut g, mut inputs) = opened(&mut app);
+    click(&app, &mut g, &mut inputs, at("a"));
+    click(&app, &mut g, &mut inputs, at("b"));
+    for _ in 0..3 {
+        refresh(&mut app, &mut g, &inputs);
+        auto_details(&app, &mut g, &mut inputs);
+    }
+    assert_eq!(g.items[0].details, vec![(at("abore"), false), (at("ahub"), true)], "A's bore and hub from the drawing");
+    assert_eq!(g.items[1].details, vec![(at("bbore"), false)], "B's too, though B was made after A");
+    // × on B's bore: out, and not taken again.
+    drop_detail(&mut g, 1, &at("bbore"), &mut inputs);
+    refresh(&mut app, &mut g, &inputs);
+    auto_details(&app, &mut g, &mut inputs);
+    assert!(g.items[1].details.is_empty() && g.items[1].dropped == vec![at("bbore")]);
+    // A circle 8 mm from A, not linked: a note on its card.
+    click(&app, &mut g, &mut inputs, at("near"));
+    refresh(&mut app, &mut g, &inputs);
+    let notes: Vec<&str> = g.item_msgs[2].iter().map(|m| m.text.as_str()).collect();
+    assert!(notes.iter().any(|n| n.starts_with("A and C are 8 mm apart, so they won't mesh")), "{notes:?}");
+    // Collisions named "Gear D gear 1 and Gear E gear 1" (or B1/B2) read as the items they name.
+    assert_eq!(gears_named("Gear D gear 1 and Gear E gear 1 collide: link them"), vec![3, 4]);
+    assert_eq!(gears_named("Gear B1 and Gear C overlap"), vec![1, 2]);
+    // A bevel side view by its two shaft lines meeting at a corner: complete, sized by settings.
+    let v = app.session.execute("sketch.create", &json!({"plane": {"origin": [0, 0, 0], "x_dir": [1, 0, 0], "y_dir": [0, 0, 1]}})).unwrap()["sketch"].as_u64().unwrap();
+    app.session.execute("sketch.line", &json!({"points": [[0, 0], [0, 60]], "ids": ["s1"]})).unwrap();
+    app.session.execute("sketch.line", &json!({"points": [[0, 0], [60, 0]], "ids": ["s2"]})).unwrap();
+    app.session.execute("sketch.finish", &json!({})).unwrap();
+    let (mut b, mut binputs) = opened(&mut app);
+    b.new_kind = type_of(ItemKind::Bevel);
+    new_gear(&mut b, &mut binputs);
+    for id in ["s1", "s2"] {
+        click(&app, &mut b, &mut binputs, Sel::SketchCurve { id: id.into(), sketch: Some(v) });
+    }
+    assert!(b.items[0].complete(&app), "{:?}", b.refused);
+    assert!(next_step(&app, &b).0.contains("sized by its teeth and module"), "{:?}", next_step(&app, &b));
+    // Edit with nothing changed: OK runs nothing.
+    let mut spur = new(None);
+    spur.items = vec![GearItem { picks: vec![at("a")], ..GearItem::new(ItemKind::Spur) }];
+    spur.group = Some(1);
+    let p = request(&app, &spur, &inputs).unwrap();
+    spur.original = Some(comparable(&p));
+    assert!(commands(&app, &spur, &inputs, &Map::new()).unwrap().is_empty());
+    spur.items[0].gears = vec![crate::dialogs_gear_items::GearSettings { module: "3 mm".into(), ..Default::default() }];
+    assert_eq!(commands(&app, &spur, &inputs, &Map::new()).unwrap()[0].0, "gear.update");
 }

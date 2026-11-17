@@ -188,6 +188,12 @@ fn tools_of(s: &Session, cmd: &str, request: &Value) -> Result<(Operation, Vec<B
     Ok((operation, targets, cuts))
 }
 
+/// The keep-out body's component in the assembly: a set of gear items makes its housing cutout a
+/// plain body (no component, no joint); an older set keeps its grounded keep-out component.
+fn keep_out_component<'a>(request: &Value, name: Option<&'a str>) -> Option<&'a str> {
+    if request.get("items").is_some_and(Value::is_array) { None } else { name }
+}
+
 /// What the feature puts out, in order, by the generator's names: each rigid member, then the
 /// keep-out body when it is a body of its own (a new set that cuts nothing with it).
 fn generated(plan: &Plan, operation: Operation, cuts: &[BodyName]) -> (Vec<String>, Option<String>) {
@@ -274,7 +280,7 @@ pub(super) fn create(s: &mut Session, cmd: &str, asked: &Asked, plan: &Plan, nam
         let folder = assembly_folder(s, &name, id)?;
         group = folder;
         let (rigid, driver) = assembly_plan(asked, plan, &request);
-        built = Some(assembly::sync(s, &rigid, asked.spec.kind, &name, &member_names, keep_out_name.as_deref(), Some(folder), None, driver, &mut warnings)?);
+        built = Some(assembly::sync(s, &rigid, asked.spec.kind, &name, &member_names, keep_out_component(&request, keep_out_name.as_deref()), Some(folder), None, driver, &mut warnings)?);
     }
     let (assembly_record, assembly_made) = built.map_or((None, None), |(r, m)| (Some(r), Some(m)));
     let bodies = names.iter().map(|n| BodyRecord { name: n.clone(), steps: Vec::new(), auto: Some(n.clone()) }).collect();
@@ -413,7 +419,7 @@ pub(super) fn update(s: &mut Session, cmd: &str, mut rec: Record, request: Value
         };
         group = Some(folder);
         let (rigid, driver) = assembly_plan(asked, plan, &request);
-        let (made, out) = assembly::sync(s, &rigid, asked.spec.kind, &rec.name, &member_names, keep_out_name.as_deref(), Some(folder), old_assembly, driver, &mut warnings)?;
+        let (made, out) = assembly::sync(s, &rigid, asked.spec.kind, &rec.name, &member_names, keep_out_component(&request, keep_out_name.as_deref()), Some(folder), old_assembly, driver, &mut warnings)?;
         rec.assembly = Some(made);
         assembly_made = Some(out);
     } else if let Some(old) = old_assembly {

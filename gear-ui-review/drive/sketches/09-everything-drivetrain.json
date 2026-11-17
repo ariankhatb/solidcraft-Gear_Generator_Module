@@ -950,6 +950,370 @@
   {
    "command": "sketch.finish",
    "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "Shafts",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      0,
+      -25
+     ],
+     [
+      0,
+      25
+     ]
+    ],
+    "ids": [
+     "sa"
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "sa",
+    "mode": "vertical"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "sa.start"
+    ],
+    "type": "horizontal",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "sa.start"
+    ],
+    "type": "vertical",
+    "value": "25 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "sa"
+    ],
+    "value": "50 mm"
+   }
+  },
+  {
+   "command": "sketch.point",
+   "params": {
+    "point": [
+     0,
+     -15
+    ],
+    "id": "pa"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "pa",
+    "b": "sa"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "pa"
+    ],
+    "type": "vertical",
+    "value": "15 mm"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      45,
+      -25
+     ],
+     [
+      45,
+      25
+     ]
+    ],
+    "ids": [
+     "sb"
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "sb",
+    "mode": "vertical"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "sb.start"
+    ],
+    "type": "horizontal",
+    "value": "45 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "sb.start"
+    ],
+    "type": "vertical",
+    "value": "25 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "sb"
+    ],
+    "value": "50 mm"
+   }
+  },
+  {
+   "command": "sketch.point",
+   "params": {
+    "point": [
+     45,
+     -15
+    ],
+    "id": "pb"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "pb",
+    "b": "sb"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "pb"
+    ],
+    "type": "vertical",
+    "value": "15 mm"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      87,
+      -85
+     ],
+     [
+      87,
+      -35
+     ]
+    ],
+    "ids": [
+     "se"
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "se",
+    "mode": "vertical"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "se.start"
+    ],
+    "type": "horizontal",
+    "value": "87 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "se.start"
+    ],
+    "type": "vertical",
+    "value": "85 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "se"
+    ],
+    "value": "50 mm"
+   }
+  },
+  {
+   "command": "sketch.point",
+   "params": {
+    "point": [
+     87,
+     -75
+    ],
+    "id": "pe"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "pe",
+    "b": "se"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "pe"
+    ],
+    "type": "vertical",
+    "value": "75 mm"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      123,
+      -85
+     ],
+     [
+      123,
+      -35
+     ]
+    ],
+    "ids": [
+     "sf"
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "sf",
+    "mode": "vertical"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "sf.start"
+    ],
+    "type": "horizontal",
+    "value": "123 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "sf.start"
+    ],
+    "type": "vertical",
+    "value": "85 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "sf"
+    ],
+    "value": "50 mm"
+   }
+  },
+  {
+   "command": "sketch.point",
+   "params": {
+    "point": [
+     123,
+     -75
+    ],
+    "id": "pf"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "pf",
+    "b": "sf"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "pf"
+    ],
+    "type": "vertical",
+    "value": "75 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
   }
  ]
 }

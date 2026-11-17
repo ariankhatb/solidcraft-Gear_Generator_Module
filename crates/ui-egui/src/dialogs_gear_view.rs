@@ -52,6 +52,8 @@ const TIP_OPERATION: &str = "New Body: separate bodies. Join/Cut/Intersect: comb
 const TIP_KEEP_OUT: &str = "Cut the space the gears sweep (plus the gap) out of the Targets, e.g. a housing.";
 const TIP_GAP: &str = "Extra room around the swept teeth when cutting the housing.";
 const TIP_ASSEMBLY: &str = "Each shaft and its gears become a component on a revolve joint, linked to its mates by the gear ratio.";
+const TIP_CUTOUT: &str = "One more body, \"Housing cutout\": all the space the drivetrain needs to turn (the teeth's swept envelopes, the shafts through the walls) and a bearing seat at every bearing point. Model a housing block and cut this body out of it.";
+const TIP_BEARING: &str = "One bearing size for every seat (bore × OD × width, mm).";
 const TIP_EQUATIONS: &str = "Exact involute curves instead of fitted splines: slower, smoother.";
 const TIP_MESH: &str = "Mesh: the two gears' teeth engage; their distance is checked.";
 const TIP_SHAFT: &str = "Same shaft: the two gears turn together.";
@@ -94,6 +96,12 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
         dg::sync_picks(app, k, inputs);
     }
     dg::refresh(app, k, inputs);
+    dg::auto_details(app, k, inputs);
+    // Opened (create or Edit): from the top.
+    if k.scroll == dg::Scroll::Top {
+        ui.scroll_to_cursor(Some(egui::Align::TOP));
+        k.scroll = dg::Scroll::None;
+    }
     let t = Tokens::get();
     ui.spacing_mut().item_spacing.y = t.space_4;
     if k.legacy.is_none() {
@@ -121,6 +129,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
         enter |= settings(ui, k, a);
     }
     enter |= drivetrain(app, ui, k);
+    enter |= housing_cutout(app, ui, k);
     enter |= output(ui, k, inputs, input);
     results(app, ui, k);
     enter |= advanced(ui, k);
@@ -254,7 +263,7 @@ fn summary(k: &Gear, i: usize) -> String {
 fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], input: &mut usize, hover: &mut Option<(usize, Sel)>) {
     let t = Tokens::get();
     let len = dg::len_of(app);
-    let (mut activate, mut remove, mut edit, mut use_detail) = (None, None, None, None);
+    let (mut activate, mut remove, mut edit, mut use_detail, mut drop_detail) = (None, None, None, None, None);
     let mut hovered = None;
     let clicked_at = ui.input(|i| if i.pointer.primary_clicked() { i.pointer.interact_pos() } else { None });
     for i in 0..k.items.len() {
@@ -296,13 +305,25 @@ fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput
                         }
                         button_hit |= x.hovered();
                         if complete && !active {
-                            ui.add(egui::Label::new(egui::RichText::new(summary(k, i)).size(t.font_small).color(t.form_dim)).truncate());
+                            let line = summary(k, i);
+                            ui.add(egui::Label::new(egui::RichText::new(line.clone()).size(t.font_small).color(t.form_dim)).truncate()).backing_on_hover_text(line);
                         }
                     });
                 });
                 // While it is picked (or incomplete): its checklist.
                 if active || !complete {
+                    // A compound's circles are its gears: "A1 pitch circle (first layer)".
+                    let mut circle_no = 0;
                     for row in it.slot_rows(app, &len) {
+                        let layer_name = (it.kind == ItemKind::Compound && row.what == "pitch circle").then(|| {
+                            circle_no += 1;
+                            let layer = match circle_no {
+                                1 => "first layer".to_string(),
+                                2 => "second layer".to_string(),
+                                n => format!("layer {n}"),
+                            };
+                            format!("{}{circle_no} pitch circle ({layer})", item_id(i))
+                        });
                         let (mark, ink) = match (&row.filled, row.next, row.required) {
                             (Some(_), _, _) => ("✓", t.form_success),
                             (None, true, _) => ("→", t.form_primary),
@@ -312,7 +333,12 @@ fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput
                         ui.horizontal(|ui| {
                             ui.add_space(t.space_10);
                             ui.label(egui::RichText::new(mark).size(t.font_label).color(ink).strong());
-                            let what = if row.required || row.filled.is_some() { row.what.to_string() } else { format!("{} (optional)", row.what) };
+                            let what = match (row.required || row.filled.is_some(), row.repeats) {
+                                _ if layer_name.is_some() => layer_name.clone().unwrap_or_default(),
+                                (true, _) => row.what.to_string(),
+                                (false, true) => format!("{} (optional, repeats)", row.what),
+                                (false, false) => format!("{} (optional)", row.what),
+                            };
                             let l = ui.label(egui::RichText::new(what).size(t.font_label).color(if row.next { t.form_primary } else { t.form_ink }));
                             if row.filled.is_none() {
                                 l.backing_on_hover_text(format!("Still needed: {}. Click one in the view.\n{}", row.what, drives(row.what)));
@@ -327,8 +353,9 @@ fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput
                         });
                     }
                 }
-                // Its gears' bore and hub circles (optional): picked, suggested by the drawing (Use),
-                // or still open.
+                // Its gears' bore and hub circles: those the drawing has (taken by themselves for a
+                // gear made here, with × to take one out; offered with Use on a reopened one). A
+                // gear's rows show only where its sketch has such a circle.
                 if (active || !complete) && solidcraft_gear::items::takes_details(it.kind) && it.gear_count(app) > 0 {
                     let picked = it.detail_things(app);
                     let n = it.gear_count(app);
@@ -338,17 +365,28 @@ fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput
                             let name = if n > 1 { format!("{} {what}", k.gear_name((i, g))) } else { what.to_string() };
                             let mine = picked.iter().find(|d| d.0 == g && d.1 == hub);
                             let offer = k.details_suggested.iter().find(|d| (d.item, d.gear, d.hub) == (i, g, hub));
+                            if mine.is_none() && offer.is_none() {
+                                continue;
+                            }
                             ui.horizontal(|ui| {
                                 ui.add_space(t.space_10);
                                 let (mark, ink) = if mine.is_some() { ("✓", t.form_success) } else { ("○", t.form_dim) };
                                 ui.label(egui::RichText::new(mark).size(t.font_label).color(ink).strong());
-                                let label = if mine.is_some() { name.clone() } else { format!("{name} (optional)") };
-                                ui.label(egui::RichText::new(label).size(t.font_label).color(t.form_ink))
-                                    .backing_on_hover_text("A circle drawn on the gear's centre, inside its pitch circle: the smaller is its bore (a hole through it), the larger its hub. Click one in the view.");
-                                if let Some((_, _, th, _)) = mine {
-                                    ui.add(egui::Label::new(egui::RichText::new(crate::dialogs_gear_items::thing_label(app, th, &len)).size(t.font_small).color(t.form_dim)).truncate());
+                                ui.label(egui::RichText::new(name.clone()).size(t.font_label).color(t.form_ink))
+                                    .backing_on_hover_text("A circle drawn on the gear's centre, inside its pitch circle: the smaller is its bore (a hole through it), the larger its hub.");
+                                if let Some((_, _, th, sel)) = mine {
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        let x = ui_kit::compact_button(ui, "×", "Take this circle out: the gear gets no bore or hub from it", true, false);
+                                        solidcraft_ui_registry::publish_target(&format!("gear:drop:{}:{g}:{slot}", item_id(i)), x.rect);
+                                        button_hit |= x.hovered();
+                                        if x.clicked() {
+                                            drop_detail = Some((i, sel.clone()));
+                                        }
+                                        ui.add(egui::Label::new(egui::RichText::new(crate::dialogs_gear_items::thing_label(app, th, &len)).size(t.font_small).color(t.form_dim)).truncate());
+                                    });
                                 } else if let Some(d) = offer {
-                                    let b = ui_kit::button(ui, format!("Use Ø{}", len(d.diameter)), ui_kit::Button::Normal)
+                                    ui.label(egui::RichText::new(format!("Ø{}", len(d.diameter))).size(t.font_small).color(t.form_dim));
+                                    let b = ui_kit::button(ui, "Use", ui_kit::Button::Normal)
                                         .backing_on_hover_text("The drawing has this circle on the gear's centre: use it.");
                                     solidcraft_ui_registry::publish_target(&format!("gear:use:{}:{g}:{slot}", item_id(i)), b.rect);
                                     button_hit |= b.hovered();
@@ -402,6 +440,9 @@ fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput
     if let Some(d) = use_detail {
         dg::use_detail(app, k, &d, inputs);
     }
+    if let Some((i, sel)) = drop_detail {
+        dg::drop_detail(k, i, &sel, inputs);
+    }
     if let Some(sk) = edit {
         k.action = Some(dg::Action::EditSketch(sk));
     }
@@ -433,6 +474,11 @@ fn settings(ui: &mut egui::Ui, k: &mut Gear, a: usize) -> bool {
     // The module block this gear is in, if any: its module is the one the gears in it share.
     let blocks = k.graph.blocks().into_iter().enumerate().find(|(_, (_, m))| m.contains(&a)).map(|(b, (_, m))| (b, m.iter().map(|i| item_id(*i)).collect::<Vec<_>>().join(", ")));
     ui_kit::section(ui, ("gear_settings", a), &title, true, |ui| {
+        // A card just made active: its settings come into view.
+        if k.scroll == dg::Scroll::Settings {
+            ui.scroll_to_cursor(Some(egui::Align::Center));
+            k.scroll = dg::Scroll::None;
+        }
         let it = &mut k.items[a];
         // The type's own settings.
         match kind {
@@ -658,6 +704,42 @@ fn drivetrain(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear) -> bool {
     enter
 }
 
+/// Housing cutout (closed, off by default): one body holding the space the drivetrain needs to
+/// turn, with a bearing seat at every bearing point, to cut out of a housing block.
+fn housing_cutout(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear) -> bool {
+    let mut enter = false;
+    let t = Tokens::get();
+    let points: usize = k.items.iter().map(|it| it.things(app).iter().filter(|x| matches!(x, solidcraft_gear::items::Thing::Point { .. })).count()).sum();
+    ui_kit::section(ui, "gear_housing_cutout", "Housing cutout", k.cutout.on, |ui| {
+        ui_kit::checkbox(ui, "Make a housing cutout", &mut k.cutout.on).backing_on_hover_text(TIP_CUTOUT);
+        if !k.cutout.on {
+            return;
+        }
+        let mut labels: Vec<String> = solidcraft_gear::hub::BEARINGS.iter().map(|b| format!("{} — {} × {} × {}", b.0, dg::fmt(b.1), dg::fmt(b.2), dg::fmt(b.3))).collect();
+        labels.push("Custom…".into());
+        let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+        choice_row(ui, "Bearing", "gear_cutout_bearing", &mut k.cutout.bearing, &labels).backing_on_hover_text(TIP_BEARING);
+        if k.cutout.bearing >= solidcraft_gear::hub::BEARINGS.len() {
+            enter |= field(ui, "Bearing OD", &mut k.cutout.od, "mm", "Custom bearing outside diameter.");
+            enter |= field(ui, "Bearing width", &mut k.cutout.width, "mm", "Custom bearing width.");
+            enter |= field(ui, "Bearing bore", &mut k.cutout.bore, "optional", "Custom bearing bore; used to check it against the shaft (empty skips the check).");
+        }
+        let said = match points {
+            0 => "No bearing points yet: pick points on the gears' shaft lines (or a Shaft gear's) for the seats.".to_string(),
+            1 => "1 bearing point: a seat there.".to_string(),
+            n => format!("{n} bearing points: a seat at each."),
+        };
+        ui.add(egui::Label::new(egui::RichText::new(said).size(t.font_small).color(t.form_dim)).wrap());
+        ui_kit::section(ui, "gear_cutout_more", "More", false, |ui| {
+            enter |= field(ui, "Radial gap", &mut k.cutout.radial, "0.5 mm", "Gap around every tip envelope and shaft. For printed housings 0.3–0.6 mm is typical.");
+            enter |= field(ui, "Axial gap", &mut k.cutout.axial, "0.5 mm", "Gap past each gear's faces along its axis.");
+            enter |= field(ui, "Seat fit", &mut k.cutout.fit, "0", "How much larger than the bearing's OD each seat is, on the diameter: 0.1–0.2 for a printed slip fit, 0 or less for a press fit.");
+            enter |= field(ui, "Shaft run-on", &mut k.cutout.run_on, "2 × face", "How far each shaft's clearance runs past its gear on each side, enough to pass through a housing wall.");
+        });
+    });
+    enter
+}
+
 /// Output: the operation, the Targets (when it needs them), the keep-out and the assembly.
 fn output(ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], input: &mut usize) -> bool {
     let mut enter = false;
@@ -705,7 +787,7 @@ fn results(app: &SolveApp, ui: &mut egui::Ui, k: &Gear) {
                 parts.push(format!("contact {}", dg::fmt((c * 100.0).round() / 100.0)));
             }
             ui_kit::row(ui, &k.gear_name((r.item, r.gear)), |ui| {
-                ui.add(egui::Label::new(egui::RichText::new(parts.join(" · ")).size(t.font_small).color(t.form_ink)).truncate())
+                ui.add(egui::Label::new(egui::RichText::new(parts.join(" · ")).size(t.font_small).color(t.form_ink)).wrap())
             })
             .backing_on_hover_text(crate::dialogs_gear_graph::reply_tip(r));
         }

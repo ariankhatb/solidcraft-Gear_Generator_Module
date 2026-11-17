@@ -12,7 +12,7 @@ const sketch = (name, plane, ents) => [C('sketch.create', { plane, name, project
 const circle = (id, c, r) => C('sketch.circle.center', { center: c, radius: r, id });
 const line = (id, a, b) => C('sketch.line', { points: [a, b], ids: [id] });
 const dia = (e, mm) => C('sketch.dimension', { entities: [e], type: 'diameter', value: `${mm} mm` });
-const hdim = (a, b, mm) => C('sketch.dimension', { entities: [a, b], type: 'horizontal', value: `${mm} mm` });
+const hdim = (a, b, mm) => C('sketch.dimension', { entities: [a, b], type: 'horizontal', value: typeof mm === 'number' ? `${mm} mm` : mm });
 const vdim = (a, b, mm) => C('sketch.dimension', { entities: [a, b], type: 'vertical', value: `${mm} mm` });
 const len = (l, mm) => C('sketch.dimension', { entities: [l], value: `${mm} mm` });
 const at0 = p => C('sketch.constraint.coincident', { a: p, b: 'origin' });
@@ -20,8 +20,15 @@ const tangent = (a, b) => C('sketch.constraint.tangent', { a, b });
 const concentric = (a, b) => C('sketch.constraint.concentric', { a, b });
 const hv = (l, mode) => C('sketch.constraint.horizontal_vertical', { line: l, mode });
 const pick = (sketch, curve, slot) => ({ sketch, curve, slot });
+const point = (sketch, id) => ({ sketch, point: id, slot: 'bearing' });
 // A bore or hub circle: drawn on a pitch circle's centre (Concentric) with its diameter (0 DOF).
 const detail = (id, of, at, d) => [circle(id, at, d / 2), concentric(id, of), dia(id, d)];
+// An upright shaft line at x (from z0 to z1, in an XZ sketch) with a bearing point on it at z:
+// the line held vertical, placed and sized; the point on the line, its height dimensioned (0 DOF).
+const shaftWithBearing = (l, xd, z0, z1, p, z, x = typeof xd === 'number' ? xd : 50) => [
+  line(l, [x, z0], [x, z1]), hv(l, 'vertical'), hdim('origin', `${l}.start`, xd), vdim('origin', `${l}.start`, Math.abs(z0)), len(l, z1 - z0),
+  C('sketch.point', { point: [x, z], id: p }), C('sketch.constraint.coincident', { a: p, b: l }), vdim('origin', p, Math.abs(z)),
+];
 const gears = (name, items, links, extra = {}) => C('gear.create', { name, items, links, assembly: true, ...extra });
 const mesh = (a, ag, b, bg) => ({ a: { item: a, gear: ag }, b: { item: b, gear: bg }, kind: 'mesh' });
 const ratio = (a, ag, b, bg) => C('gear.ratio', { a: { item: a, gear: ag }, b: { item: b, gear: bg } });
@@ -35,12 +42,17 @@ const touchingPair = (a, da, b, db) => [
 const ex = {};
 
 ex['01-spur-pair'] = [
-  // Bores Ø8 on both gears and a Ø16 hub on A, drawn as circles on their centres.
-  ...sketch('Pitch circles', XY(), [...touchingPair('a', 40, 'b', 60), ...detail('abore', 'a', [0, 0], 8), ...detail('ahub', 'a', [0, 0], 16), ...detail('bbore', 'b', [50, 0], 8)]),
+  // Bores Ø8 on both gears and a Ø16 hub on A, drawn as circles on their centres; gear A's
+  // shaft line with a bearing point 20 mm below it and one 28 mm above (seats of the
+  // housing cutout, a 608).
+  ...sketch('Pitch circles', XY(), [
+    circle('a', [0, 0], 20), circle('b', [50, 0], 30), at0('a.center'), dia('a', 40), dia('b', 60),
+    tangent('a', 'b'), vdim('origin', 'b.center', 0), ...detail('abore', 'a', [0, 0], 8), ...detail('ahub', 'a', [0, 0], 16), ...detail('bbore', 'b', [50, 0], 8)]),
+  ...sketch('Shafts', XZ, [...shaftWithBearing('s1', 0, -30, 36, 'p1', -20), C('sketch.point', { point: [0, 28], id: 'p2' }), C('sketch.constraint.coincident', { a: 'p2', b: 's1' }), vdim('origin', 'p2', 28)]),
   gears('Spur pair', [
-    { id: 'A', type: 'spur', components: [pick('Pitch circles', 'a', 'pitch'), pick('Pitch circles', 'abore', 'bore'), pick('Pitch circles', 'ahub', 'hub')], module_block: 'M' },
+    { id: 'A', type: 'spur', components: [pick('Pitch circles', 'a', 'pitch'), pick('Pitch circles', 'abore', 'bore'), pick('Pitch circles', 'ahub', 'hub'), pick('Shafts', 's1', 'axis'), point('Shafts', 'p1'), point('Shafts', 'p2')], module_block: 'M' },
     { id: 'B', type: 'spur', components: [pick('Pitch circles', 'b', 'pitch'), pick('Pitch circles', 'bbore', 'bore')], module_block: 'M' },
-  ], [mesh('A', 0, 'B', 0)], { module_blocks: [{ id: 'M', module: 2 }], drive: { item: 'A', gear: 0, rpm: 1000, torque: 2 } }),
+  ], [mesh('A', 0, 'B', 0)], { module_blocks: [{ id: 'M', module: 2 }], drive: { item: 'A', gear: 0, rpm: 1000, torque: 2 }, clearance_body: { bearing: '608', bearing_fit: 0.15 } }),
   ratio('A', 0, 'B', 0),
 ];
 

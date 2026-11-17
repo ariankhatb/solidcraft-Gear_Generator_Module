@@ -87,6 +87,8 @@ pub struct SlotRow {
     pub filled: Option<String>,
     /// Whether this is the slot the next pick goes to.
     pub next: bool,
+    /// It takes any number (a compound's circles, bearing points).
+    pub repeats: bool,
 }
 
 /// A circle's radius (0 for anything else).
@@ -294,6 +296,10 @@ pub struct GearItem {
     /// ([`items::DETAIL_SLOTS`]): sent as components with slot `bore` / `hub`; the engine reads
     /// which gear each belongs to from where it is drawn.
     pub details: Vec<(Sel, bool)>,
+    /// Its bore and hub circles come from the drawing by themselves (a gear made in this dialog;
+    /// one reopened keeps what it was made with), less those taken out by hand (`dropped`).
+    pub auto_details: bool,
+    pub dropped: Vec<Sel>,
     pub gears: Vec<GearSettings>,
     /// Ring gear: rim; worm: starts and a throated wheel; bevel and hypoid: style (an index into
     /// `BEVEL_STYLES`) and spiral angle; rack: back height; planetary: planets and a carrier;
@@ -324,6 +330,8 @@ impl GearItem {
             kind,
             picks: Vec::new(),
             details: Vec::new(),
+            auto_details: true,
+            dropped: Vec::new(),
             gears: Vec::new(),
             rim: String::new(),
             starts: String::new(),
@@ -455,10 +463,10 @@ impl GearItem {
             if picks.is_empty() {
                 let is_next = !marked && next == Some(s.what);
                 marked |= is_next;
-                out.push(SlotRow { what: s.what, required: s.required, filled: None, next: is_next });
+                out.push(SlotRow { what: s.what, required: s.required, filled: None, next: is_next, repeats: s.repeats });
             }
             for (n, p) in picks.into_iter().enumerate() {
-                out.push(SlotRow { what: s.what, required: s.required && n == 0, filled: Some(p), next: false });
+                out.push(SlotRow { what: s.what, required: s.required && n == 0, filled: Some(p), next: false, repeats: s.repeats });
             }
         }
         out
@@ -633,6 +641,7 @@ pub fn items_of(r: &Map<String, Value>, ui: Option<&Value>, graph: &mut Graph) -
     for (i, v) in r.get("items").and_then(Value::as_array).into_iter().flatten().enumerate() {
         let kind = v.get("type").and_then(Value::as_str).and_then(ItemKind::parse).unwrap_or(ItemKind::Spur);
         let mut it = GearItem::new(kind);
+        it.auto_details = false;
         it.picks = match picks_ui.and_then(|p| p.get(i)).and_then(|p| serde_json::from_value::<Vec<Sel>>(p.clone()).ok()) {
             Some(p) => p,
             None => v.get("components").and_then(Value::as_array).into_iter().flatten().filter(|c| !is_detail(c)).filter_map(sel_of).collect(),

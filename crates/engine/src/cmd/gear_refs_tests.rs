@@ -194,7 +194,8 @@ fn spur() -> (Fix, Ids, f64) {
     assert_eq!(before.links.len(), 1, "{before:?}");
     let a = before.bodies[0].clone();
     assert!(a.contains('A'), "{before:?}");
-    hole(&mut f.s, &a, [0.0, 0.0], 0.0);
+    // (Off the centre: the gear has a bore and a hub there.)
+    hole(&mut f.s, &a, [12.0, 0.0], 0.0);
     let v = volume(&mut f.s, &a);
     (f, before, v)
 }
@@ -294,7 +295,8 @@ fn spur_renames_keep_every_id_through_the_next_edit() {
     let comp_b = before.members[1].1;
     run(&mut f.s, "component.rename", json!({"component": comp_b, "name": "Wheel part"}));
     let renamed = whole(&mut f.s);
-    assert_eq!(renamed.bodies, vec!["Pinion".to_string(), b.clone()], "{renamed:?}");
+    // (The gears, then the housing cutout the fixture makes.)
+    assert_eq!(renamed.bodies[..2], ["Pinion".to_string(), b.clone()], "{renamed:?}");
     let same_but_names = |x: &Ids| (x.feature, x.members.iter().map(|m| (m.1, m.2)).collect::<Vec<_>>(), x.links.clone());
     assert_eq!(same_but_names(&renamed), same_but_names(&before));
     // An edit after the renames: the set follows the sketch with the names kept.
@@ -426,7 +428,7 @@ fn spur_items_added_and_taken_away_keep_the_others() {
     let three = whole(&mut f.s);
     assert_eq!(three.members.len(), 3);
     assert_eq!(&three.members[..2], &before.members[..], "A and B keep theirs: {three:?}");
-    assert_eq!(three.bodies[..2], before.bodies[..]);
+    assert_eq!(three.bodies[..2], before.bodies[..2]);
     assert_eq!(three.links.len(), 2);
     assert!(three.links.contains(&before.links[0]));
     // A taken away: B and C keep theirs.
@@ -741,10 +743,14 @@ fn a_shaft_line_sets_the_shafts_length_and_a_point_on_it_is_a_bearing() {
     assert!((plan.shafts[0].length - 50.0).abs() < 1e-6, "the line's length: {}", plan.shafts[0].length);
     let f = plan.bodies[plan.shafts[0].body].frame;
     assert!(f.origin.iter().zip([0.0, 0.0, -15.0]).all(|(a, b)| (a - b).abs() < 1e-6) && (f.z[2] - 1.0).abs() < 1e-9, "from the line's first end along it: {f:?}");
-    // A bearing point goes on a Shaft item's line (a gear item refuses it, saying so).
+    // A bearing point goes on a Shaft item's line, or on a gear's own shaft line; a gear without
+    // a shaft line refuses it, saying what to pick first.
+    s.execute("gear.calculate", &json!({"items": [
+        {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a"}, {"sketch": "Shaft", "curve": "s"}, {"sketch": "Shaft", "point": "brg", "slot": "bearing"}]}]}))
+        .unwrap_or_else(|e| panic!("a bearing point on A's own shaft line: {e}"));
     let e = s.execute("gear.calculate", &json!({"items": [
-        {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a"}, {"sketch": "Shaft", "curve": "s"}, {"sketch": "Shaft", "point": "brg", "slot": "bearing"}]}]})).unwrap_err().to_string();
-    assert!(e.contains("Shaft item"), "{e}");
+        {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a"}, {"sketch": "Shaft", "point": "brg", "slot": "bearing"}]}]})).unwrap_err().to_string();
+    assert!(e.contains("shaft line first"), "{e}");
     let with_shaft = json!({"items": [
         {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a", "slot": "pitch"}]},
         {"id": "B", "type": "spur", "components": [{"sketch": "Pitch", "curve": "b", "slot": "pitch"}]},
@@ -758,4 +764,62 @@ BEARING plan shafts {:?} clearance {:?} warnings {:?}", plan.shafts, plan.cleara
     let r = r.unwrap();
     assert!(r["error"].is_null(), "{r}");
     assert_eq!(plan.shafts.len(), 1, "the Shaft item's line is A's shaft");
+}
+
+/// A spur pair on two shaft lines (an upright sketch), a bearing point on each line, and the
+/// housing cutout on: each point is a 608 seat of the cutout, which is one body named "Housing
+/// cutout" and no member (no component, no joint). Moving a point moves its seat; deleting one
+/// fails the set by name, never drops the seat quietly.
+#[test]
+fn bearing_points_on_shaft_lines_are_the_housing_cutouts_seats() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Pitch"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 20.0, "id": "a"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [50, 0], "radius": 30.0, "id": "b"}));
+    run(&mut s, "sketch.finish", json!({}));
+    let sk = run(&mut s, "sketch.create", json!({"plane": {"origin": [0, 0, 0], "x_dir": [1, 0, 0], "y_dir": [0, 0, 1]}, "name": "Shafts"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.line", json!({"points": [[0, -40], [0, 40]], "ids": ["s1"]}));
+    run(&mut s, "sketch.line", json!({"points": [[50, -40], [50, 40]], "ids": ["s2"]}));
+    run(&mut s, "sketch.point", json!({"point": [0, -25], "id": "p1"}));
+    run(&mut s, "sketch.point", json!({"point": [50, -25], "id": "p2"}));
+    run(&mut s, "sketch.finish", json!({}));
+    let pick = |sketch: &str, curve: &str, slot: &str| json!({"sketch": sketch, "curve": curve, "slot": slot});
+    let point = |id: &str| json!({"sketch": "Shafts", "point": id, "slot": "bearing"});
+    let req = json!({"name": "Housed pair", "assembly": true,
+        "items": [
+            {"id": "A", "type": "spur", "components": [pick("Pitch", "a", "pitch"), pick("Shafts", "s1", "axis"), point("p1")]},
+            {"id": "B", "type": "spur", "components": [pick("Pitch", "b", "pitch"), pick("Shafts", "s2", "axis"), point("p2")]}],
+        "links": [{"a": {"item": "A"}, "b": {"item": "B"}, "kind": "mesh"}],
+        "module_blocks": [{"id": "M", "module": 2, "members": ["A", "B"]}],
+        "clearance_body": {"bearing": "608"}});
+    let r = run(&mut s, "gear.create", req);
+    no_errors(&s);
+    assert_eq!(r["clearance"], json!("Housing cutout"), "{r}");
+    let members = r["assembly"]["members"].as_array().map_or(0, Vec::len);
+    assert_eq!(members, 2, "the cutout is no member: {r}");
+    assert!(r["assembly"]["keep_out"].is_null(), "no keep-out component: {r}");
+    // Each point a seat: where they are along their shafts, from the facts.
+    let seats = |s: &mut Session| -> Vec<f64> {
+        let r = run(s, "gear.calculate", request(s));
+        r["facts"].as_array().into_iter().flatten().filter(|f| f["label"].as_str().is_some_and(|l| l.contains("bearing seat"))).filter_map(|f| f["value"].as_f64()).collect()
+    };
+    let before = seats(&mut s);
+    assert_eq!(before.len(), 2, "two seats");
+    // Point p1 moved 7 mm down its line: its seat with it.
+    run(&mut s, "sketch.edit", json!({"sketch": sk}));
+    run(&mut s, "sketch.delete", json!({"entities": ["p1"]}));
+    run(&mut s, "sketch.point", json!({"point": [0, -32], "id": "p1"}));
+    run(&mut s, "sketch.finish", json!({}));
+    no_errors(&s);
+    let after = seats(&mut s);
+    assert_eq!(after.len(), 2);
+    assert!((after[0] - before[0]).abs() > 6.9 && (after[0] - before[0]).abs() < 7.1, "{before:?} → {after:?}");
+    assert!((after[1] - before[1]).abs() < 1e-6, "the other seat stays: {before:?} → {after:?}");
+    // p2 deleted: the set fails naming it.
+    let feature = gears_features(&s)[0];
+    run(&mut s, "sketch.edit", json!({"sketch": sk}));
+    run(&mut s, "sketch.delete", json!({"entities": ["p2"]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let e = feature_error(&s, feature).expect("the set fails without its bearing point");
+    assert!(e.contains("item B") && e.contains("p2") && e.contains("Shafts"), "{e}");
 }

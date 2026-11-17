@@ -180,6 +180,146 @@
    "params": {}
   },
   {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      0,
+      1
+     ]
+    },
+    "name": "Shafts",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      0,
+      -30
+     ],
+     [
+      0,
+      36
+     ]
+    ],
+    "ids": [
+     "s1"
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "s1",
+    "mode": "vertical"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "s1.start"
+    ],
+    "type": "horizontal",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "s1.start"
+    ],
+    "type": "vertical",
+    "value": "30 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "s1"
+    ],
+    "value": "66 mm"
+   }
+  },
+  {
+   "command": "sketch.point",
+   "params": {
+    "point": [
+     0,
+     -20
+    ],
+    "id": "p1"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "p1",
+    "b": "s1"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "p1"
+    ],
+    "type": "vertical",
+    "value": "20 mm"
+   }
+  },
+  {
+   "command": "sketch.point",
+   "params": {
+    "point": [
+     0,
+     28
+    ],
+    "id": "p2"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "p2",
+    "b": "s1"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "p2"
+    ],
+    "type": "vertical",
+    "value": "28 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
    "command": "gear.create",
    "params": {
     "name": "Spur pair",
@@ -202,6 +342,21 @@
         "sketch": "Pitch circles",
         "curve": "ahub",
         "slot": "hub"
+       },
+       {
+        "sketch": "Shafts",
+        "curve": "s1",
+        "slot": "axis"
+       },
+       {
+        "sketch": "Shafts",
+        "point": "p1",
+        "slot": "bearing"
+       },
+       {
+        "sketch": "Shafts",
+        "point": "p2",
+        "slot": "bearing"
        }
       ],
       "module_block": "M"
@@ -249,6 +404,10 @@
      "gear": 0,
      "rpm": 1000,
      "torque": 2
+    },
+    "clearance_body": {
+     "bearing": "608",
+     "bearing_fit": 0.15
     }
    }
   },

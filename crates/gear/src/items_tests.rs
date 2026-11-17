@@ -82,7 +82,11 @@ fn spur_takes_a_circle_and_its_own_shaft_line() {
     refused(ItemKind::Spur, std::slice::from_ref(&c), line([0.0; 3], [10.0, 0.0, 30.0]), "tilted");
     refused(ItemKind::Spur, std::slice::from_ref(&c), line([5.0, 0.0, 0.0], [5.0, 0.0, 30.0]), "off the shaft line");
     refused(ItemKind::Spur, std::slice::from_ref(&c), circ([50.0, 0.0, 0.0], Z, 10.0), "no room");
-    refused(ItemKind::Spur, std::slice::from_ref(&c), Thing::point([0.0; 3]), "no room");
+    // A bearing point goes on the gear's own shaft line: picked first, then the point on it.
+    refused(ItemKind::Spur, std::slice::from_ref(&c), Thing::point([0.0; 3]), "shaft line first");
+    let shafted = [c.clone(), line([0.0, 0.0, -5.0], [0.0, 0.0, 30.0])];
+    assert_eq!(picked(ItemKind::Spur, &[shafted[0].clone(), shafted[1].clone(), Thing::point([0.0, 0.0, 20.0])])[2].name, "bearing");
+    refused(ItemKind::Spur, &shafted, Thing::point([3.0, 0.0, 20.0]), "off the shaft line");
     refused(ItemKind::Spur, std::slice::from_ref(&c), c.clone(), "already picked");
     refused(ItemKind::Spur, &[], circ([0.0; 3], Z, 0.0), "no size");
     let construction = Thing::Line { a: [0.0; 3], b: [0.0, 0.0, 9.0], construction: true, ids: ThingIds::default() };
@@ -273,7 +277,7 @@ fn shaft_with_bearings_on_it() {
 fn incomplete_item_is_named() {
     let it = GearItem::new("D", ItemKind::Worm).with(vec![circ([0.0; 3], Z, 30.0)]);
     let e = validate_item(&it).unwrap_err();
-    assert!(e.contains("Item D") && e.contains("worm's axis line"), "{e}");
+    assert!(e.contains("Gear D") && e.contains("worm's axis line"), "{e}");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -633,4 +637,28 @@ fn bore_and_hub_circles_belong_to_the_gear_they_sit_in() {
     let ring = GearItem::new("C", ItemKind::Internal).with(vec![circ([0.0; 3], Z, 40.0)]);
     assert_eq!(detail_gear(&ring, &circ([0.0; 3], Z, 4.0)), None);
     assert!(takes_details(ItemKind::Herringbone) && !takes_details(ItemKind::Worm));
+}
+
+/// A bevel side view clicked as its two shaft lines alone (the corner where they meet picks a
+/// line, not the apex point): lines meeting end to end with no circle are the side view, their
+/// meeting point the apex; with no contact line its sizes come from the gears' teeth and module.
+#[test]
+fn two_shaft_lines_meeting_are_a_bevel_side_view() {
+    let (s1, s2) = (line([0.0; 3], [0.0, 0.0, 60.0]), line([0.0; 3], [60.0, 0.0, 0.0]));
+    let slots = picked(ItemKind::Bevel, &[s1.clone(), s2.clone()]);
+    assert_eq!(slots.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["axis", "axis2"]);
+    assert_eq!(next_slot(ItemKind::Bevel, &[s1.clone(), s2.clone()]), None, "complete: the apex is where they meet");
+    // Sizes from the settings: no gears until teeth and module are given, then two.
+    let mut it = GearItem::new("A", ItemKind::Bevel).with(vec![s1.clone(), s2.clone()]);
+    assert!(validate_item(&it).is_ok());
+    assert!(gear_geoms(&it).is_empty());
+    it.gears = vec![GearSettings { teeth: Some(20), module: Some(2.0), ..GearSettings::default() }, GearSettings { teeth: Some(30), ..GearSettings::default() }];
+    assert_eq!(gear_geoms(&it).len(), 2);
+    // With a contact line: the ratio from its angle.
+    let with_contact = [s1.clone(), s2.clone(), line([0.0; 3], [30.0, 0.0, 20.0])];
+    assert_eq!(picked(ItemKind::Bevel, &with_contact)[2].name, "contact");
+    assert_eq!(gear_geoms(&GearItem::new("B", ItemKind::Bevel).with(with_contact.to_vec())).len(), 2);
+    // Lines that don't meet stay the two-axis-lines-and-a-circle layout.
+    let apart = [line([0.0; 3], [0.0, 0.0, 60.0]), line([5.0, 0.0, 0.0], [60.0, 0.0, 0.0])];
+    assert_eq!(next_slot(ItemKind::Bevel, &apart), Some("pitch circle"));
 }

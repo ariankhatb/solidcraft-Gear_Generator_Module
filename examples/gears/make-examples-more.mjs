@@ -22,6 +22,14 @@ const hv = (l, mode) => C('sketch.constraint.horizontal_vertical', { line: l, mo
 const pick = (sketch, curve, slot) => ({ sketch, curve, slot });
 // A bore circle: drawn on a pitch circle's centre (Concentric) with its diameter (0 DOF).
 const bore = (id, of, x, d) => [circle(id, [x, 0], d / 2), concentric(id, of), dia(id, d)];
+const XZ = { origin: [0, 0, 0], x_dir: [1, 0, 0], y_dir: [0, 0, 1] };
+const point = (sketch, id) => ({ sketch, point: id, slot: 'bearing' });
+// An upright shaft line at x (from z0 to z1, in an XZ sketch) with a bearing point on it at z:
+// the line held vertical, placed and sized; the point on the line, its height dimensioned (0 DOF).
+const shaftWithBearing = (l, x, z0, z1, p, z) => [
+  line(l, [x, z0], [x, z1]), hv(l, 'vertical'), hdim('origin', `${l}.start`, x), vdim('origin', `${l}.start`, Math.abs(z0)), len(l, z1 - z0),
+  C('sketch.point', { point: [x, z], id: p }), C('sketch.constraint.coincident', { a: p, b: l }), vdim('origin', p, Math.abs(z)),
+];
 const link = (kind, a, ag, b, bg) => ({ a: { item: a, gear: ag }, b: { item: b, gear: bg }, kind });
 const ratio = (a, ag, b, bg) => C('gear.ratio', { a: { item: a, gear: ag }, b: { item: b, gear: bg } });
 // A circle whose centre sits on the X axis at x (fully placed).
@@ -57,16 +65,21 @@ const big = [
   ...sketch(S('-60 helical'), XY(-60), [...onX('e', 87, 24), circle('f', [123, 0], 24), dia('f', 48), tangent('e', 'f'), vdim('origin', 'f.center', 0), ...bore('ebore', 'e', 87, 8), ...bore('fbore', 'f', 123, 8)]),
   ...sketch(S('+90 planetary'), XY(90), [...onX('sun', 0, 27), circle('planet', [27, 0], 13.5), circle('pring', [0, 0], 40.5), dia('planet', 27), dia('pring', 81), concentric('pring', 'sun'), tangent('planet', 'sun'), vdim('origin', 'planet.center', 0)]),
   ...sketch(S('-90 internal'), XY(-90), [...onX('rp', 123, 40), circle('ring', [153, 0], 50), dia('ring', 100), tangent('rp', 'ring'), vdim('origin', 'ring.center', 0)]),
+  // Shaft lines of A, B (layer 0), E and F (layer -60), each with a bearing point 14 mm below its gear.
+  ...sketch('Shafts', XZ, [
+    ...shaftWithBearing('sa', 0, -18, 18, 'pa', -14), ...shaftWithBearing('sb', 45, -18, 18, 'pb', -14),
+    ...shaftWithBearing('se', 87, -78, -42, 'pe', -74), ...shaftWithBearing('sf', 123, -78, -42, 'pf', -74),
+  ]),
   C('gear.create', { name: 'Everything drivetrain', assembly: true,
     items: [
       { id: 'W', type: 'worm', starts: 2, components: [pick(S('+60 worm'), 'w', 'pitch'), pick(S('+60 worm'), 'worm', 'axis')] },
       { id: 'G', type: 'rack', components: [pick(S('+30 rack'), 'rack', 'axis'), pick(S('+30 rack'), 'g', 'pitch')], module_block: 'M' },
-      { id: 'A', type: 'spur', components: [pick(S('0 spur'), 'a', 'pitch'), pick(S('0 spur'), 'abore', 'bore')], module_block: 'M' },
-      { id: 'B', type: 'spur', components: [pick(S('0 spur'), 'b', 'pitch'), pick(S('0 spur'), 'bbore', 'bore')], module_block: 'M' },
+      { id: 'A', type: 'spur', components: [pick(S('0 spur'), 'a', 'pitch'), pick(S('0 spur'), 'abore', 'bore'), pick('Shafts', 'sa', 'axis'), point('Shafts', 'pa')], module_block: 'M' },
+      { id: 'B', type: 'spur', components: [pick(S('0 spur'), 'b', 'pitch'), pick(S('0 spur'), 'bbore', 'bore'), pick('Shafts', 'sb', 'axis'), point('Shafts', 'pb')], module_block: 'M' },
       { id: 'C', type: 'herringbone', components: [pick(S('-30 herringbone'), 'c', 'pitch'), pick(S('-30 herringbone'), 'cbore', 'bore')], module_block: 'M', gears: [{ gear: 0, helix_angle: 25, hand: 'right', herringbone: true }] },
       { id: 'D', type: 'herringbone', components: [pick(S('-30 herringbone'), 'd', 'pitch'), pick(S('-30 herringbone'), 'dbore', 'bore')], module_block: 'M', gears: [{ gear: 0, helix_angle: 25, hand: 'left', herringbone: true }] },
-      { id: 'E', type: 'helical', components: [pick(S('-60 helical'), 'e', 'pitch'), pick(S('-60 helical'), 'ebore', 'bore')], module_block: 'M', gears: [{ gear: 0, helix_angle: 20, hand: 'right' }] },
-      { id: 'F', type: 'helical', components: [pick(S('-60 helical'), 'f', 'pitch'), pick(S('-60 helical'), 'fbore', 'bore')], module_block: 'M', gears: [{ gear: 0, helix_angle: 20, hand: 'left' }] },
+      { id: 'E', type: 'helical', components: [pick(S('-60 helical'), 'e', 'pitch'), pick(S('-60 helical'), 'ebore', 'bore'), pick('Shafts', 'se', 'axis'), point('Shafts', 'pe')], module_block: 'M', gears: [{ gear: 0, helix_angle: 20, hand: 'right' }] },
+      { id: 'F', type: 'helical', components: [pick(S('-60 helical'), 'f', 'pitch'), pick(S('-60 helical'), 'fbore', 'bore'), pick('Shafts', 'sf', 'axis'), point('Shafts', 'pf')], module_block: 'M', gears: [{ gear: 0, helix_angle: 20, hand: 'left' }] },
       { id: 'P', type: 'planetary', planets: 3, carrier: true, components: [pick(S('+90 planetary'), 'sun', 'sun'), pick(S('+90 planetary'), 'pring', 'ring'), pick(S('+90 planetary'), 'planet', 'planet')], module_block: 'M' },
       { id: 'R', type: 'internal', rim: 6, components: [pick(S('-90 internal'), 'ring', 'pitch'), pick(S('-90 internal'), 'rp', 'pitch2')], module_block: 'M2' },
     ],
@@ -82,7 +95,9 @@ const big = [
       link('shaft', 'F', 0, 'R', 1),
     ],
     module_blocks: [{ id: 'M', module: 1.5 }, { id: 'M2', module: 2 }],
-    drive: { item: 'W', gear: 1, rpm: 3000, torque: 0.5 } }),
+    drive: { item: 'W', gear: 1, rpm: 3000, torque: 0.5 },
+    // The housing cutout: the space it all turns in, with a 608 seat at each bearing point.
+    clearance_body: { bearing: '608', bearing_fit: 0.15 } }),
   ratio('W', 1, 'A', 0),
   ratio('W', 1, 'F', 0),
   ratio('W', 1, 'R', 0),

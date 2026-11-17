@@ -511,6 +511,9 @@ pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemPar
             c.radial = gap;
             c.axial = gap;
         }
+        // Every bearing point picked (a Shaft item's, a gear's on its shaft line): a seat of the
+        // set's bearing, where the point is now (so the seats follow the sketch).
+        c.seats.extend(gi::bearing_points(&items).into_iter().map(solidcraft_gear::clearance::Seat::Point));
         base.clearance_body = Some(c);
     }
     let mut system = plan_items(&items, &links, &blocks, drive.as_ref(), &Spec { clearance_body: None, ..base.clone() }).map_err(|e| bad(cmd, e))?;
@@ -525,9 +528,8 @@ pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemPar
             let mut whole = system.plan.clone();
             match solidcraft_gear::clearance::clearance_body(&base, &mut whole) {
                 Ok(mut body) => {
-                    if body.name.trim().is_empty() || base.name.trim().is_empty() {
-                        body.name = "Gears keep-out".into();
-                    }
+                    // The housing cutout: one body, no member (no component, no joint).
+                    body.name = "Housing cutout".into();
                     whole.clearance = Some(body);
                     system.plan = whole;
                 }

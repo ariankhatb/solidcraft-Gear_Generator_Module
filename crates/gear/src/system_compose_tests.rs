@@ -229,7 +229,7 @@ fn stages_that_collide_are_refused_naming_both() {
     let links = vec![mesh(g(0, 0), g(1, 0)), mesh(g(2, 0), g(3, 0))];
     let sp = plan_items(&items, &links, &[], None, &Spec::default()).unwrap();
     let e = sp.error.unwrap_or_default();
-    assert!(e.contains("collide") && e.contains("Item C gear 1") && e.contains("move one"), "{e}");
+    assert!(e.contains("collide") && e.contains("Gear C") && e.contains("move one"), "{e}");
     assert!(sp.plan.bodies.is_empty());
     // Moved clear along their shafts, they are made.
     let mut apart = items.clone();
@@ -325,7 +325,7 @@ fn a_free_gear_at_a_fixed_module_keeps_the_module_with_a_note() {
         // Ø42 at module 4: 10.5 teeth, 11 the closest (rounding up).
         assert_eq!((r.teeth, r.module), (11, 4.0), "{r:?}");
         assert!((r.pitch_d - 44.0).abs() < 1e-9);
-        assert!(sp.notes.iter().any(|n| n == "Item A gear 1 meshes nothing: 11 teeth at module 4 make it Ø44 (Ø42 drawn)"), "{:?}", sp.notes);
+        assert!(sp.notes.iter().any(|n| n == "Gear A meshes nothing: 11 teeth at module 4 make it Ø44 (Ø42 drawn)"), "{:?}", sp.notes);
     }
     // At a module that fits the drawing: no note.
     a.gears[0].module = Some(3.0);
@@ -419,4 +419,51 @@ fn a_ring_whose_pinion_is_in_a_cluster_keeps_its_space_for_the_pinion() {
         }
     }
     assert_eq!(inside, 0, "pinion outline points inside the ring's material");
+}
+
+/// The housing cutout of a drivetrain made from items: each bearing point picked on a gear's
+/// shaft line is a seat ([`crate::clearance::Seat::Point`]) of the set's bearing, on that gear's
+/// axis where the point is; moving the point moves the seat.
+#[test]
+fn a_bearing_point_on_a_gears_shaft_line_is_a_seat_of_the_housing_cutout() {
+    use crate::clearance::{Clearance, Seat, clearance_body};
+    use crate::items::{bearing_points, validate_slot};
+    use crate::mesh3d::Solid;
+    let pt = |p: [f64; 3]| Thing::point(p);
+    let at = |z: f64| {
+        vec![
+            item("A", ItemKind::Spur, vec![circ([0.0; 3], Z, 20.0), line([0.0, 0.0, -40.0], [0.0, 0.0, 40.0]), pt([0.0, 0.0, z])]),
+            item("B", ItemKind::Spur, vec![circ([50.0, 0.0, 0.0], Z, 30.0), line([50.0, 0.0, -40.0], [50.0, 0.0, 40.0]), pt([50.0, 0.0, -25.0])]),
+        ]
+    };
+    // A bearing point is taken on a gear only on its own shaft line.
+    let a = &at(-25.0)[0];
+    assert!(validate_slot(ItemKind::Spur, &a.things[..2], &pt([0.0, 0.0, -25.0])).is_ok());
+    let e = validate_slot(ItemKind::Spur, &a.things[..2], &pt([5.0, 0.0, -25.0])).unwrap_err();
+    assert!(e.contains("off the shaft line"), "{e}");
+    let e = validate_slot(ItemKind::Spur, &a.things[..1], &pt([0.0, 0.0, -25.0])).unwrap_err();
+    assert!(e.contains("shaft line first"), "{e}");
+    let links = vec![mesh(g(0, 0), g(1, 0))];
+    let cutout = |z: f64| {
+        let items = at(z);
+        assert_eq!(bearing_points(&items).len(), 2);
+        let base = Spec {
+            clearance_body: Some(Clearance { bearing: Some("608".into()), seats: bearing_points(&items).into_iter().map(Seat::Point).collect(), ..Clearance::default() }),
+            ..Spec::default()
+        };
+        let mut sp = plan_items(&items, &links, &[], None, &Spec { clearance_body: None, ..base.clone() }).unwrap_or_else(|e| panic!("{e}"));
+        assert!(sp.error.is_none(), "{:?}", sp.error);
+        let body = clearance_body(&base, &mut sp.plan).unwrap_or_else(|e| panic!("{e}"));
+        assert!(sp.plan.warnings.iter().all(|w| !w.contains("seat")), "{:?}", sp.plan.warnings);
+        Solid::new(&body, 0.002)
+    };
+    // A 608 is 22 mm across and 7 wide: its seat round A's axis at the point.
+    let keep = cutout(-25.0);
+    assert!(keep.contains([10.5, 0.0, -25.0]) && keep.contains([0.0, -10.5, -22.0]), "the seat at A's point");
+    assert!(!keep.contains([11.6, 0.0, -25.0]), "no bigger than the bearing");
+    assert!(keep.contains([60.5, 0.0, -25.0]), "the seat at B's point");
+    // Moved along the line, the seat follows.
+    let moved = cutout(-32.0);
+    assert!(moved.contains([10.5, 0.0, -32.0]), "the seat moved with its point");
+    assert!(keep.contains([10.5, 0.0, -24.0]) && !moved.contains([10.5, 0.0, -24.0]), "nothing left where it was");
 }

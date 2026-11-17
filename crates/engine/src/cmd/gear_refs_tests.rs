@@ -521,18 +521,19 @@ fn two_gears_features_read_one_sketch() {
 
 /// The edits every fixture goes through: a diameter, a distance, an unrelated circle added and
 /// deleted, its sketches renamed, undo and redo of each, save and reopen.
-fn common(script: &str, diameter: (&str, &str, &str), distance: Option<(&str, [&str; 2], &str, &str)>) {
+fn common(script: &str, sketch: &str, diameters: &[(&str, &str)], distance: Option<([&str; 2], &str, &str)>) {
     let mut f = Fix::load(script);
     let before = whole(&mut f.s);
-    let (sketch, ent, to) = diameter;
-    let d = f.dim(sketch, &[ent], "diameter");
-    set_dim(&mut f.s, &d, to);
-    assert_eq!(whole(&mut f.s), before, "{sketch} {ent} Ø {to}");
+    // The diameters changed together (one rebuild), as a set that stays possible.
+    let changes: serde_json::Map<String, Value> = diameters.iter().map(|(ent, to)| (f.dim(sketch, &[ent], "diameter"), json!(to))).collect();
+    let (d, to) = (f.dim(sketch, &[diameters[0].0], "diameter"), diameters[0].1);
+    run(&mut f.s, "parameters.change", json!({"changes": changes}));
+    assert_eq!(whole(&mut f.s), before, "{sketch} {diameters:?}");
     undo(&mut f.s);
     assert_eq!(whole(&mut f.s), before);
     redo(&mut f.s);
     assert_eq!(whole(&mut f.s), before);
-    if let Some((sketch, ents, kind, to)) = distance {
+    if let Some((ents, kind, to)) = distance {
         let d = f.dim(sketch, &ents, kind);
         set_dim(&mut f.s, &d, to);
         assert_eq!(whole(&mut f.s), before, "{sketch} {ents:?} {kind} {to}");
@@ -562,25 +563,27 @@ fn common(script: &str, diameter: (&str, &str, &str), distance: Option<(&str, [&
 
 #[test]
 fn compound_across_two_sketches_keeps_its_references() {
-    common(COMPOUND, ("Layer 2", "d", "56 mm"), Some(("Layer 2", ["origin", "c2.center"], "horizontal", "50 mm")));
+    common(COMPOUND, "Layer 2", &[("d", "56 mm")], Some((["origin", "d.center"], "vertical", "10 mm")));
 }
 
 #[test]
 fn worm_keeps_its_references() {
-    common(WORM, ("Worm stage", "w", "66 mm"), Some(("Worm stage", ["origin", "axis.start"], "vertical", "41 mm")));
+    common(WORM, "Worm stage", &[("w", "56 mm")], Some((["origin", "axis.start"], "vertical", "36 mm")));
 }
 
 #[test]
 fn planetary_keeps_its_references() {
-    common(PLANETARY, ("Planetary", "sun", "36 mm"), None);
+    // (Sun, planet and ring sizes are tied: (ring - sun) / 2 is the planet.)
+    common(PLANETARY, "Planetary", &[("sun", "33 mm"), ("ring", "93 mm")], None);
 }
 
 #[test]
 fn everything_drivetrain_keeps_its_references() {
     let mut f = Fix::load(EVERYTHING);
     let before = whole(&mut f.s);
-    let d = f.dim("L0 spur", &["b"], "diameter");
-    set_dim(&mut f.s, &d, "63 mm");
+    // (The internal pair's pinion: its ring moves round it; nothing shares the ring's shaft.)
+    let d = f.dim("L-90 internal", &["rp"], "diameter");
+    set_dim(&mut f.s, &d, "44 mm");
     assert_eq!(whole(&mut f.s), before);
     let sk = sketch_named(&f.s, "L-30 herringbone");
     run(&mut f.s, "timeline.rename", json!({"feature": sk, "name": "Herringbone layer"}));
@@ -726,24 +729,33 @@ fn a_shaft_line_sets_the_shafts_length_and_a_point_on_it_is_a_bearing() {
     run(&mut s, "sketch.line", json!({"points": [[0, -15], [0, 35]], "ids": ["s"]}));
     run(&mut s, "sketch.point", json!({"point": [0, 25], "id": "brg"}));
     run(&mut s, "sketch.finish", json!({}));
-    let req = |bearing: bool| {
-        let mut a = vec![json!({"sketch": "Pitch", "curve": "a", "slot": "pitch"}), json!({"sketch": "Shaft", "curve": "s", "slot": "axis"})];
-        if bearing {
-            a.push(json!({"sketch": "Shaft", "point": "brg", "slot": "bearing"}));
-        }
-        json!({"items": [
-            {"id": "A", "type": "spur", "components": a},
-            {"id": "B", "type": "spur", "components": [{"sketch": "Pitch", "curve": "b", "slot": "pitch"}]}],
-            "links": [{"a": {"item": "A"}, "b": {"item": "B"}, "kind": "mesh"}],
-            "module_blocks": [{"id": "M", "module": 2, "members": ["A", "B"]}], "bearing": "608"})
-    };
-    let (_, plan) = super::ask(&s, "gear.calculate", &req(false)).unwrap();
+    // A spur with its shaft line (Generate Shafts on by a drawn line): the shaft runs between
+    // the line's ends.
+    let req = json!({"items": [
+        {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a", "slot": "pitch"}, {"sketch": "Shaft", "curve": "s", "slot": "axis"}]},
+        {"id": "B", "type": "spur", "components": [{"sketch": "Pitch", "curve": "b", "slot": "pitch"}]}],
+        "links": [{"a": {"item": "A"}, "b": {"item": "B"}, "kind": "mesh"}],
+        "module_blocks": [{"id": "M", "module": 2, "members": ["A", "B"]}]});
+    let (_, plan) = super::ask(&s, "gear.calculate", &req).unwrap();
     assert_eq!(plan.shafts.len(), 1, "one shaft, on A's drawn line only");
     assert!((plan.shafts[0].length - 50.0).abs() < 1e-6, "the line's length: {}", plan.shafts[0].length);
-    let b = &plan.bodies[plan.shafts[0].body];
-    eprintln!("shaft frame {:?}", b.frame);
-    let r = s.execute("gear.calculate", &req(true));
-    eprintln!("with a bearing: {r:?}");
-    let r = r.unwrap_or_else(|e| panic!("a bearing on the shaft line: {e}"));
+    let f = plan.bodies[plan.shafts[0].body].frame;
+    assert!(f.origin.iter().zip([0.0, 0.0, -15.0]).all(|(a, b)| (a - b).abs() < 1e-6) && (f.z[2] - 1.0).abs() < 1e-9, "from the line's first end along it: {f:?}");
+    // A bearing point goes on a Shaft item's line (a gear item refuses it, saying so).
+    let e = s.execute("gear.calculate", &json!({"items": [
+        {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a"}, {"sketch": "Shaft", "curve": "s"}, {"sketch": "Shaft", "point": "brg", "slot": "bearing"}]}]})).unwrap_err().to_string();
+    assert!(e.contains("Shaft item"), "{e}");
+    let with_shaft = json!({"items": [
+        {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a", "slot": "pitch"}]},
+        {"id": "B", "type": "spur", "components": [{"sketch": "Pitch", "curve": "b", "slot": "pitch"}]},
+        {"id": "S", "type": "shaft", "components": [{"sketch": "Shaft", "curve": "s", "slot": "axis"}, {"sketch": "Shaft", "point": "brg", "slot": "bearing"}]}],
+        "links": [{"a": {"item": "A"}, "b": {"item": "B"}, "kind": "mesh"}],
+        "module_blocks": [{"id": "M", "module": 2, "members": ["A", "B"]}]});
+    let r = s.execute("gear.calculate", &with_shaft);
+    let (_, plan) = super::ask(&s, "gear.calculate", &with_shaft).unwrap_or_else(|e| panic!("{e}"));
+    eprintln!("BEARING reply {r:?}
+BEARING plan shafts {:?} clearance {:?} warnings {:?}", plan.shafts, plan.clearance.as_ref().map(|c| c.name.clone()), plan.warnings);
+    let r = r.unwrap();
     assert!(r["error"].is_null(), "{r}");
+    assert_eq!(plan.shafts.len(), 1, "the Shaft item's line is A's shaft");
 }

@@ -353,8 +353,6 @@ pub(super) fn update(s: &mut Session, cmd: &str, mut rec: Record, request: Value
     // the bodies keep their names, as the feature keeps them through a sketch edit.
     let bare = request == rec.request;
     let names_before = super::current_names(s, &rec);
-    // Bodies renamed since the set was last made: (the name then, the name now).
-    let renamed: Vec<(String, String)> = rec.bodies.iter().zip(&names_before).filter(|(b, n)| b.name != **n).map(|(b, n)| (b.name.clone(), n.clone())).collect();
     let auto_before: Vec<String> = rec.bodies.iter().map(|b| b.auto.clone().unwrap_or_else(|| b.name.clone())).collect();
     let before = s.doc.clone();
     let converted = rec.feature.is_none();
@@ -404,19 +402,8 @@ pub(super) fn update(s: &mut Session, cmd: &str, mut rec: Record, request: Value
     let member_names: Vec<String> = rec.bodies.iter().take(members.len()).map(|b| b.name.clone()).collect();
     let keep_out_name = keep_out.as_ref().and_then(|_| rec.bodies.get(members.len()).map(|b| b.name.clone()));
     let mut assembly_made = None;
-    // The assembly as last made names its members' bodies as they were called then: a body the
-    // user has renamed since is the same member (its component and joint stay on it).
-    let old_assembly = rec.assembly.take().map(|mut a| {
-        for (old, now) in renamed.iter() {
-            for m in a.members.iter_mut().filter(|m| m.body == *old) {
-                m.body = now.clone();
-            }
-            if let Some(k) = a.keep_out.as_mut().filter(|k| k.0 == *old) {
-                k.0 = now.clone();
-            }
-        }
-        a
-    });
+    // (Its members' bodies by the names they have now: `records` follows renames.)
+    let old_assembly = rec.assembly.take();
     // The set's folder: the one it has (a folder set's, or an assembled set's), else none.
     let mut group = Some(rec.group).filter(|g| s.doc.timeline_groups.iter().any(|t| t.id == *g));
     if assembly::wanted(&request) {

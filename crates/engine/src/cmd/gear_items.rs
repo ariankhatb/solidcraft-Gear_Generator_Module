@@ -15,6 +15,8 @@
 //! others' ([`carry_names`]).
 
 use serde_json::{Value, json};
+use solidcore_record::Vec3;
+use solidcraft_geom::Vec3Geom;
 use solidcraft_gear::analysis::{self, MeshKind, StepKind};
 use solidcraft_gear::drivetrain;
 use solidcraft_gear::items::{self as gi, GearRef};
@@ -548,23 +550,18 @@ fn takes_details(k: gi::ItemKind) -> bool {
     matches!(k, gi::ItemKind::Spur | gi::ItemKind::Helical | gi::ItemKind::Herringbone | gi::ItemKind::Compound)
 }
 
-fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn norm3(a: [f64; 3]) -> f64 {
-    dot3(a, a).sqrt()
+fn v3(p: [f64; 3]) -> Vec3 {
+    Vec3::new(p[0], p[1], p[2])
 }
 
 /// Whether circle (`c`, `n`) is concentric with gear `g`: the same centre and plane direction.
 fn concentric(g: &gi::GearGeom, c: [f64; 3], n: [f64; 3]) -> bool {
     let r = g.radius.unwrap_or(1.0);
-    let par = dot3(g.axis, n).abs() / (norm3(g.axis) * norm3(n)).max(1e-12);
-    norm3(sub3(g.centre, c)) <= gi::tol(r) && par >= 1.0 - 1e-6
+    let parallel = match (v3(g.axis).normalized(), v3(n).normalized()) {
+        (Some(a), Some(b)) => a.dot(b).abs() >= 1.0 - 1e-6,
+        _ => false,
+    };
+    v3(g.centre).dist(v3(c)) <= gi::tol(r) && parallel
 }
 
 /// Each gear's side A: the direction of its axis its face's side A reaches (decision 4).
@@ -572,9 +569,8 @@ fn side_a(items: &[gi::GearItem]) -> Vec<(GearRef, [f64; 3])> {
     let mut out = Vec::new();
     for (i, it) in items.iter().enumerate() {
         for (g, geo) in gi::gear_geoms(it).into_iter().enumerate() {
-            let l = norm3(geo.axis);
-            if l > 1e-12 {
-                out.push((GearRef::new(i, g), geo.axis.map(|v| v / l)));
+            if let Some(u) = v3(geo.axis).normalized() {
+                out.push((GearRef::new(i, g), [u.x, u.y, u.z]));
             }
         }
     }
@@ -694,12 +690,13 @@ fn apply_details(items: &[gi::GearItem], wanted: &[Wanted], sp: &mut SystemPlan)
         // The gear's axis in its body's frame: the pitch circle's centre, side A along +z.
         let body = &mut sp.plan.bodies[b];
         let f = body.frame;
-        let y = f.y();
-        let local = |p: [f64; 3]| [dot3(p, f.x), dot3(p, y), dot3(p, f.z)];
-        let z = local(geo.axis.map(|v| v / norm3(geo.axis).max(1e-12)));
-        let e = if z[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
-        let ex = sub3(e, z.map(|v| v * dot3(e, z)));
-        let frame = Frame { origin: local(sub3(geo.centre, f.origin)), x: ex.map(|v| v / norm3(ex)), z };
+        let (fx, fy, fz) = (v3(f.x), v3(f.y()), v3(f.z));
+        let local = |p: Vec3| Vec3::new(p.dot(fx), p.dot(fy), p.dot(fz));
+        let Some(z) = v3(geo.axis).normalized().map(local) else { continue };
+        let e = if z.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+        let Some(x) = (e - z * e.dot(z)).normalized() else { continue };
+        let o = local(v3(geo.centre) - v3(f.origin));
+        let frame = Frame { origin: [o.x, o.y, o.z], x: [x.x, x.y, x.z], z: [z.x, z.y, z.z] };
         let prism = |r: f64, z0: f64, height: f64, op: Op| Step::Placed {
             frame,
             step: Box::new(Step::Prism { region: Region { outer: vec![Outline::circle(V2::ZERO, r)], holes: Vec::new() }, z0, height, twist: 0.0, op }),

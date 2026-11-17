@@ -1417,6 +1417,10 @@ pub(crate) trait Reads {
     fn gear_sketch(&self, id: u64) -> std::result::Result<GearSketch, String> {
         self.solved(id).map(|ss| entities_of(id, &ss)).ok_or_else(|| format!("no sketch {id}"))
     }
+    /// A sketch's name in the design (also when it isn't solved where the set is read).
+    fn sketch_name(&self, _id: u64) -> Option<String> {
+        None
+    }
 }
 
 impl Reads for Session {
@@ -1431,6 +1435,9 @@ impl Reads for Session {
     }
     fn gear_sketch(&self, id: u64) -> std::result::Result<GearSketch, String> {
         sketch_entities(self, id)
+    }
+    fn sketch_name(&self, id: u64) -> Option<String> {
+        self.doc.feature(id).map(|f| f.name.clone())
     }
 }
 
@@ -3598,3 +3605,7 @@ mod tests;
 #[cfg(test)]
 #[path = "gear_sketch_tests.rs"]
 mod sketch_tests;
+
+#[cfg(test)]
+#[path = "gear_refs_tests.rs"]
+mod refs_tests;

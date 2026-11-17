@@ -421,7 +421,7 @@ fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput
                     if !fixes.is_empty() {
                         ui.horizontal_wrapped(|ui| {
                             for f in fixes {
-                                let b = ui_kit::compact_button(ui, &f.label(k), "Change the setting to this; the set is worked out again.", true, false);
+                                let b = ui_kit::button(ui, f.label(k), ui_kit::Button::Normal).backing_on_hover_text("Change the setting to this; the set is worked out again.");
                                 button_hit |= b.hovered();
                                 if b.clicked() {
                                     fix = Some((i, f.clone()));

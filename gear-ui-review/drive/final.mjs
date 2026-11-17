@@ -121,6 +121,60 @@ if (which === 'all' || which === 'qa') {
   s2.close();
 }
 
+if (which === 'all' || which === 'chamfer') {
+  // The tooth chamfer: one setting under All gears; 01 edited to a 0.6 mm chamfer on both faces.
+  const sc = await w.begin(null);
+  await sc.call('ui.file', { path: path.resolve('..', '..', 'examples', 'gears', '01-spur-pair.sc') });
+  for (let i = 0; i < 60; i++) { await w.sleep(1000); if (!(await sc.call('ui.inspect', {})).file_busy) break; }
+  await w.sleep(2500);
+  const f = await w.gearsFeature(sc);
+  await sc.call('ui.editFeature', { feature: f.id });
+  await w.sleep(3000);
+  const row = async () => { let a = await sc.handles('dialog:row:Tooth chamfer'); a = Array.isArray(a) ? a : a.handles ?? []; return a[0]; };
+  for (let k = 0; k < 12; k++) {
+    const h = await row();
+    if (h && h.y > 300 && h.y < 700) break;
+    await sc.call('ui.scroll', { x: 1300, y: 700, delta: h ? -(h.y - 500) / 2 : -250 });
+    await w.sleep(400);
+  }
+  await w.typeInto(sc, 'Tooth chamfer', '0.6 mm');
+  await w.sleep(2500);
+  await sc.shot('final-chamfer-setting');
+  await w.ok(sc);
+  await w.sleep(2000);
+  for (const folder of ['sketches', 'joints']) await sc.exec('browser.visibility', { visible: false, folder });
+  await sc.exec('browser.visibility', { visible: false, items: ['Housing cutout'] });
+  await sc.call('ui.view', { view: 'iso' });
+  const cam = await sc.call('ui.camera', { fit: true });
+  if (cam?.distance) await sc.call('ui.camera', { distance: cam.distance * 0.55 });
+  await w.sleep(1500);
+  await sc.shot('final-chamfer-pair');
+  // Only the chamfer changed: the gears are made again (no body kept from before).
+  const vol = async () => (await sc.exec('inspect.center_of_mass', { bodies: ['Gear A·1', 'Gear B·1'] })).bodies.map((b) => b.volume);
+  const v06 = await vol();
+  const gs = await sc.exec('gear.inspect', {}).catch((e) => e.message);
+  console.log('set request chamfer', JSON.stringify(JSON.stringify(gs).match(/tooth_chamfer[^}]*}/)?.[0] ?? null));
+  for (const size of ['0.3 mm', '0.6 mm', '']) {
+    await sc.call('ui.editFeature', { feature: f.id });
+    await w.sleep(3000);
+    for (let k = 0; k < 12; k++) {
+      const h = await row();
+      if (h && h.y > 300 && h.y < 700) break;
+      await sc.call('ui.scroll', { x: 1300, y: 700, delta: h ? -(h.y - 500) / 2 : -250 });
+      await w.sleep(400);
+    }
+    await w.typeInto(sc, 'Tooth chamfer', size || ' ');
+    await w.sleep(1500);
+    console.log('asked', JSON.stringify((await w.request(sc))?.params?.tooth_chamfer ?? null));
+    await w.ok(sc);
+    await w.sleep(1500);
+    console.log('chamfer', size || 'off', JSON.stringify(await vol()), '(0.6 mm first:', JSON.stringify(v06), ')');
+  }
+  const doc = await sc.call('document.inspect', { timeline: 'summary', bodies: 'names' });
+  console.log('errors', (doc.timeline ?? []).filter((x) => x.error).map((x) => x.name + ': ' + x.error));
+  sc.close();
+}
+
 if (which === 'all' || which === 'cutout') {
   // 01 as built (bores, hub, shaft lines, bearing points and the housing cutout), then Edit: the
   // Housing cutout section and the seats in the preview.

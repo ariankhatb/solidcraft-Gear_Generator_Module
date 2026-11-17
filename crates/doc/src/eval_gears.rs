@@ -15,7 +15,8 @@
 //! kernel's check refuses is kept with a warning saying why: SMLib refuses the curved trims of
 //! flat bevels ("Bad CurveCusp", a warning SMLib itself calls one) and some hypoid edges.
 
-use std::sync::OnceLock;
+use std::collections::VecDeque;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use serde_json::Value;
 use solidcore_record::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
@@ -111,9 +112,14 @@ pub(super) fn eval(doc: &Document, f: &Feature, st: &mut ModelState, warning: &m
     });
     applied?;
     if checks {
-        for b in st.bodies.iter().filter(|b| !before.iter().any(|old| old.same_shape(&b.body))) {
-            if let Err(e) = kernel::check_kept(&b.body) {
-                notes.push(refused_note(&b.name, &e.to_string()));
+        // Each body's check on a thread of its own (they read nothing of each other's).
+        let fresh: Vec<&ModelBody> = st.bodies.iter().filter(|b| !before.iter().any(|old| old.same_shape(&b.body))).collect();
+        let verdicts = kernel::map_on_threads(&fresh, THREADS, |b| checked(&b.body));
+        for (b, verdict) in fresh.iter().zip(verdicts) {
+            match verdict {
+                Some(None) => {}
+                Some(Some(why)) => notes.push(refused_note(&b.name, &why)),
+                None => notes.push(refused_note(&b.name, "the check stopped on an internal error")),
             }
         }
     }
@@ -141,9 +147,16 @@ fn refused_note(name: &str, why: &str) -> String {
 /// out with a note, and so is the keep-out body.
 #[allow(clippy::type_complexity)]
 fn build(plan: &Plan, notes: &mut Vec<String>) -> Result<(Vec<(String, Body)>, Option<(String, Body)>)> {
+    // Every gear (and the keep-out body) on a thread of its own: each is made from its own plan
+    // alone, and the kernel answers the same on any thread. Notes and errors in plan order.
+    let jobs: Vec<&Planned> = plan.bodies.iter().chain(plan.clearance.as_ref()).collect();
+    let mut made = kernel::map_on_threads(&jobs, THREADS, |b| made_body(b)).into_iter();
+    let mut next = || made.next().flatten().unwrap_or_else(|| (Err(stopped()), Vec::new()));
     let mut gears: Vec<Body> = Vec::with_capacity(plan.bodies.len());
     for b in &plan.bodies {
-        gears.push(build_body(b, notes).map_err(|e| DocError::Invalid(format!("{}: {e}", b.name)))?);
+        let (body, said) = next();
+        notes.extend(said);
+        gears.push(body.map_err(|e| DocError::Invalid(format!("{}: {e}", b.name)))?);
     }
     let mut members = Vec::new();
     for r in solid::members(plan) {
@@ -155,16 +168,120 @@ fn build(plan: &Plan, notes: &mut Vec<String>) -> Result<(Vec<(String, Body)>, O
         members.push((r.name, body));
     }
     let keep_out = match &plan.clearance {
-        Some(c) => match build_body(c, notes) {
-            Ok(b) => Some((c.name.clone(), b)),
-            Err(e) => {
-                notes.push(format!("{}: the keep-out body could not be made ({e}); the gears are made without it", c.name));
-                None
+        Some(c) => {
+            let (body, said) = next();
+            notes.extend(said);
+            match body {
+                Ok(b) => Some((c.name.clone(), b)),
+                Err(e) => {
+                    notes.push(format!("{}: the keep-out body could not be made ({e}); the gears are made without it", c.name));
+                    None
+                }
             }
-        },
+        }
         None => None,
     };
     Ok((members, keep_out))
+}
+
+/// Most threads a set's gears are made and checked on at once.
+const THREADS: usize = 16;
+
+/// What a body's job ends with when the kernel stopped on an internal error (its thread's panic).
+fn stopped() -> DocError {
+    DocError::Invalid("the kernel stopped on an internal error".into())
+}
+
+/// How many bodies [`MADE`] and [`CHECKED`] keep: a large set's, with room for an undo.
+const KEPT: usize = 64;
+
+/// Bodies made before, by the planned body each was made from ([`plan_key`]), with the notes
+/// making it gave. A set evaluated again (an edit to one gear, an undo,
+/// another item added) makes only the bodies whose plan changed; the others are the bodies made
+/// before, which are what making them again gives: the kernel answers the same on any thread
+/// and after any other work.
+static MADE: Mutex<VecDeque<(String, Body, Vec<String>)>> = Mutex::new(VecDeque::new());
+
+/// SMLib's verdict on bodies checked before (`None`: valid; else why it refuses), so a body made
+/// before ([`MADE`]) is not checked again.
+static CHECKED: Mutex<VecDeque<(Body, Option<String>)>> = Mutex::new(VecDeque::new());
+
+/// Keeps `entry` at the front of `cache` (the most recently used first), at most [`KEPT`].
+fn remember<T>(cache: &Mutex<VecDeque<T>>, entry: T) {
+    let mut c = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    c.push_front(entry);
+    c.truncate(KEPT);
+}
+
+/// What `take` reads of the entry of `cache` that is `wanted`, which moves to the front (used
+/// again).
+fn recall<T, R>(cache: &Mutex<VecDeque<T>>, wanted: impl Fn(&T) -> bool, take: impl Fn(&T) -> R) -> Option<R> {
+    let mut c = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    let at = c.iter().position(wanted)?;
+    let entry = c.remove(at)?;
+    let r = take(&entry);
+    c.push_front(entry);
+    Some(r)
+}
+
+/// One planned body made ([`build_body`]), or the body made from the same plan before, with the
+/// notes making it gave.
+fn made_body(b: &Planned) -> (Result<Body>, Vec<String>) {
+    let key = plan_key(b);
+    if let Some((body, notes)) = recall(&MADE, |(k, ..)| *k == key, |(_, body, notes)| (body.clone(), notes.clone())) {
+        return (Ok(body), notes);
+    }
+    let mut notes = Vec::new();
+    let body = build_body(b, &mut notes);
+    if let Ok(body) = &body {
+        remember(&MADE, (key, body.clone(), notes.clone()));
+    }
+    (body, notes)
+}
+
+/// What a planned body is known by in [`MADE`]: its debug text with every decimal number to 9
+/// decimal places (1e-9 mm or rad). A set's planner works the teeth of every gear out again for
+/// an edit to any one of them, and gives the gears that didn't change the same numbers but for
+/// the last bit or two (1e-15 mm); a gear whose plan differs that little is the same gear (the
+/// kernel's tolerances are far coarser), and is not made again.
+fn plan_key(b: &Planned) -> String {
+    let text = format!("{b:?}");
+    let mut key = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    while let Some(c) = rest.chars().next() {
+        let after_word = key.chars().next_back().is_some_and(|p| p.is_alphanumeric() || p == '_');
+        let starts_number = c.is_ascii_digit() || (c == '-' && rest[1..].starts_with(|d: char| d.is_ascii_digit()));
+        if starts_number && !after_word {
+            let len = rest
+                .char_indices()
+                .find(|&(i, d)| !(d.is_ascii_digit() || d == '.' || d == 'e' || (matches!(d, '-' | '+') && (i == 0 || rest[..i].ends_with('e')))))
+                .map_or(rest.len(), |(i, _)| i);
+            let token = &rest[..len];
+            match token.parse::<f64>() {
+                Ok(v) if token.contains(['.', 'e']) => {
+                    let near = format!("{v:.9}");
+                    key.push_str(if near.parse::<f64>() == Ok(0.0) { "0" } else { &near });
+                }
+                _ => key.push_str(token),
+            }
+            rest = &rest[len..];
+        } else {
+            key.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    key
+}
+
+/// SMLib's check of a body the feature keeps ([`kernel::check_kept`]): `None` when it passes, else
+/// why it refuses. A body checked before is not checked again.
+fn checked(body: &Body) -> Option<String> {
+    if let Some(verdict) = recall(&CHECKED, |(b, _)| b.same_shape(body), |(_, v)| v.clone()) {
+        return verdict;
+    }
+    let verdict = kernel::check_kept(body).err().map(|e| e.to_string());
+    remember(&CHECKED, (body.clone(), verdict.clone()));
+    verdict
 }
 
 /// One planned body: its steps in order, each on what the ones before made.

@@ -126,3 +126,48 @@ fn the_keep_out_hollows_a_housing_in_the_same_feature() {
     assert_eq!(st.bodies.iter().filter(|b| b.feature == id).count(), 2);
     assert_eq!(doc.features.len(), 2, "the box and one Gears feature");
 }
+
+#[test]
+fn a_set_evaluated_again_makes_only_the_gears_whose_plan_changed() {
+    let mut doc = Document::new("again");
+    let mut sk = Sketch::new();
+    sk.add_circle(Vec2::new(0.0, 0.0), 22.0, None, None).unwrap();
+    let s = doc.add_feature(FeatureKind::Sketch { plane: PlaneRef::Origin { name: "XY".into() }, sketch: sk }, None).unwrap();
+    doc.add_feature(gears(json!({"set": "sketch"}), vec![s], Vec::new()), Some("Gears")).unwrap();
+    let bodies = |m: &Model| m.state().bodies.iter().map(|b| b.body.clone()).collect::<Vec<_>>();
+    // A model of its own each time (nothing of the model's cache): the same plan, the same bodies.
+    // (A circle no other test draws: a test evaluating the same set at once could make it too.)
+    let first = bodies(&evaluated(&doc));
+    let again = bodies(&evaluated(&doc));
+    assert_eq!(first.len(), 2);
+    assert!(first.iter().zip(&again).all(|(a, b)| a.same_shape(b)), "the gears made before are taken again");
+    // Gear 1 grown: its plan changed, so it is made again.
+    if let Some(FeatureKind::Sketch { sketch, .. }) = doc.feature_mut(s).map(|f| &mut f.kind) {
+        for curve in &mut sketch.curves {
+            if let solidcraft_sketch::CurveKind::Circle { r, .. } = &mut curve.kind {
+                *r = 30.0;
+            }
+        }
+    }
+    let grown = bodies(&evaluated(&doc));
+    assert!(!grown[0].same_shape(&first[0]), "the changed gear is made again");
+    let (small, big) = (measure(&first[0]).unwrap().volume, measure(&grown[0]).unwrap().volume);
+    assert!(big > small * 1.5, "{small} -> {big}");
+}
+
+#[test]
+fn a_plan_differing_in_the_last_bits_is_known_as_the_same_body() {
+    let plan = solidcraft_gear::plan(&Spec::defaults_for(Kind::Pair)).unwrap();
+    let b = &plan.bodies[0];
+    let key = super::plan_key(b);
+    let mut noisy = b.clone();
+    noisy.frame.origin[0] += 1e-13;
+    noisy.frame.origin[1] = -0.0;
+    assert_eq!(super::plan_key(&noisy), key, "noise in the last bits");
+    let mut moved = b.clone();
+    moved.frame.origin[0] += 1e-6;
+    assert_ne!(super::plan_key(&moved), key, "a micron is another body");
+    let mut renamed = b.clone();
+    renamed.name = format!("{} 2", b.name);
+    assert_ne!(super::plan_key(&renamed), key);
+}

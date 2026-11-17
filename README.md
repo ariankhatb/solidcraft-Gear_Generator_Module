@@ -11,9 +11,7 @@ pick becomes a gear at the size you drew it. The whole drivetrain is built as **
 feature**: the gear bodies, a revolute joint per shaft and a gear link per mesh, so turning one gear
 turns the others. Change the sketch and the gears follow.
 
-<!-- gallery-pending
 <p align="center"><img src="docs/gears/img/hero-drivetrain.png" width="760" alt="A mixed drivetrain built by one Gears feature"/></p>
-gallery-pending -->
 
 <p align="center"><img src="crates/look/icons/design/svg/model/gear_generator.svg" width="72" height="72" alt="Gears"/></p>
 

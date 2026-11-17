@@ -5,15 +5,16 @@
 //! line and two or more circles on it (in parallel sketches, decision 6), a planetary set by its
 //! sun, ring and planet circles, a bevel pair by two circles or by two axis lines and one circle,
 //! a hypoid or worm pair by its circle and the other gear's axis line, a shaft by its line and the
-//! bearing points on it. Pick a type, press Create New, then click the geometry the status line
-//! asks for; a pick that doesn't fit is refused with the reason.
+//! bearing points on it. Pick a type, press New gear, then click the geometry the status line
+//! asks for; a pick that doesn't fit is refused with the reason. In the dialog an item is called
+//! a gear ("Gear B"), whatever number of gears it makes.
 //!
 //! The slots, the checks on a pick and the gear count are the gear crate's
 //! ([`solidcraft_gear::items`]: `slots`, `assign`, `validate_slot`, `next_slot`, `gear_count`):
 //! the dialog reads each pick as a world [`Thing`] (`dialogs_gear::thing_of`) and asks. Every
 //! gear of an item has its own settings (§3), typed here as text (expressions with units, empty
-//! for Auto) and read into the crate's [`items::GearSettings`]. The items are sent as
-//! `gear.create`'s `items`, with the graph's `links` and `module_blocks` (§6).
+//! for Auto) and read into the crate's [`items::GearSettings`]; `dialogs_gear_view` shows them.
+//! The items are sent as `gear.create`'s `items`, with the `links` and `module_blocks` (§6).
 
 use serde_json::{Map, Value, json};
 use solidcraft_engine::Sel;
@@ -22,7 +23,6 @@ use solidcraft_gear::items::{self, Bore, BevelStyle, FacePreset, FaceSides, Hand
 
 use crate::SolveApp;
 use crate::dialogs_gear_graph::Graph;
-use crate::ui_kit::{self, choice_row, hint_row};
 
 /// An item's id as the engine names it (A, B, … Z, then A2 …).
 pub use solidcraft_gear::items::item_id;
@@ -35,20 +35,77 @@ pub fn item_index(id: &Value) -> Option<usize> {
     }
 }
 
-/// A row with its hover guide (§5): the whole row shows it.
-fn hinted(ui: &mut egui::Ui, label: &str, value: &mut String, hint: &str, tip: &str) -> bool {
-    let mut enter = false;
-    ui.scope(|ui| enter = hint_row(ui, label, value, hint)).response.on_hover_text(tip);
-    enter
-}
-
 /// The face presets (decision 4), as the toggle shows them and `face.preset` names them.
 pub const FACE_PRESETS: [(FacePreset, &str, &str); 4] = [
     (FacePreset::Symmetric, "symmetric", "Symmetric"),
-    (FacePreset::AOnly, "a_only", "Side A Only"),
-    (FacePreset::BOnly, "b_only", "Side B Only"),
+    (FacePreset::AOnly, "a_only", "A only"),
+    (FacePreset::BOnly, "b_only", "B only"),
     (FacePreset::Custom, "custom", "Custom"),
 ];
+
+/// The name of gear `gear` of an item of `kind` where its gears have roles ("sun", "worm"); a
+/// compound's or a pair's gears are numbered instead (`None`).
+pub fn gear_part(kind: ItemKind, gear: usize) -> Option<&'static str> {
+    let names: &[&str] = match kind {
+        ItemKind::Planetary => &["sun", "ring", "planet"],
+        ItemKind::Worm => &["wheel", "worm"],
+        ItemKind::Hypoid => &["ring", "pinion"],
+        ItemKind::Internal => &["ring", "pinion"],
+        ItemKind::Rack => &["rack", "pinion"],
+        _ => &[],
+    };
+    names.get(gear).copied()
+}
+
+/// A pick named for a person: "curve c3 of sketch 'Layer 2'", "point q of sketch 'Shaft'", "a model
+/// edge", "axis Z".
+pub fn pick_name(app: &SolveApp, sel: &Sel) -> String {
+    let sketch = |id: Option<u64>| -> String {
+        match id.and_then(|s| app.session.doc.feature(s)) {
+            Some(f) => format!("sketch '{}'", f.name),
+            None => "a sketch that is gone".to_string(),
+        }
+    };
+    match sel {
+        Sel::SketchCurve { id, sketch: s } => format!("curve {id} of {}", sketch(s.or(app.session.active_sketch))),
+        Sel::ExternalSketchCurve { sketch: s, id } => format!("curve {id} of {}", sketch(Some(*s))),
+        Sel::ExternalSketchPoint { sketch: s, id } => format!("point {id} of {}", sketch(Some(*s))),
+        Sel::SketchPoint { id } => format!("point {id} of {}", sketch(app.session.active_sketch)),
+        Sel::Edge { body, .. } => format!("an edge of {body}"),
+        Sel::Face { body, .. } => format!("a face of {body}"),
+        Sel::Axis { name } => format!("axis {name}"),
+        _ => "a pick".to_string(),
+    }
+}
+
+/// One row of a gear's checklist: the slot, whether it is required, and what fills it (the
+/// pick's name: its sketch and size), if anything.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SlotRow {
+    pub what: &'static str,
+    pub required: bool,
+    pub filled: Option<String>,
+    /// Whether this is the slot the next pick goes to.
+    pub next: bool,
+}
+
+/// A picked thing named for its slot row: its sketch and its size ("Layer 1 · Ø40",
+/// "Shaft · 120 long", "Side view · point"). `len` shows a length in the design's units.
+pub fn thing_label(app: &SolveApp, t: &Thing, len: &dyn Fn(f64) -> String) -> String {
+    let sketch = t.ids().sketch.and_then(|s| app.session.doc.feature(s)).map(|f| f.name.clone());
+    let size = match t {
+        Thing::Circle { radius, .. } => format!("Ø{}", len(2.0 * radius)),
+        Thing::Line { a, b, .. } => {
+            let d = ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
+            format!("{} long", len(d))
+        }
+        Thing::Point { .. } => "point".to_string(),
+    };
+    match sketch {
+        Some(s) => format!("{s} · {size}"),
+        None => size,
+    }
+}
 
 /// A gear's own settings (§3), as typed (empty: Auto); [`GearSettings::read`] makes the gear
 /// crate's [`items::GearSettings`] of them.
@@ -275,13 +332,28 @@ impl GearItem {
         self.kind.label()
     }
 
-    fn is_gear(&self) -> bool {
+    pub fn is_gear(&self) -> bool {
         self.kind != ItemKind::Shaft
     }
 
     /// The picks as the gear crate takes them (one that can't be read is left out).
     pub fn things(&self, app: &SolveApp) -> Vec<Thing> {
         self.picks.iter().filter_map(|s| crate::dialogs_gear::thing_of(app, s)).collect()
+    }
+
+    /// The picks that no longer read as geometry (a curve deleted from its sketch, a sketch
+    /// deleted): each named, so the card can say which is gone. They are kept (never swapped for
+    /// something else) until a new pick replaces one or the gear is removed.
+    pub fn missing(&self, app: &SolveApp) -> Vec<String> {
+        self.picks.iter().filter(|s| crate::dialogs_gear::thing_of(app, s).is_none()).map(|s| pick_name(app, s)).collect()
+    }
+
+    /// A new pick taken in: it replaces the first missing pick, if any (a re-pick).
+    pub fn take(&mut self, app: &SolveApp, sel: Sel) {
+        if let Some(i) = self.picks.iter().position(|s| crate::dialogs_gear::thing_of(app, s).is_none()) {
+            self.picks.remove(i);
+        }
+        self.picks.push(sel);
     }
 
     /// The checklist (§1): each slot of the layout the picks fill (a bevel pair: two circles, or
@@ -301,9 +373,45 @@ impl GearItem {
         out
     }
 
+    /// The checklist with what fills each slot ([`SlotRow`]): the layout the picks fill (a bevel
+    /// pair: two circles, two axis lines and a circle, or a side view), each slot once, a
+    /// repeating slot once more per extra pick, and the next one to fill marked.
+    pub fn slot_rows(&self, app: &SolveApp, len: &dyn Fn(f64) -> String) -> Vec<SlotRow> {
+        let things = self.things(app);
+        let filled = items::assign(self.kind, &things).unwrap_or_default();
+        let layouts = items::slots(self.kind);
+        let list = layouts[filled.first().map_or(0, |s| s.layout).min(layouts.len() - 1)];
+        let next = items::next_slot(self.kind, &things);
+        let mut out = Vec::new();
+        let mut marked = false;
+        for (i, s) in list.iter().enumerate() {
+            let picks: Vec<String> = filled.iter().zip(&things).filter(|(f, _)| f.slot == i).map(|(_, t)| thing_label(app, t, len)).collect();
+            if picks.is_empty() {
+                let is_next = !marked && next == Some(s.what);
+                marked |= is_next;
+                out.push(SlotRow { what: s.what, required: s.required, filled: None, next: is_next });
+            }
+            for (n, p) in picks.into_iter().enumerate() {
+                out.push(SlotRow { what: s.what, required: s.required && n == 0, filled: Some(p), next: false });
+            }
+        }
+        out
+    }
+
     /// The next required slot ("shaft line"), `None` when every one is filled.
     pub fn next_slot(&self, app: &SolveApp) -> Option<String> {
         items::next_slot(self.kind, &self.things(app)).map(str::to_string)
+    }
+
+    /// What it can still take once complete ("shaft line", "another planet's pitch circle"),
+    /// `None` when nothing.
+    pub fn optional_slot(&self, app: &SolveApp) -> Option<String> {
+        let things = self.things(app);
+        let filled = items::assign(self.kind, &things).ok()?;
+        let layouts = items::slots(self.kind);
+        let list = layouts[filled.first().map_or(0, |s| s.layout).min(layouts.len() - 1)];
+        let open = list.iter().enumerate().find(|(i, s)| !s.required && !filled.iter().any(|f| f.slot == *i)).map(|(_, s)| s.what.to_string());
+        open.or_else(|| list.iter().rev().find(|s| s.repeats).map(|s| format!("another {}", s.what)))
     }
 
     pub fn complete(&self, app: &SolveApp) -> bool {
@@ -321,7 +429,7 @@ impl GearItem {
     /// ([`items::validate_slot`]: what is wrong and what to do).
     pub fn refusal(&self, app: &SolveApp, sel: &Sel, others: &[(usize, &GearItem)]) -> Option<String> {
         if let Some((i, _)) = others.iter().find(|(_, it)| it.picks.contains(sel)) {
-            return Some(format!("already used by Item {}", i + 1));
+            return Some(format!("already used by Gear {}: click its card to change it", item_id(*i)));
         }
         let Some(thing) = crate::dialogs_gear::thing_of(app, sel) else {
             return Some("pick a sketch circle, line or point, a model edge, a round face or an axis".into());
@@ -330,7 +438,7 @@ impl GearItem {
     }
 
     /// The gear settings, one per gear (a new gear starts from the first one's).
-    fn settings_mut(&mut self, n: usize) -> &mut Vec<GearSettings> {
+    pub fn settings_mut(&mut self, n: usize) -> &mut Vec<GearSettings> {
         let seed = self.gears.first().cloned().unwrap_or_default();
         while self.gears.len() < n {
             let mut s = seed.clone();
@@ -341,7 +449,7 @@ impl GearItem {
     }
 
     /// Gear `g`'s settings as typed: its own, else the first gear's (with no teeth).
-    fn typed(&self, g: usize) -> GearSettings {
+    pub fn typed(&self, g: usize) -> GearSettings {
         self.gears.get(g).cloned().unwrap_or_else(|| GearSettings { teeth: String::new(), ..self.gears.first().cloned().unwrap_or_default() })
     }
 
@@ -364,19 +472,19 @@ impl GearItem {
 pub fn items_request(app: &SolveApp, items: &[GearItem], graph: &Graph) -> Result<Map<String, Value>, String> {
     let mut list = Vec::new();
     for (i, it) in items.iter().enumerate() {
-        let who = format!("Item {} · {}", i + 1, it.label());
+        let who = format!("Gear {} · {}", item_id(i), it.label());
         let things: Vec<Thing> = it
             .picks
             .iter()
-            .map(|s| crate::dialogs_gear::thing_of(app, s).ok_or_else(|| format!("{who}: a pick that can't be part of a gear: remove it from the item")))
+            .map(|s| crate::dialogs_gear::thing_of(app, s).ok_or_else(|| format!("{who}: its {} is missing (deleted or renamed in its sketch): click its replacement in the view", pick_name(app, s))))
             .collect::<Result<_, _>>()?;
         if let Some(next) = items::next_slot(it.kind, &things) {
-            return Err(format!("{who} still needs a {next}: click one in the view"));
+            return Err(format!("{who} still needs a {next}: click one in the view (or remove the gear)"));
         }
         let slots = items::assign(it.kind, &things).map_err(|e| format!("{who}: {e}"))?;
         let mut components = Vec::new();
         for (pick, slot) in it.picks.iter().zip(&slots) {
-            let mut c = crate::dialogs_gear::locate(app, pick).ok_or_else(|| format!("{who}: a pick that can't be part of a gear: remove it from the item"))?;
+            let mut c = crate::dialogs_gear::locate(app, pick).ok_or_else(|| format!("{who}: a pick that can't be part of a gear: remove the gear and make it again"))?;
             c["slot"] = json!(slot.name);
             components.push(c);
         }
@@ -503,84 +611,3 @@ fn sel_of(c: &Value) -> Option<Sel> {
     c.get("axis").and_then(Value::as_str).map(|name| Sel::Axis { name: name.to_string() })
 }
 
-/// One item's settings (§3), by gear, with the hover guides (§5).
-pub fn item_settings(app: &SolveApp, ui: &mut egui::Ui, it: &mut GearItem, id: usize) -> bool {
-    let mut enter = false;
-    if !it.is_gear() {
-        enter |= hint_row(ui, "Shaft Ø", &mut it.shaft_d, "auto");
-        ui.checkbox(&mut it.keyway, solidcraft_ui_text::tr_label("Keyway"));
-        return enter;
-    }
-    match it.kind {
-        ItemKind::Internal => enter |= hint_row(ui, "Rim", &mut it.rim, "auto: 2.5 × module"),
-        ItemKind::Worm => {
-            enter |= hinted(ui, "Starts", &mut it.starts, "1", "Thread starts on the worm. More starts = faster, less self-locking.");
-            ui.checkbox(&mut it.throated, solidcraft_ui_text::tr_label("Throated Wheel"));
-        }
-        ItemKind::Bevel | ItemKind::Hypoid => {
-            choice_row(ui, "Style", &format!("gear_item_bevel_{id}"), &mut it.bevel_style, &["Straight", "Spiral", "Chevron"])
-                .on_hover_text("Chevron bevel: the spiral changes hand at mid-face.");
-            if it.bevel_style > 0 || it.kind == ItemKind::Hypoid {
-                enter |= hinted(ui, "Spiral Angle", &mut it.spiral, "35 deg", "Spiral bevel/hypoid tooth angle at mid-face. 35° is typical.");
-            }
-        }
-        ItemKind::Rack => enter |= hint_row(ui, "Back Height", &mut it.back_height, "auto"),
-        ItemKind::Planetary => {
-            enter |= hint_row(ui, "Planets", &mut it.planets, "auto: as many as fit, 3 at most");
-            ui.checkbox(&mut it.carrier, solidcraft_ui_text::tr_label("Carrier"));
-        }
-        _ => {}
-    }
-    let n = it.gear_count(app);
-    let kind = it.kind;
-    let names: &[&str] = match kind {
-        ItemKind::Planetary => &["Sun", "Ring", "Planet"],
-        ItemKind::Worm => &["Wheel", "Worm"],
-        ItemKind::Hypoid => &["Ring Gear", "Pinion"],
-        ItemKind::Internal => &["Ring", "Pinion"],
-        ItemKind::Rack => &["Rack", "Pinion"],
-        _ => &[],
-    };
-    for (g, s) in it.settings_mut(n).iter_mut().take(n).enumerate() {
-        let title = names.get(g).map_or_else(|| format!("Gear {}", g + 1), |t| solidcraft_ui_text::tr_label(t).to_string());
-        ui_kit::section(ui, ("gear_item_gear", id, g), &title, n == 1, |ui| {
-            let mut size = usize::from(s.by_teeth);
-            choice_row(ui, "Size By", &format!("gear_item_size_{id}_{g}"), &mut size, &["Module", "Teeth"])
-                .on_hover_text("Set the module (tooth size) or the tooth count; the other follows from the pitch circle.");
-            s.by_teeth = size == 1;
-            if s.by_teeth {
-                enter |= hinted(ui, "Teeth", &mut s.teeth, "from the circle", "Number of teeth. The pitch circle stays as drawn, so the module follows.");
-            } else {
-                enter |= hinted(ui, "Module", &mut s.module, "auto", "Tooth size in mm (pitch Ø ÷ teeth). Auto picks a standard module so the smallest gear has ≥17 teeth.");
-            }
-            let labels: Vec<&str> = FACE_PRESETS.iter().map(|p| p.2).collect();
-            choice_row(ui, "Face", &format!("gear_face_{id}_{g}"), &mut s.face_preset, &labels)
-                .on_hover_text("Symmetric: equal both sides. Side A/B only: the gear grows out of one face of the sketch.");
-            let face_tip = "How far the teeth reach each side of the sketch plane, along the axis. Auto ≈ 10 × module, limited by the room on the shaft.";
-            if s.face_preset != 2 {
-                enter |= hinted(ui, "Face Side A", &mut s.face_a, "auto", face_tip);
-            }
-            if s.face_preset >= 2 {
-                enter |= hinted(ui, "Face Side B", &mut s.face_b, "auto", face_tip);
-            }
-            if !matches!(kind, ItemKind::Bevel | ItemKind::Hypoid | ItemKind::Worm) {
-                enter |= hinted(ui, "Helix Angle", &mut s.helix, "0 = straight", "Tooth angle to the axis. 0 = straight. Meshing gears get equal angles of opposite hand.");
-                choice_row(ui, "Hand", &format!("gear_hand_{id}_{g}"), &mut s.hand, &["Auto", "Left", "Right"])
-                    .on_hover_text("Left or right helix. The mating gear is set to the other hand for you.");
-                ui.checkbox(&mut s.v, "V").on_hover_text("Herringbone: two opposite helices meeting in the middle — no axial thrust.");
-            }
-            enter |= hinted(ui, "Profile Shift", &mut s.profile_shift, "auto", "Moves the tooth out to avoid undercut on small gears. Auto does it below 17 teeth.");
-            choice_row(ui, "Bore", &format!("gear_bore_{id}_{g}"), &mut s.bore, &["Auto", "None", "Ø"]).on_hover_text("Hole through the gear. Auto fits its shaft.");
-            if s.bore == 2 {
-                enter |= hinted(ui, "Bore Ø", &mut s.bore_d, "mm", "Hole through the gear. Auto fits its shaft.");
-            }
-            ui.checkbox(&mut s.hub, solidcraft_ui_text::tr_label("Hub"));
-            if s.hub {
-                enter |= hint_row(ui, "Hub Ø", &mut s.hub_d, "auto");
-                enter |= hint_row(ui, "Hub Length A", &mut s.hub_a, "0");
-                enter |= hint_row(ui, "Hub Length B", &mut s.hub_b, "0");
-            }
-        });
-    }
-    enter
-}

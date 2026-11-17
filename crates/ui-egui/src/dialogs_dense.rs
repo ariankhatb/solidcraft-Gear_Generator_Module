@@ -421,7 +421,8 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
     } else if matches!(d.kind, Kind::PatternRect { .. }) {
         // Each direction's pick shows in its own group, with its quantity and spacing (#9634).
         input_rows_range(d, ui, &app.session, app.preferences.origin_plane_names, 0..1);
-    } else {
+    } else if !matches!(d.kind, Kind::Gear(_)) {
+        // (The Gears dialog shows its picks as gear cards, and its Targets with its output.)
         input_rows(d, ui, &app.session, app.preferences.origin_plane_names);
     }
     d.sync_material(&app.session);
@@ -889,14 +890,6 @@ fn coil_rows(ui: &mut egui::Ui, extra: &mut serde_json::Map<String, Value>) -> b
 fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> bool {
     let mut enter = false;
     let through_point = offset_through_point(d).is_some();
-    // The Gears dialog's rows name their picks as the input's chips do.
-    let gear_labels: Vec<String> = match (&d.kind, d.inputs.first()) {
-        (Kind::Gear(_), Some(inp)) => {
-            let names = app.preferences.origin_plane_names;
-            inp.items.iter().map(|item| selection_label(&app.session, names, d, inp, item)).collect()
-        }
-        _ => Vec::new(),
-    };
     match &mut d.kind {
         Kind::Revolve { angle, operation, .. } => {
             let cur = usize::from(to_object_on(&d.inputs));
@@ -1173,7 +1166,7 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
         Kind::Surface(k) => enter |= crate::dialogs_surface::rows(ui, k),
         Kind::Sheet(k) => enter |= crate::dialogs_sheet::rows(app, ui, k, &mut d.inputs),
         Kind::Plastic(k) => enter |= crate::dialogs_plastic::rows(app, ui, k, &d.inputs),
-        Kind::Gear(k) => enter |= crate::dialogs_gear::rows(app, ui, k, &mut d.inputs, &mut d.list_hover, &gear_labels),
+        Kind::Gear(k) => enter |= crate::dialogs_gear_view::rows(app, ui, k, &mut d.inputs, &mut d.active, &mut d.list_hover),
         Kind::Frame(k) => enter |= crate::dialogs_frame::rows(app, ui, k, &d.inputs),
         Kind::EndCap(k) => enter |= crate::dialogs_end_cap::rows(app, ui, k, &d.inputs),
         Kind::Assembly(k) => enter |= crate::dialogs_assembly::rows(app, ui, k, &mut d.inputs, &mut d.active),

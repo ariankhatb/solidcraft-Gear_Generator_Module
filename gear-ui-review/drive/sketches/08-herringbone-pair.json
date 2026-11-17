@@ -1,0 +1,99 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "Pitch circles",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     0
+    ],
+    "radius": 18,
+    "id": "a"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "a.center",
+    "b": "origin"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "a"
+    ],
+    "type": "diameter",
+    "value": "36 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     48,
+     0
+    ],
+    "radius": 30,
+    "id": "b"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "b"
+    ],
+    "type": "diameter",
+    "value": "60 mm"
+   }
+  },
+  {
+   "command": "sketch.constraint.tangent",
+   "params": {
+    "a": "a",
+    "b": "b"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "b.center"
+    ],
+    "type": "vertical",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  }
+ ]
+}

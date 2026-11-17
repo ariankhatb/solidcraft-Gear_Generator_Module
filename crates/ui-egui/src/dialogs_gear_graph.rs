@@ -17,8 +17,7 @@ use egui_snarl::ui::{PinInfo, SnarlPin, SnarlStyle, SnarlViewer, SnarlWidget};
 use egui_snarl::{InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
 use serde_json::{Value, json};
 
-use crate::SolveApp;
-pub use crate::dialogs_gear_items::{GearItem, GearSettings, item_id, item_index, item_settings, items_request};
+pub use crate::dialogs_gear_items::{GearItem, GearSettings, item_id, item_index, items_request};
 use solidcraft_gear::items::{GearReply, ItemKind};
 
 const MESH_TIP: &str = "Drag to another gear's Mesh pin: they mesh. The distance between them is checked.";
@@ -274,6 +273,22 @@ impl Graph {
         self.suggested.retain(|s| s != link);
     }
 
+    /// The link between these two gears taken away (either way round).
+    pub fn remove_link(&mut self, a: (usize, usize), b: (usize, usize), kind: &str) {
+        let shaft = kind == "shaft";
+        let ends = |o: &OutPinId, i: &InPinId| -> Option<((usize, usize), (usize, usize))> {
+            Some(((self.item_of(o.node)?, o.output / 2), (self.item_of(i.node)?, i.input / 2)))
+        };
+        let wires: Vec<(OutPinId, InPinId)> = self
+            .snarl
+            .wires()
+            .filter(|(o, i)| (o.output % 2 == 1) == shaft && ends(o, i).is_some_and(|(x, y)| (x == a && y == b) || (x == b && y == a)))
+            .collect();
+        for (o, i) in wires {
+            self.snarl.disconnect(o, i);
+        }
+    }
+
     /// Every suggested link accepted.
     pub fn accept_all(&mut self) {
         for s in self.suggested.clone() {
@@ -504,7 +519,7 @@ impl SnarlViewer<GNode> for Viewer<'_> {
         match node {
             GNode::Item(i) => {
                 let badge = if self.driver.is_some_and(|(d, _)| d == *i) { "▶ " } else { "" };
-                format!("{badge}{} · {}", i + 1, self.items.get(*i).map_or("", GearItem::label))
+                format!("{badge}{} · {}", item_id(*i), self.items.get(*i).map_or("", GearItem::label))
             }
             GNode::Block { .. } => "Module Block".into(),
         }
@@ -770,33 +785,6 @@ pub fn graph_ui(ui: &mut egui::Ui, items: &[GearItem], gears: &[usize], graph: &
         }
     }
     GraphOut { hovered, link: lit, driver: make_driver, clicked }
-}
-
-/// The popped-out graph's window (⤢ Pop out), while the dialog is open.
-pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
-    let len = crate::dialogs_gear::len_of(app);
-    let Some(d) = app.dialog.as_mut() else { return };
-    let crate::dialogs::Kind::Gear(g) = &mut d.kind else { return };
-    if !g.graph_popped {
-        return;
-    }
-    let mut open = true;
-    let mut out = GraphOut::default();
-    let (items, gears, driver, picked) = (g.items.clone(), g.gear_counts.clone(), g.drive_item, g.ratio_pick);
-    egui::Window::new(solidcraft_ui_text::tr_label("Gear Graph")).id(egui::Id::unique("sc_gear_graph")).open(&mut open).default_size(egui::vec2(640.0, 420.0)).resizable(true).show(ctx, |ui| {
-        let size = ui.available_size().max(egui::vec2(320.0, 240.0));
-        out = graph_ui(ui, &items, &gears, &mut g.graph, Marks { driver, picked, len: &len }, size, "sc_gear_graph_window");
-    });
-    if out.driver.is_some() {
-        g.drive_item = out.driver;
-    }
-    if out.hovered.is_some() {
-        g.graph_hovered = out.hovered;
-    }
-    if let Some(c) = out.clicked {
-        crate::dialogs_gear::pick_for_ratio(g, c);
-    }
-    g.graph_popped = open;
 }
 
 #[cfg(test)]

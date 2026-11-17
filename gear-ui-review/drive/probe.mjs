@@ -1,0 +1,10 @@
+import path from 'node:path';
+import { connect, sleep } from './sc.mjs';
+const sc = await connect(7980);
+await sc.script(path.resolve('sketches', process.argv[2] ?? '01-spur-pair.json'));
+await sc.call('ui.view', { view: 'top' }); await sc.call('ui.camera', { fit: true });
+await sc.call('ui.start', { command: 'gear.create' }); await sleep(1500);
+await sc.shot(process.argv[3] ?? 'probe');
+let h = await sc.handles(''); h = Array.isArray(h) ? h : h.handles ?? [];
+console.log(JSON.stringify(h.filter((x) => /gear|dialog/.test(x.name)).map((x) => `${x.name}@${Math.round(x.x)},${Math.round(x.y)}`)));
+sc.close();

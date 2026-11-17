@@ -56,6 +56,7 @@ pub mod dialogs_plastic;
 pub mod dialogs_gear;
 pub mod dialogs_gear_graph;
 pub mod dialogs_gear_items;
+pub mod dialogs_gear_view;
 pub mod dialogs_save_mesh;
 pub mod dialogs_sheet;
 pub mod dialogs_surface;
@@ -2643,8 +2644,8 @@ impl SolveApp {
         }
         // A gear set's own feature (the Gears feature: its id is the set's): the Gears dialog on
         // the set.
-        if dialogs_gear::is_set(self, id) {
-            if let Err(why) = dialogs_gear::open_set(self, id) {
+        if let Some(set) = dialogs_gear::set_of_feature(self, id) {
+            if let Err(why) = dialogs_gear::open_set(self, set) {
                 self.set_status(why, true);
             }
             return;
@@ -3899,7 +3900,6 @@ impl SolveApp {
         design_properties::show(self, ui.ctx());
         sketch_report::show(self, ui.ctx());
         dialogs_gear::tick(self);
-        dialogs_gear_graph::show(self, ui.ctx());
         material_card_review::show(self, ui.ctx());
         recovery_ui::show(self, ui.ctx());
         mesh_units::show(self, ui.ctx());

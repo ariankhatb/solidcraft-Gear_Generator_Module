@@ -1,0 +1,116 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "Hypoid",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     0
+    ],
+    "radius": 45,
+    "id": "ring"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "ring.center",
+    "b": "origin"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "ring"
+    ],
+    "type": "diameter",
+    "value": "90 mm"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -60,
+      -15
+     ],
+     [
+      60,
+      -15
+     ]
+    ],
+    "ids": [
+     "pinion"
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "pinion",
+    "mode": "horizontal"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "pinion"
+    ],
+    "value": "120 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "pinion.start",
+     "origin"
+    ],
+    "type": "horizontal",
+    "value": "60 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "pinion.start",
+     "origin"
+    ],
+    "type": "vertical",
+    "value": "15 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  }
+ ]
+}

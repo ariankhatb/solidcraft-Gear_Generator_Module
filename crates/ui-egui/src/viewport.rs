@@ -6335,6 +6335,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             && app.dialog.is_none()
             && app.session.active_sketch.is_none()
             && let Some(Hit::Face { body, index, point }) = app.viewport.hover.clone()
+            && !crate::dialogs_gear::double_click_body(app, &body)
             && !crate::edit_in_place::double_click_face(app, &body)
         {
             app.edit_feature_of_face(&body, index, point);

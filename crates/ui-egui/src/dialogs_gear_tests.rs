@@ -17,381 +17,175 @@ fn gear(app: &SolveApp) -> Gear {
     }
 }
 
-fn type_of(k: GearKind) -> usize {
-    TYPES.iter().position(|t| t.0 == k).unwrap()
+/// The type list's index of `kind`.
+fn type_of(kind: ItemKind) -> usize {
+    TYPES.iter().position(|t| t.0 == kind).unwrap()
 }
 
-/// Gears is a native dialog: drawn in a sketch, the set is made from it with gear.create
-/// {sketch}, follows a native dimension change, and Edit Gears reopens the dialog on it.
-#[test]
-fn the_gears_dialog_makes_a_set_from_a_native_sketch_that_follows_it() {
-    let mut app = app();
-    let made = app.session.execute("gear.sketch", &json!({"type": "pair", "gear": {"module": 2, "teeth": 20, "teeth2": 40}})).unwrap();
-    let sk = made["sketch"].as_u64().unwrap();
+/// The Gears dialog opened, as its kind and inputs.
+fn opened(app: &mut SolveApp) -> (Gear, Vec<SelInput>) {
     app.start("gear.create");
-    let mut d = app.dialog.clone().expect("Gears opens a dialog");
-    let Kind::Gear(g) = &mut d.kind else { panic!("the Gears dialog") };
-    g.sketch = Some(sk);
-    *g.value_mut("module") = "2 mm".into();
-    let c = apply_commands(&app, &d).unwrap();
-    assert_eq!(c[0].0, "gear.create");
-    assert_eq!(c[0].1["sketch"], json!(sk));
-    // The tooth style: the drawing decides the set (two touching circles, a pair).
-    assert_eq!(c[0].1["type"], "spur", "{}", c[0].1);
-    run_all(&mut app, c);
-    app.dialog = None;
-    let sets = solidcraft_engine::gear_sets(&app.session);
-    assert_eq!(sets.len(), 1);
-    assert_eq!(sets[0].sketch, Some(sk));
-    let group = sets[0].group;
-    // A native dimension changed: the set follows.
-    let d1 = made["dimensions"]["diameter1"].as_str().unwrap().to_string();
-    app.run("parameters.change", json!({"name": d1, "expression": "60"})).unwrap();
-    let st = solidcraft_engine::gear_sets(&app.session).into_iter().find(|s| s.group == group).unwrap();
-    assert_eq!(st.params["teeth"].as_f64(), Some(30.0), "{}", st.params);
-    // Edit Gears reopens the dialog on the set; OK updates it.
-    assert!(is_set(&app, group));
-    open_set(&mut app, group).unwrap();
-    let g = gear(&app);
-    assert_eq!((g.group, g.sketch), (Some(group), Some(sk)));
-    let c = apply_commands(&app, app.dialog.as_ref().unwrap()).unwrap();
-    assert_eq!(c[0].0, "gear.update");
-    assert_eq!(c[0].1["group"], json!(group));
-    assert_eq!(c[0].1["sketch"], json!(sk), "the set's sketch stays: {}", c[0].1);
+    let d = app.dialog.clone().expect("Gears opens a dialog");
+    let Kind::Gear(g) = d.kind else { panic!("the Gears dialog") };
+    (g, d.inputs)
 }
 
-/// Started while a sketch is being edited, Gears finishes it and takes it, as Extrude takes
-/// the profile.
-#[test]
-fn gears_started_in_a_sketch_takes_that_sketch() {
-    let mut app = app();
-    let made = app.session.execute("gear.sketch", &json!({"type": "spur", "gear": {"module": 2, "teeth": 24}})).unwrap();
-    let sk = made["sketch"].as_u64().unwrap();
-    app.edit_sketch(sk);
-    assert_eq!(app.session.active_sketch, Some(sk));
-    app.start("gear.create");
-    assert_eq!(app.session.active_sketch, None);
-    assert_eq!(gear(&app).sketch, Some(sk));
-    let c = apply_commands(&app, app.dialog.as_ref().unwrap()).unwrap();
-    assert_eq!(c[0].1["type"], "spur");
-}
-
-/// A bevel's shafts are lines meeting at the apex, their native angle dimension the shaft
-/// angle; changing it, the set follows; Edit Gears reopens it as a bevel.
-#[test]
-fn a_bevel_is_made_in_the_dialog_and_follows_its_native_angle() {
-    let mut app = app();
-    let made = app.session.execute("gear.sketch", &json!({"type": "bevel", "gear": {"module": 2, "teeth": 20, "teeth2": 30, "shaft_angle": 90}})).unwrap();
-    let sk = made["sketch"].as_u64().unwrap();
-    app.start("gear.create");
-    let mut d = app.dialog.clone().expect("Gears opens a dialog");
-    let Kind::Gear(g) = &mut d.kind else { panic!("the Gears dialog") };
-    g.kind = type_of(GearKind::Bevel);
-    g.sketch = Some(sk);
-    for (key, v) in [("module", "2 mm"), ("teeth", "20"), ("teeth2", "30")] {
-        *g.value_mut(key) = v.into();
+/// A click in the view while picks go to the gears: the pick lands in the Geometry input, and the
+/// dialog lays it onto the gears on its next frame.
+fn click(app: &SolveApp, g: &mut Gear, inputs: &mut [SelInput], sel: Sel) {
+    if let Some(i) = inputs[0].items.iter().position(|s| *s == sel) {
+        inputs[0].items.remove(i);
+    } else {
+        inputs[0].items.push(sel);
     }
-    let c = apply_commands(&app, &d).unwrap();
-    assert_eq!(c[0].1["type"], "bevel");
-    assert_eq!(c[0].1["teeth"], json!(20));
-    run_all(&mut app, c);
-    app.dialog = None;
-    let group = solidcraft_engine::gear_sets(&app.session)[0].group;
-    let angle = made["dimensions"]["shaft_angle"].as_str().unwrap().to_string();
-    app.run("parameters.change", json!({"name": angle, "expression": "75 deg"})).unwrap();
-    let st = solidcraft_engine::gear_sets(&app.session).into_iter().find(|s| s.group == group).unwrap();
-    assert!((st.params["shaft_angle"].as_f64().unwrap() - 75.0).abs() < 1e-6, "{}", st.params);
-    open_set(&mut app, group).unwrap();
-    assert_eq!(gear(&app).gear_kind(), GearKind::Bevel);
+    sync_picks(app, g, inputs);
 }
 
-/// The types a sketch can't hold are made from their rows alone; the differential sends its
-/// style, its drive and the bodies it makes, as a plain case.
+/// The flow a first-time user follows: an empty dialog says what to do; New gear starts a gear of
+/// the chosen type and the status line names the next sketch piece; picks tick the slots off in
+/// the gear crate's words; a complete gear says so; a pick with no gear waiting starts one; a
+/// pick that fits nowhere is refused with the reason; clicking a card makes it the active one,
+/// clicking a pick again takes it out; × removes a gear and renumbers the rest.
 #[test]
-fn sketch_free_types_and_the_differential_are_rows() {
+fn the_flow_new_gear_click_pieces_card_per_gear() {
     let mut app = app();
-    app.start("gear.create");
-    let mut d = app.dialog.clone().unwrap();
-    let Kind::Gear(g) = &mut d.kind else { panic!() };
-    g.kind = type_of(GearKind::Spline);
-    *g.value_mut("teeth") = "18".into();
-    let c = apply_commands(&app, &d).unwrap();
-    assert_eq!((c[0].1["type"].as_str(), c[0].1["teeth"].as_u64()), (Some("spline"), Some(18)), "{}", c[0].1);
-    assert!(c[0].1.get("sketch").is_none());
-    let Kind::Gear(g) = &mut d.kind else { panic!() };
-    g.kind = type_of(GearKind::Differential);
-    g.diff_style = 2;
-    g.diff_parts[4] = false;
-    g.which_pinions = "1, 3".into();
-    let c = apply_commands(&app, &d).unwrap();
-    let df = &c[0].1["differential"];
-    assert_eq!(df["style"], "torsen_b", "{df}");
-    assert_eq!((df["windows"].as_bool(), df["ring_bolts"].as_bool()), (Some(false), Some(false)), "a plain case");
-    assert_eq!(df["parts"]["case"], false);
-    assert_eq!(df["parts"]["which_pinions"], json!([1, 3]));
+    let (s1, s2, s3) = items_drawing(&mut app);
+    let at = |sk: u64, id: &str| Sel::SketchCurve { id: id.into(), sketch: Some(sk) };
+    let (mut g, mut inputs) = opened(&mut app);
+    assert!(g.items.is_empty());
+    assert!(next_step(&app, &g).0.starts_with("Press New gear"), "{:?}", next_step(&app, &g));
+    // Compound: New gear, then the status line asks for its shaft line first.
+    g.new_kind = type_of(ItemKind::Compound);
+    new_gear(&mut g, &mut inputs);
+    assert_eq!((g.items.len(), g.active), (1, Some(0)));
+    assert_eq!(next_step(&app, &g).0, "Gear A · Compound — click: shaft line");
+    click(&app, &mut g, &mut inputs, at(s3, "s"));
+    assert_eq!(next_step(&app, &g).0, "Gear A · Compound — click: pitch circle");
+    click(&app, &mut g, &mut inputs, at(s1, "c2"));
+    click(&app, &mut g, &mut inputs, at(s2, "c3"));
+    assert!(g.items[0].complete(&app));
+    assert!(next_step(&app, &g).0.starts_with("Gear A · Compound is complete"), "{:?}", next_step(&app, &g));
+    // The checklist: each slot with what fills it (its sketch and size).
+    let len = |v: f64| fmt(v);
+    let rows = g.items[0].slot_rows(&app, &len);
+    assert_eq!(rows.iter().map(|r| r.what).collect::<Vec<_>>(), ["shaft line", "pitch circle", "pitch circle"]);
+    assert!(rows.iter().all(|r| r.filled.is_some()), "{rows:?}");
+    assert!(rows[1].filled.as_deref().is_some_and(|f| f.ends_with("Ø20")), "{rows:?}");
+    // The input holds the active gear's picks.
+    assert_eq!(inputs[0].items, g.items[0].picks);
+    // The gear is complete and a circle doesn't fit it: the pick starts a new gear of the type in
+    // the list (a Spur now).
+    g.new_kind = type_of(ItemKind::Spur);
+    click(&app, &mut g, &mut inputs, at(s1, "c1"));
+    assert_eq!((g.items.len(), g.active, g.items[1].kind), (2, Some(1), ItemKind::Spur));
+    assert_eq!(inputs[0].items, vec![at(s1, "c1")]);
+    // A pick another gear holds is refused, and says which.
+    click(&app, &mut g, &mut inputs, at(s1, "c2"));
+    assert_eq!(g.items.len(), 2);
+    let (text, bad) = next_step(&app, &g);
+    assert!(bad && text.contains("already used by Gear A"), "{text}");
+    assert_eq!(inputs[0].items, vec![at(s1, "c1")], "the refused pick doesn't stay picked");
+    // A construction line can't be a shaft: refused with the crate's reason.
+    g.new_kind = type_of(ItemKind::Shaft);
+    new_gear(&mut g, &mut inputs);
+    click(&app, &mut g, &mut inputs, at(s1, "k"));
+    assert!(next_step(&app, &g).0.contains("a construction line is a helper, not a shaft"), "{:?}", next_step(&app, &g));
+    // × on the empty shaft: gone; clicking card A makes it the active one with its picks.
+    remove_item(&mut g, 2, &mut inputs);
+    assert_eq!(g.items.len(), 2);
+    make_active(&mut g, 0, &mut inputs);
+    assert_eq!(g.active, Some(0));
+    assert_eq!(inputs[0].items, g.items[0].picks);
+    // Clicking a pick again takes it out of its gear: the status line asks for it again.
+    click(&app, &mut g, &mut inputs, at(s3, "s"));
+    assert_eq!(g.items[0].picks.len(), 2);
+    assert_eq!(next_step(&app, &g).0, "Gear A · Compound — click: shaft line");
+    // Removing gear A renumbers B to A; its links and the driver follow.
+    g.graph.node_of(0);
+    g.graph.node_of(1);
+    g.drive_item = Some((1, 0));
+    remove_item(&mut g, 0, &mut inputs);
+    assert_eq!((g.items.len(), g.items[0].kind, g.drive_item), (1, ItemKind::Spur, Some((0, 0))));
 }
 
-/// Picks are rows, each with its role: circles gears of the dialog's type, a line a shaft, a
-/// point on it a bearing; sent as `selection` (roles, locators, the row's index, its size).
-/// A point off the picked lines can't be a bearing, and the row says why.
+/// With nothing picked yet, a click starts a gear of the type in the list (no need to press New
+/// gear first); a pick the type can't start with says what the type needs.
 #[test]
-fn picks_are_rows_with_roles_sent_as_the_selection() {
+fn a_pick_with_no_gear_waiting_starts_one() {
     let mut app = app();
-    let sk = app.session.execute("sketch.create", &json!({"plane": "XY"})).unwrap()["sketch"].as_u64().unwrap();
-    for (id, x, r) in [("c1", 0.0, 20.0), ("c2", 30.0, 10.0)] {
-        app.session.execute("sketch.circle.center", &json!({"center": [x, 0], "radius": r, "id": id})).unwrap();
+    let (s1, _, s3) = items_drawing(&mut app);
+    let at = |sk: u64, id: &str| Sel::SketchCurve { id: id.into(), sketch: Some(sk) };
+    let (mut g, mut inputs) = opened(&mut app);
+    g.new_kind = type_of(ItemKind::Worm);
+    click(&app, &mut g, &mut inputs, at(s1, "c1"));
+    assert_eq!((g.items.len(), g.items[0].kind), (1, ItemKind::Worm));
+    assert_eq!(next_step(&app, &g).0, "Gear A · Worm and Wheel — click: worm's axis line");
+    // A planetary set can't start from a shaft line: refused, nothing made.
+    let (mut g, mut inputs) = opened(&mut app);
+    g.new_kind = type_of(ItemKind::Planetary);
+    click(&app, &mut g, &mut inputs, at(s3, "s"));
+    assert!(g.items.is_empty());
+    let (text, bad) = next_step(&app, &g);
+    assert!(bad && text.contains("A Planetary gear can't start with that"), "{text}");
+}
+
+/// The dialog reads its slots from the gear crate, never its own list: every type's checklist is
+/// `items::slots`' first layout, and a bevel pair drawn in a side view (apex point, two shaft
+/// lines, an optional contact line) takes that layout as soon as the point is picked.
+#[test]
+fn slots_are_the_gear_crates() {
+    let mut app = app();
+    let len = |v: f64| fmt(v);
+    for (kind, _) in TYPES {
+        let it = GearItem::new(kind);
+        let rows: Vec<&str> = it.slot_rows(&app, &len).iter().map(|r| r.what).collect();
+        let crate_rows: Vec<&str> = gi::slots(kind)[0].iter().map(|s| s.what).collect();
+        assert_eq!(rows, crate_rows, "{kind:?}");
+        // The first required slot is the one marked next.
+        assert_eq!(it.slot_rows(&app, &len).iter().find(|r| r.next).map(|r| r.what), gi::next_slot(kind, &[]), "{kind:?}");
     }
-    app.session.execute("sketch.line", &json!({"points": [[0, -40], [0, 40]], "ids": ["s1"]})).unwrap();
-    app.session.execute("sketch.point", &json!({"point": [0, 30], "id": "b1"})).unwrap();
-    app.session.execute("sketch.point", &json!({"point": [15, 30], "id": "b2"})).unwrap();
+    // A side view: the apex where the shafts meet, two shaft lines from it, a contact line.
+    let s = app.session.execute("sketch.create", &json!({"plane": "XZ"})).unwrap()["sketch"].as_u64().unwrap();
+    app.session.execute("sketch.point", &json!({"point": [0, 0], "id": "apex"})).unwrap();
+    app.session.execute("sketch.line", &json!({"points": [[0, 0], [60, 0]], "ids": ["s1"]})).unwrap();
+    app.session.execute("sketch.line", &json!({"points": [[0, 0], [0, 40]], "ids": ["s2"]})).unwrap();
+    app.session.execute("sketch.line", &json!({"points": [[40, 0], [0, 20]], "ids": ["c"], "construction": true})).unwrap();
     app.session.execute("sketch.finish", &json!({})).unwrap();
-    app.start("gear.create");
-    let mut d = app.dialog.clone().unwrap();
-    let curve = |id: &str| Sel::SketchCurve { id: id.into(), sketch: Some(sk) };
-    let point = |id: &str| Sel::ExternalSketchPoint { sketch: sk, id: id.into() };
-    d.inputs[0].items = vec![curve("c1"), curve("c2"), curve("s1"), point("b1")];
-    let c = apply_commands(&app, &d).unwrap();
-    let p = &c[0].1;
-    let sel = p["selection"].as_array().unwrap_or_else(|| panic!("{p}"));
-    let roles: Vec<&str> = sel.iter().map(|i| i["role"].as_str().unwrap()).collect();
-    // Circles are Auto until given a type: the engine works out what each is.
-    assert_eq!(roles, ["auto", "auto", "shaft", "bearing"], "{p}");
-    assert_eq!(p["shafts"]["generate"], true, "shafts on every gear axis by default: {p}");
-    assert_eq!((sel[0]["curve"].as_str(), sel[0]["index"].as_u64()), (Some("c1"), Some(0)));
-    assert_eq!((sel[3]["point"].as_str(), sel[3]["bearing"].as_str()), (Some("b1"), Some("608")));
-    assert!(p.get("sketch").is_none(), "each entry names its own sketch: {p}");
-    assert_eq!(sel[0]["sketch"], json!(sk));
-    let name = app.session.doc.feature(sk).unwrap().name.clone();
-    assert_eq!(row_name(&app, &geo(&app, &curve("c1")), "c1"), format!("c1 · {name}"));
-    // Sized by teeth: each gear row its own teeth; the module is left to the engine.
-    let Kind::Gear(g) = &mut d.kind else { panic!() };
-    *g.value_mut("module") = "2 mm".into();
-    g.by_teeth = true;
-    g.picks = rows_now(&app, g, &d.inputs).into_iter().map(|(p, _)| p).collect();
-    g.picks[0].teeth = "40".into();
-    let c = apply_commands(&app, &d).unwrap();
-    let sel = c[0].1["selection"].as_array().unwrap().clone();
-    assert_eq!(sel[0]["teeth"], json!(40));
-    assert!(sel[0].get("module").is_none() && sel[1].get("module").is_none(), "{sel:?}");
-    // A point off every picked line: not a bearing.
-    d.inputs[0].items.push(point("b2"));
-    let Kind::Gear(g) = &mut d.kind else { panic!() };
-    let rows = rows_now(&app, g, &d.inputs);
-    assert_eq!(rows[4].0.role, UNUSED_ROLE, "a point off the lines is not taken as a bearing");
-    let geos: Vec<Geo> = rows.iter().map(|(_, g)| g.clone()).collect();
-    assert!(bearing_refused(&geos[4], &geos).is_some_and(|why| why.contains("on a picked shaft line")));
-    assert!(bearing_refused(&geos[3], &geos).is_none());
-}
-
-/// What `gear.calculate` says per row (`members`) is shown on the rows: the worked-out size,
-/// the meshes, the shared shaft of a compound gear, and a row's own error.
-#[test]
-fn rows_show_what_the_engine_worked_out_for_them() {
-    let fixture = json!({"members": [
-        {"index": 0, "role": "spur", "module": 2.0, "teeth": 20, "pitch_diameter": 40.0, "face_width": 10.0, "meshes_with": [1], "shaft": 4, "cluster": "A", "error": null},
-        {"index": 1, "role": "spur", "module": 2.0, "teeth": 10, "pitch_diameter": 20.0, "face_width": 10.0, "meshes_with": [0], "shaft": null, "cluster": null, "error": null},
-        {"index": 2, "role": "spur", "module": null, "teeth": null, "pitch_diameter": 15.0, "face_width": null, "meshes_with": [], "shaft": null, "cluster": null, "error": "circle c3 touches no other gear: make it tangent"}
-    ]});
-    let m = members_of(&fixture);
-    let (line, bad) = member_line(&m[&0]);
-    assert!(!bad);
-    assert_eq!(line, "m 2 · z 20 · Ø40 · b 10 · meshes 2 · one body with shaft 5 · compound A");
-    let (line, bad) = member_line(&m[&2]);
-    assert!(bad && line.contains("circle c3 touches no other gear"), "{line}");
-}
-
-/// An Auto row says what the engine made of it and its hand; a generated shaft is a row with
-/// its gears; a contact is a point or a line.
-#[test]
-fn auto_rows_generated_shafts_and_contacts_from_the_engine() {
-    let fixture = json!({
-        "members": [{"index": 0, "role": "bevel", "inferred": true, "shaft_angle": 90.0, "hand": "LH", "module": 2.0, "teeth": 20, "shaft": 1}],
-        "shafts": [{"index": 1, "name": "input", "diameter": null, "gears": [0, 2, 3], "length": 120.0, "line": 4}],
-        "contacts": [{"a": [1.0, 2.0, 3.0], "b": [1.0, 2.0, 13.0]}, {"a": [0.0, 0.0, 0.0]}]
-    });
-    let (line, bad) = member_line(&members_of(&fixture)[&0]);
-    assert!(!bad);
-    assert!(line.starts_with("Auto → Bevel 90° · LH · m 2 · z 20"), "{line}");
-    assert!(line.ends_with("one body with shaft 2"), "{line}");
-    let shafts = shafts_of(&fixture);
-    assert_eq!(shaft_line(&shafts[0]), "Shaft 2: input, Ø auto, 3 gears, 120 long (row 5)");
-    let c = contacts_of(&fixture);
-    assert_eq!(c.len(), 2);
-    assert_eq!(c[1][0], c[1][1], "a point contact");
-}
-
-/// Parallel-axis rows take a helix angle and V; bevel rows a spiral angle and V.
-#[test]
-fn rows_send_their_helix_or_spiral_and_v() {
-    let mut app = app();
-    let sk = app.session.execute("sketch.create", &json!({"plane": "XY"})).unwrap()["sketch"].as_u64().unwrap();
-    for (id, x, r) in [("c1", 0.0, 20.0), ("c2", 30.0, 10.0)] {
-        app.session.execute("sketch.circle.center", &json!({"center": [x, 0], "radius": r, "id": id})).unwrap();
+    let (mut g, mut inputs) = opened(&mut app);
+    g.new_kind = type_of(ItemKind::Bevel);
+    new_gear(&mut g, &mut inputs);
+    click(&app, &mut g, &mut inputs, Sel::ExternalSketchPoint { sketch: s, id: "apex".into() });
+    assert_eq!(g.items[0].picks.len(), 1, "{:?}", g.refused);
+    let rows: Vec<&str> = g.items[0].slot_rows(&app, &len).iter().map(|r| r.what).collect();
+    let side: Vec<&str> = gi::slots(ItemKind::Bevel).iter().find(|l| l.iter().any(|s| s.kind == gi::SlotKind::Point)).unwrap().iter().map(|s| s.what).collect();
+    assert_eq!(rows, side);
+    for id in ["s1", "s2"] {
+        click(&app, &mut g, &mut inputs, Sel::SketchCurve { id: id.into(), sketch: Some(s) });
     }
-    app.session.execute("sketch.finish", &json!({})).unwrap();
-    app.start("gear.create");
-    let mut d = app.dialog.clone().unwrap();
-    d.inputs[0].items = vec![Sel::SketchCurve { id: "c1".into(), sketch: Some(sk) }, Sel::SketchCurve { id: "c2".into(), sketch: Some(sk) }];
-    let Kind::Gear(g) = &mut d.kind else { panic!() };
-    g.picks = rows_now(&app, g, &d.inputs).into_iter().map(|(p, _)| p).collect();
-    g.picks[0].angle = "25 deg".into();
-    g.picks[0].v = true;
-    g.picks[1].role = ROLES.iter().position(|r| r.0 == "bevel").unwrap();
-    g.picks[1].angle = "35".into();
-    let c = apply_commands(&app, &d).unwrap();
-    let sel = c[0].1["selection"].as_array().unwrap().clone();
-    assert_eq!((sel[0]["helix_angle"].as_f64(), sel[0]["herringbone"].as_bool()), (Some(25.0), Some(true)), "{sel:?}");
-    assert_eq!(sel[1]["spiral_angle"].as_f64(), Some(35.0), "{sel:?}");
-    assert!(sel[1].get("helix_angle").is_none());
+    assert!(g.items[0].complete(&app), "{:?} {:?}", g.items[0].slot_rows(&app, &len), g.refused);
+    assert_eq!(g.items[0].optional_slot(&app).as_deref(), Some("contact line"));
 }
 
-/// The preview is the set's outline (pitch, tip and root circles, shafts) drawn in the
-/// viewport; the kernel never builds teeth before OK.
+/// A message from the engine lands on the card of the gear it names, worded as the dialog names
+/// gears; one about no gear goes above the cards.
 #[test]
-fn the_preview_is_the_outline_and_no_teeth_before_ok() {
-    let mut app = app();
-    let made = app.session.execute("gear.sketch", &json!({"type": "pair", "gear": {"module": 2, "teeth": 20, "teeth2": 40}})).unwrap();
-    app.start("gear.create");
-    let Some(Kind::Gear(g)) = app.dialog.as_mut().map(|d| &mut d.kind) else { panic!() };
-    g.sketch = made["sketch"].as_u64();
-    assert!(!g.previews(), "no kernel preview");
-    let mut d = app.dialog.take().unwrap();
-    let Kind::Gear(g) = &mut d.kind else { panic!() };
-    let mut hover = None;
-    let ctx = egui::Context::default();
-    let _ = ctx.run_ui(Default::default(), |ui| {
-        rows(&mut app, ui, g, &mut d.inputs, &mut hover, &[]);
-    });
-    assert!(!g.shape.is_empty(), "the shape to draw: {:?}", g.calc);
+fn engine_messages_go_on_their_cards() {
+    assert_eq!(about_item("Item B: the pinion doesn't touch the ring"), Some((1, "the pinion doesn't touch the ring".to_string())));
+    assert_eq!(about_item("Gear C · Compound still needs a pitch circle: click one"), Some((2, "click one".to_string())));
+    assert_eq!(about_item("centre distance 31.2, needs 30.0"), None);
+    assert_eq!(worded("item A gear 1 and Item B"), "gear A gear 1 and Gear B");
+    // A gear's own name for its parts: sun, ring, planet; a compound's numbered.
+    let mut g = new(None);
+    g.items = vec![GearItem::new(ItemKind::Planetary), GearItem::new(ItemKind::Compound), GearItem::new(ItemKind::Spur)];
+    g.gear_counts = vec![3, 2, 1];
+    assert_eq!((g.gear_name((0, 0)), g.gear_name((0, 2)), g.gear_name((1, 1)), g.gear_name((2, 0))), ("A sun".into(), "A planet".into(), "B2".into(), "C".into()));
 }
 
-/// A set drawn across several sketches on different planes: each row's entry names its sketch.
+/// Edit on a set made before gear items (one type read from a sketch) opens it as it is (no new
+/// set): OK updates it in place, its request kept; Convert turns its circles into gears, and OK
+/// then sends gear items in place of the old type, still on the same set.
 #[test]
-fn rows_may_come_from_several_sketches() {
-    let mut app = app();
-    let mut sketch = |plane: &str, circle: (&str, f64)| {
-        let sk = app.session.execute("sketch.create", &json!({"plane": plane})).unwrap()["sketch"].as_u64().unwrap();
-        app.session.execute("sketch.circle.center", &json!({"center": [0, 0], "radius": circle.1, "id": circle.0})).unwrap();
-        app.session.execute("sketch.finish", &json!({})).unwrap();
-        sk
-    };
-    let (a, b) = (sketch("XY", ("g1", 20.0)), sketch("XZ", ("g2", 10.0)));
-    app.start("gear.create");
-    let mut d = app.dialog.clone().unwrap();
-    d.inputs[0].items = vec![Sel::SketchCurve { id: "g1".into(), sketch: Some(a) }, Sel::SketchCurve { id: "g2".into(), sketch: Some(b) }];
-    let Kind::Gear(g) = &mut d.kind else { panic!() };
-    g.kind = type_of(GearKind::Bevel);
-    let c = apply_commands(&app, &d).unwrap();
-    let sel = c[0].1["selection"].as_array().unwrap().clone();
-    assert_eq!((sel[0]["sketch"].as_u64(), sel[1]["sketch"].as_u64()), (Some(a), Some(b)), "{sel:?}");
-    assert_eq!((sel[0]["role"].as_str(), sel[1]["role"].as_str()), (Some("bevel"), Some("bevel")));
-}
-
-/// Operation and Targets: the set joined to or cut from bodies, its keep-out cut from a
-/// housing; the driver is a row; Join without targets says what to pick.
-#[test]
-fn operation_targets_keep_out_and_driver() {
-    let mut app = app();
-    app.session.execute("solid.box", &json!({"length": 80, "width": 60, "height": 20})).unwrap();
-    let body = solidcraft_engine::Sel::Body { name: crate::open_meshing::session_world(&app.session).bodies[0].name.clone() };
-    let sk = app.session.execute("sketch.create", &json!({"plane": "XY"})).unwrap()["sketch"].as_u64().unwrap();
-    for (id, x, r) in [("c1", 0.0, 20.0), ("c2", 30.0, 10.0)] {
-        app.session.execute("sketch.circle.center", &json!({"center": [x, 0], "radius": r, "id": id})).unwrap();
-    }
-    app.session.execute("sketch.finish", &json!({})).unwrap();
-    app.start("gear.create");
-    let mut d = app.dialog.clone().unwrap();
-    d.inputs[0].items = vec![Sel::SketchCurve { id: "c1".into(), sketch: Some(sk) }, Sel::SketchCurve { id: "c2".into(), sketch: Some(sk) }];
-    let Kind::Gear(g) = &mut d.kind else { panic!() };
-    g.operation = 2;
-    let e = apply_commands(&app, &d).unwrap_err();
-    assert!(e.contains("pick the bodies"), "{e}");
-    d.inputs[1].items = vec![body.clone()];
-    let Kind::Gear(g) = &mut d.kind else { panic!() };
-    g.cut_keep_out = true;
-    g.assembly = true;
-    g.driver = 1;
-    let c = apply_commands(&app, &d).unwrap();
-    let p = &c[0].1;
-    assert_eq!(p["operation"], "cut");
-    let name = match &body {
-        Sel::Body { name } => name.clone(),
-        _ => unreachable!(),
-    };
-    assert_eq!(p["targets"], json!([name]));
-    assert_eq!(p["keep_out_cuts"], json!([name]));
-    assert_eq!(p["assembly_driver"], json!(2), "the second gear drives (1-based)");
-}
-
-/// The engine's outlines draw each gear without teeth: tip, pitch and root circles at both
-/// faces.
-#[test]
-fn outlines_are_drawn_from_the_engine() {
-    let r = json!({"outlines": [{"index": 0, "center": [0.0, 0.0, 0.0], "axis": [0.0, 0.0, 1.0], "face_width": 10.0, "pitch_diameter": 40.0, "tip_diameter": 44.0, "root_diameter": 35.0}]});
-    let o = outlines_of(&r);
-    // tip ×2, root ×2, pitch ×2, four lines between.
-    assert_eq!(o.len(), 10);
-    let front = &o[5].1;
-    assert!((front[0][2] - 10.0).abs() < 1e-9 && (front[0][0] - 20.0).abs() < 1e-9, "{front:?}");
-}
-
-/// The user's gearbox (a local copy in %TEMP%\geartest\u\GAERBOX.sc, not in the repository):
-/// the picks the dialog would send, read by the engine. Run by hand (`--ignored --nocapture`).
-#[test]
-#[ignore]
-fn the_users_gearbox_reads_sanely() {
-    let path = std::env::temp_dir().join("geartest").join("u").join("GAERBOX.sc");
-    if !path.exists() {
-        return;
-    }
-    let mut app = app();
-    app.session.execute("doc.open", &json!({"path": path})).unwrap();
-    let st = crate::open_meshing::session_world(&app.session);
-    let mut items = Vec::new();
-    for ss in &st.sketches {
-        let name = app.session.doc.feature(ss.feature).map(|f| f.name.clone()).unwrap_or_default();
-        let Ok(gs) = solidcraft_engine::gear_sketch(&app.session, ss.feature) else { continue };
-        for (id, c) in &gs.circles {
-            eprintln!("{name} circle {id} Ø{:.2} at ({:.2}, {:.2})", 2.0 * c.r, c.c.x, c.c.y);
-            let d = (2.0 * c.r * 100.0).round() / 100.0;
-            if [30.0, 15.0, 25.0].contains(&d) {
-                items.push(Sel::SketchCurve { id: id.clone(), sketch: Some(ss.feature) });
-            }
-        }
-        for (id, l) in &gs.lines {
-            eprintln!("{name} line {id} {:.2} long", l.len());
-            if gs.circles.is_empty() {
-                items.push(Sel::SketchCurve { id: id.clone(), sketch: Some(ss.feature) });
-            }
-        }
-    }
-    app.start("gear.create");
-    let mut d = app.dialog.clone().unwrap();
-    d.inputs[0].items = items;
-    let Kind::Gear(g) = &d.kind else { panic!() };
-    for (i, (p, geo)) in rows_now(&app, g, &d.inputs).iter().enumerate() {
-        eprintln!("row {}: {:?} as {}", i + 1, geo, ROLES[p.role].0);
-    }
-    let c = apply_commands(&app, &d).unwrap();
-    eprintln!("request: {}", c[0].1);
-    match app.session.execute("gear.calculate", &c[0].1) {
-        Ok(r) => {
-            for m in members_of(&r).values() {
-                eprintln!("member: {}", member_line(m).0);
-            }
-            for s in shafts_of(&r) {
-                eprintln!("{}", shaft_line(&s));
-            }
-            eprintln!("contacts: {}, outlines: {}", contacts_of(&r).len(), outlines_of(&r).len());
-        }
-        Err(e) => eprintln!("refused: {e}"),
-    }
-}
-
-/// Edit on the Gears feature (its id differs from the set's folder id) opens THAT set, and OK
-/// updates it in place: still one set, the same feature.
-#[test]
-fn editing_the_gears_feature_opens_that_set_and_updates_it_in_place() {
+fn an_old_set_opens_as_it_is_and_converts() {
     let mut app = app();
     let made = app.session.execute("gear.sketch", &json!({"type": "pair", "gear": {"module": 2, "teeth": 20, "teeth2": 40}})).unwrap();
     let sk = made["sketch"].as_u64().unwrap();
@@ -401,12 +195,83 @@ fn editing_the_gears_feature_opens_that_set_and_updates_it_in_place() {
     app.edit_feature(feature);
     let g = gear(&app);
     assert_eq!(g.group, Some(set.group), "the dialog is on that set");
+    assert!(g.legacy.as_ref().is_some_and(|l| l.convertible), "{:?}", g.legacy);
     let c = apply_commands(&app, app.dialog.as_ref().unwrap()).unwrap();
     assert_eq!(c[0].0, "gear.update");
+    assert_eq!((c[0].1["sketch"].as_u64(), c[0].1["type"].as_str()), (Some(sk), Some("spur")), "kept as it was: {}", c[0].1);
+    // Convert: its two circles become two spur gears.
+    let mut d = app.dialog.clone().unwrap();
+    let Kind::Gear(g) = &mut d.kind else { panic!() };
+    assert_eq!(convert_legacy(&app, g), Ok(2));
+    assert!(g.legacy.is_none() && g.items.iter().all(|it| it.kind == ItemKind::Spur && it.picks.len() == 1));
+    let c = apply_commands(&app, &d).unwrap();
+    assert_eq!(c[0].0, "gear.update");
+    let p = &c[0].1;
+    assert_eq!(p["items"].as_array().map(Vec::len), Some(2), "{p}");
+    assert!(p.get("sketch").is_none() && p.get("type").is_none() && p.get("module").is_none(), "the old keys go: {p}");
+    crate::dialogs::cancel(&mut app);
     run_all(&mut app, c);
     let after = solidcraft_engine::gear_sets(&app.session);
     assert_eq!(after.len(), 1, "no new set");
     assert_eq!(after[0].feature, set.feature, "updated in place");
+}
+
+/// Several sketch pieces picked at once (a box selection, Ctrl-clicks): one gear per circle of the
+/// type in the list, in one go; touching ones are suggested as meshes; one OK makes them all as
+/// one Gears feature.
+#[test]
+fn several_circles_at_once_make_one_gear_each() {
+    let mut app = app();
+    let (s1, s2, _) = items_drawing(&mut app);
+    let at = |sk: u64, id: &str| Sel::SketchCurve { id: id.into(), sketch: Some(sk) };
+    let (mut g, mut inputs) = opened(&mut app);
+    inputs[0].items = vec![at(s1, "c1"), at(s1, "c2"), at(s2, "c3")];
+    sync_picks(&app, &mut g, &mut inputs);
+    assert_eq!(g.items.len(), 3, "{:?}", g.refused);
+    assert!(g.items.iter().all(|it| it.kind == ItemKind::Spur && it.picks.len() == 1));
+    refresh(&mut app, &mut g, &inputs);
+    let s = g.graph.suggested();
+    assert!(s.iter().any(|s| s.kind == "mesh" && [s.a, s.b] == [0, 1]), "c1 and c2 touch: {s:?}");
+    g.graph.accept_all();
+    let mut d = app.dialog.clone().unwrap();
+    d.kind = Kind::Gear(g);
+    d.inputs = inputs;
+    let c = apply_commands(&app, &d).unwrap();
+    assert_eq!(c[0].0, "gear.create");
+    assert_eq!(c[0].1["items"].as_array().map(Vec::len), Some(3));
+    crate::dialogs::cancel(&mut app);
+    run_all(&mut app, c);
+    assert_eq!(solidcraft_engine::gear_sets(&app.session).len(), 1, "one Gears feature");
+}
+
+/// A picked circle deleted from its sketch: the gear keeps the pick and names it as missing (it is
+/// never swapped for something else), the status line asks for its replacement, OK says which is
+/// gone; a new pick replaces it.
+#[test]
+fn a_deleted_pick_is_named_missing_until_re_picked() {
+    let mut app = app();
+    let (s1, _, _) = items_drawing(&mut app);
+    let at = |sk: u64, id: &str| Sel::SketchCurve { id: id.into(), sketch: Some(sk) };
+    let (mut g, mut inputs) = opened(&mut app);
+    g.items = vec![GearItem { picks: vec![at(s1, "gone")], ..GearItem::new(ItemKind::Spur) }];
+    make_active(&mut g, 0, &mut inputs);
+    // The host drops a pick it can't show: the gear keeps it.
+    inputs[0].items.clear();
+    sync_picks(&app, &mut g, &mut inputs);
+    assert_eq!(g.items[0].picks, vec![at(s1, "gone")]);
+    let gone = g.items[0].missing(&app);
+    assert_eq!(gone.len(), 1);
+    assert!(gone[0].starts_with("curve gone of sketch"), "{gone:?}");
+    let (text, bad) = next_step(&app, &g);
+    assert!(bad && text.contains("is missing") && text.contains("curve gone"), "{text}");
+    let mut d = app.dialog.clone().unwrap();
+    d.kind = Kind::Gear(g.clone());
+    let e = apply_commands(&app, &d).unwrap_err();
+    assert!(e.contains("Gear A") && e.contains("curve gone") && e.contains("is missing"), "{e}");
+    // Re-picked: the new circle takes its place.
+    click(&app, &mut g, &mut inputs, at(s1, "c1"));
+    assert_eq!(g.items[0].picks, vec![at(s1, "c1")]);
+    assert!(g.items[0].missing(&app).is_empty() && g.items[0].complete(&app));
 }
 
 /// A drawing for the gear items: in an XY sketch, circle c1 (r20) at the origin tangent to c2
@@ -446,7 +311,7 @@ fn picks_are_checked_by_the_gear_crates_slots() {
     assert!(why.contains("no room for another pitch circle"), "{why}");
     // Used by another item.
     let compound = GearItem { picks: vec![at(s1, "c2")], ..GearItem::new(ItemKind::Compound) };
-    assert_eq!(compound.refusal(&app, &at(s1, "c1"), &[(0, &spur)]).as_deref(), Some("already used by Item 1"));
+    assert_eq!(compound.refusal(&app, &at(s1, "c1"), &[(0, &spur)]).as_deref(), Some("already used by Gear A: click its card to change it"));
     // A construction line is a helper, not a shaft.
     let why = compound.refusal(&app, &at(s1, "k"), &[]).unwrap();
     assert!(why.starts_with("a construction line is a helper, not a shaft"), "{why}");
@@ -670,7 +535,7 @@ fn the_engine_reply_is_shown_per_gear_and_per_link() {
     // `error`: the status line says it (nothing is built); `notes` are kept.
     assert_eq!(status_of(Ok::<_, String>(reply.clone())), Err("Item C: the pinion doesn't touch the ring".to_string()));
     assert_eq!(notes_of(&reply), ["module 2 from Module Block M1"]);
-    assert!(status_of(Ok::<_, String>(json!({"facts": [{"label": "ratio", "value": 2.0}]}))).unwrap()[0].starts_with("ratio: 2"));
+    assert_eq!(status_of(Ok::<_, String>(json!({"warnings": ["thin rim"]}))).unwrap(), vec!["⚠ thin rim".to_string()]);
 }
 
 /// The ratio calculator: two gears picked (graph rows, the cards' chips, or the lists), and

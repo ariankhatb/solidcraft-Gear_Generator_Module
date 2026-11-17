@@ -1,0 +1,791 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      60
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "L+60 worm",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     0
+    ],
+    "radius": 30,
+    "id": "w"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "w.center",
+    "b": "origin"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "w"
+    ],
+    "type": "diameter",
+    "value": "60 mm"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      -40,
+      38
+     ],
+     [
+      40,
+      38
+     ]
+    ],
+    "ids": [
+     "worm"
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "worm",
+    "mode": "horizontal"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "worm"
+    ],
+    "value": "80 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "worm.start",
+     "origin"
+    ],
+    "type": "horizontal",
+    "value": "40 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "worm.start"
+    ],
+    "type": "vertical",
+    "value": "38 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      30
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "L+30 rack",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     45,
+     0
+    ],
+    "radius": 15,
+    "id": "g"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "g.center"
+    ],
+    "type": "horizontal",
+    "value": "45 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "g.center"
+    ],
+    "type": "vertical",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "g"
+    ],
+    "type": "diameter",
+    "value": "30 mm"
+   }
+  },
+  {
+   "command": "sketch.line",
+   "params": {
+    "points": [
+     [
+      5,
+      -15
+     ],
+     [
+      85,
+      -15
+     ]
+    ],
+    "ids": [
+     "rack"
+    ]
+   }
+  },
+  {
+   "command": "sketch.constraint.horizontal_vertical",
+   "params": {
+    "line": "rack",
+    "mode": "horizontal"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "rack"
+    ],
+    "value": "80 mm"
+   }
+  },
+  {
+   "command": "sketch.constraint.tangent",
+   "params": {
+    "a": "rack",
+    "b": "g"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "rack.start"
+    ],
+    "type": "horizontal",
+    "value": "5 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "L0 spur",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     0
+    ],
+    "radius": 15,
+    "id": "a"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "a.center",
+    "b": "origin"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "a"
+    ],
+    "type": "diameter",
+    "value": "30 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     45,
+     0
+    ],
+    "radius": 30,
+    "id": "b"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "b"
+    ],
+    "type": "diameter",
+    "value": "60 mm"
+   }
+  },
+  {
+   "command": "sketch.constraint.tangent",
+   "params": {
+    "a": "a",
+    "b": "b"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "b.center"
+    ],
+    "type": "vertical",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      -30
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "L-30 herringbone",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     45,
+     0
+    ],
+    "radius": 15,
+    "id": "c"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "c.center"
+    ],
+    "type": "horizontal",
+    "value": "45 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "c.center"
+    ],
+    "type": "vertical",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "c"
+    ],
+    "type": "diameter",
+    "value": "30 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     87,
+     0
+    ],
+    "radius": 27,
+    "id": "d"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "d"
+    ],
+    "type": "diameter",
+    "value": "54 mm"
+   }
+  },
+  {
+   "command": "sketch.constraint.tangent",
+   "params": {
+    "a": "c",
+    "b": "d"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "d.center"
+    ],
+    "type": "vertical",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      -60
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "L-60 helical",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     87,
+     0
+    ],
+    "radius": 12,
+    "id": "e"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "e.center"
+    ],
+    "type": "horizontal",
+    "value": "87 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "e.center"
+    ],
+    "type": "vertical",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "e"
+    ],
+    "type": "diameter",
+    "value": "24 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     123,
+     0
+    ],
+    "radius": 24,
+    "id": "f"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "f"
+    ],
+    "type": "diameter",
+    "value": "48 mm"
+   }
+  },
+  {
+   "command": "sketch.constraint.tangent",
+   "params": {
+    "a": "e",
+    "b": "f"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "f.center"
+    ],
+    "type": "vertical",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      90
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "L+90 planetary",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     0
+    ],
+    "radius": 13.5,
+    "id": "sun"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "sun.center",
+    "b": "origin"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "sun"
+    ],
+    "type": "diameter",
+    "value": "27 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     27,
+     0
+    ],
+    "radius": 13.5,
+    "id": "planet"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     0
+    ],
+    "radius": 40.5,
+    "id": "pring"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "planet"
+    ],
+    "type": "diameter",
+    "value": "27 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "pring"
+    ],
+    "type": "diameter",
+    "value": "81 mm"
+   }
+  },
+  {
+   "command": "sketch.constraint.concentric",
+   "params": {
+    "a": "pring",
+    "b": "sun"
+   }
+  },
+  {
+   "command": "sketch.constraint.tangent",
+   "params": {
+    "a": "planet",
+    "b": "sun"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "planet.center"
+    ],
+    "type": "vertical",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      -90
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "L-90 internal",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     123,
+     0
+    ],
+    "radius": 20,
+    "id": "rp"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "rp.center"
+    ],
+    "type": "horizontal",
+    "value": "123 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "rp.center"
+    ],
+    "type": "vertical",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "rp"
+    ],
+    "type": "diameter",
+    "value": "40 mm"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     153,
+     0
+    ],
+    "radius": 50,
+    "id": "ring"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "ring"
+    ],
+    "type": "diameter",
+    "value": "100 mm"
+   }
+  },
+  {
+   "command": "sketch.constraint.tangent",
+   "params": {
+    "a": "rp",
+    "b": "ring"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "ring.center"
+    ],
+    "type": "vertical",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "inspect.interference",
+   "params": {}
+  }
+ ]
+}

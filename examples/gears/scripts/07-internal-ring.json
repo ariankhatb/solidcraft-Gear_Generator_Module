@@ -1,0 +1,153 @@
+{
+ "commands": [
+  {
+   "command": "sketch.create",
+   "params": {
+    "plane": {
+     "origin": [
+      0,
+      0,
+      0
+     ],
+     "x_dir": [
+      1,
+      0,
+      0
+     ],
+     "y_dir": [
+      0,
+      1,
+      0
+     ]
+    },
+    "name": "Ring and pinion",
+    "project_edges": false
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     0,
+     0
+    ],
+    "radius": 40,
+    "id": "ring"
+   }
+  },
+  {
+   "command": "sketch.circle.center",
+   "params": {
+    "center": [
+     25,
+     0
+    ],
+    "radius": 15,
+    "id": "pin"
+   }
+  },
+  {
+   "command": "sketch.constraint.coincident",
+   "params": {
+    "a": "ring.center",
+    "b": "origin"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "ring"
+    ],
+    "type": "diameter",
+    "value": "80 mm"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "pin"
+    ],
+    "type": "diameter",
+    "value": "30 mm"
+   }
+  },
+  {
+   "command": "sketch.constraint.tangent",
+   "params": {
+    "a": "pin",
+    "b": "ring"
+   }
+  },
+  {
+   "command": "sketch.dimension",
+   "params": {
+    "entities": [
+     "origin",
+     "pin.center"
+    ],
+    "type": "vertical",
+    "value": "0 mm"
+   }
+  },
+  {
+   "command": "sketch.finish",
+   "params": {}
+  },
+  {
+   "command": "gear.create",
+   "params": {
+    "name": "Internal pair",
+    "items": [
+     {
+      "id": "R",
+      "type": "internal",
+      "rim": 6,
+      "components": [
+       {
+        "sketch": "Ring and pinion",
+        "curve": "ring",
+        "slot": "pitch"
+       },
+       {
+        "sketch": "Ring and pinion",
+        "curve": "pin",
+        "slot": "pitch2"
+       }
+      ]
+     }
+    ],
+    "links": [],
+    "assembly": true,
+    "module_blocks": [
+     {
+      "id": "M",
+      "module": 1.5,
+      "members": [
+       "R"
+      ]
+     }
+    ],
+    "drive": {
+     "item": "R",
+     "gear": 1,
+     "rpm": 1000
+    }
+   }
+  },
+  {
+   "command": "gear.ratio",
+   "params": {
+    "a": {
+     "item": "R",
+     "gear": 1
+    },
+    "b": {
+     "item": "R",
+     "gear": 0
+    }
+   }
+  }
+ ]
+}

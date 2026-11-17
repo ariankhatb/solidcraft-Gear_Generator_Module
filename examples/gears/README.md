@@ -15,10 +15,9 @@ Designs made with the Gears feature (`gear.create` with `items`). In each one, t
 | `09-everything-drivetrain.sc` | One drivetrain: worm, rack, spur, herringbone, helical, planetary and internal stages, chained through shared shafts, driven from the worm |
 | `10-hypoid-pair.sc` | Hypoid: ring pitch circle plus the pinion's axis line 15 mm off-centre, 37 : 9 |
 
-
 ## Known issues
 
-- `09`: the internal ring builds as a solid cup when its pinion shares a shaft with other gears (an engine bug, being fixed).
+- `09`: `inspect.interference` reports a large overlap between the internal ring and its pinion. The ring is built correctly (an annulus, 56,804 mm³); the interference check gives a false positive when a pinion sits inside a toothed hole.
 - `10`: SolidCraft's own geometry check flags the hypoid pinion's trimmed surfaces ("Bad CurveCusp"), the known kernel issue. The gears themselves are correct.
 
 ## Rebuilding

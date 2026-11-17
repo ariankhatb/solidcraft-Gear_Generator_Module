@@ -742,6 +742,14 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
     if let Some(g) = solidcraft_engine::gear_selected_set(&app.session).map(|set| for_set(&set)) {
         return Some((Kind::Gear(g), inputs()));
     }
+    // A set's timeline folder picked in the timeline (a folder pick is not a model selection):
+    // the dialog on that set.
+    if !app.tree.picked_timeline_groups.is_empty() {
+        let sets = solidcraft_engine::gear_sets(&app.session);
+        if let Some(set) = app.tree.picked_timeline_groups.iter().find_map(|id| sets.iter().find(|set| owns(set, *id))) {
+            return Some((Kind::Gear(for_set(set)), inputs()));
+        }
+    }
     let g = match &app.gear_after_sketch {
         Some(after) => Gear { sketch: Some(after.sketch), calc: None, shape: Vec::new(), flagged: Vec::new(), action: None, ..after.dialog.clone() },
         None => new(None),

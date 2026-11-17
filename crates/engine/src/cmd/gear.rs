@@ -152,6 +152,7 @@ pub static COMMANDS: &[CommandSpec] = &[
              (gear.create {sketch, picks}) follows it: when the sketch reads differently after a command, the set is updated in that command's step",
         ),
     CommandSpec::new("gear.inspect", "Inspect Gears", crate::checked!("gear.inspect", inspect))
+        .icon("gear_generator")
         .noundo()
         .read_only()
         .contract(&INSPECT_CONTRACT)

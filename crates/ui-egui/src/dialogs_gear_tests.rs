@@ -753,5 +753,132 @@ fn the_dialogs_request_is_the_engines_schema() {
     let ratio = app.session.execute("gear.ratio", &q).unwrap();
     let lines = ratio_lines(&ratio, &|v: f64| fmt(v));
     assert!(lines[0].1.starts_with("2.00 : 1, opposite"), "{lines:?} {ratio}");
-    assert_eq!(lines[1], ("Path".to_string(), "1·1 → 2·1".to_string()), "a compound is one body, named by its first gear: {ratio}");
+    assert_eq!(lines[1], ("Path".to_string(), "1·1 → 2·1 → 2·2".to_string()), "a compound is one body; the path names both its gears: {ratio}");
+}
+
+/// A set made of items in the dialog (Create New + picks): every way to edit it opens the
+/// dialog on THAT set with its items (not a new dialog), and OK updates it in place.
+#[test]
+fn every_edit_entry_point_opens_an_items_set() {
+    use crate::dialogs_gear_graph::{GearItem, Suggested};
+    use solidcraft_gear::items::ItemKind;
+    let mut app = app();
+    let (s1, s2, s3) = items_drawing(&mut app);
+    let at = |sk: u64, id: &str| Sel::SketchCurve { id: id.into(), sketch: Some(sk) };
+    app.start("gear.create");
+    let mut d = app.dialog.clone().unwrap();
+    let Kind::Gear(g) = &mut d.kind else { panic!() };
+    g.items = vec![GearItem { picks: vec![at(s1, "c1")], ..GearItem::new(ItemKind::Spur) }, GearItem { picks: vec![at(s1, "c2"), at(s3, "s"), at(s2, "c3")], ..GearItem::new(ItemKind::Compound) }];
+    g.graph.accept(&Suggested { a: 0, a_gear: 0, b: 1, b_gear: 0, kind: "mesh".into() });
+    g.assembly = true;
+    let c = apply_commands(&app, &d).unwrap();
+    assert_eq!(c[0].0, "gear.create");
+    crate::dialogs::cancel(&mut app);
+    run_all(&mut app, c);
+    let sets = solidcraft_engine::gear_sets(&app.session);
+    assert_eq!(sets.len(), 1, "{sets:?}");
+    let set = sets[0].clone();
+    let feature = set.feature.expect("a Gears feature");
+    let check = |app: &SolveApp, how: &str| {
+        let g = match app.dialog.as_ref().map(|d| &d.kind) {
+            Some(Kind::Gear(g)) => g.clone(),
+            other => panic!("{how}: not the Gears dialog: {other:?}"),
+        };
+        assert_eq!(g.group, Some(set.group), "{how}: the dialog is on the set");
+        assert_eq!(g.items.len(), 2, "{how}: its items are restored");
+    };
+    app.edit_feature(feature);
+    check(&app, "the Gears feature's Edit");
+    crate::dialogs::cancel(&mut app);
+    open_set(&mut app, set.group).unwrap();
+    check(&app, "the folder's Edit Gears");
+    crate::dialogs::cancel(&mut app);
+    // A body of the set selected, then the Gears command.
+    let body = set.bodies.first().cloned().expect("a body");
+    app.session.selection = vec![solidcraft_engine::Sel::Body { name: body.clone() }];
+    app.start("gear.create");
+    check(&app, "a body selected + Gears");
+    crate::dialogs::cancel(&mut app);
+    // The feature selected, then the Gears command.
+    app.session.selection = vec![solidcraft_engine::Sel::Feature { id: feature }];
+    app.start("gear.create");
+    check(&app, "the feature selected + Gears");
+    crate::dialogs::cancel(&mut app);
+    // The set's folder picked in the timeline (not a model selection), then the Gears command.
+    app.session.selection.clear();
+    app.tree.picked_timeline_groups = vec![set.group];
+    app.start("gear.create");
+    check(&app, "the folder picked + Gears");
+    crate::dialogs::cancel(&mut app);
+    app.tree.picked_timeline_groups.clear();
+    // Edit on the body's feature (a double-click on the body in the viewport).
+    let made_by = app.session.model.state().bodies.iter().find(|b| b.name == body).map(|b| b.feature);
+    if let Some(f) = made_by {
+        app.edit_feature(f);
+        check(&app, "the body's feature");
+        crate::dialogs::cancel(&mut app);
+    }
+    // An occurrence of the set's assembly selected, then the Gears command.
+    if let Some(o) = app.session.doc.occurrences.first().map(|o| o.id) {
+        app.session.selection = vec![solidcraft_engine::Sel::Occurrence { path: vec![o] }];
+        app.start("gear.create");
+        check(&app, "an occurrence selected + Gears");
+        crate::dialogs::cancel(&mut app);
+    }
+    app.session.selection.clear();
+    // OK on the reopened dialog: the same set, updated in place.
+    app.edit_feature(feature);
+    let c = apply_commands(&app, app.dialog.as_ref().unwrap()).unwrap();
+    assert_eq!(c[0].0, "gear.update", "{c:?}");
+    crate::dialogs::cancel(&mut app);
+    run_all(&mut app, c);
+    let after = solidcraft_engine::gear_sets(&app.session);
+    assert_eq!(after.len(), 1, "no new set");
+    assert_eq!(after[0].feature, Some(feature), "updated in place");
+}
+
+/// The same set edited the way a person does it, frames running: a double-click on the Gears
+/// feature's timeline row or on its folder, and the dialog stays on the set over later frames.
+#[test]
+fn double_clicks_in_the_timeline_open_an_items_set_and_it_stays_open() {
+    use crate::dialogs_gear_graph::{GearItem, Suggested};
+    use solidcraft_gear::items::ItemKind;
+    let mut h = crate::scenario::Harness::new();
+    h.app.home.open = false;
+    let (s1, s2, s3) = items_drawing(&mut h.app);
+    let at = |sk: u64, id: &str| Sel::SketchCurve { id: id.into(), sketch: Some(sk) };
+    h.app.start("gear.create");
+    let mut d = h.app.dialog.clone().unwrap();
+    let Kind::Gear(g) = &mut d.kind else { panic!() };
+    g.items = vec![GearItem { picks: vec![at(s1, "c1")], ..GearItem::new(ItemKind::Spur) }, GearItem { picks: vec![at(s1, "c2"), at(s3, "s"), at(s2, "c3")], ..GearItem::new(ItemKind::Compound) }];
+    g.graph.accept(&Suggested { a: 0, a_gear: 0, b: 1, b_gear: 0, kind: "mesh".into() });
+    g.assembly = true;
+    let c = apply_commands(&h.app, &d).unwrap();
+    crate::dialogs::cancel(&mut h.app);
+    run_all(&mut h.app, c);
+    h.frames(3);
+    let set = solidcraft_engine::gear_sets(&h.app.session).into_iter().next().expect("a set");
+    let feature = set.feature.expect("a Gears feature");
+    let state = |h: &crate::scenario::Harness| match h.app.dialog.as_ref().map(|d| &d.kind) {
+        Some(Kind::Gear(g)) => Some((g.group, g.items.len())),
+        _ => None,
+    };
+    let fname = h.app.session.doc.feature(feature).map(|f| f.name.clone()).unwrap();
+    let gname = h.app.session.doc.timeline_groups.iter().find(|g| g.id == set.group).map(|g| g.name.clone());
+    let mut tried = Vec::new();
+    for handle in [Some(format!("timeline:{fname}")), gname.map(|n| format!("timeline-folder:{n}"))].into_iter().flatten() {
+        if h.step(&json!({"click": {"handle": handle}, "double": true})).is_err() {
+            continue;
+        }
+        h.frames(5);
+        assert_eq!(state(&h), Some((Some(set.group), 2)), "{handle}: the dialog on the set with its items, frames later");
+        tried.push(handle);
+        crate::dialogs::cancel(&mut h.app);
+        h.frames(2);
+    }
+    assert!(!tried.is_empty(), "no timeline handle to double-click");
+    // Edit from the API, frames later.
+    h.app.edit_feature(feature);
+    h.frames(5);
+    assert_eq!(state(&h), Some((Some(set.group), 2)), "edit_feature, frames later");
 }

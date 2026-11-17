@@ -1325,6 +1325,16 @@
       "id": "W",
       "type": "worm",
       "starts": 2,
+      "gears": [
+       {
+        "gear": 0,
+        "face": {
+         "preset": "symmetric",
+         "a": 3.8,
+         "b": 3.8
+        }
+       }
+      ],
       "components": [
        {
         "sketch": "L+60 worm",

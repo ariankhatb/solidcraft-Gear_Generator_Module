@@ -95,7 +95,7 @@ ex['05-worm-and-wheel'] = [
     hdim('axis.start', 'origin', 40), vdim('origin', 'axis.start', 38),
   ]),
   gears('Worm drive', [
-    { id: 'W', type: 'worm', starts: 1, components: [pick('Worm stage', 'w', 'pitch'), pick('Worm stage', 'axis', 'axis')] },
+    { id: 'W', type: 'worm', starts: 1, gears: [{ gear: 0, face: { preset: 'symmetric', a: 3.8, b: 3.8 } }], components: [pick('Worm stage', 'w', 'pitch'), pick('Worm stage', 'axis', 'axis')] },
   ], [], { drive: { item: 'W', gear: 1, rpm: 1500 } }),
   ratio('W', 1, 'W', 0),
 ];

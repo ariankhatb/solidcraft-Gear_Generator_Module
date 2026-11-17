@@ -35,6 +35,47 @@ pub fn item_index(id: &Value) -> Option<usize> {
     }
 }
 
+/// A request read back with its items named by position (A, B, C, … as the dialog names them):
+/// a request written elsewhere (the CLI, a script) may name its items W, G, R; every `item`
+/// that refers to one (links, ratios, the drive) is renamed with it.
+pub fn positional_ids(r: &mut serde_json::Map<String, Value>) {
+    let ids: Vec<Option<String>> = r.get("items").and_then(Value::as_array).into_iter().flatten().map(|v| v.get("id").and_then(Value::as_str).map(str::to_string)).collect();
+    let rename: std::collections::HashMap<String, String> =
+        ids.iter().enumerate().filter_map(|(i, id)| Some((id.clone()?, item_id(i)))).filter(|(a, b)| a != b).collect();
+    if rename.is_empty() {
+        return;
+    }
+    fn walk(v: &mut Value, rename: &std::collections::HashMap<String, String>) {
+        match v {
+            Value::Object(o) => {
+                for (k, x) in o.iter_mut() {
+                    match x {
+                        Value::String(s) if k == "item" => {
+                            if let Some(n) = rename.get(s.as_str()) {
+                                *s = n.clone();
+                            }
+                        }
+                        _ => walk(x, rename),
+                    }
+                }
+            }
+            Value::Array(a) => a.iter_mut().for_each(|x| walk(x, rename)),
+            _ => {}
+        }
+    }
+    for (k, v) in r.iter_mut() {
+        if k == "items" {
+            for (i, it) in v.as_array_mut().into_iter().flatten().enumerate() {
+                if let Some(o) = it.as_object_mut() {
+                    o.insert("id".into(), Value::String(item_id(i)));
+                }
+            }
+        } else if k != "ui" {
+            walk(v, &rename);
+        }
+    }
+}
+
 /// The face presets (decision 4), as the toggle shows them and `face.preset` names them.
 pub const FACE_PRESETS: [(FacePreset, &str, &str); 4] = [
     (FacePreset::Symmetric, "symmetric", "Symmetric"),

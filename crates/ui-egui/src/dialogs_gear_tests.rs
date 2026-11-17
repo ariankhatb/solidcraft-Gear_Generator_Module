@@ -497,6 +497,25 @@ fn items_and_the_graph_make_the_request_and_edit_restores_them() {
     assert_eq!(again["items"], p["items"]);
     assert_eq!(again["links"], p["links"]);
     assert_eq!(again["drive"], p["drive"]);
+    // A request written elsewhere names its items W and R: read back by position, its links
+    // and drive with them.
+    let mut named = p.clone();
+    named["items"][0]["id"] = json!("W");
+    named["items"][1]["id"] = json!("R");
+    let swap = |v: &mut Value| {
+        if let Some(s) = v.as_str() {
+            *v = json!(if s == "A" { "W" } else { "R" });
+        }
+    };
+    for l in named["links"].as_array_mut().unwrap() {
+        swap(&mut l["a"]["item"]);
+        swap(&mut l["b"]["item"]);
+    }
+    swap(&mut named["drive"]["item"]);
+    let e = for_set(&solidcraft_engine::schema::gear::GearSet { request: named, ..set.clone() });
+    assert_eq!(e.graph.links(), vec![(0, 0, 1, 0, "mesh")]);
+    assert_eq!(e.drive_item, Some((1, 0)));
+    assert_eq!(e.base["items"][1]["id"], json!("B"));
 }
 
 /// What the engine says (§6) is shown: per gear z, m, Ø, ratio, rpm, torque, contact ratio and

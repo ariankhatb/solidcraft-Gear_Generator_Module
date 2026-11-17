@@ -622,6 +622,7 @@ fn shown(v: f64, kind: ValueKind) -> String {
 pub fn for_set(set: &solidcraft_engine::schema::gear::GearSet) -> Gear {
     let mut r = set.request.as_object().cloned().unwrap_or_default();
     let ui = r.remove("ui");
+    crate::dialogs_gear_items::positional_ids(&mut r);
     let mut g = new(set.sketch);
     g.group = Some(set.group);
     g.assembly = r.get("assembly").and_then(Value::as_bool) == Some(true);

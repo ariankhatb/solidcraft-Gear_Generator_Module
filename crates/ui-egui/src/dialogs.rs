@@ -1720,6 +1720,14 @@ impl Dialog {
             return Some(target);
         }
         let inp = self.active_input()?;
+        // Gears: a point under the pointer is a pick only on a line (a bearing point, an apex);
+        // otherwise the click goes on to the curve under it.
+        if matches!(self.kind, Kind::Gear(_))
+            && let Hit::SketchPoint { sketch, id, .. } = h
+            && !crate::dialogs_gear::takes_point_hit(s, *sketch, id)
+        {
+            return None;
+        }
         if self.takes_components() {
             return match h {
                 Hit::Face { body, .. } => occurrence_path_of_body(s, body).map(|path| Sel::Occurrence { path }),

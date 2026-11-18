@@ -1047,3 +1047,74 @@ fn round_two_fixes_wording_and_new_circles_on_edit() {
     assert!(e.items[0].details.is_empty(), "the dropped bore stays out: {:?}", e.items[0].details);
     assert!(e.items[1].details.iter().any(|(sel, _)| *sel == Sel::SketchCurve { id: "bbore".into(), sketch: Some(s) }), "the new circle on B is taken: {:?}", e.items[1].details);
 }
+
+/// Where a point sits on a line (a bearing point on a shaft line, a line's end such as a bevel's
+/// apex), a click there picks the point, not the line; a point on no line (a free point, a
+/// circle's centre) leaves the click to the curve under it.
+#[test]
+fn points_on_lines_win_over_the_line_in_picking() {
+    use crate::viewport::Hit;
+    use solidcore_record::{Vec2, Vec3};
+    let mut app = app();
+    let s = app.session.execute("sketch.create", &json!({"plane": "XZ"})).unwrap()["sketch"].as_u64().unwrap();
+    app.session.execute("sketch.line", &json!({"points": [[0, 0], [0, 40]], "ids": ["s"]})).unwrap();
+    app.session.execute("sketch.point", &json!({"point": [0, 25], "id": "brg"})).unwrap();
+    app.session.execute("sketch.point", &json!({"point": [10, 25], "id": "free"})).unwrap();
+    app.session.execute("sketch.circle.center", &json!({"center": [30, 30], "radius": 5, "id": "c"})).unwrap();
+    app.session.execute("sketch.finish", &json!({})).unwrap();
+    assert!(takes_point_hit(&app.session, s, "brg"), "a point on the line");
+    assert!(!takes_point_hit(&app.session, s, "free"), "a point on no line");
+    let st = crate::open_meshing::session_world(&app.session);
+    let sk = &st.sketch(s).unwrap().sketch;
+    let end = sk.points[match sk.curves.iter().find(|c| c.id == "s").unwrap().kind {
+        solidcraft_engine::sketch::CurveKind::Line { a, .. } => a,
+        _ => unreachable!(),
+    }]
+    .id
+    .clone();
+    let centre = sk.points[match sk.curves.iter().find(|c| c.id == "c").unwrap().kind {
+        solidcraft_engine::sketch::CurveKind::Circle { c, .. } => c,
+        _ => unreachable!(),
+    }]
+    .id
+    .clone();
+    drop(st);
+    assert!(takes_point_hit(&app.session, s, &end), "a line's end (an apex)");
+    assert!(!takes_point_hit(&app.session, s, &centre), "a circle's centre");
+    app.start("gear.create");
+    let d = app.dialog.as_ref().unwrap();
+    assert!(d.inputs[0].accept & crate::selection::POINTS != 0 && d.inputs[0].accept & crate::selection::EXTERNAL_POINTS != 0);
+    let point = Hit::SketchPoint { sketch: s, id: "brg".into(), at: Vec2::new(0.0, 25.0) };
+    let line = Hit::SketchCurve { sketch: s, id: "s".into(), straight: true, point: Vec3::new(0.0, 0.0, 25.0) };
+    let free = Hit::SketchPoint { sketch: s, id: "free".into(), at: Vec2::new(10.0, 25.0) };
+    // Points come before curves in a pick's hits: the bearing point wins; a free point yields.
+    let (_, sel) = crate::viewport::candidate(&app, &[point.clone(), line.clone()]).unwrap();
+    assert_eq!(sel, Sel::ExternalSketchPoint { sketch: s, id: "brg".into() });
+    let (h, _) = crate::viewport::candidate(&app, &[free, line.clone()]).unwrap();
+    assert_eq!(h, line);
+}
+
+/// The tooth chamfer (All gears) shows in the preview: on each chamfered end the tip circle steps
+/// in by the size, with a second circle the size back from the face.
+#[test]
+fn the_tooth_chamfer_shows_in_the_preview() {
+    let mut app = app();
+    let (s1, _, _) = items_drawing(&mut app);
+    let (mut g, mut inputs) = opened(&mut app);
+    g.new_kind = type_of(ItemKind::Spur);
+    new_gear(&mut g, &mut inputs);
+    click(&app, &mut g, &mut inputs, Sel::SketchCurve { id: "c1".into(), sketch: Some(s1) });
+    refresh(&mut app, &mut g, &inputs);
+    let rings = |g: &Gear| g.shape.iter().filter(|(_, l)| l.len() == 49).count();
+    let plain = rings(&g);
+    assert!(plain > 0, "the outline");
+    g.chamfer = "0.5 mm".into();
+    refresh(&mut app, &mut g, &inputs);
+    assert_eq!(rings(&g), plain + 2, "a second circle at each end");
+    let radii: Vec<f64> = g.shape.iter().filter(|(_, l)| l.len() == 49).map(|(_, l)| (l[0][0] * l[0][0] + l[0][1] * l[0][1]).sqrt()).collect();
+    let tip = radii.iter().copied().fold(0.0, f64::max);
+    assert!(radii.iter().any(|r| (r - (tip - 0.5)).abs() < 1e-6), "the tip stepped in by 0.5: {radii:?}");
+    g.chamfer_faces = 1;
+    refresh(&mut app, &mut g, &inputs);
+    assert_eq!(rings(&g), plain + 1, "side A only");
+}

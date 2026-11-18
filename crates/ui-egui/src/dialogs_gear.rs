@@ -1129,7 +1129,7 @@ pub(crate) fn next_step(app: &SolveApp, k: &Gear) -> (String, bool) {
         None => match it.optional_slot(app) {
             // A bevel side view without its contact line: sized by its gears' settings.
             Some(more) if it.kind == ItemKind::Bevel && more == "contact line" => (
-                format!("{name} is complete — sized by its teeth and module (Gear {} settings below); or click its contact line to size it from the drawing", crate::dialogs_gear_graph::item_id(a)),
+                format!("{name} is complete — sized by its gears' teeth and module ({} teeth each at module {} until you set them in Gear {} settings below); or click its contact line to size it from the drawing", gi::SIDE_VIEW_TEETH, gi::SIDE_VIEW_MODULE, crate::dialogs_gear_graph::item_id(a)),
                 false,
             ),
             Some(more) => (format!("{name} is complete — optional: {more}; or New gear for the next one"), false),
@@ -1481,6 +1481,14 @@ pub(crate) fn worded(text: &str) -> String {
 
 /// The item a message is about ("Gear B: …", "Item B · Compound: …", "item B …"), and the
 /// message without that name in front.
+/// An engine message without its "invalid parameters for `cmd`: " lead.
+pub(crate) fn plain_message(text: &str) -> String {
+    match text.strip_prefix("invalid parameters for `").and_then(|r| r.split_once("`: ")) {
+        Some((_, rest)) => rest.to_string(),
+        None => text.to_string(),
+    }
+}
+
 pub(crate) fn about_item(text: &str) -> Option<(usize, String)> {
     let words: Vec<&str> = text.split_whitespace().collect();
     let at = words.iter().position(|w| matches!(*w, "Gear" | "Item" | "gear" | "item"))?;
@@ -1535,6 +1543,9 @@ pub(crate) fn refresh(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput]) {
     let mut per: Vec<Vec<Msg>> = vec![Vec::new(); k.items.len()];
     let mut set_msgs = Vec::new();
     let mut put = |text: &str, error: bool| {
+        // (The engine's "invalid parameters for `gear.calculate`: " is for scripts, not for people.)
+        let text = plain_message(text);
+        let text = text.as_str();
         let msg = |t: String| Msg { text: t, error };
         match about_item(text) {
             Some((i, rest)) if i < per.len() => {

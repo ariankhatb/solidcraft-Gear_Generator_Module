@@ -72,7 +72,6 @@ The status line reads "That pick doesn't fit: …" followed by one of these.
 | Gear W2 is a worm gear: it meshes only at an angle to its mate; put a spur gear on its shaft (a Compound, or a Shaft link) to mesh on parallel shafts | One gear, one kind of teeth. |
 | Gear P1 is in a planetary set: its gears mesh only within the set …; link another gear to its sun or ring by Shaft instead | |
 | Gear G1 meshes with two pinions: a rack with several pinions is not made yet; give each pinion its own rack | |
-| Gear B: a side view without a contact line takes its sizes from the gears: give both gears their teeth (Size by Teeth) and a module, or draw the contact line from the apex | Side-view bevel. |
 | the drive gear (Gear C) doesn't exist: make another gear the driver | |
 | item B, gear 1: the bore (Ø12) must be smaller than the hub (Ø10) | Swap or resize the circles. |
 | Join, Cut and Intersect act on the Targets: pick the bodies (Output › Targets) | |

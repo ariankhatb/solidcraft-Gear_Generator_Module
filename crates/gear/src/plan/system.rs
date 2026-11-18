@@ -622,7 +622,17 @@ fn pair_unit(items: &[GearItem], s: &Stage, mapped: &crate::items::Mapped, base:
             i.ask.role = Some(dt::Role::Gear(Kind::SpiralBevel));
         }
     }
-    let o = dt::read_with(&its, None, &Simple::default(), base, false);
+    // A hypoid's asked spiral angle sizes the set (its largest offset follows from it).
+    let spiral_asked = s.gears.iter().find_map(|r| items.get(r.item).and_then(|i| (0..i.gear_count().max(1)).find_map(|g| i.settings(g).spiral_angle)));
+    let hypoid_base;
+    let read_base = match spiral_asked.filter(|a| s.kind == StageKind::Hypoid && a.is_finite() && a.abs() < 89.0) {
+        Some(a) => {
+            hypoid_base = Spec { spiral_angle: a, ..base.clone() };
+            &hypoid_base
+        }
+        None => base,
+    };
+    let o = dt::read_with(&its, None, &Simple::default(), read_base, false);
     let e = o.error.clone().or_else(|| o.members.iter().find_map(|m| m.error.clone()));
     if let Some(e) = e {
         return Err(rename_members(&e, &names));

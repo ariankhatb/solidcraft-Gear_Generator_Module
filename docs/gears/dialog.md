@@ -41,7 +41,7 @@ Always one line saying what to do next, for example:
 - "Press New gear (or click a circle in the view) to start a Spur gear"
 - "Gear B · Compound — click: shaft line"
 - "Gear A · Spur is complete — optional: shaft line; or New gear for the next one"
-- "Gear B · Bevel Pair is complete — sized by its teeth and module (Gear B settings below); or click its contact line to size it from the drawing"
+- "Gear B · Bevel Pair is complete — sized by its gears' teeth and module (20 teeth each at module 2 until you set them in Gear B settings below); or click its contact line to size it from the drawing"
 - "Click a gear's card to change it, or New gear for another"
 
 A refused pick turns it into a warning (⚠, warning colour): "That pick doesn't fit: …" with the

@@ -110,7 +110,7 @@ Two gears whose shafts meet at an angle. Three ways to draw it:
 3. **Side view** (one sketch): the **apex point**, **two shaft lines** from it and, optionally, a
    **contact line** from the apex between them. The contact line's angle to each shaft sets the
    ratio; its length sets the cone distance. Without a contact line, the size comes from the gears'
-   teeth and module (set Size by Teeth on both gears and a module). Two shaft lines that start at a
+   teeth and module: 20 teeth each at module 2 until you set them (Size by Teeth on both gears). Two shaft lines that start at a
    common end can be picked without the point: that end is the apex. Pick in any order.
 
 **What you get:** a straight, spiral or chevron bevel pair (Style row), any shaft angle. Example

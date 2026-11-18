@@ -649,13 +649,17 @@ fn two_shaft_lines_meeting_are_a_bevel_side_view() {
     let slots = picked(ItemKind::Bevel, &[s1.clone(), s2.clone()]);
     assert_eq!(slots.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["axis", "axis2"]);
     assert_eq!(next_slot(ItemKind::Bevel, &[s1.clone(), s2.clone()]), None, "complete: the apex is where they meet");
-    // Sizes from the settings: no gears until teeth and module are given, then two.
+    // Sizes from the settings: 20 teeth each at module 2 until they are set (it builds at once),
+    // then the ones given.
     let mut it = GearItem::new("A", ItemKind::Bevel).with(vec![s1.clone(), s2.clone()]);
-    let e = validate_item(&it).unwrap_err();
-    assert!(e.contains("teeth") && e.contains("contact line"), "{e}");
-    assert!(gear_geoms(&it).is_empty());
+    assert!(validate_item(&it).is_ok());
+    let g = gear_geoms(&it);
+    assert_eq!(g.len(), 2);
+    assert!(g.iter().all(|g| (g.radius.unwrap() - 20.0).abs() < 1e-9), "{g:?}");
     it.gears = vec![GearSettings { teeth: Some(20), module: Some(2.0), ..GearSettings::default() }, GearSettings { teeth: Some(30), ..GearSettings::default() }];
-    assert_eq!(gear_geoms(&it).len(), 2);
+    let g = gear_geoms(&it);
+    assert_eq!(g.len(), 2);
+    assert!((g[0].radius.unwrap() - 20.0).abs() < 1e-9 && (g[1].radius.unwrap() - 30.0).abs() < 1e-9, "{g:?}");
     assert!(validate_item(&it).is_ok());
     // With a contact line: the ratio from its angle.
     let with_contact = [s1.clone(), s2.clone(), line([0.0; 3], [30.0, 0.0, 20.0])];

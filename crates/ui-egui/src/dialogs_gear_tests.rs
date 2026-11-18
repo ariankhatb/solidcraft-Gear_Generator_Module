@@ -980,7 +980,7 @@ fn qa_details_by_themselves_side_view_by_lines_and_quiet_edits() {
         click(&app, &mut b, &mut binputs, Sel::SketchCurve { id: id.into(), sketch: Some(v) });
     }
     assert!(b.items[0].complete(&app), "{:?}", b.refused);
-    assert!(next_step(&app, &b).0.contains("sized by its teeth and module"), "{:?}", next_step(&app, &b));
+    assert!(next_step(&app, &b).0.contains("sized by its gears' teeth and module"), "{:?}", next_step(&app, &b));
     // Edit with nothing changed: OK runs nothing.
     let mut spur = new(None);
     spur.items = vec![GearItem { picks: vec![at("a")], ..GearItem::new(ItemKind::Spur) }];

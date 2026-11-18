@@ -513,15 +513,28 @@ pub(super) fn sync(
             AssemblyLink::RackPinion { pitch_radius, .. } => json!({"a": ja, "b": jb, "radius": pitch_radius}),
             AssemblyLink::Rigid { .. } => continue,
         };
-        if let Some(i) = s.doc.assembly.links.iter().position(|k| k.a == ja && k.b == jb) {
+        // A link redefined in place keeps its offset (where the gears meshed as built): the
+        // gears turned since stay in mesh at the new ratio (`joints::follow_links` below).
+        let kept = s.doc.assembly.links.iter().position(|k| k.a == ja && k.b == jb).map(|i| (i, s.doc.assembly.links[i].offset));
+        if let Some((i, _)) = kept {
             p["link"] = json!(i);
         }
         let cmd = if matches!(l, AssemblyLink::RackPinion { .. }) { "joint.rack_pinion" } else { "joint.gear" };
         match s.execute(cmd, &p) {
-            Ok(_) => links_made.push((ja, jb)),
+            Ok(_) => {
+                if let Some((i, offset)) = kept
+                    && let Some(k) = s.doc_mut().assembly.links.get_mut(i)
+                {
+                    k.offset = offset;
+                }
+                links_made.push((ja, jb))
+            }
             Err(e) => warnings.push(format!("assembly: {} and {} could not be linked ({e})", bodies[x], bodies[y])),
         }
     }
+    // Each driven gear set from its driver as the links are now (kept offsets, new ratios).
+    crate::cmd::joints::follow_links(s.doc_mut());
+    crate::cmd::joints::resolve(s);
     let links: Vec<usize> = links_made.iter().filter_map(|(ja, jb)| s.doc.assembly.links.iter().position(|k| k.a == *ja && k.b == *jb)).collect();
 
     // What the joints can't show.

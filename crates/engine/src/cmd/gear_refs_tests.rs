@@ -929,3 +929,41 @@ fn a_bored_gear_on_a_shaft_line_gets_no_stub() {
     let sleeve = body.steps.iter().filter(|st| matches!(st, solidcraft_gear::plan::Step::Prism { op: solidcraft_gear::plan::Op::Join, z0, .. } if *z0 > 1e-6)).count();
     assert!(sleeve >= 1, "a sleeve between the layers: {:?}", body.steps.len());
 }
+
+/// Gears turned, then a sketch edit that changes a tooth count: the driven gear follows its
+/// driver at the new ratio from where they meshed as built (not at the old ratio's angle), so
+/// the teeth stay in mesh at that pose and when driven back to 0.
+#[test]
+fn turned_gears_stay_in_mesh_after_a_tooth_count_changes() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Pitch"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 20.0, "id": "a"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [50, 0], "radius": 30.0, "id": "b"}));
+    run(&mut s, "sketch.constraint.coincident", json!({"a": "a.center", "b": "origin"}));
+    run(&mut s, "sketch.dimension", json!({"entities": ["a"], "type": "diameter", "value": "40 mm"}));
+    run(&mut s, "sketch.dimension", json!({"entities": ["b"], "type": "diameter", "value": "d2 = 60 mm"}));
+    run(&mut s, "sketch.constraint.tangent", json!({"a": "a", "b": "b"}));
+    run(&mut s, "sketch.dimension", json!({"entities": ["origin", "b.center"], "type": "vertical", "value": "0 mm"}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "gear.create", json!({"assembly": true, "items": [
+        {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a", "slot": "pitch"}]},
+        {"id": "B", "type": "spur", "components": [{"sketch": "Pitch", "curve": "b", "slot": "pitch"}]}],
+        "links": [{"a": {"item": "A"}, "b": {"item": "B"}, "kind": "mesh"}],
+        "module_blocks": [{"id": "M", "module": 2, "members": ["A", "B"]}], "drive": {"item": "A", "gear": 0}}));
+    no_errors(&s);
+    // Each joint's value as the solve has it (a driven gear's from its link).
+    let value = |s: &mut Session, name: &str| {
+        let l = run(s, "joint.list", json!({}));
+        l["joints"].as_array().unwrap().iter().find(|j| j["name"] == name).and_then(|j| j["values"][0]["value"].as_f64()).unwrap_or(f64::NAN)
+    };
+    run(&mut s, "joint.drive", json!({"joint": "Gear A·1 shaft", "value": 17}));
+    assert!((value(&mut s, "Gear B·1 shaft") + 17.0 * 20.0 / 30.0).abs() < 1e-6, "{}", value(&mut s, "Gear B·1 shaft"));
+    run(&mut s, "parameters.change", json!({"name": "d2", "expression": "64 mm"}));
+    no_errors(&s);
+    let l = s.doc.assembly.links.first().unwrap().clone();
+    assert!((l.ratio + 20.0 / 32.0).abs() < 1e-6, "the new ratio: {}", l.ratio);
+    assert!((value(&mut s, "Gear A·1 shaft") - 17.0).abs() < 1e-9);
+    assert!((value(&mut s, "Gear B·1 shaft") - l.follow(17.0)).abs() < 1e-6, "B at the new ratio from the as-built mesh: {} vs {}", value(&mut s, "Gear B·1 shaft"), l.follow(17.0));
+    run(&mut s, "joint.drive", json!({"joint": "Gear A·1 shaft", "value": 0}));
+    assert!((value(&mut s, "Gear B·1 shaft") - l.offset).abs() < 1e-6 && l.offset.abs() < 1e-6, "back at 0 both at 0 (as built): {}", value(&mut s, "Gear B·1 shaft"));
+}

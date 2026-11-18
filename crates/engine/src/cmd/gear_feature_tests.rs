@@ -499,9 +499,12 @@ fn a_bevel_pair_from_a_side_view_sketch() {
 /// set by either id (the timeline lists the feature), for gear.inspect and gear.update alike.
 #[test]
 fn group_names_a_set_by_its_folder_or_its_gears_feature() {
-    let (mut s, r) = one_feature(json!({"type": "pair", "teeth": 18, "teeth2": 30, "assembly": true}));
+    let mut s = Session::default();
+    let r = run(&mut s, "gear.create", json!({"type": "pair", "teeth": 18, "teeth2": 30, "assembly": true}));
+    no_errors(&s);
     let feature = r["feature"].as_u64().unwrap();
     let folder = r["group"].as_u64().unwrap();
+    assert_ne!(folder, feature, "the assembly's folder is not the feature: {r}");
     for id in [folder, feature] {
         let i = run(&mut s, "gear.inspect", json!({"group": id}));
         assert_eq!(i["sets"].as_array().map(Vec::len), Some(1), "{id}: {i}");

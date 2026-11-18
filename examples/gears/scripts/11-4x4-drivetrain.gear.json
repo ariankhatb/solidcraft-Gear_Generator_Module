@@ -1,0 +1,373 @@
+{
+ "name": "4x4 drivetrain",
+ "assembly": true,
+ "items": [
+  {
+   "id": "I",
+   "type": "spur",
+   "components": [
+    {
+     "sketch": "Sketch3",
+     "curve": "c4",
+     "slot": "pitch"
+    }
+   ]
+  },
+  {
+   "id": "L",
+   "type": "compound",
+   "components": [
+    {
+     "sketch": "Sketch2",
+     "curve": "l1",
+     "slot": "axis"
+    },
+    {
+     "sketch": "Sketch3",
+     "curve": "c2",
+     "slot": "pitch"
+    },
+    {
+     "sketch": "Sketch1",
+     "curve": "c2",
+     "slot": "pitch2"
+    }
+   ]
+  },
+  {
+   "id": "R",
+   "type": "compound",
+   "components": [
+    {
+     "sketch": "Sketch2",
+     "curve": "l2",
+     "slot": "axis"
+    },
+    {
+     "sketch": "Sketch3",
+     "curve": "c1",
+     "slot": "pitch"
+    },
+    {
+     "sketch": "Sketch1",
+     "curve": "c3",
+     "slot": "pitch2"
+    }
+   ]
+  },
+  {
+   "id": "M",
+   "type": "spur",
+   "components": [
+    {
+     "sketch": "Sketch1",
+     "curve": "c1",
+     "slot": "pitch"
+    }
+   ]
+  },
+  {
+   "id": "KF",
+   "type": "bevel",
+   "components": [
+    {
+     "sketch": "Sketch4",
+     "curve": "l1",
+     "slot": "axis"
+    },
+    {
+     "sketch": "Sketch4",
+     "curve": "l2",
+     "slot": "axis2"
+    }
+   ],
+   "gears": [
+    {
+     "gear": 0,
+     "size_by": "teeth",
+     "teeth": 30,
+     "module": 0.6
+    },
+    {
+     "gear": 1,
+     "size_by": "teeth",
+     "teeth": 30,
+     "module": 0.6
+    }
+   ]
+  },
+  {
+   "id": "KB",
+   "type": "bevel",
+   "components": [
+    {
+     "sketch": "Sketch4",
+     "curve": "l3",
+     "slot": "axis"
+    },
+    {
+     "sketch": "Sketch4",
+     "curve": "l4",
+     "slot": "axis2"
+    }
+   ],
+   "gears": [
+    {
+     "gear": 0,
+     "size_by": "teeth",
+     "teeth": 30,
+     "module": 0.6
+    },
+    {
+     "gear": 1,
+     "size_by": "teeth",
+     "teeth": 30,
+     "module": 0.6
+    }
+   ]
+  },
+  {
+   "id": "F",
+   "type": "hypoid",
+   "components": [
+    {
+     "sketch": "Sketch4",
+     "curve": "c1",
+     "slot": "ring"
+    },
+    {
+     "sketch": "Sketch4",
+     "curve": "l2",
+     "slot": "axis"
+    }
+   ],
+   "gears": [
+    {
+     "gear": 0,
+     "size_by": "teeth",
+     "teeth": 37
+    },
+    {
+     "gear": 1,
+     "size_by": "teeth",
+     "teeth": 9
+    }
+   ]
+  },
+  {
+   "id": "B",
+   "type": "hypoid",
+   "components": [
+    {
+     "sketch": "Sketch4",
+     "curve": "c2",
+     "slot": "ring"
+    },
+    {
+     "sketch": "Sketch4",
+     "curve": "l4",
+     "slot": "axis"
+    }
+   ],
+   "gears": [
+    {
+     "gear": 0,
+     "size_by": "teeth",
+     "teeth": 37
+    },
+    {
+     "gear": 1,
+     "size_by": "teeth",
+     "teeth": 9
+    }
+   ]
+  },
+  {
+   "id": "SF1",
+   "type": "shaft",
+   "diameter": 6,
+   "components": [
+    {
+     "sketch": "Sketch4",
+     "curve": "l1",
+     "slot": "axis"
+    }
+   ]
+  },
+  {
+   "id": "SB1",
+   "type": "shaft",
+   "diameter": 6,
+   "components": [
+    {
+     "sketch": "Sketch4",
+     "curve": "l3",
+     "slot": "axis"
+    }
+   ]
+  },
+  {
+   "id": "SF2",
+   "type": "shaft",
+   "diameter": 6,
+   "components": [
+    {
+     "sketch": "Sketch4",
+     "curve": "l2",
+     "slot": "axis"
+    }
+   ]
+  },
+  {
+   "id": "SB2",
+   "type": "shaft",
+   "diameter": 6,
+   "components": [
+    {
+     "sketch": "Sketch4",
+     "curve": "l4",
+     "slot": "axis"
+    }
+   ]
+  }
+ ],
+ "links": [
+  {
+   "a": {
+    "item": "I",
+    "gear": 0
+   },
+   "b": {
+    "item": "L",
+    "gear": 0
+   },
+   "kind": "mesh"
+  },
+  {
+   "a": {
+    "item": "I",
+    "gear": 0
+   },
+   "b": {
+    "item": "R",
+    "gear": 0
+   },
+   "kind": "mesh"
+  },
+  {
+   "a": {
+    "item": "L",
+    "gear": 1
+   },
+   "b": {
+    "item": "M",
+    "gear": 0
+   },
+   "kind": "mesh"
+  },
+  {
+   "a": {
+    "item": "R",
+    "gear": 1
+   },
+   "b": {
+    "item": "M",
+    "gear": 0
+   },
+   "kind": "mesh"
+  },
+  {
+   "a": {
+    "item": "M",
+    "gear": 0
+   },
+   "b": {
+    "item": "KF",
+    "gear": 0
+   },
+   "kind": "shaft"
+  },
+  {
+   "a": {
+    "item": "M",
+    "gear": 0
+   },
+   "b": {
+    "item": "KB",
+    "gear": 0
+   },
+   "kind": "shaft"
+  },
+  {
+   "a": {
+    "item": "KF",
+    "gear": 1
+   },
+   "b": {
+    "item": "F",
+    "gear": 1
+   },
+   "kind": "shaft"
+  },
+  {
+   "a": {
+    "item": "KB",
+    "gear": 1
+   },
+   "b": {
+    "item": "B",
+    "gear": 1
+   },
+   "kind": "shaft"
+  },
+  {
+   "a": {
+    "item": "M",
+    "gear": 0
+   },
+   "b": {
+    "item": "SF1",
+    "gear": 0
+   },
+   "kind": "shaft"
+  },
+  {
+   "a": {
+    "item": "M",
+    "gear": 0
+   },
+   "b": {
+    "item": "SB1",
+    "gear": 0
+   },
+   "kind": "shaft"
+  },
+  {
+   "a": {
+    "item": "KF",
+    "gear": 1
+   },
+   "b": {
+    "item": "SF2",
+    "gear": 0
+   },
+   "kind": "shaft"
+  },
+  {
+   "a": {
+    "item": "KB",
+    "gear": 1
+   },
+   "b": {
+    "item": "SB2",
+    "gear": 0
+   },
+   "kind": "shaft"
+  }
+ ],
+ "drive": {
+  "item": "I",
+  "gear": 0,
+  "rpm": 3000
+ }
+}

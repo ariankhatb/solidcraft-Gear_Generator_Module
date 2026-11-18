@@ -13,15 +13,28 @@ use std::process::Command;
 
 /// The workspace crates a design's model is computed from: `doc` and every workspace crate it
 /// depends on (a test checks the list against their manifests).
-const EVALUATION_CRATES: [&str; 11] = ["color", "geom", "profile", "smlib", "sketch", "kernel", "render", "derive", "doc", "format", "viewport"];
-/// The other files the saved model depends on, relative to the workspace root.
-const EVALUATION_FILES: [&str; 3] = ["crates/io/build.rs", "crates/io/src/design/native_cache.rs", ".cargo/config.toml"];
+const EVALUATION_CRATES: [&str; 12] = ["color", "geom", "profile", "smlib", "sketch", "kernel", "render", "derive", "doc", "format", "viewport", "gear"];
+/// The other files the saved model depends on, relative to the workspace root: the model cache's
+/// own code, and the Gear Generator's reading of a set, which `doc` evaluates a Gears feature
+/// through (the planner the engine installs: `solidcraft_doc::set_gears_planner`).
+const EVALUATION_FILES: [&str; 10] = [
+    "crates/io/build.rs",
+    "crates/io/src/design/native_cache.rs",
+    ".cargo/config.toml",
+    "crates/engine/src/cmd/gear.rs",
+    "crates/engine/src/cmd/gear_assembly.rs",
+    "crates/engine/src/cmd/gear_equations.rs",
+    "crates/engine/src/cmd/gear_feature.rs",
+    "crates/engine/src/cmd/gear_items.rs",
+    "crates/engine/src/cmd/gear_sketch.rs",
+    "crates/engine/src/schema/gear.rs",
+];
 /// The committed trees whose every file computes models, hashed as one tree id each: the vendored
 /// kernel, so any change under `solidcore/` invalidates the models the old kernel computed.
 const EVALUATION_TREES: [&str; 1] = ["solidcore"];
-/// What under `vendor/` does not compute models: notes, and the interface's renderer. The kernel is
-/// not under `vendor/`; it is `solidcore/`, in [`EVALUATION_TREES`].
-const VENDOR_OUTSIDE: [&str; 2] = ["README.md", "egui-wgpu"];
+/// What under `vendor/` does not compute models: notes, the interface's renderer, and the Gears
+/// dialog's node graph. The kernel is not under `vendor/`; it is `solidcore/`, in [`EVALUATION_TREES`].
+const VENDOR_OUTSIDE: [&str; 4] = ["README.md", "egui-wgpu", "egui-snarl", "egui-scale"];
 
 fn git(root: &Path, args: &[&str]) -> Option<String> {
     let out = Command::new("git").arg("-C").arg(root).args(args).output().ok()?;

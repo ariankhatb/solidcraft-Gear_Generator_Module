@@ -1368,6 +1368,40 @@ pub fn gear_geoms(item: &GearItem) -> Vec<GearGeom> {
     }
 }
 
+/// A Shaft item's line as a place links can name (`{item, gear: 0}`): from its first end along
+/// it, no radius, the line's ends. `None` for any other item, or a Shaft item with no line yet.
+pub fn shaft_geom(item: &GearItem) -> Option<GearGeom> {
+    if item.kind != ItemKind::Shaft {
+        return None;
+    }
+    let (a, b) = line_ends(&item.things, 0)?;
+    let u = unit(sub(b, a))?;
+    Some(GearGeom { centre: a, axis: u, radius: None, ring: false, rack: false, line: Some((a, b)) })
+}
+
+/// Where the gear (or Shaft item, gear 0) a link names is: [`gear_geoms`], or a Shaft item's
+/// [`shaft_geom`].
+pub fn link_geom(items: &[GearItem], r: GearRef) -> Option<GearGeom> {
+    let it = items.get(r.item)?;
+    match it.kind {
+        ItemKind::Shaft => shaft_geom(it).filter(|_| r.gear == 0),
+        _ => gear_geoms(it).get(r.gear).copied(),
+    }
+}
+
+/// Whether a gear at `g` lies on the shaft line `s` ([`shaft_geom`]): on its axis, its centre
+/// within the line's ends (give or take its own radius).
+pub fn on_shaft_line(s: &GearGeom, g: &GearGeom) -> bool {
+    let Some((a, b)) = s.line else { return false };
+    let t = tol(g.radius.unwrap_or(1.0));
+    if !matches!(lie(s.centre, s.axis, g.centre, g.axis, t), Lie::Coaxial) {
+        return false;
+    }
+    let at = dot(sub(g.centre, a), s.axis);
+    let reach = g.radius.unwrap_or(0.0).max(t);
+    at >= -reach && at <= len(sub(b, a)) + reach
+}
+
 /// A bevel pair drawn as a side view ([`BEVEL_SIDE`]), read: the apex, each shaft's direction
 /// away from it (toward its line's far end) with the line's ends, and the contact line's
 /// direction and length when one is drawn. Checks that both shaft lines run through the apex
@@ -1509,7 +1543,39 @@ pub fn suggest_links(items: &[GearItem]) -> Vec<Suggestion> {
             }
         }
     }
+    // A Shaft item carries the gears on its line: a Shaft link to one gear of each set of gears
+    // already on one shaft (the gears on its line are on one axis, so usually just the first).
+    for (s, it) in items.iter().enumerate() {
+        let Some(sg) = shaft_geom(it) else { continue };
+        let mut joined: Vec<usize> = Vec::new();
+        for (j, gj) in geoms.iter().enumerate() {
+            for (gb, b) in gj.iter().enumerate() {
+                if j == s || !on_shaft_line(&sg, b) {
+                    continue;
+                }
+                let x = find(&mut root, index(j, gb));
+                if joined.contains(&x) {
+                    continue;
+                }
+                joined.push(x);
+                let at = dot(sub(b.centre, sg.centre), sg.axis);
+                out.push(Suggestion { a: GearRef::new(s, 0), b: GearRef::new(j, gb), kind: LinkKind::Shaft, why: format!("on the shaft line, {} mm along it", num(at)) });
+            }
+        }
+    }
     out
+}
+
+/// The Shaft links a request's own links leave out (decision 3 for Shaft items): a Shaft item
+/// that no link names carries the gears on its line, as [`suggest_links`] suggests. A request
+/// with no links at all uses every suggestion ([`effective_links`]).
+pub fn implicit_shaft_links(items: &[GearItem], links: &[ItemLink]) -> Vec<ItemLink> {
+    let named = |i: usize| links.iter().any(|l| l.a.item == i || l.b.item == i);
+    suggest_links(items)
+        .iter()
+        .filter(|s| s.kind == LinkKind::Shaft && [s.a, s.b].iter().any(|r| items.get(r.item).is_some_and(|it| it.kind == ItemKind::Shaft) && !named(r.item)))
+        .map(Suggestion::link)
+        .collect()
 }
 
 /// A gear's details picked as circles (`gear.create` component slots `bore` and `hub`, beside
@@ -1562,6 +1628,12 @@ fn suggest(a: &GearGeom, b: &GearGeom) -> Option<(LinkKind, String)> {
             .is_ok()
             .then(|| (LinkKind::Mesh, "the rack's pitch line touches this pitch circle".to_string()));
     }
+    // Gears of any kind on one axis line (a bevel's, a pinion's or a worm's axis too) share it.
+    let t = tol([a.radius, b.radius].into_iter().flatten().reduce(f64::min).unwrap_or(1.0));
+    if matches!(lie(a.centre, a.axis, b.centre, b.axis, t), Lie::Coaxial) {
+        let gap = dot(sub(b.centre, a.centre), a.axis).abs();
+        return (gap > t && !a.ring && !b.ring).then(|| (LinkKind::Shaft, format!("on one axis, {} mm apart along it", num(gap))));
+    }
     let (ra, rb) = (a.radius?, b.radius?);
     let t = tol(ra.min(rb));
     if a.line.is_some() || b.line.is_some() {
@@ -1569,10 +1641,7 @@ fn suggest(a: &GearGeom, b: &GearGeom) -> Option<(LinkKind, String)> {
         return None;
     }
     match lie(a.centre, a.axis, b.centre, b.axis, t) {
-        Lie::Coaxial => {
-            let gap = dot(sub(b.centre, a.centre), a.axis).abs();
-            (gap > t && !a.ring && !b.ring).then(|| (LinkKind::Shaft, format!("on one axis, {} mm apart along it", num(gap))))
-        }
+        Lie::Coaxial => None,
         Lie::Parallel { distance } => {
             let gap = dot(sub(b.centre, a.centre), a.axis).abs();
             if gap > t {
@@ -1595,7 +1664,11 @@ pub fn effective_links(items: &[GearItem], links: &[ItemLink]) -> (Vec<ItemLink>
         let s: Vec<ItemLink> = suggest_links(items).iter().map(Suggestion::link).collect();
         (s, true)
     } else {
-        (links.to_vec(), false)
+        // The request's own links in their order (the replies follow it), then a Shaft item's
+        // that no link names.
+        let mut all = links.to_vec();
+        all.extend(implicit_shaft_links(items, links));
+        (all, false)
     }
 }
 
@@ -1673,6 +1746,7 @@ pub struct Stage {
 /// "Gear B ring" for a pair's named parts, "Gear C2" for a compound's second.
 pub(crate) fn who(items: &[GearItem], r: GearRef) -> String {
     match items.get(r.item) {
+        Some(it) if it.kind == ItemKind::Shaft => format!("Shaft {}", it.id),
         Some(it) if it.gear_count() <= 1 => it.who(),
         Some(it) => match part_name(it.kind, r.gear) {
             Some(part) => format!("{} {part}", it.who()),
@@ -1747,7 +1821,10 @@ fn bevel_style_of(items: &[GearItem], gears: &[GearRef]) -> BevelStyle {
 pub fn stages(items: &[GearItem], links: &[ItemLink]) -> Vec<Stage> {
     let (links, _) = effective_links(items, links);
     let geoms: Vec<Vec<GearGeom>> = items.iter().map(gear_geoms).collect();
-    let geom = |r: GearRef| geoms.get(r.item).and_then(|g| g.get(r.gear)).copied();
+    let shafts: Vec<Option<GearGeom>> = items.iter().map(shaft_geom).collect();
+    // A gear's place, or a Shaft item's line (its gear 0).
+    let geom = |r: GearRef| geoms.get(r.item).and_then(|g| g.get(r.gear)).copied().or_else(|| shafts.get(r.item).copied().flatten().filter(|_| r.gear == 0));
+    let is_shaft = |r: GearRef| items.get(r.item).is_some_and(|it| it.kind == ItemKind::Shaft);
     let mut out = Vec::new();
     let base = |kind, gears: Vec<GearRef>, from| {
         let g: Vec<GearGeom> = gears.iter().filter_map(|r| geom(*r)).collect();
@@ -1789,6 +1866,10 @@ pub fn stages(items: &[GearItem], links: &[ItemLink]) -> Vec<Stage> {
         }
         let (kind, error) = match (geom(l.a), geom(l.b)) {
             _ if l.a == l.b => (StageKind::Parallel, Some(format!("{} is linked to itself: remove the link", who(items, l.a)))),
+            _ if is_shaft(l.a) || is_shaft(l.b) => {
+                let s = if is_shaft(l.a) { l.a } else { l.b };
+                (StageKind::Parallel, Some(format!("{} has no teeth, so it can't mesh: link it by Shaft to the gears it carries", who(items, s))))
+            }
             (Some(a), Some(b)) => classify(items, l.a, l.b, &a, &b),
             (ga, _) => {
                 let bad = if ga.is_none() { l.a } else { l.b };
@@ -1800,7 +1881,9 @@ pub fn stages(items: &[GearItem], links: &[ItemLink]) -> Vec<Stage> {
         out.push(s);
     }
     // Shaft clusters: union of Shaft links and compound items' gears.
-    let all: Vec<GearRef> = geoms.iter().enumerate().flat_map(|(i, g)| (0..g.len()).map(move |k| GearRef::new(i, k))).collect();
+    // (A Shaft item is one more member, its gear 0: links through it join one rigid cluster.)
+    let mut all: Vec<GearRef> = geoms.iter().enumerate().flat_map(|(i, g)| (0..g.len()).map(move |k| GearRef::new(i, k))).collect();
+    all.extend(shafts.iter().enumerate().filter(|(_, s)| s.is_some()).map(|(i, _)| GearRef::new(i, 0)));
     let mut parent: Vec<usize> = (0..all.len()).collect();
     fn root(p: &mut [usize], mut x: usize) -> usize {
         while p[x] != x {
@@ -1818,18 +1901,39 @@ pub fn stages(items: &[GearItem], links: &[ItemLink]) -> Vec<Stage> {
     };
     let mut shaft_links: Vec<(usize, usize)> = Vec::new();
     let mut errors: Vec<(usize, String)> = Vec::new();
+    // Shaft links that join nothing (a gear that isn't there, a gear to itself): their own stage,
+    // so the link's reply says what is wrong.
+    let mut shaft_errors: Vec<(usize, String)> = Vec::new();
     for (k, l) in links.iter().enumerate().filter(|(_, l)| l.kind == LinkKind::Shaft) {
         match (idx(l.a), idx(l.b)) {
             (Some(a), Some(b)) if a != b => {
                 join(&mut parent, a, b);
                 shaft_links.push((k, a));
                 let (ga, gb) = (geom(l.a).unwrap_or_else(|| unreachable!()), geom(l.b).unwrap_or_else(|| unreachable!()));
-                let t = tol(ga.radius.unwrap_or(1.0).min(gb.radius.unwrap_or(1.0)));
+                let t = tol([ga.radius, gb.radius].into_iter().flatten().reduce(f64::min).unwrap_or(1.0));
                 if !matches!(lie(ga.centre, ga.axis, gb.centre, gb.axis, t), Lie::Coaxial) {
-                    errors.push((a, format!("{} and {} share a shaft but are not on one axis: put their centres on one line, square to both circles, or remove the link", who(items, l.a), who(items, l.b))));
+                    let e = if is_shaft(l.a) || is_shaft(l.b) {
+                        let (s, g) = if is_shaft(l.a) { (l.a, l.b) } else { (l.b, l.a) };
+                        format!("{} is not on the line of {}: a shaft carries only the gears on its line; draw the line along the gear's axis, or remove the link", who(items, g), who(items, s))
+                    } else {
+                        format!("{} and {} share a shaft but are not on one axis: put their centres on one line, square to both circles, or remove the link", who(items, l.a), who(items, l.b))
+                    };
+                    errors.push((a, e));
                 }
             }
-            _ => {}
+            (Some(_), Some(_)) => {
+                shaft_errors.push((k, format!("{} is linked to itself: remove the link", who(items, l.a))));
+            }
+            (a, _) => {
+                // Never dropped quietly: a link to a gear that isn't there is said.
+                let bad = if a.is_none() { l.a } else { l.b };
+                let e = if is_shaft(bad) {
+                    format!("{} is linked as gear {}: a shaft is linked as gear 0 (it has no gears of its own)", who(items, bad), bad.gear)
+                } else {
+                    format!("{} doesn't exist (yet): finish its item or remove the link", who(items, bad))
+                };
+                shaft_errors.push((k, e));
+            }
         }
     }
     let mut compound_of: Vec<(usize, usize)> = Vec::new();
@@ -1860,6 +1964,13 @@ pub fn stages(items: &[GearItem], links: &[ItemLink]) -> Vec<Stage> {
         let items_in: Vec<usize> = compound_of.iter().filter(|(_, a)| root(&mut parent, *a) == r).map(|(i, _)| *i).collect();
         let mut s = base(StageKind::Shaft, members, StageFrom::Cluster { links: links_in, items: items_in });
         s.error = errors.iter().find(|(a, _)| root(&mut parent, *a) == r).map(|(_, e)| e.clone());
+        out.push(s);
+    }
+    for (k, e) in shaft_errors {
+        let l = links[k];
+        let gears: Vec<GearRef> = [l.a, l.b].into_iter().filter(|r| geom(*r).is_some()).collect();
+        let mut s = base(StageKind::Shaft, gears, StageFrom::Cluster { links: vec![k], items: Vec::new() });
+        s.error = Some(e);
         out.push(s);
     }
     out

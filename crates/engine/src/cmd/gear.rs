@@ -2475,7 +2475,7 @@ fn keep(s: &mut Session, rec: &Record, warnings: &mut Vec<String>) {
         warnings.push("the design holds too much plugin data to keep this set's parameters: it can't be reopened in the Gear Generator".into());
         return;
     }
-    doc.plugin_data.insert(key, solidcraft_doc::canvas::base64_encode(&bytes));
+    doc.plugin_data.insert(key, solidcraft_doc::canvas::base64_encode(&bytes).into());
 }
 
 /// The names the set's bodies have now: a body follows the feature that made it through a

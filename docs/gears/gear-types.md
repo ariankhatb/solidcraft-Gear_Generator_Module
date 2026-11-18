@@ -155,9 +155,19 @@ spur/helical gears and a Mesh link; if they meet, use a Bevel Pair.
 
 **Pick:** the line, then the points.
 
-**What you get:** no teeth. The line is a shaft (its **Shaft Ø**, Auto from the smallest gear's
-root) and the points are bearing seats for the [housing cutout](housing-cutout.md). Use it for a
-shaft that carries gears made by other items, or just for bearing points.
+**What you get:** no teeth. The line is a round shaft, a body of its own along the line from end to
+end (its **Shaft Ø**, Auto from the smallest root of the gears it carries), and the points are
+bearing seats for the [housing cutout](housing-cutout.md). Use it for a shaft that carries gears
+made by other items (on any gear's axis: a spur's, a bevel's, a hypoid pinion's or a worm's), or
+just for bearing points.
+
+- **Link it by Shaft** (as `{item, gear: 0}`) to the gears it carries: they and the shaft are one
+  rigid part that turns as one. Links through it count: A – shaft and shaft – B join A and B.
+- **In no link**, it carries the gears on its line (the reply notes it).
+- Where another body is in its way along the line (a gear it doesn't carry, a bevel's mate where
+  two shafts meet), the shaft is cut back to stop short of it; the notes say how far.
+- It is never dropped: a shaft linked to a gear off its line, or meshed, is refused naming it; one
+  that carries no gear, or whose line reaches none of the gears it carries, is made with a warning.
 
 ## Mixing types in one drivetrain
 

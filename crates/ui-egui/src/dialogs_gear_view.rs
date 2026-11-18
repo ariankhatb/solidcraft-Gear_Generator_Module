@@ -33,28 +33,38 @@ const TIP_TYPE: &str = "What the next gear will be. Each type lists the sketch p
 const TIP_NEW: &str = "Start a new gear of this type, then click the sketch pieces it asks for in the view.";
 const TIP_CARD: &str = "Click to make this the gear your picks go to. Hover to light its geometry.";
 const TIP_SIZE_BY: &str = "Set the module (tooth size) or the tooth count; the other follows from the pitch circle.";
-const TIP_MODULE: &str = "Tooth size in mm (pitch Ø ÷ teeth). Auto picks a standard module so the smallest gear has ≥17 teeth.";
-const TIP_TEETH: &str = "Number of teeth. The pitch circle stays as drawn, so the module follows.";
-const TIP_FACE: &str = "How far the teeth reach each side of the sketch plane, along the axis. Auto ≈ 10 × module, limited by the room on the shaft.";
+const TIP_MODULE: &str = "Tooth size in mm (pitch Ø ÷ teeth). Meshing gears share one module: set it on one gear and its mates follow. Auto: the largest standard module giving the smallest meshing gear 17 teeth or more.";
+const TIP_TEETH: &str = "Number of teeth. The pitch circle stays as drawn, so the module follows; its mates take the same module.";
+const TIP_FACE: &str = "How far the teeth reach from the sketch plane along the axis, on this side. Auto: 5 × module each side (10 × module in all); A only / B only: 10 × module on that side. The value is per side: 10 mm on each side gives a 20 mm face.";
 const TIP_PRESET: &str = "Symmetric: equal both sides. A only / B only: the gear grows out of one face of the sketch (side A is the green arrow in the view).";
 const TIP_HELIX: &str = "Tooth angle to the axis. 0 = straight. Meshing gears get equal angles of opposite hand.";
 const TIP_HAND: &str = "Left or right helix. The mating gear is set to the other hand for you.";
 const TIP_V: &str = "Herringbone: two opposite helices meeting in the middle — no axial thrust.";
-const TIP_V_BEVEL: &str = "Chevron bevel: the spiral changes hand at mid-face.";
-const TIP_SHIFT: &str = "Moves the tooth out to avoid undercut on small gears. Auto does it below 17 teeth.";
-const TIP_BORE: &str = "Hole through the gear. Auto fits its shaft.";
+const TIP_V_BEVEL: &str = "Straight: straight teeth. Spiral: curved teeth, smoother and quieter. Chevron: the spiral changes hand at mid-face, so the axial thrust cancels.";
+const TIP_SHIFT: &str = "Worked out for you: it holds the drawn centre distance and clears undercut on small gears.";
+const TIP_BORE: &str = "Hole through the gear. Auto: fits the shaft when a shaft line is picked; otherwise none, unless a bore circle is drawn. Ø: this diameter. A drawn bore circle wins.";
 const TIP_SPIRAL: &str = "Spiral bevel/hypoid tooth angle at mid-face. 35° is typical.";
 const TIP_STARTS: &str = "Thread starts on the worm. More starts = faster, less self-locking.";
-const TIP_DRIVER: &str = "The gear you turn. Every other gear's speed and direction follow from it.";
+const TIP_DRIVER: &str = "The gear you turn. Every other gear's speed and direction follow from it. — : none; the assembly is driven from the first gear.";
 const TIP_RPM: &str = "Optional: fills speed and torque for every gear in Results.";
-const TIP_ACCEPT: &str = "Make every suggested link real. Suggested = circles the drawing shows as touching or on one line.";
+const TIP_ACCEPT: &str = "Make every suggested link real. Suggested: circles that touch in the drawing (mesh) or gears on one axis (same shaft).";
 const TIP_OPERATION: &str = "New Body: separate bodies. Join/Cut/Intersect: combine with the Targets.";
 const TIP_KEEP_OUT: &str = "Cut the space the gears sweep (plus the gap) out of the Targets, e.g. a housing.";
 const TIP_GAP: &str = "Extra room around the swept teeth when cutting the housing.";
 const TIP_ASSEMBLY: &str = "Each shaft and its gears become a component on a revolve joint, linked to its mates by the gear ratio.";
+const TIP_TORQUE: &str = "Optional: the driver's torque in N·m. Fills torque for every gear in Results (losses included).";
+const TIP_RIM: &str = "Rim thickness outside the tooth roots. Auto: 2.5 × module.";
+const TIP_BACK: &str = "Material behind the rack's tooth roots. Auto from the module.";
+const TIP_CARRIER: &str = "Make a carrier body: the planets turn on its pins. Off: the planets have no carrier.";
+const TIP_SHAFT_D: &str = "Shaft diameter. Auto: from the smallest gear's root.";
+const TIP_HUB: &str = "A boss on the gear's face round its bore. A drawn hub circle sets its Ø.";
+const TIP_HUB_D: &str = "Hub diameter (mm), smaller than the tooth roots. Auto: 1.6 × the bore (or about half the root Ø with no bore).";
+const TIP_HUB_LEN: &str = "How far the hub reaches past the face on this side. Both empty: half the face width on side A.";
+const TIP_BORE_D: &str = "Bore diameter (mm). Must stay inside the tooth roots.";
+const TIP_CHAMFER: &str = "A 45° chamfer off the tooth tips' edges on the end faces of every gear in the set (mm across, as deep): spur, helical, herringbone (outer ends), compound layers and ring gears. Bevel, worm, hypoid, crossed helical, rack and planetary gears stay plain (a note says so). Empty: none.";
 const TIP_CUTOUT: &str = "One more body, \"Housing cutout\": all the space the drivetrain needs to turn (the teeth's swept envelopes, the shafts through the walls) and a bearing seat at every bearing point. Model a housing block and cut this body out of it.";
 const TIP_BEARING: &str = "One bearing size for every seat (bore × OD × width, mm).";
-const TIP_EQUATIONS: &str = "Exact involute curves instead of fitted splines: slower, smoother.";
+const TIP_EQUATIONS: &str = "Exact involute curves instead of fitted splines: slower, smoother. Only for a set made before Gears features (a folder of features).";
 const TIP_MESH: &str = "Mesh: the two gears' teeth engage; their distance is checked.";
 const TIP_SHAFT: &str = "Same shaft: the two gears turn together.";
 
@@ -129,6 +139,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
         enter |= settings(ui, k, a);
     }
     enter |= drivetrain(app, ui, k);
+    enter |= all_gears(ui, k);
     enter |= housing_cutout(app, ui, k);
     enter |= output(ui, k, inputs, input);
     results(app, ui, k);
@@ -264,6 +275,7 @@ fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput
     let t = Tokens::get();
     let len = dg::len_of(app);
     let (mut activate, mut remove, mut edit, mut use_detail, mut drop_detail) = (None, None, None, None, None);
+    let mut fix: Option<(usize, dg::Fix)> = None;
     let mut hovered = None;
     let clicked_at = ui.input(|i| if i.pointer.primary_clicked() { i.pointer.interact_pos() } else { None });
     for i in 0..k.items.len() {
@@ -404,6 +416,19 @@ fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput
                 }
                 for m in k.item_msgs.get(i).into_iter().flatten() {
                     message(ui, m);
+                    // What the message suggests, one click each.
+                    let fixes = dg::fixes_in(k, &m.text);
+                    if !fixes.is_empty() {
+                        ui.horizontal_wrapped(|ui| {
+                            for f in fixes {
+                                let b = ui_kit::button(ui, f.label(k), ui_kit::Button::Normal).backing_on_hover_text("Change the setting to this; the set is worked out again.");
+                                button_hit |= b.hovered();
+                                if b.clicked() {
+                                    fix = Some((i, f.clone()));
+                                }
+                            }
+                        });
+                    }
                     if let Some(sk) = loose_sketch(app, &m.text) {
                         let b = ui_kit::button(ui, "Edit sketch", ui_kit::Button::Normal).backing_on_hover_text("Open the sketch to dimension it; the dialog comes back when you finish it.");
                         button_hit |= b.hovered();
@@ -442,6 +467,9 @@ fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput
     }
     if let Some((i, sel)) = drop_detail {
         dg::drop_detail(k, i, &sel, inputs);
+    }
+    if let Some((i, f)) = fix {
+        dg::apply_fix(k, i, &f, inputs);
     }
     if let Some(sk) = edit {
         k.action = Some(dg::Action::EditSketch(sk));
@@ -483,14 +511,13 @@ fn settings(ui: &mut egui::Ui, k: &mut Gear, a: usize) -> bool {
         // The type's own settings.
         match kind {
             ItemKind::Shaft => {
-                enter |= hint_row(ui, "Shaft Ø", &mut it.shaft_d, "auto");
-                ui_kit::checkbox(ui, "Keyway", &mut it.keyway);
+                enter |= field(ui, "Shaft Ø", &mut it.shaft_d, "auto", TIP_SHAFT_D);
                 return;
             }
-            ItemKind::Internal => enter |= hint_row(ui, "Rim", &mut it.rim, "auto: 2.5 × module"),
+            ItemKind::Internal => enter |= field(ui, "Rim", &mut it.rim, "auto: 2.5 × module", TIP_RIM),
             ItemKind::Worm => {
-                enter |= field(ui, "Starts", &mut it.starts, "1", TIP_STARTS);
-                ui_kit::checkbox(ui, "Throated wheel", &mut it.throated);
+                enter |= field(ui, "Starts", &mut it.starts, "auto", TIP_STARTS);
+                ui_kit::caption(ui, "Starts", "The wheel is throated: its rim wraps round the worm.");
             }
             ItemKind::Bevel | ItemKind::Hypoid => {
                 choice_row(ui, "Style", &format!("gear_bevel_{a}"), &mut it.bevel_style, &["Straight", "Spiral", "Chevron"]).backing_on_hover_text(TIP_V_BEVEL);
@@ -498,10 +525,10 @@ fn settings(ui: &mut egui::Ui, k: &mut Gear, a: usize) -> bool {
                     enter |= field(ui, "Spiral angle", &mut it.spiral, "35 deg", TIP_SPIRAL);
                 }
             }
-            ItemKind::Rack => enter |= hint_row(ui, "Back height", &mut it.back_height, "auto"),
+            ItemKind::Rack => enter |= field(ui, "Back height", &mut it.back_height, "auto", TIP_BACK),
             ItemKind::Planetary => {
                 enter |= field(ui, "Planets", &mut it.planets, "auto", "How many planets: Auto fits as many as there is room for, 3 at most.");
-                ui_kit::checkbox(ui, "Carrier", &mut it.carrier);
+                ui_kit::checkbox(ui, "Carrier", &mut it.carrier).backing_on_hover_text(TIP_CARRIER);
             }
             _ => {}
         }
@@ -517,7 +544,7 @@ fn settings(ui: &mut egui::Ui, k: &mut Gear, a: usize) -> bool {
         let s: &mut GearSettings = &mut it.settings_mut(n)[g];
         let block = blocks.as_ref().and_then(|(b, names)| Some((k.graph.block_module_mut(*b)?, names.clone())));
         enter |= gear_rows(ui, s, kind, reply, block);
-        enter |= more_rows(ui, s, (a, g));
+        enter |= more_rows(ui, s, reply, (a, g));
     });
     enter
 }
@@ -554,27 +581,35 @@ fn gear_rows(ui: &mut egui::Ui, s: &mut GearSettings, kind: ItemKind, reply: Opt
     if !matches!(kind, ItemKind::Bevel | ItemKind::Hypoid | ItemKind::Worm) {
         enter |= field(ui, "Helix angle", &mut s.helix, "0 = straight", TIP_HELIX);
         if !s.helix.trim().is_empty() && s.helix.trim() != "0" && s.helix.trim() != "0 deg" {
-            segments(ui, "Hand", &mut s.hand, &["Auto", "Left", "Right"], TIP_HAND);
+            if kind == ItemKind::Planetary {
+                segments(ui, "Hand", &mut s.hand, &["Auto", "Left", "Right"], TIP_HAND);
+            } else {
+                ui_kit::caption(ui, "Helix angle", "Hand: worked out, opposite across each mesh.");
+            }
             ui_kit::checkbox(ui, "V teeth (herringbone)", &mut s.v).backing_on_hover_text(TIP_V);
         }
     }
     enter
 }
 
-/// More (closed): profile shift, bore, hub.
-fn more_rows(ui: &mut egui::Ui, s: &mut GearSettings, (a, g): (usize, usize)) -> bool {
+/// More (closed): the profile shift worked out, bore, hub.
+fn more_rows(ui: &mut egui::Ui, s: &mut GearSettings, reply: Option<&solidcraft_gear::items::GearReply>, (a, g): (usize, usize)) -> bool {
     let mut enter = false;
     ui_kit::section(ui, ("gear_more", a, g), "More", false, |ui| {
-        enter |= field(ui, "Profile shift", &mut s.profile_shift, "auto", TIP_SHIFT);
-        choice_row(ui, "Bore", &format!("gear_bore_{a}_{g}"), &mut s.bore, &["Auto", "None", "Ø"]).backing_on_hover_text(TIP_BORE);
+        // The shift is the planner's: it holds the drawn centre distance (read-only).
+        let shift = reply.and_then(|r| r.profile_shift).map_or_else(|| "worked out to hold the drawn centre distance".to_string(), |x| format!("{} (worked out to hold the drawn centre distance)", dg::fmt((x * 1000.0).round() / 1000.0)));
+        ui.scope(|ui| ui_kit::caption(ui, "Profile shift", &format!("Profile shift: {shift}"))).response.backing_on_hover_text(TIP_SHIFT);
+        let mut bore = usize::from(s.bore == 2);
+        choice_row(ui, "Bore", &format!("gear_bore_{a}_{g}"), &mut bore, &["Auto", "Ø"]).backing_on_hover_text(TIP_BORE);
+        s.bore = if bore == 1 { 2 } else if s.bore == 2 { 0 } else { s.bore };
         if s.bore == 2 {
-            enter |= field(ui, "Bore Ø", &mut s.bore_d, "mm", TIP_BORE);
+            enter |= field(ui, "Bore Ø", &mut s.bore_d, "mm", TIP_BORE_D);
         }
-        ui_kit::checkbox(ui, "Hub", &mut s.hub);
+        ui_kit::checkbox(ui, "Hub", &mut s.hub).backing_on_hover_text(TIP_HUB);
         if s.hub {
-            enter |= hint_row(ui, "Hub Ø", &mut s.hub_d, "auto");
-            enter |= hint_row(ui, "Hub length A", &mut s.hub_a, "0");
-            enter |= hint_row(ui, "Hub length B", &mut s.hub_b, "0");
+            enter |= field(ui, "Hub Ø", &mut s.hub_d, "auto", TIP_HUB_D);
+            enter |= field(ui, "Hub length A", &mut s.hub_a, "auto", TIP_HUB_LEN);
+            enter |= field(ui, "Hub length B", &mut s.hub_b, "auto", TIP_HUB_LEN);
         }
     });
     enter
@@ -661,8 +696,8 @@ fn drivetrain(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear) -> bool {
         choice_row(ui, "Driver", "gear_driver", &mut at, &with_none).backing_on_hover_text(TIP_DRIVER);
         k.drive_item = at.checked_sub(1).and_then(|p| gears.get(p).copied());
         if k.drive_item.is_some() {
-            enter |= field(ui, "Input rpm", &mut k.rpm, "optional", TIP_RPM);
-            enter |= field(ui, "Input torque", &mut k.torque, "N·m, optional", TIP_RPM);
+            enter |= field(ui, "Input rpm", &mut k.rpm, "rpm, optional", TIP_RPM);
+            enter |= field(ui, "Input torque", &mut k.torque, "N·m, optional", TIP_TORQUE);
         }
         // The ratio between two gears.
         for (n, (key, title)) in [("gear_ratio_a", "Ratio from"), ("gear_ratio_b", "to")].into_iter().enumerate() {
@@ -699,6 +734,18 @@ fn drivetrain(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear) -> bool {
             k.graph_hovered = out.hovered;
         } else {
             k.graph_hovered = None;
+        }
+    });
+    enter
+}
+
+/// All gears (open): what goes on every gear of the set: the tooth chamfer.
+fn all_gears(ui: &mut egui::Ui, k: &mut Gear) -> bool {
+    let mut enter = false;
+    ui_kit::section(ui, "gear_all_gears", "All gears", true, |ui| {
+        enter |= field(ui, "Tooth chamfer", &mut k.chamfer, "off", TIP_CHAMFER);
+        if !k.chamfer.trim().is_empty() {
+            segments(ui, "Chamfer faces", &mut k.chamfer_faces, &["Both", "Side A", "Side B"], "Which end faces of every gear get the chamfer: side A is the green arrow in the view.");
         }
     });
     enter
@@ -744,7 +791,7 @@ fn housing_cutout(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear) -> bool {
 fn output(ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], input: &mut usize) -> bool {
     let mut enter = false;
     ui_kit::section(ui, "gear_output", "Output", true, |ui| {
-        ui_kit::checkbox(ui, "Assembly (components, joints and gear ratios)", &mut k.assembly).backing_on_hover_text(TIP_ASSEMBLY);
+        ui_kit::checkbox(ui, "Assembly (joints and gear links)", &mut k.assembly).backing_on_hover_text(TIP_ASSEMBLY);
         choice_row(ui, "Operation", "gear_op", &mut k.operation, &OP_LABELS).backing_on_hover_text(TIP_OPERATION);
         ui_kit::checkbox(ui, "Cut keep-out from Targets", &mut k.cut_keep_out).backing_on_hover_text(TIP_KEEP_OUT);
         if k.cut_keep_out {
@@ -801,7 +848,10 @@ fn advanced(ui: &mut egui::Ui, k: &mut Gear) -> bool {
         for (key, label, _, hint, tip) in dg::ADVANCED {
             enter |= field(ui, label, k.values.entry(key.to_string()).or_default(), hint, tip);
         }
-        ui_kit::checkbox(ui, "Equation teeth", &mut k.equations).backing_on_hover_text(TIP_EQUATIONS);
+        // Formula teeth are a folder of features: only for a set made that way, never a Gears feature.
+        if k.legacy.is_some() {
+            ui_kit::checkbox(ui, "Equation teeth", &mut k.equations).backing_on_hover_text(TIP_EQUATIONS);
+        }
     });
     enter
 }

@@ -358,7 +358,7 @@ fn spur_a_deleted_pick_fails_by_name_and_a_redrawn_one_recovers() {
     run(&mut f.s, "sketch.delete", json!({"entities": ["b"]}));
     run(&mut f.s, "sketch.finish", json!({}));
     let e = feature_error(&f.s, gears).unwrap_or_else(|| panic!("a set missing gear B's circle must fail: {:?}", ids(&f.s)));
-    for want in ["B", "pitch", "Pitch circles", "`b`"] {
+    for want in ["Gear B", "pitch circle", "Pitch circles", "curve b"] {
         assert!(e.contains(want), "the error names {want}: {e}");
     }
     // The record keeps its components and joints (nothing was rebuilt from another pick).
@@ -389,7 +389,7 @@ fn a_deleted_pick_is_never_replaced_by_the_next_entity() {
     run(&mut f.s, "sketch.circle.center", json!({"center": [55, 0], "radius": 30.0}));
     run(&mut f.s, "sketch.finish", json!({}));
     let e = feature_error(&f.s, gears).unwrap_or_else(|| panic!("the new circle is not gear B's: {:?}", ids(&f.s)));
-    assert!(e.contains("`b`") && e.contains("Pitch circles"), "{e}");
+    assert!(e.contains("curve b is gone") && e.contains("Pitch circles") && !e.contains('`'), "{e}");
 }
 
 #[test]
@@ -689,7 +689,7 @@ fn bore_circle_follows_its_dimension_and_a_deleted_one_fails_by_name() {
     run(&mut s, "sketch.delete", json!({"entities": ["ab"]}));
     run(&mut s, "sketch.finish", json!({}));
     let e = feature_error(&s, before.feature).expect("the set fails without its bore circle");
-    assert!(e.contains("item A, bore") && e.contains("`ab`") && e.contains("Detailed"), "{e}");
+    assert!(e.contains("Gear A, bore circle") && e.contains("curve ab") && e.contains("Detailed"), "{e}");
     undo(&mut s);
     assert_eq!(whole(&mut s), before);
 }
@@ -716,7 +716,7 @@ fn a_bore_circle_off_centre_is_refused_by_name() {
     let mut s = Session::default();
     detailed_sketch(&mut s);
     let e = s.execute("gear.calculate", &detailed_request(&[("b", "bore")])).unwrap_err().to_string();
-    assert!(e.contains("item A, bore") && e.contains("concentric"), "{e}");
+    assert!(e.contains("Gear A, bore circle") && e.contains("concentric"), "{e}");
 }
 
 #[test]
@@ -821,5 +821,61 @@ fn bearing_points_on_shaft_lines_are_the_housing_cutouts_seats() {
     run(&mut s, "sketch.delete", json!({"entities": ["p2"]}));
     run(&mut s, "sketch.finish", json!({}));
     let e = feature_error(&s, feature).expect("the set fails without its bearing point");
-    assert!(e.contains("item B") && e.contains("p2") && e.contains("Shafts"), "{e}");
+    assert!(e.contains("Gear B") && e.contains("p2") && e.contains("Shafts"), "{e}");
+}
+
+/// The set's tooth chamfer: every gear loses a ring off its tips' edges, the pair still turns
+/// without the gears running into each other, the setting is kept for Edit, and a size that
+/// would take the addendum is refused naming the gear. Without it the set builds as before.
+#[test]
+fn a_tooth_chamfer_goes_on_every_gear_and_the_pair_still_meshes() {
+    let build = |chamfer: Option<Value>| {
+        let mut s = Session::default();
+        detailed_sketch(&mut s);
+        let mut p = detailed_request(&[]);
+        if let Some(c) = chamfer {
+            p["tooth_chamfer"] = c;
+        }
+        let r = s.execute("gear.create", &p).map_err(|e| e.to_string());
+        (s, r)
+    };
+    let (mut s0, r0) = build(None);
+    let r0 = r0.unwrap();
+    let names = |r: &Value| [0, 1].map(|i| r["gears"][i]["body"].as_str().unwrap().to_string());
+    let plain = names(&r0).map(|n| volume(&mut s0, &n));
+    let (mut s, r) = build(Some(json!({"size": 0.6})));
+    let r = r.unwrap();
+    no_errors(&s);
+    let chamfered = names(&r).map(|n| volume(&mut s, &n));
+    for k in 0..2 {
+        assert!(chamfered[k] < plain[k] - 1.0, "gear {k}: {} → {}", plain[k], chamfered[k]);
+    }
+    // Kept in the set's request (Edit reads it back).
+    let kept = request(&s);
+    assert_eq!(kept["tooth_chamfer"], json!({"size": 0.6}), "{kept}");
+    // Turned through a tooth and more: the gears overlap no more than the plain pair (zero
+    // backlash: the flanks touch, a trace of tessellation overlap at most).
+    let turned = |s: &mut Session, r: &Value, deg: f64| {
+        let j = r["assembly"]["members"].as_array().unwrap().iter().filter_map(|m| m["joint"].as_u64()).next().unwrap();
+        let d = run(s, "joint.drive", json!({"joint": j, "value": deg}));
+        assert_eq!(d["conflicts"].as_array().map(Vec::len).unwrap_or(0), 0, "{d}");
+        let b = names(r);
+        let i = run(s, "inspect.interference", json!({"bodies": [b[0].as_str(), b[1].as_str()]}));
+        i["interferences"].as_array().unwrap().iter().map(|h| h["volume_mm3"].as_f64().unwrap_or(0.0)).sum::<f64>()
+    };
+    for deg in [0.0, 7.0, 13.0, 29.0] {
+        let (v0, v) = (turned(&mut s0, &r0, deg), turned(&mut s, &r, deg));
+        eprintln!("at {deg}°: plain {v0} mm³, chamfered {v} mm³");
+        assert!(v <= v0 + 1e-4 && v < 0.01, "at {deg}°: {v} mm³ of overlap (plain {v0})");
+    }
+    // One side only takes less.
+    let (mut s1, r1) = build(Some(json!({"size": 0.6, "faces": "a"})));
+    let one = names(&r1.unwrap()).map(|n| volume(&mut s1, &n));
+    assert!(one[0] < plain[0] && one[0] > chamfered[0], "{} {} {}", plain[0], one[0], chamfered[0]);
+    // Too big for module 2 (addendum 2 mm): refused, naming the gear.
+    let (_, e) = build(Some(json!({"size": 2.5})));
+    let e = e.unwrap_err();
+    assert!(e.contains("Tooth chamfer 2.5 mm is too big for Gear A (addendum 2 mm)"), "{e}");
+    let (_, bad) = build(Some(json!({"size": 0.5, "faces": "c"})));
+    assert!(bad.unwrap_err().contains("tooth_chamfer.faces"));
 }

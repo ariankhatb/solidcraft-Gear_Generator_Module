@@ -35,6 +35,47 @@ pub fn item_index(id: &Value) -> Option<usize> {
     }
 }
 
+/// A request read back with its items named by position (A, B, C, … as the dialog names them):
+/// a request written elsewhere (the CLI, a script) may name its items W, G, R; every `item`
+/// that refers to one (links, ratios, the drive) is renamed with it.
+pub fn positional_ids(r: &mut serde_json::Map<String, Value>) {
+    let ids: Vec<Option<String>> = r.get("items").and_then(Value::as_array).into_iter().flatten().map(|v| v.get("id").and_then(Value::as_str).map(str::to_string)).collect();
+    let rename: std::collections::HashMap<String, String> =
+        ids.iter().enumerate().filter_map(|(i, id)| Some((id.clone()?, item_id(i)))).filter(|(a, b)| a != b).collect();
+    if rename.is_empty() {
+        return;
+    }
+    fn walk(v: &mut Value, rename: &std::collections::HashMap<String, String>) {
+        match v {
+            Value::Object(o) => {
+                for (k, x) in o.iter_mut() {
+                    match x {
+                        Value::String(s) if k == "item" => {
+                            if let Some(n) = rename.get(s.as_str()) {
+                                *s = n.clone();
+                            }
+                        }
+                        _ => walk(x, rename),
+                    }
+                }
+            }
+            Value::Array(a) => a.iter_mut().for_each(|x| walk(x, rename)),
+            _ => {}
+        }
+    }
+    for (k, v) in r.iter_mut() {
+        if k == "items" {
+            for (i, it) in v.as_array_mut().into_iter().flatten().enumerate() {
+                if let Some(o) = it.as_object_mut() {
+                    o.insert("id".into(), Value::String(item_id(i)));
+                }
+            }
+        } else if k != "ui" {
+            walk(v, &rename);
+        }
+    }
+}
+
 /// The face presets (decision 4), as the toggle shows them and `face.preset` names them.
 pub const FACE_PRESETS: [(FacePreset, &str, &str); 4] = [
     (FacePreset::Symmetric, "symmetric", "Symmetric"),
@@ -186,7 +227,8 @@ impl GearSettings {
             _ => Bore::Auto,
         };
         let hub = if self.hub {
-            Some(Hub { diameter: len(&self.hub_d, "hub Ø")?, length_a: len(&self.hub_a, "hub length A")?.unwrap_or(0.0), length_b: len(&self.hub_b, "hub length B")?.unwrap_or(0.0) })
+            let diameter = len(&self.hub_d, "hub Ø")?;
+            Some(Hub { diameter, length_a: len(&self.hub_a, "hub length A")?.unwrap_or(0.0), length_b: len(&self.hub_b, "hub length B")?.unwrap_or(0.0), auto: diameter.is_none() })
         } else {
             None
         };
@@ -282,6 +324,9 @@ pub fn gear_json(gear: usize, s: &items::GearSettings) -> Value {
     };
     if let Some(h) = s.hub {
         e["hub"] = json!({"diameter": h.diameter, "length_a": h.length_a, "length_b": h.length_b});
+        if h.auto {
+            e["hub"]["auto"] = json!(true);
+        }
     }
     e
 }
@@ -669,6 +714,11 @@ pub fn items_of(r: &Map<String, Value>, ui: Option<&Value>, graph: &mut Graph) -
         it.carrier = v.get("carrier").and_then(Value::as_bool) != Some(false);
         it.shaft_d = s("diameter", ValueKind::Length);
         it.keyway = v.get("keyway").and_then(Value::as_bool) == Some(true);
+        // Saved with the circles it keeps out: it takes any new one the drawing gets by itself.
+        if let Some(d) = ui.and_then(|u| u.get("gear_dropped")).and_then(|d| d.get(i)).and_then(|d| serde_json::from_value::<Vec<Sel>>(d.clone()).ok()) {
+            it.auto_details = true;
+            it.dropped = d;
+        }
         graph.node_of(i);
         out.push(it);
     }

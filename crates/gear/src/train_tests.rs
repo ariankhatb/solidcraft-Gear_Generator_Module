@@ -236,8 +236,8 @@ fn shifts_past_the_limits_are_refused_naming_sizes_that_work() {
     let sized = size_train(&tc, Kind::Spur, &Simple { module: Some(3.0), ..Simple::default() }, &Spec::defaults_for(Kind::Spur));
     assert!(sized.spec.is_none() && sized.errors.iter().all(Option::is_some), "{:?}", sized.errors);
     let e = sized.error.unwrap();
-    assert!(e.contains("gears 1 and 2") && e.contains("undercut") && e.contains("7 and 7 teeth at module 3"), "{e}");
-    assert!(e.contains("module 2.5 (8, 8 teeth)") && e.contains("with 6 teeth"), "{e}");
+    assert!(e.contains("gears 1 and 2") && e.contains("undercut") && e.contains("at module 3 (gear 1 z7 and gear 2 z7)"), "{e}");
+    assert!(e.contains("module 2.5 (gear 1 z8, gear 2 z8)") && e.contains("with 6 teeth (or draw it Ø18)"), "{e}");
 }
 
 #[test]
@@ -293,7 +293,7 @@ fn stages_follow_the_rule_where_they_can() {
     assert!(s.notes.iter().any(|n| n.contains("ratio")), "{:?}", s.notes);
     // A pair past the limits: refused with sizes that work.
     let e = size_stage(Kind::Pair, &[StageGear::of(20.0), StageGear::of(20.0)], Some(3.0), &base).unwrap_err();
-    assert!(e.contains("undercut") && e.contains("module 2.5 (8, 8 teeth)"), "{e}");
+    assert!(e.contains("undercut") && e.contains("module 2.5 (gear 1 z8, gear 2 z8)"), "{e}");
 }
 
 #[test]

@@ -339,6 +339,9 @@ pub struct Hub {
     pub diameter: Option<f64>,
     pub length_a: f64,
     pub length_b: f64,
+    /// Its Ø worked out when none is given or drawn (the dialog's Hub Ø left on auto): 1.6 × the
+    /// bore, or half the root Ø. Off, a hub with no Ø only gives a drawn hub circle its lengths.
+    pub auto: bool,
 }
 
 /// One gear's own settings (GEAR_UI_SPEC §3, §6); `None`: Auto.
@@ -740,8 +743,8 @@ fn no_room(kind: ItemKind, things: &[Thing]) -> String {
         }
     }
     let what = match got {
-        SlotKind::Point => "a bearing point goes on a Shaft item's line".to_string(),
-        _ => "start a new item for it".to_string(),
+        SlotKind::Point => "a bearing point goes on a shaft line: pick the gear's shaft line first, or make a Shaft gear".to_string(),
+        _ => "press New gear for it".to_string(),
     };
     format!("this {label} has no room for another {}: {what}{alt}", got.name())
 }
@@ -1666,14 +1669,53 @@ pub struct Stage {
     pub error: Option<String>,
 }
 
-/// A gear for people, as the dialog names it: "Gear A" for an item of one gear, "Gear B2" for a
-/// compound's or a pair's second.
+/// A gear for people, as the dialog names it: "Gear A" for an item of one gear, "Gear W worm",
+/// "Gear B ring" for a pair's named parts, "Gear C2" for a compound's second.
 pub(crate) fn who(items: &[GearItem], r: GearRef) -> String {
     match items.get(r.item) {
         Some(it) if it.gear_count() <= 1 => it.who(),
-        Some(it) => format!("{}{}", it.who(), r.gear + 1),
+        Some(it) => match part_name(it.kind, r.gear) {
+            Some(part) => format!("{} {part}", it.who()),
+            None => format!("{}{}", it.who(), r.gear + 1),
+        },
         None => format!("Gear {}{}", item_id(r.item), r.gear + 1),
     }
+}
+
+/// The name of a pair's gear number (the dialog's): a worm item's "wheel" and "worm", a ring's
+/// "ring" and "pinion"; None for a compound's layers (numbered).
+pub fn part_name(kind: ItemKind, gear: usize) -> Option<&'static str> {
+    let names: &[&str] = match kind {
+        ItemKind::Planetary => &["sun", "ring", "planet"],
+        ItemKind::Worm => &["wheel", "worm"],
+        ItemKind::Hypoid => &["ring", "pinion"],
+        ItemKind::Internal => &["ring", "pinion"],
+        ItemKind::Rack => &["rack", "pinion"],
+        _ => &[],
+    };
+    names.get(gear).copied()
+}
+
+/// Two gears on one circle: the same centre, radius and plane.
+fn same_circle(a: &GearGeom, b: &GearGeom) -> bool {
+    match (a.radius, b.radius) {
+        (Some(r1), Some(r2)) => (r1 - r2).abs() <= tol(r1.max(r2)) && len(sub(a.centre, b.centre)) <= tol(r1.max(r2)),
+        _ => false,
+    }
+}
+
+/// The entity id of the circle a gear was picked from (its pitch circle), when it was one pick.
+fn pitch_thing(items: &[GearItem], r: GearRef) -> Option<String> {
+    let it = items.get(r.item)?;
+    let g = gear_geoms(it).get(r.gear).copied()?;
+    let rad = g.radius?;
+    it.things.iter().find_map(|t| match t {
+        Thing::Circle { centre, radius, .. } if (radius - rad).abs() <= tol(rad) && len(sub(*centre, g.centre)) <= tol(rad) => {
+            let e = t.ids().entity.clone();
+            (!e.is_empty()).then_some(e)
+        }
+        _ => None,
+    })
 }
 
 fn style_of(items: &[GearItem], gears: &[GearRef]) -> Kind {
@@ -1837,6 +1879,12 @@ fn classify(items: &[GearItem], ra: GearRef, rb: GearRef, a: &GearGeom, b: &Gear
     }
     let t = tol(a.radius.unwrap_or(1.0).min(b.radius.unwrap_or(1.0)));
     match lie(a.centre, a.axis, b.centre, b.axis, t) {
+        Lie::Coaxial if same_circle(a, b) => {
+            // One circle picked for two gears.
+            let (first, second) = if (ra.item, ra.gear) <= (rb.item, rb.gear) { (ra, rb) } else { (rb, ra) };
+            let curve = pitch_thing(items, first).map_or(String::new(), |e| format!(" (curve {e})"));
+            (StageKind::Parallel, Some(format!("{} uses the same pitch circle as {}{curve}: pick another circle", who(items, second), who(items, first))))
+        }
         Lie::Coaxial => (StageKind::Parallel, Some(format!("{} are on one axis, so they can't mesh: link them by Shaft instead", names()))),
         Lie::Parallel { distance } => {
             let (Some(r1), Some(r2)) = (a.radius, b.radius) else { return (StageKind::Parallel, None) };
@@ -2037,7 +2085,7 @@ pub fn to_drivetrain(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlo
                         ItemKind::Bevel => {
                             Role::Gear(if it.settings(0).bevel_style == BevelStyle::Straight { Kind::Bevel } else { Kind::SpiralBevel })
                         }
-                        ItemKind::CrossedHelical => Role::Gear(Kind::Helical),
+                        ItemKind::CrossedHelical => Role::Gear(Kind::CrossedHelical),
                         _ => style_role(g),
                     };
                     push(&mut out, circle(geo), ask_of(g), role, Source::Gear(GearRef::new(i, g)), face_of(g));

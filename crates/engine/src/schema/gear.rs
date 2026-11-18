@@ -512,6 +512,18 @@ pub struct ShaftParams {
     pub chamfer: Option<f64>,
 }
 
+/// The Gears feature's tooth chamfer, one for every gear of the set.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct ToothChamferParams {
+    /// Width across the face from the tip circle, and depth along the axis (45°), in mm.
+    pub size: f64,
+    /// "both" (default), "a" or "b": the end faces it goes on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub faces: Option<String>,
+}
+
 /// An edge chamfer on the teeth.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -960,6 +972,9 @@ pub struct GearFaceParams {
 pub struct GearHubParams {
     #[serde(default)]
     pub diameter: Option<f64>,
+    /// The Ø worked out when none is given or drawn: 1.6 × the bore, or half the root Ø.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto: Option<bool>,
     #[serde(default)]
     pub length_a: Option<f64>,
     #[serde(default)]
@@ -1628,6 +1643,12 @@ pub struct GearParams {
     /// With `items`: the gear that is turned (default the first), its rpm and torque.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drive: Option<GearDriveParams>,
+    /// With `items`: one tooth chamfer for every gear of the set (45°, `size` mm off the tip
+    /// circle's edge, on `faces`: "both" (default), "a" or "b", the gear's side A / side B).
+    /// Bevel, hypoid, worm, crossed helical, rack and planetary gears are left plain, with a note.
+    /// Absent or size 0: none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tooth_chamfer: Option<ToothChamferParams>,
     /// With `items`: the keep-out body's gap round the gears (radial and axial, mm); asking it
     /// (or `keep_out_cuts`) makes the keep-out body.
     #[serde(default, skip_serializing_if = "Option::is_none")]

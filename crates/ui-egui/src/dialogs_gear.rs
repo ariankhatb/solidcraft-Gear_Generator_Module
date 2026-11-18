@@ -190,6 +190,10 @@ pub struct Gear {
     /// The housing cutout (`clearance_body`): one body holding the space the drivetrain needs to
     /// turn, with a seat of the bearing at every bearing point; off by default.
     pub cutout: Cutout,
+    /// The set's tooth chamfer (`tooth_chamfer`): its size as typed (empty or 0: none) and its
+    /// faces (0 both, 1 side A, 2 side B).
+    pub chamfer: String,
+    pub chamfer_faces: usize,
     /// The cutout's preview: the gears' swept envelopes as rings (drawn translucent) and each
     /// bearing seat as a ring in its gear's colour, in the world, by item.
     pub cutout_rings: Vec<(Option<usize>, Vec<[f64; 3]>)>,
@@ -221,6 +225,88 @@ pub(crate) fn comparable(v: &Value) -> Value {
         }
     }
     norm(v)
+}
+
+/// `tooth_chamfer.faces` by the dialog's choice: Both, Side A, Side B.
+pub const CHAMFER_FACES: [&str; 3] = ["both", "a", "b"];
+
+/// A fix a refusal names ("These would work: module 1.5 (…), Gear B with 11 teeth (…)"), as one
+/// click on the card: the module on the gears, or a gear's tooth count.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Fix {
+    Module(f64),
+    Teeth { item: usize, gear: usize, teeth: u32 },
+}
+
+impl Fix {
+    pub fn label(&self, k: &Gear) -> String {
+        match self {
+            Fix::Module(m) => format!("Use module {}", fmt(*m)),
+            Fix::Teeth { item, gear, teeth } => format!("Use {teeth} teeth on {}", k.gear_name((*item, *gear))),
+        }
+    }
+}
+
+/// The fixes a message suggests, in its order (at most four).
+pub(crate) fn fixes_in(k: &Gear, text: &str) -> Vec<Fix> {
+    let Some(at) = text.find("These would work:") else { return Vec::new() };
+    let mut out = Vec::new();
+    let rest = &text[at + "These would work:".len()..];
+    // The ideas, split at the commas outside brackets.
+    let (mut depth, mut start, mut parts) = (0i32, 0usize, Vec::new());
+    for (k2, c) in rest.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                parts.push(&rest[start..k2]);
+                start = k2 + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&rest[start..]);
+    for p in parts {
+        let p = p.trim();
+        if let Some(m) = p.strip_prefix("module ").and_then(|r| r.split_whitespace().next()).and_then(|v| v.parse::<f64>().ok()) {
+            out.push(Fix::Module(m));
+        } else if let Some(w) = p.find(" with ") {
+            let who = p[..w].trim().trim_start_matches("Gear ").trim();
+            let teeth = p[w + 6..].split_whitespace().next().and_then(|v| v.parse::<u32>().ok());
+            let gear = (0..k.items.len()).flat_map(|i| (0..k.gear_counts.get(i).copied().unwrap_or(1).max(1)).map(move |g| (i, g))).find(|r| k.gear_name(*r).replace(' ', "") == who.replace(' ', ""));
+            if let (Some((item, gear)), Some(teeth)) = (gear, teeth) {
+                out.push(Fix::Teeth { item, gear, teeth });
+            }
+        }
+        if out.len() == 4 {
+            break;
+        }
+    }
+    out
+}
+
+/// Applies a fix: the module typed on item `on`'s gears (its mates follow), or the tooth count.
+pub(crate) fn apply_fix(k: &mut Gear, on: usize, fix: &Fix, inputs: &[SelInput]) {
+    match fix {
+        Fix::Module(m) => {
+            let n = k.gear_counts.get(on).copied().unwrap_or(1).max(1);
+            if let Some(it) = k.items.get_mut(on) {
+                for s in it.settings_mut(n).iter_mut() {
+                    s.by_teeth = false;
+                    s.module = format!("{} mm", fmt(*m));
+                }
+            }
+        }
+        Fix::Teeth { item, gear, teeth } => {
+            let n = k.gear_counts.get(*item).copied().unwrap_or(1).max(1);
+            if let Some(s) = k.items.get_mut(*item).and_then(|it| it.settings_mut(n).get_mut(*gear)) {
+                s.by_teeth = true;
+                s.teeth = teeth.to_string();
+            }
+        }
+    }
+    k.calc = None;
+    let _ = inputs;
 }
 
 /// The housing cutout's settings as typed (empty: the default).
@@ -487,6 +573,8 @@ fn new(sketch: Option<u64>) -> Gear {
         built: Vec::new(),
         details_suggested: Vec::new(),
         cutout: Cutout { bearing: default_bearing(), ..Cutout::default() },
+        chamfer: String::new(),
+        chamfer_faces: 0,
         cutout_rings: Vec::new(),
         scroll: Scroll::Top,
         original: None,
@@ -622,6 +710,7 @@ fn shown(v: f64, kind: ValueKind) -> String {
 pub fn for_set(set: &solidcraft_engine::schema::gear::GearSet) -> Gear {
     let mut r = set.request.as_object().cloned().unwrap_or_default();
     let ui = r.remove("ui");
+    crate::dialogs_gear_items::positional_ids(&mut r);
     let mut g = new(set.sketch);
     g.group = Some(set.group);
     g.assembly = r.get("assembly").and_then(Value::as_bool) == Some(true);
@@ -634,6 +723,10 @@ pub fn for_set(set: &solidcraft_engine::schema::gear::GearSet) -> Gear {
     g.operation = r.get("operation").and_then(Value::as_str).and_then(|o| OPS.iter().position(|x| *x == o)).unwrap_or(0);
     g.cut_keep_out = r.get("keep_out_cuts").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
     g.cutout = Cutout::of(r.get("clearance_body"));
+    if let Some(c) = r.get("tooth_chamfer") {
+        g.chamfer = c.get("size").and_then(Value::as_f64).filter(|v| *v > 0.0).map(|v| shown(v, ValueKind::Length)).unwrap_or_default();
+        g.chamfer_faces = CHAMFER_FACES.iter().position(|f| Some(*f) == c.get("faces").and_then(Value::as_str)).unwrap_or(0);
+    }
     g.keep_out_gap = r.get("keep_out_gap").and_then(Value::as_f64).map(|v| shown(v, ValueKind::Length)).unwrap_or_default();
     if r.get("items").is_some_and(Value::is_array) {
         g.items = crate::dialogs_gear_items::items_of(&r, ui.as_ref(), &mut g.graph);
@@ -1022,6 +1115,7 @@ fn owned() -> Vec<&'static str> {
         "assembly",
         "tooth_curves",
         "clearance_body",
+        "tooth_chamfer",
         "operation",
         "targets",
         "keep_out_cuts",
@@ -1080,6 +1174,13 @@ fn output(app: &SolveApp, k: &Gear, inputs: &[SelInput], p: &mut Map<String, Val
     if k.cutout.on {
         p.insert("clearance_body".into(), k.cutout.params(app)?);
     }
+    if let Some(size) = number(app, &k.chamfer, ValueKind::Length, "Tooth chamfer")?.filter(|v| *v != 0.0) {
+        let mut c = json!({"size": size});
+        if k.chamfer_faces != 0 {
+            c["faces"] = json!(CHAMFER_FACES[k.chamfer_faces.min(2)]);
+        }
+        p.insert("tooth_chamfer".into(), c);
+    }
     if k.equations {
         p.insert("tooth_curves".into(), json!("equations"));
     }
@@ -1099,7 +1200,7 @@ fn output(app: &SolveApp, k: &Gear, inputs: &[SelInput], p: &mut Map<String, Val
             return Err("Join, Cut and Intersect act on the Targets: pick the bodies (Output › Targets)".into());
         }
         if k.cut_keep_out {
-            return Err("Cut Keep-Out cuts the gears' room out of the Targets: pick the housing bodies (Output › Targets)".into());
+            return Err("Cut keep-out from Targets needs the housing bodies: pick them under Output › Targets.".into());
         }
     } else {
         p.insert("targets".into(), json!(targets));
@@ -1131,6 +1232,27 @@ pub(crate) fn request(app: &SolveApp, k: &Gear, inputs: &[SelInput]) -> Result<V
         return Err("Add a gear: pick a type, press New gear and click the sketch pieces it lists".into());
     }
     p.extend(crate::dialogs_gear_graph::items_request(app, &k.items, &k.graph)?);
+    // The circles each gear keeps out: taken out by hand, and (a gear that doesn't take them by
+    // itself) those offered and left. Edit takes any other circle the drawing gets later.
+    let dropped: Vec<Value> = k
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, it)| {
+            let mut out = it.dropped.clone();
+            if !it.auto_details {
+                for d in k.details_suggested.iter().filter(|d| d.item == i) {
+                    if !out.contains(&d.sel) {
+                        out.push(d.sel.clone());
+                    }
+                }
+            }
+            serde_json::to_value(out).unwrap_or(Value::Null)
+        })
+        .collect();
+    if let Some(ui) = p.get_mut("ui").and_then(Value::as_object_mut) {
+        ui.insert("gear_dropped".into(), Value::Array(dropped));
+    }
     if let Some((item, gear)) = k.drive_item.filter(|(i, _)| *i < k.items.len()) {
         let mut drive = json!({"item": crate::dialogs_gear_graph::item_id(item), "gear": gear});
         if let Some(rpm) = number(app, &k.rpm, ValueKind::Unitless, "Input rpm")? {
@@ -1220,11 +1342,17 @@ pub(crate) fn ratio_lines(r: &Value, len: &dyn Fn(f64) -> String) -> Vec<(String
             _ => String::new(),
         };
         out.push((tr("Ratio").to_string(), format!("{} : 1{dir}", fmt_ratio(if dir.is_empty() { x } else { x.abs() }))));
+        // A slow-down (a 20 : 1 worm reads 0.05 : 1): said as the reduction people expect.
+        if x.abs() < 1.0
+            && let Some(red) = r.get("reduction").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 1.0)
+        {
+            out.push((tr("Reduction").to_string(), format!("{} : 1", fmt_ratio(red))));
+        }
     }
-    // A gear {item, gear} as "2·1", else the body's name.
+    // A gear {item, gear} as the dialog names it ("A", "B2"), else the body's name.
     let gear_or = |g: Option<&Value>, body: Option<&Value>| -> Option<String> {
         match g.and_then(|g| Some((g.get("item").and_then(crate::dialogs_gear_graph::item_index)?, g.get("gear").and_then(Value::as_u64).unwrap_or(0)))) {
-            Some((item, gear)) => Some(format!("{}·{}", item + 1, gear + 1)),
+            Some((item, gear)) => Some(crate::dialogs_gear_graph::short_name(item, gear as usize)),
             None => body.and_then(Value::as_str).map(str::to_string),
         }
     };
@@ -1297,7 +1425,23 @@ pub(crate) fn notes_of(r: &Value) -> Vec<String> {
 
 /// A message as the dialog says it: the engine's "Item B" is "Gear B" here.
 pub(crate) fn worded(text: &str) -> String {
-    text.replace("Item ", "Gear ").replace("item ", "gear ")
+    // Only "Item B" / "item B" (an item's letter after it): "item B has no gear 2" stays readable.
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("tem ") {
+        let head = &rest[..at];
+        let next = rest[at + 4..].chars().next();
+        let lead = (head.ends_with('I') || head.ends_with('i')) && !head[..head.len() - 1].chars().next_back().is_some_and(char::is_alphanumeric);
+        if lead && next.is_some_and(|c| c.is_ascii_uppercase()) {
+            out.push_str(&head[..head.len() - 1]);
+            out.push_str("Gear ");
+        } else {
+            out.push_str(&rest[..at + 4]);
+        }
+        rest = &rest[at + 4..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The item a message is about ("Gear B: …", "Item B · Compound: …", "item B …"), and the
@@ -1447,7 +1591,7 @@ pub(crate) fn refresh(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput]) {
     // Two pitch circles in one plane a little apart with no link: they won't mesh; say so.
     for (i, j, gap) in near_misses(app, k) {
         let text = format!(
-            "{} and {} are {} mm apart, so they won't mesh. Make them tangent in the sketch to mesh them.",
+            "Gears {} and {} are {} mm apart, so they won't mesh. Make the circles Tangent in the sketch, or leave them unlinked.",
             crate::dialogs_gear_graph::item_id(i),
             crate::dialogs_gear_graph::item_id(j),
             fmt((gap * 10.0).round() / 10.0)

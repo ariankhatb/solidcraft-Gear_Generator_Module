@@ -816,7 +816,7 @@ fn impossible_inputs_are_refused_clearly() {
     has(refusal(&|s| s.shift = f64::NAN, Kind::Spur), &["profile shift"]);
     has(refusal(&|s| s.rack_height = 1.0, Kind::Rack), &["rack height"]);
     has(refusal(&|s| (s.shaft_angle, s.teeth, s.teeth2) = (150.0, 40, 12), Kind::Bevel), &["cone angle"]);
-    has(refusal(&|s| (s.shaft_angle, s.helix) = (170.0, -45.0), Kind::CrossedHelical), &["helix angle"]);
+    has(refusal(&|s| (s.shaft_angle, s.helix) = (90.0, 80.0), Kind::CrossedHelical), &["helix angle"]);
     has(refusal(&|s| s.worm_diameter = 3.0, Kind::Worm), &["worm", "diameter"]);
     has(refusal(&|s| (s.starts, s.worm_diameter) = (6, 9.0), Kind::Worm), &["lead angle"]);
     has(refusal(&|s| s.teeth3 = 19, Kind::Planetary), &["ring teeth"]);

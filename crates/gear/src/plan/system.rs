@@ -224,7 +224,7 @@ fn tagged(mut u: Unit, spec: &Spec, kind: Option<MeshKind>) -> Unit {
 /// comes back as [`SystemPlan::error`] with an empty plan and the replies.
 pub fn plan_items(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlock], drive: Option<&Drive>, base: &Spec) -> Result<SystemPlan, String> {
     if items.is_empty() {
-        return Err("add a gear item: pick a pitch circle".into());
+        return Err("Add a gear: press New gear and click a pitch circle.".into());
     }
     for it in items {
         validate_item(it)?;
@@ -543,6 +543,16 @@ fn train_unit(items: &[GearItem], gears: &[GearRef], mapped: &crate::items::Mapp
             }
         }
     }
+    // A ring's rim as its gear asks (else the planner's).
+    let rim = gears.iter().find_map(|r| items.get(r.item).filter(|i| i.kind == ItemKind::Internal).and_then(|i| i.settings(r.gear).rim)).filter(|v| *v > 0.0);
+    let ringed;
+    let base = match rim {
+        Some(rim) => {
+            ringed = Spec { rim, ..base.clone() };
+            &ringed
+        }
+        None => base,
+    };
     let o = dt::read_with(&its, None, &Simple::default(), base, has_lines);
     if let Some(e) = &o.error {
         return Err(rename_members(e, &names));
@@ -617,7 +627,26 @@ fn pair_unit(items: &[GearItem], s: &Stage, mapped: &crate::items::Mapped, base:
     if let Some(e) = e {
         return Err(rename_members(&e, &names));
     }
-    let solved = o.solved.as_ref().ok_or_else(|| format!("{}: no set fits these shafts", names.join(" and ")))?;
+    let mut solved = o.solved.clone().ok_or_else(|| format!("{}: no set fits these shafts", names.join(" and ")))?;
+    // What the item asks of the pair: a worm's thread starts, a spiral bevel's or hypoid's
+    // spiral angle.
+    let asked = |f: fn(&GearSettings) -> Option<f64>| s.gears.iter().find_map(|r| items.get(r.item).and_then(|i| (0..i.gear_count().max(1)).find_map(|g| f(&i.settings(g)))));
+    if s.kind == StageKind::Worm
+        && let Some(z) = asked(|g| g.starts.map(f64::from)).filter(|z| *z >= 1.0)
+    {
+        solved.spec.starts = z as u32;
+    }
+    if matches!(s.kind, StageKind::Bevel | StageKind::Hypoid)
+        && (s.bevel_style != BevelStyle::Straight || s.kind == StageKind::Hypoid)
+        && let Some(a) = asked(|g| g.spiral_angle).filter(|a| a.is_finite() && a.abs() < 89.0)
+    {
+        solved.spec.spiral_angle = a;
+    }
+    // A chevron bevel pair: spiral teeth whose hand changes at mid-face.
+    if s.kind == StageKind::Bevel && s.bevel_style == BevelStyle::Chevron {
+        solved.spec.herringbone = true;
+    }
+    let solved = &solved;
     let mut p = plan(&solved.spec).map_err(|e| format!("{}: {e}", names.join(" and ")))?;
     // Which body is which gear: the one on its axis.
     let geom = |k: usize| s.geom.get(k).copied();
@@ -888,6 +917,8 @@ fn rack_unit(items: &[GearItem], s: &Stage, blocks: &[ModuleBlock], base: &Spec)
         placement: Some(Frame { origin, x: u, z: rz }),
         only: 0,
         clearance_body: None,
+        // Its back height as the rack item asks (else the planner's).
+        rack_height: items.get(rr.item).and_then(|i| i.back_height).filter(|v| *v > 0.0).unwrap_or(base.rack_height),
         ..base.clone()
     };
     if helix != 0.0 {

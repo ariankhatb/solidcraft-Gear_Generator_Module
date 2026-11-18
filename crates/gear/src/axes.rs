@@ -551,8 +551,11 @@ pub fn solve(axis1: &Axis, axis2: Option<&Axis>, kind: Option<Kind>, base: &Spec
                     if !(5.0..=175.0).contains(&sigma.to_degrees()) {
                         return Err(format!("the axes cross at {}°: this set needs 5° to 175°", num(sigma.to_degrees())));
                     }
+                    // Crossed helicals past square: the mirror set (left-hand helices) at the
+                    // acute angle, gear 2's axis the same line pointing the other way.
                     spec.shaft_angle = sigma.to_degrees();
-                    skew(offset, sigma, &mut spec, drive, &mut out)?;
+                    let solve_at = if kind == Kind::CrossedHelical && sigma > FRAC_PI_2 + 1e-9 { sigma - std::f64::consts::PI } else { sigma };
+                    skew(offset, solve_at, &mut spec, drive, &mut out)?;
                     sigma
                 }
             };
@@ -878,7 +881,7 @@ fn skew(e: f64, sigma: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) ->
     let (z1, z2) = (f64::from(spec.teeth), f64::from(spec.teeth2));
     let limit = 80f64.to_radians();
     // The hypoid builder keeps both angles positive; crossed helicals may take either hand.
-    let (lo, hi) = if kind == Kind::Hypoid { (1e-3_f64.max(sigma - limit), (sigma - 1e-3).min(limit)) } else { (sigma - limit + 1e-6, limit - 1e-6) };
+    let (lo, hi) = if kind == Kind::Hypoid { (1e-3_f64.max(sigma - limit), (sigma - 1e-3).min(limit)) } else { ((sigma - limit).max(-limit) + 1e-6, (sigma + limit).min(limit) - 1e-6) };
     if lo >= hi {
         return Err(format!("the axes cross at {}°: too far from square for these gears", num(sigma.to_degrees())));
     }

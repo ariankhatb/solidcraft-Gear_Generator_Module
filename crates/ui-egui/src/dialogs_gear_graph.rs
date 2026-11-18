@@ -24,9 +24,9 @@ const MESH_TIP: &str = "Drag to another gear's Mesh pin: they mesh. The distance
 const SHAFT_TIP: &str = "Drag to another gear's Shaft pin: they share a shaft and turn together.";
 const BLOCK_TIP: &str = "Gears in this block share one module, so they can mesh with each other.";
 const DRIVER_TIP: &str = "The gear you turn. Every other gear's speed and direction follow from it.";
-const ACCEPT_TIP: &str = "Make every dashed link real. Dashed = circles the drawing shows as touching or on one line.";
-const RATIO_TIP: &str = "Click two gear rows to see the ratio between them (Ratio, under the graph).";
-const EMPTY: &str = "Items appear here. Drag from a ● Mesh pin to another to make them mesh.";
+const ACCEPT_TIP: &str = "Make every dashed link real. Dashed: circles that touch in the drawing (mesh) or gears on one axis (same shaft).";
+const RATIO_TIP: &str = "Click two gear rows to see the ratio between them (Ratio from / to, above the graph).";
+const EMPTY: &str = "Gears appear here. Drag from a ● Mesh pin to another gear's to make them mesh.";
 
 /// A ratio as a link shows it: "2.00" (of "2.00 : 1").
 fn ratio_text(r: f64) -> String {
@@ -475,13 +475,18 @@ fn suggested_of(r: &Value) -> Vec<Suggested> {
         .collect()
 }
 
-/// What `gear.calculate` says of each link, as lines for the dialog ("1·1 – 2·2: 2.00 : 1", or
+/// A gear as the dialog's messages name it: "A" (an item's first gear), "B2" (its second).
+pub fn short_name(item: usize, gear: usize) -> String {
+    if gear == 0 { item_id(item) } else { format!("{}{}", item_id(item), gear + 1) }
+}
+
+/// What `gear.calculate` says of each link, as lines for the dialog ("A – B2: 2.00 : 1", or
 /// the error and what to do: red), and the links it suggests.
 pub fn link_notes(r: &Value) -> (Vec<(String, bool)>, Vec<Suggested>) {
     let notes = notes_of(r)
         .iter()
         .filter_map(|n| {
-            let name = format!("{}·{} – {}·{}", n.a + 1, n.a_gear + 1, n.b + 1, n.b_gear + 1);
+            let name = format!("{} – {}", short_name(n.a, n.a_gear), short_name(n.b, n.b_gear));
             n.label().map(|(text, bad)| (format!("{name}: {text}"), bad))
         })
         .collect();
@@ -889,7 +894,7 @@ mod tests {
         assert_eq!(inner_meshes(item("planetary").kind, 3), &[(0, 2), (2, 1)]);
         assert!(inner_meshes(item("internal").kind, 1).is_empty());
         let (lines, suggested) = link_notes(&json!({"links": [{"a": {"item": "A", "gear": 0}, "b": {"item": "B", "gear": 1}, "kind": "mesh", "ratio": 0.5}], "suggestions": ["item A gear 1 and item C gear 1 are tangent: link them?"]}));
-        assert_eq!(lines, vec![("1·1 – 2·2: 0.50 : 1".to_string(), false)]);
+        assert_eq!(lines, vec![("A – B2: 0.50 : 1".to_string(), false)]);
         assert_eq!(suggested, vec![Suggested { a: 0, a_gear: 0, b: 2, b_gear: 0, kind: "mesh".into() }]);
         assert!((to_segment(egui::pos2(5.0, 3.0), egui::pos2(0.0, 0.0), egui::pos2(10.0, 0.0)) - 3.0).abs() < 1e-6);
     }

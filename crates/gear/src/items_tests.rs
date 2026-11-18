@@ -209,7 +209,8 @@ fn bevel_pair_by_two_axis_lines_and_one_circle() {
     let (l1, l2) = (line([0.0; 3], [0.0, 0.0, 100.0]), line([0.0; 3], [100.0, 0.0, 0.0]));
     let c = circ([0.0, 0.0, 30.0], Z, 20.0);
     let s = picked(ItemKind::Bevel, &[l1.clone(), l2.clone(), c.clone()]);
-    assert!(s.iter().all(|s| s.layout == 1));
+    // (Picked one by one the two lines meeting are a side view at first; the circle makes it this layout.)
+    assert!(assign(ItemKind::Bevel, &[l1.clone(), l2.clone(), c.clone()]).unwrap().iter().all(|s| s.layout == 1));
     assert_eq!(s.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["axis", "axis2", "pitch"]);
     // In any order.
     picked(ItemKind::Bevel, &[c.clone(), l2.clone(), l1.clone()]);
@@ -437,7 +438,7 @@ fn bad_mesh_links_say_why() {
         item("C", ItemKind::Spur, vec![circ([0.0, 0.0, 30.0], Z, 10.0)]),
     ];
     let st = stages(&items, &[mesh((0, 0), (1, 0)), mesh((0, 0), (2, 0)), mesh((0, 0), (5, 0))]);
-    assert!(st[0].error.as_deref().unwrap().contains("don't touch"), "{:?}", st[0].error);
+    assert!(st[0].error.as_deref().unwrap().contains("are 10 mm apart"), "{:?}", st[0].error);
     assert!(st[1].error.as_deref().unwrap().contains("by Shaft"), "{:?}", st[1].error);
     assert!(st[2].error.as_deref().unwrap().contains("doesn't exist"), "{:?}", st[2].error);
 }
@@ -650,10 +651,12 @@ fn two_shaft_lines_meeting_are_a_bevel_side_view() {
     assert_eq!(next_slot(ItemKind::Bevel, &[s1.clone(), s2.clone()]), None, "complete: the apex is where they meet");
     // Sizes from the settings: no gears until teeth and module are given, then two.
     let mut it = GearItem::new("A", ItemKind::Bevel).with(vec![s1.clone(), s2.clone()]);
-    assert!(validate_item(&it).is_ok());
+    let e = validate_item(&it).unwrap_err();
+    assert!(e.contains("teeth") && e.contains("contact line"), "{e}");
     assert!(gear_geoms(&it).is_empty());
     it.gears = vec![GearSettings { teeth: Some(20), module: Some(2.0), ..GearSettings::default() }, GearSettings { teeth: Some(30), ..GearSettings::default() }];
     assert_eq!(gear_geoms(&it).len(), 2);
+    assert!(validate_item(&it).is_ok());
     // With a contact line: the ratio from its angle.
     let with_contact = [s1.clone(), s2.clone(), line([0.0; 3], [30.0, 0.0, 20.0])];
     assert_eq!(picked(ItemKind::Bevel, &with_contact)[2].name, "contact");

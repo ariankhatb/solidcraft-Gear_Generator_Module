@@ -355,9 +355,12 @@ fn a_bevel_pair_from_one_side_view() {
     let (z1, z2) = (teeth(&sp, g(0, 0)), teeth(&sp, g(0, 1)));
     assert!((z1 / z2 - 2.0).abs() < 0.15, "about 2:1 as drawn: {z1} {z2}");
     assert!(sp.mesh_tags.iter().any(|t| t.kind == crate::analysis::MeshKind::Bevel));
-    // Without the contact line: from the gears' teeth and module.
+    // Without the contact line: from the gears' teeth and module, 20 each at module 2 until
+    // they are set (it builds at once).
     let mut bare = item("T", ItemKind::Bevel, vec![Thing::point([0.0; 3]), line([0.0; 3], [0.0, 0.0, 60.0]), line([0.0; 3], [60.0, 0.0, 0.0])]);
-    assert!(validate_item(&bare).unwrap_err().contains("contact line"));
+    validate_item(&bare).unwrap();
+    let sp = planned(std::slice::from_ref(&bare), &[], None);
+    assert_eq!((teeth(&sp, g(0, 0)), teeth(&sp, g(0, 1))), (20.0, 20.0), "{:?}", sp.error);
     let by = |z: u32| GearSettings { size_by: SizeBy::Teeth, teeth: Some(z), module: Some(2.0), ..GearSettings::default() };
     bare.gears = vec![by(30), by(15)];
     validate_item(&bare).unwrap();

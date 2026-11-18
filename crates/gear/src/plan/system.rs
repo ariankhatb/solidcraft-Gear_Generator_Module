@@ -554,7 +554,16 @@ fn shaft_unit(items: &[GearItem], i: usize, line: &GearGeom, carried: &[GearRef]
         if !coaxial || crate::items::on_shaft_line(line, &g) || others.iter().any(|o| crate::items::on_shaft_line(o, &g)) {
             continue;
         }
-        let at = dot(sub(g.centre, a), u);
+        // Into the middle of its body along the axis (a hypoid pinion's drawn place is where its
+        // axis passes the ring's, past its teeth), else to its centre.
+        let at = match planned.iter().find(|x| x.gear == *r) {
+            Some(x) => {
+                let (blo, bhi) = crate::mesh3d::Solid::new(&x.body, 1.0).bounds();
+                let zs: Vec<f64> = (0..8).map(|k| dot(sub([if k & 1 == 0 { blo[0] } else { bhi[0] }, if k & 2 == 0 { blo[1] } else { bhi[1] }, if k & 4 == 0 { blo[2] } else { bhi[2] }], a), u)).collect();
+                0.5 * (zs.iter().copied().fold(f64::INFINITY, f64::min) + zs.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+            }
+            None => dot(sub(g.centre, a), u),
+        };
         if at < lo || at > hi {
             (lo, hi) = (lo.min(at), hi.max(at));
             reached.push(format!("{} ({} mm past its line's end)", who(items, *r), num(if at < 0.0 { -at } else { at - length })));
@@ -1562,7 +1571,7 @@ fn trim_shafts(items: &[GearItem], out: &mut SystemPlan, sweeps: &mut Sweeps) {
             let mut by: Vec<String> = [below, above].into_iter().flatten().filter_map(|i| blocked[i]).map(name).collect();
             by.dedup();
             let shaft = on_body(sh.body, true).map_or_else(|| format!("the shaft of {}", name(sh.body)), |g| who(items, g));
-            cuts.push((k, j, from, to, format!("{shaft} is cut back to {} mm (of {} mm drawn) to stay clear of {}", num(to - from), num(height), by.join(" and "))));
+            cuts.push((k, j, from, to, format!("{shaft} is cut back to {} mm (of {} mm) to stay clear of {}", num(to - from), num(height), by.join(" and "))));
         }
     }
     for (k, j, from, to, note) in cuts {

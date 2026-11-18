@@ -136,7 +136,8 @@ The face is how far the teeth reach from the sketch plane along the axis, on eac
 Note that **Each side** is per side: `10` gives a 20 mm face. Side A is the green arrow in the view
 (see [Sketch conventions › Side A](sketch-conventions.md#side-a-and-side-b)). Use A only / B only
 to grow a gear out of one face of its sketch, for example two gears on one shaft drawn in one
-plane.
+plane. A bevel pair whose face is left on Auto gets at most a third of its cone distance, so
+its small ends aren't weak.
 
 Meshing gears' faces must overlap along the axis; gears on one shaft must not overlap.
 

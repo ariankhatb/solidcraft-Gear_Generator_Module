@@ -967,3 +967,43 @@ fn turned_gears_stay_in_mesh_after_a_tooth_count_changes() {
     run(&mut s, "joint.drive", json!({"joint": "Gear A·1 shaft", "value": 0}));
     assert!((value(&mut s, "Gear B·1 shaft") - l.offset).abs() < 1e-6 && l.offset.abs() < 1e-6, "back at 0 both at 0 (as built): {}", value(&mut s, "Gear B·1 shaft"));
 }
+
+/// The trailer's edit: gear B's diameter stepped 60 → 84 mm while the pair stands at rest and
+/// while A is turned. After every rebuild the teeth sit in each other's gaps: no clash volume
+/// beyond the zero-backlash noise of touching flanks.
+#[test]
+fn stepping_a_diameter_keeps_the_teeth_meshed_at_rest_and_turned() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Pitch"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 20.0, "id": "a"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [50, 0], "radius": 30.0, "id": "b"}));
+    run(&mut s, "sketch.constraint.coincident", json!({"a": "a.center", "b": "origin"}));
+    run(&mut s, "sketch.dimension", json!({"entities": ["a"], "type": "diameter", "value": "40 mm"}));
+    run(&mut s, "sketch.dimension", json!({"entities": ["b"], "type": "diameter", "value": "d2 = 60 mm"}));
+    run(&mut s, "sketch.constraint.tangent", json!({"a": "a", "b": "b"}));
+    run(&mut s, "sketch.dimension", json!({"entities": ["origin", "b.center"], "type": "vertical", "value": "0 mm"}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "gear.create", json!({"assembly": true, "items": [
+        {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a", "slot": "pitch"}]},
+        {"id": "B", "type": "spur", "components": [{"sketch": "Pitch", "curve": "b", "slot": "pitch"}]}],
+        "links": [{"a": {"item": "A"}, "b": {"item": "B"}, "kind": "mesh"}],
+        "module_blocks": [{"id": "M", "module": 2, "members": ["A", "B"]}], "drive": {"item": "A", "gear": 0}}));
+    no_errors(&s);
+    let clash = |s: &mut Session| -> f64 {
+        let r = run(s, "inspect.interference", json!({"bodies": ["Gear A·1", "Gear B·1"]}));
+        r["interferences"].as_array().map_or(0.0, |v| v.iter().filter_map(|i| i["volume_mm3"].as_f64()).sum())
+    };
+    for d in [64, 70, 76, 84] {
+        // At rest, then turned (the edit made while A stands at 13°).
+        run(&mut s, "joint.drive", json!({"joint": "Gear A·1 shaft", "value": 0}));
+        run(&mut s, "parameters.change", json!({"name": "d2", "expression": format!("{} mm", d - 2)}));
+        no_errors(&s);
+        let at_rest = clash(&mut s);
+        assert!(at_rest < 0.05, "d2 {}: {at_rest} mm3 at rest", d - 2);
+        run(&mut s, "joint.drive", json!({"joint": "Gear A·1 shaft", "value": 13}));
+        run(&mut s, "parameters.change", json!({"name": "d2", "expression": format!("{d} mm")}));
+        no_errors(&s);
+        let turned = clash(&mut s);
+        assert!(turned < 0.05, "d2 {d}: {turned} mm3 with A at 13°");
+    }
+}

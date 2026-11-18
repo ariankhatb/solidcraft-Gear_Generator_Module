@@ -656,6 +656,23 @@ fn pair_unit(items: &[GearItem], s: &Stage, mapped: &crate::items::Mapped, base:
     if s.kind == StageKind::Bevel && s.bevel_style == BevelStyle::Chevron {
         solved.spec.herringbone = true;
     }
+    // A bevel pair's face left on Auto: at most a third of the cone distance (GEAR_UI_SPEC §3),
+    // so the small ends aren't weak.
+    let auto_face = s.gears.iter().all(|r| items.get(r.item).is_none_or(|i| {
+        let f = i.settings(r.gear).face;
+        f.a.is_none() && f.b.is_none()
+    }));
+    if s.kind == StageKind::Bevel && auto_face {
+        let sp = &mut solved.spec;
+        let (z1, z2) = (f64::from(sp.teeth), f64::from(sp.teeth2));
+        let sigma = sp.shaft_angle.to_radians();
+        let d1 = sigma.sin().atan2(z2 / z1 + sigma.cos());
+        let re = sp.module * z1 / (2.0 * d1.sin().max(1e-9));
+        let third = (re / 3.0 * 10.0).floor() / 10.0;
+        if third > 0.0 && sp.face_width > third {
+            sp.face_width = third;
+        }
+    }
     let solved = &solved;
     let mut p = plan(&solved.spec).map_err(|e| format!("{}: {e}", names.join(" and ")))?;
     // Which body is which gear: the one on its axis.

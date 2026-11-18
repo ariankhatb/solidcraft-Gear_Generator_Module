@@ -208,7 +208,7 @@ fn check(job: &Job) -> Done {
 fn check_pair(a: &Body, b: &Body, (na, nb): &(String, String)) -> Outcome {
     let threshold = 1e-9 * a.size().max(1.0).powi(3);
     // A pair whose shared part can't be worked out is reported, not passed as clear.
-    let shared = match solidcraft_kernel::boolean(a, b, solidcraft_kernel::BoolOp::Intersect) {
+    let shared = match shared_part(a, b) {
         Ok(Some(o)) => o,
         Ok(None) => return Outcome::Clear,
         Err(e) => return Outcome::Unchecked(e.to_string()),
@@ -228,6 +228,63 @@ fn check_pair(a: &Body, b: &Body, (na, nb): &(String, String)) -> Outcome {
         });
     }
     Outcome::Clear
+}
+
+/// The part `a` and `b` share, exactly (`None`: nothing). Two copies of one solid in one place
+/// (a design built twice over) share all of it: the copy itself, with no boolean, which on
+/// coincident faces takes minutes. Otherwise each body is first cut down to the box where their
+/// boxes overlap, so the boolean of two meshed gears works on the few teeth near the mesh rather
+/// than on every tooth (the shared part lies in that box, so it is the same part); where a cut
+/// can't be made, the whole bodies are intersected.
+fn shared_part(a: &Body, b: &Body) -> solidcraft_kernel::Result<Option<Body>> {
+    use solidcraft_kernel::BoolOp::Intersect;
+    if !a.is_mesh() && (std::ptr::eq(a.record(), b.record()) || a.record() == b.record()) {
+        return Ok(Some(a.clone()));
+    }
+    match clipped_to_overlap(a, b) {
+        Some(None) => return Ok(None),
+        Some(Some((ca, cb))) => {
+            if let Ok(shared) = solidcraft_kernel::boolean(&ca, &cb, Intersect) {
+                return Ok(shared);
+            }
+        }
+        None => {}
+    }
+    solidcraft_kernel::boolean(a, b, Intersect)
+}
+
+/// `a` and `b` each cut to the box where their exact boxes overlap, grown a little so its faces
+/// stay clear of theirs: `Some(None)` when a cut leaves nothing (they share nothing), `None` when
+/// the box keeps most of both (cutting saves nothing) or a cut fails.
+fn clipped_to_overlap(a: &Body, b: &Body) -> Option<Option<(Body, Body)>> {
+    let (ba, bb) = (a.exact_bounds().ok()?, b.exact_bounds().ok()?);
+    if ba.is_empty() || bb.is_empty() {
+        return None;
+    }
+    let margin = (1e-3 * a.size().max(b.size())).max(1e-3) + 4.0 * a.record().tolerance.max(b.record().tolerance);
+    let o = ba.intersection(&bb).inflated(margin);
+    if o.is_empty() {
+        return None;
+    }
+    let volume = |x: &Aabb3| {
+        let s = x.size();
+        s.x.max(0.0) * s.y.max(0.0) * s.z.max(0.0)
+    };
+    // The share of a body's own box the cut keeps, at most.
+    let kept = |bx: &Aabb3| volume(&o.intersection(bx)) / volume(bx).max(f64::MIN_POSITIVE);
+    if kept(&ba).min(kept(&bb)) > 0.5 {
+        return None;
+    }
+    let tool = solidcraft_kernel::box_solid(o.min, o.max).ok()?;
+    let cut = |x: &Body, bx: &Aabb3| -> Option<Option<Body>> {
+        if o.contains(bx.min) && o.contains(bx.max) {
+            return Some(Some(x.clone()));
+        }
+        solidcraft_kernel::boolean(x, &tool, solidcraft_kernel::BoolOp::Intersect).ok()
+    };
+    let ca = cut(a, &ba)?;
+    let cb = cut(b, &bb)?;
+    Some(ca.zip(cb))
 }
 
 /// Each job's answer (in pair order, with the pair's names; `None`: not finished within

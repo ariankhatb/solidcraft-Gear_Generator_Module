@@ -112,6 +112,10 @@ fn nothing_is_added_by_default() {
             if k == Kind::Differential {
                 continue;
             }
+            // (Nor a bevel planetary set's carrier, with a pin placed along every planet's axis.)
+            if b.name.contains(crate::plan::bevel_planet::CARRIER) {
+                continue;
+            }
             assert!(
                 !b.steps.iter().any(|st| matches!(st, Step::Placed { .. }) || (!revolve_ok && matches!(st, Step::Revolve { .. }) && !(trim_ok && matches!(st, Step::Revolve { op: Op::Intersect, .. })))),
                 "{k:?}"

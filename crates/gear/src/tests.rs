@@ -96,6 +96,8 @@ fn every_kind_plans() {
                     Step::Coil { section, pitch, .. } => assert!(section.len() >= 3 && *pitch > 0.0),
                     // A differential's case has its pin holes and windows in frames of their own.
                     Step::Placed { .. } if k == Kind::Differential => {}
+                    // A bevel planetary set's carrier has a pin placed along every planet's axis.
+                    Step::Placed { .. } if b.name.contains(crate::plan::bevel_planet::CARRIER) => {}
                     Step::Placed { .. } => panic!("{k:?}: nothing is placed by default"),
                 }
             }

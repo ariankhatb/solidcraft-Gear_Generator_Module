@@ -411,7 +411,9 @@ fn schematic_frames_match_the_plan() {
             }
         }
         let bodies: Vec<usize> = sch.members.iter().filter_map(|m| m.body).collect();
-        assert_eq!(bodies.len(), p.bodies.len(), "{:?} only {}", s.kind, s.only);
+        // (A bevel planetary set's carrier is a support, not a gear: the schematic leaves it out.)
+        let gears = p.bodies.iter().filter(|b| !b.name.contains(crate::plan::bevel_planet::CARRIER)).count();
+        assert_eq!(bodies.len(), gears, "{:?} only {}", s.kind, s.only);
         for m in &sch.members {
             let Some(bi) = m.body else { continue };
             let f = p.bodies[bi].frame;

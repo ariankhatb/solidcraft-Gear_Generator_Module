@@ -364,7 +364,8 @@ pub fn clearance_body(s: &Spec, p: &mut Plan) -> Result<Body, String> {
     // (Following the formulas: only for the whole set, whose plan holds the bodies' own teeth.)
     let follows = if s.only == 0 { member_follows(s, p, bodies) } else { vec![None; bodies.len()] };
     let mut placed = Vec::new();
-    let (body, follow) = build(s, &c, bodies, preview, &follows, &mut facts, &mut warnings, &mut placed)?;
+    let built_shafts = if s.only == 0 { on_built_shaft(p) } else { vec![false; bodies.len()] };
+    let (body, follow) = build(s, &c, bodies, preview, &follows, &built_shafts, &mut facts, &mut warnings, &mut placed)?;
     p.clearance_follow = follow;
     p.bearings = placed;
     for (label, value, unit) in facts {
@@ -397,12 +398,37 @@ fn bore_of(s: &Spec, role: u8) -> (Bore, bool, f64) {
     (bore, integral, d)
 }
 
+/// Per body, whether its shaft is a body built with the set (a drivetrain's Shaft item: a bar
+/// with no teeth), or it is that bar: such a body's shaft clearance runs only as far as the
+/// bar's own envelope (no stub on past it), since the bar's own clearance is the shaft's.
+fn on_built_shaft(p: &Plan) -> Vec<bool> {
+    let bars: Vec<usize> = p.shafts.iter().map(|sh| sh.body).filter(|b| p.members.iter().any(|m| m.body == Some(*b) && m.teeth == 0) && *b < p.bodies.len()).collect();
+    (0..p.bodies.len())
+        .map(|b| {
+            if bars.contains(&b) {
+                return true;
+            }
+            let f = p.bodies[b].frame;
+            let clusters: Vec<usize> = p.members.iter().filter(|m| m.body == Some(b)).filter_map(|m| m.cluster).collect();
+            bars.iter().any(|&bar| {
+                let rigid = p.members.iter().any(|m| m.body == Some(bar) && m.cluster.is_some_and(|c| clusters.contains(&c)));
+                let g = p.bodies[bar].frame;
+                let d = sub(f.origin, g.origin);
+                let off = len(sub(d, mul(g.z, dot(d, g.z))));
+                rigid && len(cross(f.z, g.z)) < 1e-6 && off < 0.05
+            })
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build(
     s: &Spec,
     c: &Clearance,
     bodies: &[Body],
     preview: &[PreviewGear],
     follows: &[Option<MemberFollow>],
+    built_shafts: &[bool],
     facts: &mut Vec<(String, f64, Unit)>,
     warn: &mut Vec<String>,
     placed: &mut Vec<PlacedBearing>,
@@ -575,9 +601,12 @@ fn build(
         };
         m.shaft_d = if integral { Some(integral_d) } else { d };
         if let (Some(d), false, false) = (d, integral, m.planet) {
+            // On a shaft built with the set (or that shaft): no stub past it.
+            let built = built_shafts.get(mi).copied().unwrap_or(false);
+            let ext = if built { 0.0 } else { ext };
             let band = (zr.0 - ext, zr.1 + ext, d / 2.0 + rad);
             // Its ends: on past the gear's ends, by twice the face width unless given.
-            let more = if c.shaft_extension > 0.0 { 0.0 } else { 2.0 };
+            let more = if c.shaft_extension > 0.0 || built { 0.0 } else { 2.0 };
             rules[gi].anchors.extend([(band.0, -more), (band.1, 1.0 + more)]);
             g.bands.push(band);
             m.shaft = Some(band);

@@ -217,8 +217,9 @@ fn a_shaft_item_that_cant_be_used_is_said_never_dropped() {
     let sp = planned(&with(on_m), &core);
     assert!(rigid_of(&sp, g(0, 0)).contains(&sp.body(g(4, 0)).unwrap()));
     assert!(sp.notes.iter().any(|n| n.contains("Shaft S is in no link") && n.contains("Gear M")), "{:?}", sp.notes);
-    // Linked to a gear past its line's end: made along its line, with a warning.
+    // Linked to gears past its line's ends (on its axis): it runs on to reach them, as said.
     let short = shaft_item("S", [-40.0, 0.0, 0.0], [-20.0, 0.0, 0.0]);
     let sp = planned(&with(short), &plus(shaft(g(4, 0), g(2, 0))));
-    assert!(sp.plan.warnings.iter().any(|w| w.contains("Shaft S") && w.contains("reaches none")), "{:?}", sp.plan.warnings);
+    assert!(sp.notes.iter().any(|n| n.contains("Shaft S runs on past its line to") && n.contains("Gear M")), "{:?}", sp.notes);
+    assert!(shaft_length(&sp, 4) > 100.0, "{}", shaft_length(&sp, 4));
 }

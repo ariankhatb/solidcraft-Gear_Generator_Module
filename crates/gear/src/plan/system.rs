@@ -732,7 +732,17 @@ fn pair_unit(items: &[GearItem], s: &Stage, mapped: &crate::items::Mapped, base:
             i.ask.role = Some(dt::Role::Gear(Kind::SpiralBevel));
         }
     }
-    let o = dt::read_with(&its, None, &Simple::default(), base, false);
+    // A hypoid's asked spiral angle sizes the set (its largest offset follows from it).
+    let spiral_asked = s.gears.iter().find_map(|r| items.get(r.item).and_then(|i| (0..i.gear_count().max(1)).find_map(|g| i.settings(g).spiral_angle)));
+    let hypoid_base;
+    let read_base = match spiral_asked.filter(|a| s.kind == StageKind::Hypoid && a.is_finite() && a.abs() < 89.0) {
+        Some(a) => {
+            hypoid_base = Spec { spiral_angle: a, ..base.clone() };
+            &hypoid_base
+        }
+        None => base,
+    };
+    let o = dt::read_with(&its, None, &Simple::default(), read_base, false);
     let e = o.error.clone().or_else(|| o.members.iter().find_map(|m| m.error.clone()));
     if let Some(e) = e {
         return Err(rename_members(&e, &names));
@@ -755,6 +765,23 @@ fn pair_unit(items: &[GearItem], s: &Stage, mapped: &crate::items::Mapped, base:
     // A chevron bevel pair: spiral teeth whose hand changes at mid-face.
     if s.kind == StageKind::Bevel && s.bevel_style == BevelStyle::Chevron {
         solved.spec.herringbone = true;
+    }
+    // A bevel pair's face left on Auto: at most a third of the cone distance (GEAR_UI_SPEC §3),
+    // so the small ends aren't weak.
+    let auto_face = s.gears.iter().all(|r| items.get(r.item).is_none_or(|i| {
+        let f = i.settings(r.gear).face;
+        f.a.is_none() && f.b.is_none()
+    }));
+    if s.kind == StageKind::Bevel && auto_face {
+        let sp = &mut solved.spec;
+        let (z1, z2) = (f64::from(sp.teeth), f64::from(sp.teeth2));
+        let sigma = sp.shaft_angle.to_radians();
+        let d1 = sigma.sin().atan2(z2 / z1 + sigma.cos());
+        let re = sp.module * z1 / (2.0 * d1.sin().max(1e-9));
+        let third = (re / 3.0 * 10.0).floor() / 10.0;
+        if third > 0.0 && sp.face_width > third {
+            sp.face_width = third;
+        }
     }
     let solved = &solved;
     let mut p = plan(&solved.spec).map_err(|e| format!("{}: {e}", names.join(" and ")))?;

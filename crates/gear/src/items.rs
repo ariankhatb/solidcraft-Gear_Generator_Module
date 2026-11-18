@@ -1472,6 +1472,11 @@ fn bevel_side(things: &[Thing]) -> Result<SideView, String> {
     Ok(SideView { apex, shafts, contact })
 }
 
+/// A side view with no contact line and no tooth counts set: each gear's teeth, and the module
+/// when none is set.
+pub const SIDE_VIEW_TEETH: u32 = 20;
+pub const SIDE_VIEW_MODULE: f64 = 2.0;
+
 /// The two bevel gears of a side view: the cone angles from the contact line (else from the
 /// gears' tooth counts against the shaft angle), the cone distance from the contact line's
 /// length (else from the module and teeth). Fewer than two while that can't be worked out.
@@ -1484,8 +1489,10 @@ fn bevel_side_gears(item: &GearItem) -> Vec<GearGeom> {
         Some((c, r)) => (angle(u1, c), angle(u2, c), r),
         None => {
             let (s1, s2) = (item.settings(0), item.settings(1));
-            let (Some(z1), Some(z2)) = (s1.teeth.filter(|z| *z > 0), s2.teeth.filter(|z| *z > 0)) else { return Vec::new() };
-            let Some(m) = s1.module.or(s2.module).filter(|m| *m > 0.0 && m.is_finite()) else { return Vec::new() };
+            // Teeth and module not set yet: [`SIDE_VIEW_TEETH`] each at [`SIDE_VIEW_MODULE`], so
+            // the pair builds at once (the dialog shows them; set them to size it).
+            let (z1, z2) = (s1.teeth.filter(|z| *z > 0).unwrap_or(SIDE_VIEW_TEETH), s2.teeth.filter(|z| *z > 0).unwrap_or(SIDE_VIEW_TEETH));
+            let m = s1.module.or(s2.module).filter(|m| *m > 0.0 && m.is_finite()).unwrap_or(SIDE_VIEW_MODULE);
             let d1 = sigma.sin().atan2(f64::from(z2) / f64::from(z1) + sigma.cos());
             let r1 = m * f64::from(z1) / 2.0;
             (d1, sigma - d1, r1 / d1.sin().max(1e-12))

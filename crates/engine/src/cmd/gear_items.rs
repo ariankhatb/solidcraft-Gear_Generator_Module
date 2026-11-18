@@ -704,6 +704,8 @@ fn apply_details(items: &[gi::GearItem], wanted: &[Wanted], sp: &mut SystemPlan)
     use solidcraft_gear::plan::{Frame, Op, Step};
     use solidcraft_gear::{Outline, Region, V2};
     let mut out = Vec::new();
+    // Each bored gear's body and bore Ø: a shaft stub through it is taken off below.
+    let mut bored: Vec<(usize, f64)> = Vec::new();
     for w in wanted {
         let Some(m) = sp.member_of.iter().find(|(r, _)| *r == w.gear).map(|(_, m)| *m) else { continue };
         let Some(b) = sp.plan.members.get(m).and_then(|x| x.body).filter(|b| *b < sp.plan.bodies.len()) else { continue };
@@ -775,13 +777,82 @@ fn apply_details(items: &[gi::GearItem], wanted: &[Wanted], sp: &mut SystemPlan)
             let lo = if others.iter().any(|t| *t < -1e-6) { -bb - w.hub.map_or(0.0, |_| len_b) - 1.0 } else { -bb - far };
             let hi = if others.iter().any(|t| *t > 1e-6) { a + w.hub.map_or(0.0, |_| len_a) + 1.0 } else { a + far };
             body.steps.push(prism(d / 2.0, lo, hi - lo, Op::Cut));
+            bored.push((b, d));
         }
         if let Some(g) = sp.gears.iter_mut().find(|g| g.item == w.gear.item && g.gear == w.gear.gear) {
             g.warnings.extend(warn);
         }
         out.push((w.gear, bore, w.hub));
     }
+    drop_bored_stubs(items, sp, &bored);
     out
+}
+
+/// A bore is for a shaft of its own through the gear, so a shaft stub built from the gear's
+/// shaft line would be left as a tube round it: the stub of each body with a bored gear is not
+/// built. A body of several gears (a compound's layers) keeps the stub between its outermost
+/// gears as the sleeve joining them, bored through with its smallest bore.
+fn drop_bored_stubs(items: &[gi::GearItem], sp: &mut SystemPlan, bored: &[(usize, f64)]) {
+    use solidcraft_gear::plan::{Op, Step};
+    use solidcraft_gear::{Outline, Region, Seg, V2};
+    let mut bodies: Vec<usize> = bored.iter().map(|(b, _)| *b).collect();
+    bodies.sort_unstable();
+    bodies.dedup();
+    for b in bodies {
+        let Some(k) = sp.plan.shafts.iter().position(|sh| sh.body == b) else { continue };
+        let (d, length) = (sp.plan.shafts[k].diameter, sp.plan.shafts[k].length);
+        let is_stub = |st: &Step| match st {
+            Step::Prism { region, z0, height, op: Op::Join, .. } => {
+                region.holes.is_empty()
+                    && z0.abs() < 1e-6
+                    && (height - length).abs() < 1e-6
+                    && matches!(region.outer.as_slice(), [o] if matches!(o.segs.as_slice(), [Seg::Circle(c, r)] if c.x.abs() < 1e-6 && c.y.abs() < 1e-6 && (r - d / 2.0).abs() < 1e-6))
+            }
+            _ => false,
+        };
+        let Some(at) = sp.plan.bodies[b].steps.iter().rposition(is_stub) else { continue };
+        // The body's gears: where each reaches along the body's z, and its root Ø.
+        let frame = sp.plan.bodies[b].frame;
+        let fz = v3(frame.z);
+        let mut spans: Vec<(f64, f64, f64)> = Vec::new();
+        for (r, m) in &sp.member_of {
+            if sp.plan.members.get(*m).and_then(|x| x.body) != Some(b) {
+                continue;
+            }
+            let Some(geo) = items.get(r.item).and_then(|it| gi::gear_geoms(it).get(r.gear).copied()) else { continue };
+            let Some(shape) = sp.plan.shapes.iter().find(|x| x.member == *m) else { continue };
+            let module = sp.gears.iter().find(|g| g.item == r.item && g.gear == r.gear).map_or(1.0, |g| g.module);
+            let (mut a, mut bb) = gi::face_extent(&items[r.item].settings(r.gear), module);
+            if shape.face > 0.0 && a + bb > 0.0 {
+                let f = shape.face / (a + bb);
+                a *= f;
+                bb *= f;
+            }
+            let Some(u) = v3(geo.axis).normalized() else { continue };
+            let o = (v3(geo.centre) - v3(frame.origin)).dot(fz);
+            let s = u.dot(fz);
+            let (e0, e1) = (o - s * bb, o + s * a);
+            spans.push((e0.min(e1), e0.max(e1), shape.root_diameter));
+        }
+        let bore = bored.iter().filter(|(x, _)| *x == b).map(|(_, d)| *d).fold(f64::INFINITY, f64::min);
+        let body = &mut sp.plan.bodies[b];
+        let lo = spans.iter().map(|s| s.0).fold(f64::INFINITY, f64::min);
+        let hi = spans.iter().map(|s| s.1).fold(f64::NEG_INFINITY, f64::max);
+        if spans.len() > 1 && hi - lo > 1e-6 {
+            let root = spans.iter().map(|s| s.2).filter(|r| *r > 0.0).fold(f64::INFINITY, f64::min);
+            // The sleeve: the stub's Ø, or wider to keep a wall round the bore, within the roots;
+            // in the stub's place (before the bores are cut), then bored through.
+            let sleeve = d.max(bore + 3.0).min(0.85 * root).max(d.min(0.85 * root));
+            let disc = |r: f64| Region { outer: vec![Outline::circle(V2::ZERO, r)], holes: Vec::new() };
+            body.steps[at] = Step::Prism { region: disc(sleeve / 2.0), z0: lo, height: hi - lo, twist: 0.0, op: Op::Join };
+            if bore < sleeve {
+                body.steps.push(Step::Prism { region: disc(bore / 2.0), z0: lo - 1.0, height: hi - lo + 2.0, twist: 0.0, op: Op::Cut });
+            }
+        } else {
+            body.steps.remove(at);
+        }
+        sp.plan.shafts.remove(k);
+    }
 }
 
 /// Circles the drawing suggests as a gear's bore and hub: drawn in its pitch circle's sketch,

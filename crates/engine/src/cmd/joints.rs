@@ -298,6 +298,40 @@ fn recouple(s: &mut Session) {
             l.lift = t;
         }
     }
+    follow_links(doc);
+}
+
+/// The joints driven by gears, racks and screws set from their drivers by the links as they are
+/// now (ratio and offset), down every chain of links: after a ratio changes (a sketch edit,
+/// gear.update) the gears stay in mesh at the pose they are turned to, not at the old ratio's
+/// angle. The offset is where the gears meshed when they were coupled (the as-built phase).
+pub(crate) fn follow_links(doc: &mut solidcraft_doc::Document) {
+    for _ in 0..doc.assembly.links.len() {
+        let vals = joints::joint_values(&doc.assembly);
+        let value = |id: u64, i: usize| vals.get(&id).and_then(|q| q.get(i)).copied();
+        let moves: Vec<(u64, usize, f64)> = doc
+            .assembly
+            .links
+            .iter()
+            .filter(|l| matches!(l.coupling, Some(Coupling::Gear { .. } | Coupling::RackPinion { .. } | Coupling::Screw { .. })))
+            .filter_map(|l| {
+                let want = l.follow(value(l.a, l.ia)?);
+                let now = value(l.b, l.ib)?;
+                (want.is_finite() && (want - now).abs() > 1e-9 * (1.0 + want.abs())).then_some((l.b, l.ib, want))
+            })
+            .collect();
+        if moves.is_empty() {
+            break;
+        }
+        for (id, i, v) in moves {
+            if let Some(j) = doc.assembly.joints.iter_mut().find(|j| j.id == id) {
+                if j.values.len() <= i {
+                    j.values.resize(i + 1, 0.0);
+                }
+                j.values[i] = v;
+            }
+        }
+    }
 }
 
 /// Re-solve the joints, keeping the `held` values (the ones being driven, mapped to the values

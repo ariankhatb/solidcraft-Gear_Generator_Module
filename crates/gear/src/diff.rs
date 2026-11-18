@@ -262,7 +262,9 @@ impl Default for Diff {
             clearance: 0.5,
             bearing: String::new(),
             windows: false,
-            drive: DriveKind::SpiralBevel,
+            // Helical (a transaxle): a spiral bevel ring builds in seconds too, but the kernel's full
+            // check of its 41 twisted teeth takes minutes, too long for a default.
+            drive: DriveKind::Helical,
             mount: Mount::Bolted,
             ring_teeth: 41,
             drive_pinion_teeth: 11,
@@ -706,10 +708,12 @@ fn bevel_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     for w in &sp.warnings {
         p.warn(renamed(w));
     }
-    for f in &sp.facts {
+    // (The case holds the pins: the bevel planetary set's own carrier is left out.)
+    let carrier = |name: &str| name.contains(crate::plan::bevel_planet::CARRIER) || name.contains("carrier pin");
+    for f in sp.facts.iter().filter(|f| !carrier(&f.label)) {
         p.facts.push(Fact { label: renamed(&f.label), value: f.value, unit: f.unit });
     }
-    let mut bodies: Vec<Body> = sp.bodies.iter().map(|b| Body { name: renamed(&b.name), ..b.clone() }).collect();
+    let mut bodies: Vec<Body> = sp.bodies.iter().filter(|b| !carrier(&b.name)).map(|b| Body { name: renamed(&b.name), ..b.clone() }).collect();
     let nb = bodies.len();
     // Sun first, the planets, sun 2 last: side gears first, then the pinions.
     let side_b = bodies.remove(nb - 1);

@@ -217,7 +217,9 @@ fn facts_and_ratios() {
     assert!((fact("ratio (sun 2 fixed, sun in, carrier out)") - 2.0).abs() < 1e-12);
     assert!((fact("cone angle (sun axis to planet axes)") - 90.0).abs() < 1e-9);
     assert!((fact("planet 2 azimuth") - 90.0).abs() < 1e-9);
-    assert_eq!(p.bodies.len(), 6);
+    // Sun, four planets, sun 2 and the carrier.
+    assert_eq!(p.bodies.len(), 7);
+    assert!(p.bodies[6].name.starts_with("Carrier (4 planets)"), "{}", p.bodies[6].name);
     let r = plan(&set(BevelPlanetMode::Ring, 60.0, 24, 12, 3)).unwrap();
     let f = |l: &str| r.facts.iter().find(|f| f.label == l).unwrap().value;
     assert!((f("ratio (ring fixed, sun in, carrier out)") - 2.5).abs() < 1e-12);
@@ -291,12 +293,11 @@ fn bevel_ring_is_one_solid_without_a_cut() {
         ("ring 30 20:10 x3 spiral -35", Spec { spiral_angle: -35.0, ..set(BevelPlanetMode::Ring, 30.0, 20, 10, 3) }),
     ] {
         let p = prove(label, &s);
-        let ring = p.bodies.last().unwrap();
+        let ring = p.bodies.iter().find(|b| b.name.starts_with("Ring")).unwrap();
         let [Step::RingTaper { op: crate::plan::Op::New, .. }] = ring.steps.as_slice() else { panic!("{label}: {:?}", ring.steps) };
         assert!(p.bodies.iter().all(|b| b.steps.iter().all(|st| !matches!(st, Step::Taper { op: crate::plan::Op::Cut, .. }))), "{label}");
-        let n = p.bodies.len();
         let cut = Solid::new(ring, 0.05);
-        for b in &p.bodies[1..n - 1] {
+        for b in p.bodies.iter().filter(|b| b.name.starts_with("Planet")) {
             let with = overlap(&Solid::new(b, 0.05), &cut, 0.1);
             eprintln!("{label}: {} in the ring {with:.3} mm3", b.name);
             assert!(with < 0.01 * s.module.powi(3), "{label}: {} overlaps the ring by {with} mm3", b.name);
@@ -410,4 +411,28 @@ fn bevel_planetary_on_a_face_gears_shafts_plans_quickly() {
         }
     }
     assert!(t.elapsed().as_secs_f64() < 10.0);
+}
+
+/// The whole set gets a carrier (as a planetary set does): a hub round the apex and a pin along
+/// each planet's axis through its bore; it touches no gear, the planets ride on it in the
+/// assembly, and a set built one member at a time has none.
+#[test]
+fn the_whole_set_has_a_carrier_that_touches_no_gear() {
+    use crate::mesh3d::{Solid, overlap};
+    for (label, s) in [
+        ("differential (default)", d()),
+        ("single 90 16:10 x3", set(BevelPlanetMode::Single, 90.0, 16, 10, 3)),
+        ("ring 60 24:12 x3", set(BevelPlanetMode::Ring, 60.0, 24, 12, 3)),
+    ] {
+        let p = plan(&s).unwrap_or_else(|e| panic!("{label}: {e}"));
+        let c = p.bodies.iter().position(|b| b.name.starts_with("Carrier")).unwrap_or_else(|| panic!("{label}: no carrier"));
+        let carrier = Solid::new(&p.bodies[c], 0.1);
+        for (i, b) in p.bodies.iter().enumerate().filter(|(i, _)| *i != c) {
+            let with = overlap(&Solid::new(b, 0.1), &carrier, 0.1);
+            assert!(with < 0.05 * s.module.powi(3), "{label}: the carrier overlaps {} by {with} mm3", b.name);
+            let planet = b.name.starts_with("Planet");
+            assert_eq!(p.assembly.members[i].carrier, planet.then_some(c), "{label}: {}", b.name);
+        }
+        assert!(plan(&Spec { only: 2, ..s.clone() }).unwrap().bodies.iter().all(|b| !b.name.starts_with("Carrier")), "{label}");
+    }
 }

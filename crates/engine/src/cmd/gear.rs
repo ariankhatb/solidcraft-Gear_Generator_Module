@@ -2540,9 +2540,9 @@ pub fn selected_set(s: &Session) -> Option<GearSet> {
 fn find(s: &Session, cmd: &str, group: Option<u64>, body: Option<&str>) -> Result<Record> {
     let all = records(&s.doc);
     let found = match (group, body) {
-        (Some(group), _) => all.into_iter().find(|r| r.group == group),
+        (Some(group), _) => all.into_iter().find(|r| r.group == group || r.feature == Some(group)),
         (None, Some(body)) => all.into_iter().find(|r| current_names(s, r).iter().any(|n| n == body)),
-        (None, None) => return Err(bad(cmd, "`group` (the set's timeline folder) or `body` (one of its bodies) is required")),
+        (None, None) => return Err(bad(cmd, "`group` (the set's timeline folder or Gears feature) or `body` (one of its bodies) is required")),
     };
     found.ok_or_else(|| bad(cmd, "no gear set there: only a set made by gear.create and kept with the design can be inspected or updated"))
 }

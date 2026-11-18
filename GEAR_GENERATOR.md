@@ -41,7 +41,8 @@ is a work in progress shared for testing and feedback. It tracks SolidCraft `mai
   made to the gears.
 - **Differential designer** (`type: differential`): open bevel, torque-biasing bevel (uneven side
   gears), Torsen Type B and Torsen Type A, with the case, its drive gear (spiral bevel, straight
-  bevel, hypoid or helical; bolted or integral), the assembly and a housing keep-out body. In
+  bevel, hypoid or helical; bolted or integral; helical by default, since the kernel's full check
+  of a spiral bevel ring takes minutes), the assembly and a housing keep-out body. In
   Simple mode, the **Design** button sizes one from the axle, final drive ratio and torque.
 - **Bevels at any shaft angle.** Teeth end on their back and front cones, so the larger gear of a set
   at 100° to 150° (a nearly flat cone) is built correctly. Each gear has its own face width and heel

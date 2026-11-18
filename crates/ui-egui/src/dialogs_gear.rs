@@ -36,7 +36,7 @@ use solidcraft_gear::items::{self as gi, ItemKind};
 use crate::SolveApp;
 use crate::dialogs::{Kind, OPS};
 use crate::dialogs_gear_graph::{GearItem, Graph};
-use crate::selection::{AXES, BODIES, CURVES, EDGES, FACES, SKETCH_POINTS, SelInput};
+use crate::selection::{AXES, BODIES, CURVES, EDGES, EXTERNAL_POINTS, FACES, POINTS, SKETCH_POINTS, SelInput};
 
 /// Each gear item's colour: its dot on the card, its picked geometry and its outline in the view
 /// (an item's index picks one, round the list).
@@ -581,10 +581,45 @@ fn new(sketch: Option<u64>) -> Gear {
     }
 }
 
+/// What the Geometry input picks: sketch curves, the points of every shown sketch (with their
+/// sketch: `POINTS` offers them, `EXTERNAL_POINTS` names their sketch), model edges, faces and
+/// axes. Points are offered before curves, so a bearing point or a bevel's apex wins over the
+/// line it lies on ([`takes_point_hit`] keeps only points on a line).
+pub(crate) const GEOMETRY: crate::selection::Accept = CURVES | POINTS | EXTERNAL_POINTS | SKETCH_POINTS | EDGES | FACES | AXES;
+
+/// Whether a click on sketch point `id` of `sketch` is a pick for the Gears dialog: only a point
+/// on a line of its sketch (a bearing point, a line's end such as a bevel's apex) is, so a circle's
+/// centre or a free point under the pointer doesn't take a click meant for a curve.
+pub(crate) fn takes_point_hit(s: &solidcraft_engine::Session, sketch: u64, id: &str) -> bool {
+    use solidcraft_engine::sketch::CurveKind;
+    use solidcraft_engine::geom::prelude::*;
+    let st = crate::open_meshing::session_world(s);
+    let Some(ss) = st.sketch(sketch) else { return false };
+    let sk = &ss.sketch;
+    let Some(i) = sk.point_index(id) else { return false };
+    let Some(p) = sk.point(i) else { return false };
+    sk.curves.iter().any(|c| match c.kind {
+        CurveKind::Line { a, b } => {
+            if a == i || b == i {
+                return true;
+            }
+            let (Some(pa), Some(pb)) = (sk.point(a), sk.point(b)) else { return false };
+            let (ab, ap) = (pb - pa, p - pa);
+            let l2 = ab.dot(ab);
+            if l2 <= 1e-18 {
+                return false;
+            }
+            let t = (ap.dot(ab) / l2).clamp(0.0, 1.0);
+            (pa + ab * t).dist(p) <= 1e-6 * (1.0 + l2.sqrt())
+        }
+        _ => false,
+    })
+}
+
 /// The pick input (sketch circles, lines and points, 3D ones too, model edges, faces and axes:
 /// the active gear's picks) and the bodies the set's operation and keep-out act on.
 fn inputs() -> Vec<SelInput> {
-    vec![SelInput::new("Geometry", CURVES | SKETCH_POINTS | EDGES | FACES | AXES, true), SelInput::new("Targets", BODIES, true)]
+    vec![SelInput::new("Geometry", GEOMETRY, true), SelInput::new("Targets", BODIES, true)]
 }
 
 /// The dialog for `gear.create`.
@@ -1094,7 +1129,7 @@ pub(crate) fn next_step(app: &SolveApp, k: &Gear) -> (String, bool) {
         None => match it.optional_slot(app) {
             // A bevel side view without its contact line: sized by its gears' settings.
             Some(more) if it.kind == ItemKind::Bevel && more == "contact line" => (
-                format!("{name} is complete — sized by its teeth and module (Gear {} settings below); or click its contact line to size it from the drawing", crate::dialogs_gear_graph::item_id(a)),
+                format!("{name} is complete — sized by its gears' teeth and module ({} teeth each at module {} until you set them in Gear {} settings below); or click its contact line to size it from the drawing", gi::SIDE_VIEW_TEETH, gi::SIDE_VIEW_MODULE, crate::dialogs_gear_graph::item_id(a)),
                 false,
             ),
             Some(more) => (format!("{name} is complete — optional: {more}; or New gear for the next one"), false),
@@ -1446,6 +1481,14 @@ pub(crate) fn worded(text: &str) -> String {
 
 /// The item a message is about ("Gear B: …", "Item B · Compound: …", "item B …"), and the
 /// message without that name in front.
+/// An engine message without its "invalid parameters for `cmd`: " lead.
+pub(crate) fn plain_message(text: &str) -> String {
+    match text.strip_prefix("invalid parameters for `").and_then(|r| r.split_once("`: ")) {
+        Some((_, rest)) => rest.to_string(),
+        None => text.to_string(),
+    }
+}
+
 pub(crate) fn about_item(text: &str) -> Option<(usize, String)> {
     let words: Vec<&str> = text.split_whitespace().collect();
     let at = words.iter().position(|w| matches!(*w, "Gear" | "Item" | "gear" | "item"))?;
@@ -1500,6 +1543,9 @@ pub(crate) fn refresh(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput]) {
     let mut per: Vec<Vec<Msg>> = vec![Vec::new(); k.items.len()];
     let mut set_msgs = Vec::new();
     let mut put = |text: &str, error: bool| {
+        // (The engine's "invalid parameters for `gear.calculate`: " is for scripts, not for people.)
+        let text = plain_message(text);
+        let text = text.as_str();
         let msg = |t: String| Msg { text: t, error };
         match about_item(text) {
             Some((i, rest)) if i < per.len() => {
@@ -1677,6 +1723,34 @@ fn unit(v: [f64; 3]) -> Option<[f64; 3]> {
     (l > 1e-12).then(|| v.map(|x| x / l))
 }
 
+fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn len(v: [f64; 3]) -> f64 {
+    dot(v, v).sqrt()
+}
+
+/// One end of a gear's tip circle in the preview ([`items_preview`]): its outline line, its gear,
+/// where it is (`h` along `axis` from `centre`; `out` +1 on side A, -1 on side B), its tip
+/// radius and the gear's face span along its axis.
+struct TipEnd {
+    line: usize,
+    item: usize,
+    gear: usize,
+    centre: [f64; 3],
+    axis: [f64; 3],
+    h: f64,
+    out: f64,
+    tip: f64,
+    ring: bool,
+    span: (f64, f64),
+}
+
 /// A circle in the world: 49 points round `centre` square to `axis`.
 fn ring_points(centre: [f64; 3], axis: [f64; 3], r: f64, h: f64) -> Vec<[f64; 3]> {
     let Some(ax) = unit(axis) else { return Vec::new() };
@@ -1777,6 +1851,7 @@ fn items_preview(app: &SolveApp, k: &Gear) -> (Vec<(usize, Vec<[f64; 3]>)>, Vec<
     let blocks: Vec<gi::ModuleBlock> = Vec::new();
     let (mut lines, mut contacts, mut arrows) = (Vec::new(), Vec::new(), Vec::new());
     let mut faces = BTreeMap::new();
+    let mut tip_ends: Vec<TipEnd> = Vec::new();
     for (i, (ci, gs)) in geoms.iter().enumerate() {
         for (g, geo) in gs.iter().enumerate() {
             let s = ci.settings(g);
@@ -1804,6 +1879,10 @@ fn items_preview(app: &SolveApp, k: &Gear) -> (Vec<(usize, Vec<[f64; 3]>)>, Vec<
                 let (tip, root) = if geo.ring { (r - m + shift, r + 1.25 * m + shift) } else { (r + m + shift, r - 1.25 * m + shift) };
                 for d in [tip, root] {
                     if d > 0.0 {
+                        if d == tip {
+                            tip_ends.push(TipEnd { line: lines.len(), item: i, gear: g, centre: geo.centre, axis: ax, h: fa, out: 1.0, tip, ring: geo.ring, span: (-fb, fa) });
+                            tip_ends.push(TipEnd { line: lines.len() + 1, item: i, gear: g, centre: geo.centre, axis: ax, h: -fb, out: -1.0, tip, ring: geo.ring, span: (-fb, fa) });
+                        }
                         lines.push((i, ring_points(geo.centre, ax, d, fa)));
                         lines.push((i, ring_points(geo.centre, ax, d, -fb)));
                     }
@@ -1815,6 +1894,50 @@ fn items_preview(app: &SolveApp, k: &Gear) -> (Vec<(usize, Vec<[f64; 3]>)>, Vec<
                 let a = std::f64::consts::FRAC_PI_2 * f64::from(q);
                 let p = [0, 1, 2].map(|j| geo.centre[j] + r * (a.cos() * x[j] + a.sin() * y[j]));
                 lines.push((i, vec![at(p, ax, fa), at(p, ax, -fb)]));
+            }
+        }
+    }
+    // The set's tooth chamfer (All gears), as the build cuts it: on each chamfered end the tip
+    // circle steps in by the size, and a second circle the size back from the face, joined by
+    // short slanted lines.
+    let size = number(app, &k.chamfer, ValueKind::Length, "Tooth chamfer").ok().flatten().filter(|c| *c > 0.0 && c.is_finite());
+    if let Some(c) = size {
+        for (n, e) in tip_ends.iter().enumerate() {
+            let side_ok = match k.chamfer_faces {
+                1 => e.out > 0.0,
+                2 => e.out < 0.0,
+                _ => true,
+            };
+            let takes = matches!(geoms.get(e.item).map(|g| g.0.kind), Some(ItemKind::Spur | ItemKind::Helical | ItemKind::Herringbone | ItemKind::Compound | ItemKind::Internal | ItemKind::Rack));
+            if !side_ok || !takes {
+                continue;
+            }
+            // An end against another layer of its compound that reaches past this tip: buried.
+            let end = at(e.centre, e.axis, e.h);
+            let buried = tip_ends.iter().enumerate().any(|(j, o)| {
+                if j == n || o.item != e.item || o.gear == e.gear || o.out < 0.0 {
+                    return false;
+                }
+                let t = dot(sub(end, o.centre), o.axis);
+                let foot = at(o.centre, o.axis, t);
+                len(sub(end, foot)) <= 1e-6 * (1.0 + o.tip) && t >= o.span.0 - 1e-6 && t <= o.span.1 + 1e-6 && o.tip > e.tip - c - 1e-9
+            });
+            if buried {
+                continue;
+            }
+            let inner = if e.ring { e.tip + c } else { e.tip - c };
+            if inner <= 0.0 {
+                continue;
+            }
+            lines[e.line] = (e.item, ring_points(e.centre, e.axis, inner, e.h));
+            let back = e.h - e.out * c;
+            lines.push((e.item, ring_points(e.centre, e.axis, e.tip, back)));
+            let x = unit(cross(e.axis, if e.axis[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] })).unwrap_or([1.0, 0.0, 0.0]);
+            let y = cross(e.axis, x);
+            for q in 0..8 {
+                let a = std::f64::consts::FRAC_PI_4 * f64::from(q);
+                let dir = [0, 1, 2].map(|j| a.cos() * x[j] + a.sin() * y[j]);
+                lines.push((e.item, vec![at(at(e.centre, dir, inner), e.axis, e.h), at(at(e.centre, dir, e.tip), e.axis, back)]));
             }
         }
     }

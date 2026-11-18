@@ -1996,7 +1996,15 @@ fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, face: Con
     let (dc, ds) = (delta.cos(), delta.sin());
     let ha = crown.addendum.max(0.0);
     if ha * ds >= 0.5 * h || crown.dedendum >= 0.9 * re * delta.tan() {
-        p.refuse(format!("{who}: the teeth are too tall for a cone this flat or this slim (pitch cone angle {}°): use a smaller module, more teeth or a different shaft angle", num(delta.to_degrees())));
+        // A flat cone at a wide shaft angle: the tooth ratio that keeps both cones at 85° or less.
+        let sigma = s.shaft_angle.to_radians();
+        let range = if delta.to_degrees() > 80.0 && s.shaft_angle > 90.0 && s.shaft_angle < 170.0 {
+            let k = |d: f64| sigma.sin() / d.to_radians().tan() - sigma.cos();
+            format!("; at this {}° shaft angle the tooth ratio must be about {} to {} (equal teeth always work)", num(s.shaft_angle), num((k(85.0) * 100.0).round() / 100.0), num((k(s.shaft_angle - 85.0) * 100.0).round() / 100.0))
+        } else {
+            String::new()
+        };
+        p.refuse(format!("{who}: the teeth are too tall for a cone this flat or this slim (pitch cone angle {}°): use a smaller module, more teeth or a different shaft angle{range}", num(delta.to_degrees())));
         let none = ConeTeeth { steps: Vec::new(), ends: ConeEnds { back: 0.0, front: 0.0, small_root: 0.0 }, tip_radius: 0.0 };
         return (none, ToothFlank { rf: 0.0, ra: 0.0, root_half: 0.0, tip_half: 0.0, fillet: Vec::new(), flank: Vec::new(), undercut: false, pointed: false });
     }
@@ -2230,7 +2238,8 @@ fn bevel(s: &Spec, p: &mut Plan) {
     let d1 = sigma.sin().atan2(z2 / z1 + sigma.cos());
     let d2 = sigma - d1;
     let spiral = if s.kind == Kind::SpiralBevel { s.spiral_angle.to_radians() } else { 0.0 };
-    if d1.to_degrees() > 85.0 || d2.to_degrees() > 85.0 || d1.to_degrees() < 2.0 || d2.to_degrees() < 2.0 {
+    // (85° itself is built: a 170° shaft angle's equal gears.)
+    if d1.to_degrees() > 85.0 + 1e-6 || d2.to_degrees() > 85.0 + 1e-6 || d1.to_degrees() < 2.0 || d2.to_degrees() < 2.0 {
         p.refuse(format!(
             "pitch cone angles of {}° and {}°: crown and internal bevels (a cone angle over 85°) aren't built; lower the shaft angle or bring the tooth counts closer",
             num(d1.to_degrees()),

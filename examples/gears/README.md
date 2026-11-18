@@ -17,7 +17,7 @@ Designs made with the Gears feature (`gear.create` with `items`). In each one, t
 
 ## Bores, hubs, bearing points and the housing cutout
 
-- A circle drawn on a gear's centre, inside its pitch circle, is its bore (the smaller) or hub: pick it with `slot: bore` / `hub` (the Gears dialog takes the drawing's circles by itself; × on the card leaves one out).
+- A circle drawn on a gear's centre, inside its pitch circle, is its bore (the smaller) or hub: pick it with `slot: bore` / `hub` (the Gears dialog takes the drawing's circles by itself; × on the card leaves one out). A bored gear goes on a shaft of your own, so no shaft stub is built from its shaft line (a compound keeps a sleeve between its layers, bored through).
 - A point on a gear's shaft line (or on a Shaft item's line) is a bearing point (`slot: bearing`). With `clearance_body` on, each is a seat of the set's bearing in the **Housing cutout** body: the space the drivetrain needs to turn, to cut out of a housing block. The cutout is a plain body (no component, no joint) and follows the sketch: move a point and its seat moves; delete it and the set fails, naming it. In 01 and 09 the cutout is hidden so the files open on the gears: show it with its eye in the Browser (Bodies › Housing cutout).
 - `tooth_chamfer: {size, faces}` puts one 45° chamfer on the tooth tips of every gear in the set (faces `both`, `a` or `b`); the dialog has it under All gears. Bevel, hypoid, worm, crossed helical, rack and planetary gears stay plain, with a note.
 

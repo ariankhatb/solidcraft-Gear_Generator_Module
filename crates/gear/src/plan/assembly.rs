@@ -152,6 +152,15 @@ pub(crate) fn fill(s: &Spec, p: &mut Plan) {
                 let ra = f64::from(if a == 0 { s.teeth } else { s.teeth2 });
                 links.push(gear(a, b, ra, ra / m.ratio.abs(), m.ratio > 0.0));
             }
+            // The planets turn on the carrier's pins (when it is built).
+            if let Some(c) = bodies.iter().position(|b| b.name.contains(super::bevel_planet::CARRIER)) {
+                let sun = &bodies[0].frame;
+                for (i, m) in members.iter_mut().enumerate() {
+                    if i != 0 && i != c && !coaxial(sun, &bodies[i].frame) {
+                        m.carrier = Some(c);
+                    }
+                }
+            }
         }
         _ => {}
     }

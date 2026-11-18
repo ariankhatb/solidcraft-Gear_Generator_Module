@@ -114,7 +114,6 @@ items. Either wire them up or hide them / mark them "(not applied yet)". The gui
 
 ## Tooth chamfer
 
-TODO: a set-wide tooth chamfer setting is being added in parallel (branch work in `sg-final`).
-When it lands, check its label, hint, units and tooltip against `docs/gears/dialog.md` (Advanced
-section has a TODO marker) and the engine's `tooth_chamfer_front` / `tooth_chamfer_back`
-(`{size, angle?}`).
+Done: the set-wide tooth chamfer is the **All gears** section (**Tooth chamfer**, **Chamfer faces**),
+sent as `tooth_chamfer {size, faces}`; its texts are in [The dialog](dialog.md#all-gears) and
+[Scripting](scripting.md).

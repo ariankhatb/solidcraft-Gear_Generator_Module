@@ -27,7 +27,9 @@ module: … type a number, or leave it empty for Auto".
 
 You don't have to press New gear. When no gear is waiting for a pick (none is active, or the active
 one is complete and the pick doesn't fit it), clicking geometry starts a new gear of the chosen type.
-Box-selecting several circles makes one gear per circle.
+Box-selecting several circles makes one gear per circle. Where a point sits on a line (a bearing point on a
+shaft line, the apex where a bevel's two shaft lines meet), a click there picks the point; click
+the line away from its points to pick the line.
 
 With no gears yet, a guide box shows three steps and the hint "Then link them under Drivetrain:
 touching circles are suggested for you."
@@ -39,7 +41,7 @@ Always one line saying what to do next, for example:
 - "Press New gear (or click a circle in the view) to start a Spur gear"
 - "Gear B · Compound — click: shaft line"
 - "Gear A · Spur is complete — optional: shaft line; or New gear for the next one"
-- "Gear B · Bevel Pair is complete — sized by its teeth and module (Gear B settings below); or click its contact line to size it from the drawing"
+- "Gear B · Bevel Pair is complete — sized by its gears' teeth and module (20 teeth each at module 2 until you set them in Gear B settings below); or click its contact line to size it from the drawing"
 - "Click a gear's card to change it, or New gear for another"
 
 A refused pick turns it into a warning (⚠, warning colour): "That pick doesn't fit: …" with the
@@ -134,7 +136,8 @@ The face is how far the teeth reach from the sketch plane along the axis, on eac
 Note that **Each side** is per side: `10` gives a 20 mm face. Side A is the green arrow in the view
 (see [Sketch conventions › Side A](sketch-conventions.md#side-a-and-side-b)). Use A only / B only
 to grow a gear out of one face of its sketch, for example two gears on one shaft drawn in one
-plane.
+plane. A bevel pair whose face is left on Auto gets at most a third of its cone distance, so
+its small ends aren't weak.
 
 Meshing gears' faces must overlap along the axis; gears on one shaft must not overlap.
 
@@ -153,7 +156,7 @@ Hidden for Bevel, Hypoid and Worm.
 | Row | Default | Meaning |
 |---|---|---|
 | **Profile shift** | worked out | Read only: the shift the planner chose to hold the drawn centre distance and clear undercut. |
-| **Bore** | Auto | Auto or Ø. **Auto** fits the shaft when a shaft line is picked; otherwise no hole, unless a bore circle is drawn. **Ø** shows **Bore Ø** (mm) and cuts that hole. A drawn bore circle wins over this setting. |
+| **Bore** | Auto | Auto or Ø. **Auto** fits the shaft when a shaft line is picked; otherwise no hole, unless a bore circle is drawn. **Ø** shows **Bore Ø** (mm) and cuts that hole. A drawn bore circle wins over this setting. A bore (Ø or drawn) means the gear goes on a shaft of its own, so no shaft stub is built from its shaft line; a compound keeps a sleeve between its layers, bored through. |
 | **Hub** | off | A boss on the gear's face. **Hub Ø** (mm; auto: 1.6 × the bore, or about half the root Ø with no bore), **Hub length A** and **Hub length B** (mm past the face on each side; both 0: half the face width on side A). A drawn hub circle gives the Ø. |
 
 A bore at or past the tooth roots is left out with a warning; a hub wider than the roots gets a
@@ -237,7 +240,8 @@ Open. Settings for every gear in the set at once.
 | **Tooth chamfer** | off | A 45° chamfer off the tooth tips' edges on the end faces (mm across, as deep). Applied to spur, helical and herringbone gears (outer ends), each compound layer and ring gears. Bevel, worm, hypoid, crossed helical, rack and planetary gears stay plain, and a note says so. A chamfer as big as the tooth's addendum, or half the face, is refused, naming the gear. Clear the field to remove it. |
 | **Chamfer faces** | Both | Shown once a chamfer is set: Both, Side A or Side B (side A is the green arrow in the view). |
 
-The chamfer is in the built gears, not in the dialog's preview.
+The preview draws the chamfer on each chamfered end: the tip circle stepped in by the size, a second
+circle the size back from the face, and short slanted lines between them.
 
 ## OK and Cancel
 
@@ -247,5 +251,6 @@ The chamfer is in the built gears, not in the dialog's preview.
 - **Cancel** leaves the design as it was.
 
 The view shows only outlines while the dialog is open (pitch, tip and root circles at both faces,
+the tooth chamfer when one is set,
 each gear's picks in its colour and labelled "B · shaft line", each mesh's contact in yellow, the
 active gear's side-A arrow). The teeth are built on OK.

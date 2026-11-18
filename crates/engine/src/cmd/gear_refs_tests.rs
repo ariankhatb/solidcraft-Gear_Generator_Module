@@ -879,3 +879,131 @@ fn a_tooth_chamfer_goes_on_every_gear_and_the_pair_still_meshes() {
     let (_, bad) = build(Some(json!({"size": 0.5, "faces": "c"})));
     assert!(bad.unwrap_err().contains("tooth_chamfer.faces"));
 }
+
+/// A bore is for a shaft of one's own: a gear on a drawn shaft line with a bore gets that hole and
+/// no shaft stub (none left as a tube round the bore); a compound keeps a sleeve between its
+/// layers, bored through.
+#[test]
+fn a_bored_gear_on_a_shaft_line_gets_no_stub() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Pitch"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 20.0, "id": "a"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 4.0, "id": "ab"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [50, 0], "radius": 30.0, "id": "b"}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "sketch.create", json!({"plane": {"origin": [0, 0, -20], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}, "name": "Low"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 15.0, "id": "a2"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 4.0, "id": "a2b"}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "sketch.create", json!({"plane": {"origin": [0, 0, 0], "x_dir": [1, 0, 0], "y_dir": [0, 0, 1]}, "name": "Shaft"}));
+    run(&mut s, "sketch.line", json!({"points": [[0, -35], [0, 15]], "ids": ["s"]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let spur = |bore: bool| {
+        let mut c = vec![json!({"sketch": "Pitch", "curve": "a", "slot": "pitch"}), json!({"sketch": "Shaft", "curve": "s", "slot": "axis"})];
+        if bore {
+            c.push(json!({"sketch": "Pitch", "curve": "ab", "slot": "bore"}));
+        }
+        json!({"items": [{"id": "A", "type": "spur", "components": c}, {"id": "B", "type": "spur", "components": [{"sketch": "Pitch", "curve": "b", "slot": "pitch"}]}],
+            "links": [{"a": {"item": "A"}, "b": {"item": "B"}, "kind": "mesh"}], "module_blocks": [{"id": "M", "module": 2, "members": ["A", "B"]}]})
+    };
+    let (_, plain) = super::ask(&s, "gear.calculate", &spur(false)).unwrap();
+    assert_eq!(plain.shafts.len(), 1, "a shaft line and no bore: the stub is built");
+    let (_, bored) = super::ask(&s, "gear.calculate", &spur(true)).unwrap();
+    assert!(bored.shafts.is_empty(), "a bore: no stub ({:?})", bored.shafts);
+    let r = run(&mut s, "gear.create", spur(true));
+    no_errors(&s);
+    let a = r["gears"][0]["body"].as_str().unwrap().to_string();
+    let v = volume(&mut s, &a);
+    // The gear alone (Ø40 m2, 20 mm face by default about 10 m) less the Ø8 bore: well under a
+    // gear with a Ø16 stub 50 mm long.
+    let stub = std::f64::consts::PI * 8.0 * 8.0 * 50.0;
+    assert!(v < 40.0 * 40.0 * 0.785 * 20.0 + 1.0 && v > 0.0, "no stub on the bored gear: {v} (a stub alone is {stub})");
+    // A compound with both layers bored: one body, its layers joined by a sleeve, bored through.
+    let compound = json!({"items": [{"id": "C", "type": "compound", "components": [
+        {"sketch": "Shaft", "curve": "s", "slot": "axis"}, {"sketch": "Pitch", "curve": "a", "slot": "pitch"}, {"sketch": "Low", "curve": "a2", "slot": "pitch2"},
+        {"sketch": "Pitch", "curve": "ab", "slot": "bore"}, {"sketch": "Low", "curve": "a2b", "slot": "bore"}]}],
+        "module_blocks": [{"id": "M", "module": 2, "members": ["C"]}]});
+    let (_, plan) = super::ask(&s, "gear.calculate", &compound).unwrap();
+    assert!(plan.shafts.is_empty(), "{:?}", plan.shafts);
+    let body = &plan.bodies[0];
+    let sleeve = body.steps.iter().filter(|st| matches!(st, solidcraft_gear::plan::Step::Prism { op: solidcraft_gear::plan::Op::Join, z0, .. } if *z0 > 1e-6)).count();
+    assert!(sleeve >= 1, "a sleeve between the layers: {:?}", body.steps.len());
+}
+
+/// Gears turned, then a sketch edit that changes a tooth count: the driven gear follows its
+/// driver at the new ratio from where they meshed as built (not at the old ratio's angle), so
+/// the teeth stay in mesh at that pose and when driven back to 0.
+#[test]
+fn turned_gears_stay_in_mesh_after_a_tooth_count_changes() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Pitch"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 20.0, "id": "a"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [50, 0], "radius": 30.0, "id": "b"}));
+    run(&mut s, "sketch.constraint.coincident", json!({"a": "a.center", "b": "origin"}));
+    run(&mut s, "sketch.dimension", json!({"entities": ["a"], "type": "diameter", "value": "40 mm"}));
+    run(&mut s, "sketch.dimension", json!({"entities": ["b"], "type": "diameter", "value": "d2 = 60 mm"}));
+    run(&mut s, "sketch.constraint.tangent", json!({"a": "a", "b": "b"}));
+    run(&mut s, "sketch.dimension", json!({"entities": ["origin", "b.center"], "type": "vertical", "value": "0 mm"}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "gear.create", json!({"assembly": true, "items": [
+        {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a", "slot": "pitch"}]},
+        {"id": "B", "type": "spur", "components": [{"sketch": "Pitch", "curve": "b", "slot": "pitch"}]}],
+        "links": [{"a": {"item": "A"}, "b": {"item": "B"}, "kind": "mesh"}],
+        "module_blocks": [{"id": "M", "module": 2, "members": ["A", "B"]}], "drive": {"item": "A", "gear": 0}}));
+    no_errors(&s);
+    // Each joint's value as the solve has it (a driven gear's from its link).
+    let value = |s: &mut Session, name: &str| {
+        let l = run(s, "joint.list", json!({}));
+        l["joints"].as_array().unwrap().iter().find(|j| j["name"] == name).and_then(|j| j["values"][0]["value"].as_f64()).unwrap_or(f64::NAN)
+    };
+    run(&mut s, "joint.drive", json!({"joint": "Gear A·1 shaft", "value": 17}));
+    assert!((value(&mut s, "Gear B·1 shaft") + 17.0 * 20.0 / 30.0).abs() < 1e-6, "{}", value(&mut s, "Gear B·1 shaft"));
+    run(&mut s, "parameters.change", json!({"name": "d2", "expression": "64 mm"}));
+    no_errors(&s);
+    let l = s.doc.assembly.links.first().unwrap().clone();
+    assert!((l.ratio + 20.0 / 32.0).abs() < 1e-6, "the new ratio: {}", l.ratio);
+    assert!((value(&mut s, "Gear A·1 shaft") - 17.0).abs() < 1e-9);
+    assert!((value(&mut s, "Gear B·1 shaft") - l.follow(17.0)).abs() < 1e-6, "B at the new ratio from the as-built mesh: {} vs {}", value(&mut s, "Gear B·1 shaft"), l.follow(17.0));
+    run(&mut s, "joint.drive", json!({"joint": "Gear A·1 shaft", "value": 0}));
+    assert!((value(&mut s, "Gear B·1 shaft") - l.offset).abs() < 1e-6 && l.offset.abs() < 1e-6, "back at 0 both at 0 (as built): {}", value(&mut s, "Gear B·1 shaft"));
+}
+
+/// The trailer's edit: gear B's diameter stepped 60 → 84 mm while the pair stands at rest and
+/// while A is turned. After every rebuild the teeth sit in each other's gaps: no clash volume
+/// beyond the zero-backlash noise of touching flanks.
+#[test]
+fn stepping_a_diameter_keeps_the_teeth_meshed_at_rest_and_turned() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Pitch"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 20.0, "id": "a"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [50, 0], "radius": 30.0, "id": "b"}));
+    run(&mut s, "sketch.constraint.coincident", json!({"a": "a.center", "b": "origin"}));
+    run(&mut s, "sketch.dimension", json!({"entities": ["a"], "type": "diameter", "value": "40 mm"}));
+    run(&mut s, "sketch.dimension", json!({"entities": ["b"], "type": "diameter", "value": "d2 = 60 mm"}));
+    run(&mut s, "sketch.constraint.tangent", json!({"a": "a", "b": "b"}));
+    run(&mut s, "sketch.dimension", json!({"entities": ["origin", "b.center"], "type": "vertical", "value": "0 mm"}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "gear.create", json!({"assembly": true, "items": [
+        {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a", "slot": "pitch"}]},
+        {"id": "B", "type": "spur", "components": [{"sketch": "Pitch", "curve": "b", "slot": "pitch"}]}],
+        "links": [{"a": {"item": "A"}, "b": {"item": "B"}, "kind": "mesh"}],
+        "module_blocks": [{"id": "M", "module": 2, "members": ["A", "B"]}], "drive": {"item": "A", "gear": 0}}));
+    no_errors(&s);
+    let clash = |s: &mut Session| -> f64 {
+        let r = run(s, "inspect.interference", json!({"bodies": ["Gear A·1", "Gear B·1"]}));
+        r["interferences"].as_array().map_or(0.0, |v| v.iter().filter_map(|i| i["volume_mm3"].as_f64()).sum())
+    };
+    for d in [64, 70, 76, 84] {
+        // At rest, then turned (the edit made while A stands at 13°).
+        run(&mut s, "joint.drive", json!({"joint": "Gear A·1 shaft", "value": 0}));
+        run(&mut s, "parameters.change", json!({"name": "d2", "expression": format!("{} mm", d - 2)}));
+        no_errors(&s);
+        let at_rest = clash(&mut s);
+        assert!(at_rest < 0.05, "d2 {}: {at_rest} mm3 at rest", d - 2);
+        run(&mut s, "joint.drive", json!({"joint": "Gear A·1 shaft", "value": 13}));
+        run(&mut s, "parameters.change", json!({"name": "d2", "expression": format!("{d} mm")}));
+        no_errors(&s);
+        let turned = clash(&mut s);
+        assert!(turned < 0.05, "d2 {d}: {turned} mm3 with A at 13°");
+    }
+}

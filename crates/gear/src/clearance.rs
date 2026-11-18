@@ -182,6 +182,8 @@ pub(crate) fn motions(kind: Kind, bodies: &[Body]) -> Vec<Motion> {
             Kind::CycloidalDrive if n >= 2 && i == 0 => orbit(&bodies[1].frame, &bodies[0].frame),
             // Sun first; members off its axis are planets; on it, the ring has the sun's
             // apex-pointing z (a second sun's points the other way).
+            // The carrier turns about the sun's axis.
+            Kind::BevelPlanetary if bodies[i].name.contains(crate::plan::bevel_planet::CARRIER) => Motion::Turns,
             Kind::BevelPlanetary if i > 0 => {
                 let (sun, f) = (&bodies[0].frame, &bodies[i].frame);
                 if coaxial(sun, f) {
@@ -447,6 +449,9 @@ fn build(
         let coarse = Solid::new(b, 1.0);
         let span = (coarse.z.1 - coarse.z.0).max(1e-3);
         let (h, hz) = spacing(s.module, span);
+        // A bevel planetary set's carrier has no teeth: plain round parts, sampled four times
+        // coarser (its margin grows with the spacing, so it is still cleared).
+        let (h, hz) = if b.name.contains(crate::plan::bevel_planet::CARRIER) { (4.0 * h, 4.0 * hz) } else { (h, hz) };
         let solid = Solid::new(b, h);
         let pts = solid.material_points(hz);
         let z = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q[2]), a.1.max(q[2])));

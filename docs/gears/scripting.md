@@ -59,6 +59,7 @@ Top-level keys:
 | `operation`, `targets` | string, [body names] | `new` (default), `join`, `cut`, `intersect` with the target bodies. |
 | `keep_out_cuts`, `keep_out_gap` | [body names], mm | Cut the keep-out from these bodies, with this gap. |
 | `pressure_angle`, `backlash`, `tip_round`, `xy_compensation` | numbers | The Advanced defaults for every gear (degrees, mm, × module, mm). |
+| `tooth_chamfer` | object | `{size, faces?}`: a 45° chamfer of `size` mm off the tooth tips of every gear that takes one, on `faces` `"both"` (default), `"a"` or `"b"`. Absent or size 0: none. Too big for a gear's addendum: refused, naming the gear. |
 | `name` | string | The feature's name. |
 
 Don't mix `items` with the older single-set keys `sketch`, `selection`, `axis1`, `axis2` or

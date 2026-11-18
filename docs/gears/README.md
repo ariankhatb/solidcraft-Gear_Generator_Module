@@ -40,5 +40,5 @@ joints when Assembly is on).
 5. Each gear picks the tooth count nearest its drawn diameter for the module; the drawn centre
    distances are held exactly by profile shift.
 
-> Note for this build: a set-wide **tooth chamfer** setting is being added in a parallel change.
-> TODO: document it in [The dialog](dialog.md) once it lands.
+A set-wide **tooth chamfer** is in the dialog's **All gears** section: see
+[The dialog](dialog.md#all-gears).

@@ -95,22 +95,17 @@ wheel, worm; sun, ring, planet; …): each gear has its own size, face and helix
 | Type | Row | Default | Meaning |
 |---|---|---|---|
 | Ring Gear | **Rim** | auto: 2.5 × module | Rim thickness outside the tooth roots (mm). |
-| Worm and Wheel | **Starts** | 1 | Thread starts on the worm. |
-| | **Throated wheel** | off | A wheel whose rim wraps round the worm. |
-| Bevel Pair, Hypoid Pair | **Style** | Straight | Straight, Spiral or Chevron (the spiral changes hand at mid-face). Hypoid has a spiral regardless. |
+| Worm and Wheel | **Starts** | auto | Thread starts on the worm. More starts turn the wheel faster and lock less. The wheel is always throated: its rim wraps round the worm. |
+| Bevel Pair, Hypoid Pair | **Style** | Straight | Straight, Spiral or Chevron (V teeth: the spiral changes hand at mid-face). Hypoid has a spiral regardless. |
 | | **Spiral angle** | 35 deg | Tooth angle at mid-face (shown for Spiral, Chevron and Hypoid). |
 | Rack | **Back height** | auto | Material behind the rack's tooth roots (mm). |
 | Planetary | **Planets** | auto | How many planets: Auto fits as many as there is room for, 3 at most. |
 | | **Carrier** | on | Generates a carrier body that the planets turn on. |
 | Shaft | **Shaft Ø** | auto | Shaft diameter. |
-| | **Keyway** | off | A keyway along the shaft. |
 
-> In this build several of these rows are sent with the request but not yet applied by the
-> planner for sets made in this dialog (rim, starts, throated, spiral angle, back height, keyway).
-> See [UI_TEXT_GAPS.md](UI_TEXT_GAPS.md#settings-that-have-no-effect-yet). Planets, Carrier and
-> Shaft Ø are applied.
+All of these are applied to the built set.
 
-A Shaft item has only Shaft Ø and Keyway; it has no teeth.
+A Shaft item has only Shaft Ø; it has no teeth.
 
 ### Size by, Module, Teeth
 
@@ -157,9 +152,9 @@ Hidden for Bevel, Hypoid and Worm.
 
 | Row | Default | Meaning |
 |---|---|---|
-| **Profile shift** | auto | Moves the tooth outward. The planner works the shift out itself to hold the drawn centre distance and clear undercut. *(A typed value is not applied in this build; see UI_TEXT_GAPS.)* |
-| **Bore** | Auto | Auto, None or Ø. **Ø** shows **Bore Ø** (mm) and cuts that hole. With a shaft line picked, the gear sits on a built shaft and its bore fits the shaft. A drawn bore circle wins over this setting. |
-| **Hub** | off | A boss on the gear's face. **Hub Ø** (mm), **Hub length A** and **Hub length B** (mm past the face on each side; both 0: half the face width on side A). A drawn hub circle gives the Ø. *(With Hub Ø left on auto and no hub circle, no hub is built in this build.)* |
+| **Profile shift** | worked out | Read only: the shift the planner chose to hold the drawn centre distance and clear undercut. |
+| **Bore** | Auto | Auto or Ø. **Auto** fits the shaft when a shaft line is picked; otherwise no hole, unless a bore circle is drawn. **Ø** shows **Bore Ø** (mm) and cuts that hole. A drawn bore circle wins over this setting. |
+| **Hub** | off | A boss on the gear's face. **Hub Ø** (mm; auto: 1.6 × the bore, or about half the root Ø with no bore), **Hub length A** and **Hub length B** (mm past the face on each side; both 0: half the face width on side A). A drawn hub circle gives the Ø. |
 
 A bore at or past the tooth roots is left out with a warning; a hub wider than the roots gets a
 warning.
@@ -231,10 +226,18 @@ Closed. The defaults every gear takes.
 | **Backlash** | 0 | Play between meshing teeth, taken from each tooth's thickness (mm). |
 | **Tip Rounding** | × module | Round the tooth tips, as a fraction of the module. |
 | **XY Compensation** | 0 | Shrink (or grow) every tooth flank for a printer's over-extrusion (mm). |
-| **Equation teeth** | off | Exact involute curves instead of fitted splines: slower, smoother. *(See the note in [Troubleshooting](troubleshooting.md#equation-teeth).)* |
+| **Equation teeth** | off | Shown only when editing an older set made as a folder of formula features. *(See [Troubleshooting](troubleshooting.md#equation-teeth).)* |
 
-<!-- TODO: tooth chamfer. A set-wide tooth chamfer setting is being added in a parallel change.
-     Document its row (label, default, units) here when it lands. -->
+## All gears
+
+Open. Settings for every gear in the set at once.
+
+| Row | Default | Meaning |
+|---|---|---|
+| **Tooth chamfer** | off | A 45° chamfer off the tooth tips' edges on the end faces (mm across, as deep). Applied to spur, helical and herringbone gears (outer ends), each compound layer and ring gears. Bevel, worm, hypoid, crossed helical, rack and planetary gears stay plain, and a note says so. A chamfer as big as the tooth's addendum, or half the face, is refused, naming the gear. Clear the field to remove it. |
+| **Chamfer faces** | Both | Shown once a chamfer is set: Both, Side A or Side B (side A is the green arrow in the view). |
+
+The chamfer is in the built gears, not in the dialog's preview.
 
 ## OK and Cancel
 

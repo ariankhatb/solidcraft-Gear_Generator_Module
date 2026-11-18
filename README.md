@@ -62,7 +62,9 @@ Each gear type turning, captured from the gear math's own 3D preview (made with 
   every gear's speed and torque; read the ratio and path between any two gears.
 - **Housing cutout.** Points on the shaft lines become bearing seats in one "Housing cutout" body
   that also holds the gears' swept space: cut it from a housing block.
-- **Coming next:** a set-wide tooth chamfer setting.
+- **Tooth chamfer.** One setting chamfers the tooth tips of every gear in the set at 45°, on both
+  end faces or one side; gears it can't apply to (bevel, worm, hypoid, crossed helical, rack,
+  planetary) stay plain with a note.
 
 ## How you design now
 

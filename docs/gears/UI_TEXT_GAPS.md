@@ -10,6 +10,11 @@ in the code. Where the code and `GEAR_UI_SPEC.md` disagree, the guide follows th
 
 Priorities: **P1** says something that isn't true, **P2** missing or confusing, **P3** wording.
 
+> **Status:** the dialog's second round (merged after `2ee452a9`) applied these tooltips and
+> wording, and made the "settings that have no effect yet" either work (starts, spiral angle, rim,
+> back height, auto hub Ø) or go (throated, keyway; profile shift is now read-only). This file is
+> kept as the record of what was found.
+
 ## Settings that have no effect yet
 
 The fields below are typed, checked and sent with the request, but the drivetrain planner

@@ -205,3 +205,45 @@ fn excluded_pairs_are_left_out_and_pairs_name_their_place() {
         assert!(s.execute("inspect.interference", &json!({"exclude_pairs": bad})).is_err(), "{bad}");
     }
 }
+
+/// Bodies that overlap only in a corner of their boxes are cut down to that corner before they
+/// are intersected: the overlap is still exact. Two long cylinders whose ends overlap (their boxes
+/// share a tenth of each), the lens of two r5 circles 7 apart, 10 high.
+#[test]
+fn bodies_meeting_in_a_corner_of_their_boxes_overlap_exactly() {
+    let mut s = Session::default();
+    run(&mut s, "solid.cylinder", json!({"radius": 5, "height": 40, "base": [0, 0, 0], "body_name": "Low"}));
+    run(&mut s, "solid.cylinder", json!({"radius": 5, "height": 40, "base": [7, 0, 30], "operation": "new", "body_name": "High"}));
+    let low = s.model.state().body("Low").unwrap().body.clone();
+    let high = s.model.state().body("High").unwrap().body.clone();
+    assert!(matches!(super::clipped_to_overlap(&low, &high), Some(Some(_))), "the pair is cut to its overlap");
+    let i = run(&mut s, "inspect.interference", json!({}));
+    assert_eq!(i["count"], 1, "{i}");
+    let (r, d): (f64, f64) = (5.0, 7.0);
+    let lens = 2.0 * r * r * (d / (2.0 * r)).acos() - d / 2.0 * (4.0 * r * r - d * d).sqrt();
+    let got = f(&i["interferences"][0]["volume_mm3"]);
+    assert!((got - 10.0 * lens).abs() < 1e-3 * 10.0 * lens, "{got} against {}: {i}", 10.0 * lens);
+    // Ends that only touch (the second moved up to start where the first ends) share nothing.
+    run(&mut s, "solid.cylinder", json!({"radius": 5, "height": 40, "base": [7, 0, 40], "operation": "new", "body_name": "Touching"}));
+    let i = run(&mut s, "inspect.interference", json!({"bodies": ["Low", "Touching"]}));
+    assert_eq!(i["count"], 0, "{i}");
+    assert_eq!(i["unchecked"].as_array().map(Vec::len), Some(0), "{i}");
+}
+
+/// Two copies of one solid in one place share all of it, answered without a boolean (on their
+/// coincident faces one took minutes: a design whose gears were made twice over).
+#[test]
+fn a_body_and_its_copy_in_place_share_all_of_it() {
+    let a = solidcraft_kernel::box_solid(solidcore_record::Vec3::ZERO, solidcore_record::Vec3::new(10., 20., 30.)).unwrap();
+    let b = solidcraft_kernel::box_solid(solidcore_record::Vec3::ZERO, solidcore_record::Vec3::new(10., 20., 30.)).unwrap();
+    for other in [a.clone(), b] {
+        let shared = super::shared_part(&a, &other).unwrap().expect("they share the box");
+        assert!((solidcraft_kernel::measure_mass(&shared).unwrap().volume - 6000.0).abs() < 1e-6);
+    }
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 10, "width": 20, "height": 30, "corner": [0, 0, 0], "body_name": "One"}));
+    run(&mut s, "solid.box", json!({"length": 10, "width": 20, "height": 30, "corner": [0, 0, 0], "operation": "new", "body_name": "Two"}));
+    let i = run(&mut s, "inspect.interference", json!({}));
+    assert_eq!(i["count"], 1, "{i}");
+    assert!((f(&i["interferences"][0]["volume_mm3"]) - 6000.0).abs() < 1e-6, "{i}");
+}

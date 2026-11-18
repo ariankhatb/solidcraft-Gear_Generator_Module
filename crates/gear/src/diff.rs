@@ -262,7 +262,9 @@ impl Default for Diff {
             clearance: 0.5,
             bearing: String::new(),
             windows: false,
-            drive: DriveKind::SpiralBevel,
+            // Helical (a transaxle): a spiral bevel ring builds in seconds too, but the kernel's full
+            // check of its 41 twisted teeth takes minutes, too long for a default.
+            drive: DriveKind::Helical,
             mount: Mount::Bolted,
             ring_teeth: 41,
             drive_pinion_teeth: 11,

@@ -29,7 +29,9 @@ plane, and points on that line for bearings.
 **Pick:** the circle, then (optional) the shaft line, then the bearing points.
 
 **What you get:** one gear body. With a shaft line, a round shaft along the line (between its ends)
-built as one part with the gear, the gear's bore fitting it. The three types differ only in their
+built as one part with the gear, the gear's bore fitting it. A bore circle drawn on the gear's
+centre (or a Bore Ø) is for a shaft of your own: the gear gets that hole and no shaft is built.
+The three types differ only in their
 starting settings: Helical starts with a 20° helix, Herringbone with 20° and V teeth. You can turn
 any of them into the others with the Helix rows.
 
@@ -78,7 +80,9 @@ circle" until you start a new gear.
 
 **What you get:** one rigid body with all its gears (named like "Gear B·1+2"); each gear (B1, B2,
 …) has its own size, face and helix in the settings tabs. Mesh each layer's gear with gears drawn in
-the same layer.
+the same layer. With bore circles drawn (or a Bore Ø), the compound goes on a shaft of your own:
+the shaft line's stub isn't built, the layers are joined by a sleeve between them, and the bore
+runs through all of it.
 
 ## Planetary
 

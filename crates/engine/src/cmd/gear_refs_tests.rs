@@ -879,3 +879,53 @@ fn a_tooth_chamfer_goes_on_every_gear_and_the_pair_still_meshes() {
     let (_, bad) = build(Some(json!({"size": 0.5, "faces": "c"})));
     assert!(bad.unwrap_err().contains("tooth_chamfer.faces"));
 }
+
+/// A bore is for a shaft of one's own: a gear on a drawn shaft line with a bore gets that hole and
+/// no shaft stub (none left as a tube round the bore); a compound keeps a sleeve between its
+/// layers, bored through.
+#[test]
+fn a_bored_gear_on_a_shaft_line_gets_no_stub() {
+    let mut s = Session::default();
+    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Pitch"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 20.0, "id": "a"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 4.0, "id": "ab"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [50, 0], "radius": 30.0, "id": "b"}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "sketch.create", json!({"plane": {"origin": [0, 0, -20], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}, "name": "Low"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 15.0, "id": "a2"}));
+    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 4.0, "id": "a2b"}));
+    run(&mut s, "sketch.finish", json!({}));
+    run(&mut s, "sketch.create", json!({"plane": {"origin": [0, 0, 0], "x_dir": [1, 0, 0], "y_dir": [0, 0, 1]}, "name": "Shaft"}));
+    run(&mut s, "sketch.line", json!({"points": [[0, -35], [0, 15]], "ids": ["s"]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let spur = |bore: bool| {
+        let mut c = vec![json!({"sketch": "Pitch", "curve": "a", "slot": "pitch"}), json!({"sketch": "Shaft", "curve": "s", "slot": "axis"})];
+        if bore {
+            c.push(json!({"sketch": "Pitch", "curve": "ab", "slot": "bore"}));
+        }
+        json!({"items": [{"id": "A", "type": "spur", "components": c}, {"id": "B", "type": "spur", "components": [{"sketch": "Pitch", "curve": "b", "slot": "pitch"}]}],
+            "links": [{"a": {"item": "A"}, "b": {"item": "B"}, "kind": "mesh"}], "module_blocks": [{"id": "M", "module": 2, "members": ["A", "B"]}]})
+    };
+    let (_, plain) = super::ask(&s, "gear.calculate", &spur(false)).unwrap();
+    assert_eq!(plain.shafts.len(), 1, "a shaft line and no bore: the stub is built");
+    let (_, bored) = super::ask(&s, "gear.calculate", &spur(true)).unwrap();
+    assert!(bored.shafts.is_empty(), "a bore: no stub ({:?})", bored.shafts);
+    let r = run(&mut s, "gear.create", spur(true));
+    no_errors(&s);
+    let a = r["gears"][0]["body"].as_str().unwrap().to_string();
+    let v = volume(&mut s, &a);
+    // The gear alone (Ø40 m2, 20 mm face by default about 10 m) less the Ø8 bore: well under a
+    // gear with a Ø16 stub 50 mm long.
+    let stub = std::f64::consts::PI * 8.0 * 8.0 * 50.0;
+    assert!(v < 40.0 * 40.0 * 0.785 * 20.0 + 1.0 && v > 0.0, "no stub on the bored gear: {v} (a stub alone is {stub})");
+    // A compound with both layers bored: one body, its layers joined by a sleeve, bored through.
+    let compound = json!({"items": [{"id": "C", "type": "compound", "components": [
+        {"sketch": "Shaft", "curve": "s", "slot": "axis"}, {"sketch": "Pitch", "curve": "a", "slot": "pitch"}, {"sketch": "Low", "curve": "a2", "slot": "pitch2"},
+        {"sketch": "Pitch", "curve": "ab", "slot": "bore"}, {"sketch": "Low", "curve": "a2b", "slot": "bore"}]}],
+        "module_blocks": [{"id": "M", "module": 2, "members": ["C"]}]});
+    let (_, plan) = super::ask(&s, "gear.calculate", &compound).unwrap();
+    assert!(plan.shafts.is_empty(), "{:?}", plan.shafts);
+    let body = &plan.bodies[0];
+    let sleeve = body.steps.iter().filter(|st| matches!(st, solidcraft_gear::plan::Step::Prism { op: solidcraft_gear::plan::Op::Join, z0, .. } if *z0 > 1e-6)).count();
+    assert!(sleeve >= 1, "a sleeve between the layers: {:?}", body.steps.len());
+}

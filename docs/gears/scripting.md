@@ -51,7 +51,7 @@ Top-level keys:
 | Key | Type | Meaning |
 |---|---|---|
 | `items` | array | One entry per gear item (a card in the dialog). Required, at most 64. |
-| `links` | array | `{a: {item, gear}, b: {item, gear}, kind: "mesh" \| "shaft"}`. Left out or empty: the links the drawing suggests are used. |
+| `links` | array | `{a: {item, gear}, b: {item, gear}, kind: "mesh" \| "shaft"}`. Left out or empty: the links the drawing suggests are used. A Shaft item is linked as `gear: 0`, by Shaft only; a Shaft item no link names carries the gears on its line. |
 | `module_blocks` | array | `{id, module?, members?}`. Items in a block share one module (none: Auto for the block). |
 | `drive` | object | `{item, gear, rpm?, torque?}`: the driver; rpm and torque (N·m) fill the per-gear replies. |
 | `assembly` | bool | Components, revolute joints and gear links. |
@@ -75,7 +75,7 @@ Don't mix `items` with the older single-set keys `sketch`, `selection`, `axis1`,
 | `gears` | Per-gear settings (below). The first one fills any gear left out. |
 | `module_block` | The id of a block in `module_blocks`. |
 | `planets`, `carrier` | Planetary: number of planets (Auto: as many as fit, at most 3) and whether a carrier is made (default true). |
-| `diameter` | Shaft: its diameter (mm). |
+| `diameter` | Shaft: its diameter (mm; Auto: half the smallest root diameter of the gears it carries). |
 | `rim`, `starts`, `throated`, `bevel_style`, `spiral_angle`, `back_height`, `keyway` | Type-specific settings. They are read and checked, but in this build the drivetrain planner doesn't apply them yet (see [UI_TEXT_GAPS.md](UI_TEXT_GAPS.md)); `bevel_style` (straight, spiral, chevron) is applied. |
 
 **Slots.** The order of the components decides what each is, as in the dialog: the first circle of
@@ -96,6 +96,7 @@ bore or hub of the gear it is concentric with.
 | bevel, crossed_helical | first | second | |
 | hypoid | ring | pinion | |
 | worm | wheel | worm | |
+| shaft | the shaft itself (links only: it has no gears) | | |
 
 ### A gear's settings (`gears[]`)
 

@@ -236,10 +236,17 @@ pub fn plan_items(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlock]
     {
         return Err(format!("the drive gear ({}) doesn't exist: make another gear the driver", who(items, GearRef::new(d.item, d.gear))));
     }
-    let mut out = SystemPlan { suggestions: unlinked(suggest_links(items), links), ..SystemPlan::default() };
     let (used, inferred) = effective_links(items, links);
+    // The suggestions not in use (with no links given, all of them: the dialog draws them dashed).
+    let mut out = SystemPlan { suggestions: unlinked(suggest_links(items), if inferred { links } else { &used[..] }), ..SystemPlan::default() };
     if inferred && !used.is_empty() {
         out.notes.push("no links given: the gears mesh and share shafts as the drawing suggests".into());
+    }
+    // A Shaft item no link names carries the gears on its line: say so.
+    if !inferred {
+        for l in &used[links.len()..] {
+            out.notes.push(format!("{} is in no link: it carries {}, on its line", who(items, l.a), who(items, l.b)));
+        }
     }
     // A module block on Auto: one module for all its members' gears.
     let mut blocks = blocks.to_vec();
@@ -263,7 +270,9 @@ pub fn plan_items(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlock]
         return Ok(refused(items, &st, &used, err, loose, out));
     }
     let merged = merge(&st, units, drive, &mut out);
-    if let Some(e) = collisions(items, &out, &merged.body_units) {
+    let mut sweeps = Sweeps::default();
+    trim_shafts(items, &mut out, &mut sweeps);
+    if let Some(e) = collisions(items, &out, &merged.body_units, &mut sweeps) {
         out.error = Some(e);
     }
     replies(items, &st, &used, drive, &merged.shifts, &merged.contact, &mut out);
@@ -455,7 +464,7 @@ fn plan_units(items: &[GearItem], st: &[Stage], mapped: &crate::items::Mapped, b
             if let (Some(r), Some(b)) = (r, m.body.and_then(|b| u.plan.bodies.get(b)))
                 && !planned.iter().any(|p| p.gear == *r)
             {
-                planned.push(Planned { gear: *r, module: m.module, teeth: m.teeth, body: b.clone() });
+                planned.push(Planned { gear: *r, module: m.module, teeth: m.teeth, pitch_d: m.pitch_diameter, body: b.clone() });
             }
         }
     };
@@ -482,15 +491,116 @@ fn plan_units(items: &[GearItem], st: &[Stage], mapped: &crate::items::Mapped, b
             Err(e) => fail(err, &s.gears, Some(k), e),
         }
     }
+    // Shaft items: each a bar along its line, joined to the gears its cluster holds.
+    for (i, it) in items.iter().enumerate() {
+        let Some(line) = crate::items::shaft_geom(it) else { continue };
+        let me = GearRef::new(i, 0);
+        let carried: Vec<GearRef> = st
+            .iter()
+            .filter(|s| s.kind == StageKind::Shaft && s.error.is_none() && s.gears.contains(&me))
+            .flat_map(|s| s.gears.iter().copied())
+            .filter(|r| items.get(r.item).is_some_and(|x| x.kind != ItemKind::Shaft))
+            .collect();
+        // The other Shaft items' lines in its cluster: a gear on one of them is that shaft's.
+        let others: Vec<GearGeom> = st
+            .iter()
+            .filter(|s| s.kind == StageKind::Shaft && s.error.is_none() && s.gears.contains(&me))
+            .flat_map(|s| s.gears.iter().copied())
+            .filter(|r| r.item != i)
+            .filter_map(|r| items.get(r.item).and_then(crate::items::shaft_geom))
+            .collect();
+        units.push(shaft_unit(items, i, &line, &carried, &others, &planned, base));
+    }
     units
 }
 
-/// A gear planned already: its module, teeth and body (where it is).
+/// A gear planned already: its module, teeth, pitch diameter and body (where it is).
 struct Planned {
     gear: GearRef,
     module: f64,
     teeth: u32,
+    pitch_d: f64,
     body: Body,
+}
+
+/// A Shaft item's bar: a round bar along its drawn line, from end to end, and on past an end to
+/// a gear it carries on its axis there that no other Shaft item of its cluster (`others`, their
+/// lines) holds (so a prop shaft reaches the pinion it drives); cut back later where another
+/// body is in its way ([`trim_shafts`]). `carried`: the gears its cluster holds (joined to it by
+/// the merge's clusters). Its diameter is the item's, else half the smallest root diameter of the
+/// gears it carries (as a train's shaft). What it can't do is said in its warnings.
+fn shaft_unit(items: &[GearItem], i: usize, line: &GearGeom, carried: &[GearRef], others: &[GearGeom], planned: &[Planned], base: &Spec) -> Unit {
+    let it = &items[i];
+    let me = GearRef::new(i, 0);
+    let name = who(items, me);
+    let (a, b) = line.line.unwrap_or((line.centre, add(line.centre, line.axis)));
+    let u = line.axis;
+    let length = len(sub(b, a));
+    let mut p = Plan::default();
+    // The gears it carries on its line (its cluster may hold gears on other shafts too).
+    let on_line: Vec<GearRef> = carried.iter().copied().filter(|r| crate::items::link_geom(items, *r).is_some_and(|g| crate::items::on_shaft_line(line, &g))).collect();
+    let sized = if on_line.is_empty() { carried } else { &on_line[..] };
+    let roots: Vec<f64> = sized.iter().filter_map(|r| planned.iter().find(|x| x.gear == *r)).map(|x| x.pitch_d - 2.5 * x.module).filter(|d| *d > 0.0).collect();
+    let d = it.shaft_diameter.filter(|d| *d > 0.0).or((base.bore.diameter > 0.0).then_some(base.bore.diameter)).unwrap_or_else(|| match roots.iter().copied().reduce(f64::min) {
+        Some(root) => (root.floor() / 2.0).max(1.0),
+        None => (length / 16.0).clamp(2.0, 10.0),
+    });
+    // On past its ends to the gears it carries on its axis that no other shaft of its cluster holds.
+    let (mut lo, mut hi) = (0.0f64, length);
+    let mut reached: Vec<String> = Vec::new();
+    for r in carried {
+        let Some(g) = crate::items::link_geom(items, *r) else { continue };
+        let coaxial = len(cross(g.axis, u)) < 1e-3 && Axis { origin: a, dir: u }.distance(g.centre) <= crate::items::tol(g.radius.unwrap_or(1.0));
+        if !coaxial || crate::items::on_shaft_line(line, &g) || others.iter().any(|o| crate::items::on_shaft_line(o, &g)) {
+            continue;
+        }
+        // Into the middle of its body along the axis (a hypoid pinion's drawn place is where its
+        // axis passes the ring's, past its teeth), else to its centre.
+        let at = match planned.iter().find(|x| x.gear == *r) {
+            Some(x) => {
+                let (blo, bhi) = crate::mesh3d::Solid::new(&x.body, 1.0).bounds();
+                let zs: Vec<f64> = (0..8).map(|k| dot(sub([if k & 1 == 0 { blo[0] } else { bhi[0] }, if k & 2 == 0 { blo[1] } else { bhi[1] }, if k & 4 == 0 { blo[2] } else { bhi[2] }], a), u)).collect();
+                0.5 * (zs.iter().copied().fold(f64::INFINITY, f64::min) + zs.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+            }
+            None => dot(sub(g.centre, a), u),
+        };
+        if at < lo || at > hi {
+            (lo, hi) = (lo.min(at), hi.max(at));
+            reached.push(format!("{} ({} mm past its line's end)", who(items, *r), num(if at < 0.0 { -at } else { at - length })));
+        }
+    }
+    let length_drawn = length;
+    let length = hi - lo;
+    let frame = Frame { origin: a, x: square_to(u), z: u };
+    let region = Region { outer: vec![Outline::circle(V2::ZERO, d / 2.0)], holes: vec![] };
+    p.bodies.push(Body { name: format!("{name} Ø{}", num(d)), frame, steps: vec![Step::Prism { region, z0: lo, height: length, twist: 0.0, op: Op::New }] });
+    p.assembly = Assembly { members: vec![AssemblyMember { body: 0, axis: Axis { origin: a, dir: u }, grounded: false, carrier: None }], links: Vec::new() };
+    p.members = vec![SetMember { source: 0, module: 0.0, teeth: 0, pitch_diameter: 0.0, face_width: length, face_a: length, face_b: 0.0, ring: false, meshes_with: Vec::new(), cluster: None, body: Some(0) }];
+    p.shafts.push(PlanShaft { body: 0, gears: vec![0], diameter: d, length });
+    p.fact("diameter", d, crate::plan::Unit::Mm);
+    p.fact("length", length, crate::plan::Unit::Mm);
+    if carried.is_empty() {
+        p.warn("carries no gear: it is made on its own and turns with nothing; draw its line along a gear's axis, or link it by Shaft to the gears it carries");
+    }
+    // Linked to gears its line doesn't reach (off its ends): the bar is made along its line all
+    // the same and turns with them, but touches none of them.
+    if !carried.is_empty() && on_line.is_empty() && reached.is_empty() {
+        let near = carried
+            .iter()
+            .filter_map(|r| crate::items::link_geom(items, *r).map(|g| (*r, dot(sub(g.centre, a), u))))
+            .filter(|(_, at)| *at < 0.0 || *at > length_drawn)
+            .map(|(r, at)| (r, if at < 0.0 { -at } else { at - length_drawn }))
+            .min_by(|x, y| x.1.total_cmp(&y.1));
+        if let Some((r, short)) = near {
+            p.warn(format!(
+                "its line reaches none of the gears it carries ({} is {} mm past its end): it is made along its line and turns with them; lengthen the line to reach the gear",
+                who(items, r),
+                num(short)
+            ));
+        }
+    }
+    let notes = if reached.is_empty() { Vec::new() } else { vec![format!("{name} runs on past its line to {}, which it carries", reached.join(" and "))] };
+    Unit { label: name, plan: p, refs: vec![Some(me)], shifts: vec![None], carrier: None, tags: Vec::new(), contact: Vec::new(), notes }
 }
 
 /// The drivetrain reader's items for `gears` (each with its face sides), and the shaft lines and
@@ -515,8 +625,8 @@ fn reader_items(items: &[GearItem], gears: &[GearRef], mapped: &crate::items::Ma
                 }),
                 _ => true,
             };
-            let mine = owners.contains(&item) || items.get(item).is_some_and(|i| i.kind == ItemKind::Shaft) && on_axis(&mapped.items[k]);
-            if mine && on_axis(&mapped.items[k]) {
+            // (A Shaft item's line is a body of its own, [`shaft_unit`], joined to what it carries.)
+            if owners.contains(&item) && on_axis(&mapped.items[k]) {
                 its.push(mapped.items[k]);
                 let what = if matches!(s, Source::Line { .. }) { "shaft line" } else { "bearing" };
                 names.push(format!("{} {what} {}", items.get(item).map_or_else(String::new, GearItem::who), n + 1));
@@ -1140,6 +1250,7 @@ fn merge(st: &[Stage], units: Vec<Unit>, drive: Option<&Drive>, out: &mut System
         }
         p.clusters.push(g);
     }
+    same_way_round(&mut asm, &mut edges);
     // One assembly driven from the drive gear.
     let driver = drive.map(|d| GearRef::new(d.item, d.gear)).or_else(|| out.member_of.first().map(|m| m.0));
     let root_body = driver.and_then(|r| out.member_of.iter().find(|(g, _)| *g == r)).and_then(|(_, m)| p.members.get(*m)).and_then(|m| m.body).unwrap_or(0);
@@ -1153,6 +1264,65 @@ fn merge(st: &[Stage], units: Vec<Unit>, drive: Option<&Drive>, out: &mut System
     out.notes.push(format!("{made} {} from {stage_count} {}", if made == 1 { "body" } else { "bodies" }, if stage_count == 1 { "stage" } else { "stages" }));
     contact.resize(out.plan.members.len(), None);
     Merged { body_units, shifts, contact }
+}
+
+/// The bodies of each rigid member turned about one axis direction: a rigid link turns its two
+/// members the same amount about their own axes, so two bodies on one shaft whose axes point
+/// opposite ways (a bevel gear's toward its apex, the pinion it carries toward its own crossing)
+/// would turn opposite ways. Each such body's axis is turned round to its member's first body's,
+/// and each gear link at it turns the other way about the new axis (`reverse`). A body whose
+/// worm or rack link can't be turned round is kept as it is, and its member taken from it.
+fn same_way_round(asm: &mut [AssemblyMember], edges: &mut [AssemblyLink]) {
+    let n = asm.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn root(p: &mut [usize], mut x: usize) -> usize {
+        while p[x] != x {
+            p[x] = p[p[x]];
+            x = p[x];
+        }
+        x
+    }
+    for e in edges.iter() {
+        if let AssemblyLink::Rigid { a, b } = *e
+            && a < n
+            && b < n
+        {
+            let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
+            if ra != rb {
+                parent[ra.max(rb)] = ra.min(rb);
+            }
+        }
+    }
+    // Bodies whose links can only turn one way about their axis: a worm, a rack's pinion.
+    let fixed: Vec<bool> = (0..n).map(|k| edges.iter().any(|e| matches!(e, AssemblyLink::Worm { .. } | AssemblyLink::RackPinion { .. }) && { let (a, b) = e.members(); a == k || b == k })).collect();
+    let mut flipped = vec![false; n];
+    let mut seen: Vec<usize> = Vec::new();
+    for k in 0..n {
+        let r = root(&mut parent, k);
+        if seen.contains(&r) {
+            continue;
+        }
+        seen.push(r);
+        let group: Vec<usize> = (0..n).filter(|x| root(&mut parent, *x) == r).collect();
+        if group.len() < 2 {
+            continue;
+        }
+        let reference = group.iter().copied().find(|x| fixed[*x]).unwrap_or(group[0]);
+        let d0 = asm[reference].axis.dir;
+        for &x in &group {
+            if x != reference && !fixed[x] && dot(asm[x].axis.dir, d0) < 0.0 {
+                asm[x].axis.dir = mul(asm[x].axis.dir, -1.0);
+                flipped[x] = true;
+            }
+        }
+    }
+    for e in edges.iter_mut() {
+        if let AssemblyLink::Gear { a, b, reverse, .. } = e
+            && flipped.get(*a).copied().unwrap_or(false) != flipped.get(*b).copied().unwrap_or(false)
+        {
+            *reverse = !*reverse;
+        }
+    }
 }
 
 /// A body's swept volume about an axis: per band along it, the least and most radius its
@@ -1250,9 +1420,201 @@ impl Sweep {
     }
 }
 
+/// The volume each body of a plan sweeps as it turns ([`body_sweep`]), worked out once each.
+#[derive(Default)]
+struct Sweeps(Vec<Option<Option<Sweep>>>);
+
+impl Sweeps {
+    fn get(&mut self, p: &Plan, b: usize) -> Option<&Sweep> {
+        if self.0.len() < p.bodies.len() {
+            self.0.resize_with(p.bodies.len(), || None);
+        }
+        if self.0[b].is_none() {
+            self.0[b] = Some(body_sweep(p, b));
+        }
+        self.0[b].as_ref().and_then(Option::as_ref)
+    }
+    /// Body `b` changed: its sweep is worked out again when next asked for.
+    fn forget(&mut self, b: usize) {
+        if let Some(s) = self.0.get_mut(b) {
+            *s = None;
+        }
+    }
+}
+
+/// The volume body `b` sweeps as it turns: about its assembly axis (a planet about its carrier's,
+/// hollow like a ring's); a rack slides, so its own body.
+fn body_sweep(p: &Plan, b: usize) -> Option<Sweep> {
+    let carrier_of = |b: usize| p.assembly.members.get(b).and_then(|m| m.carrier);
+    let axis = match carrier_of(b).and_then(|c| p.assembly.members.get(c)) {
+        Some(c) => c.axis,
+        None => p.assembly.members.get(b).map_or(Axis { origin: p.bodies[b].frame.origin, dir: p.bodies[b].frame.z }, |m| m.axis),
+    };
+    let ring = p.members.iter().any(|m| m.body == Some(b) && m.ring);
+    let rack = p.assembly.links.iter().any(|l| matches!(l, AssemblyLink::RackPinion { rack, .. } if *rack == b));
+    if rack {
+        // A rack slides: its envelope is its body (a sweep about its own z).
+        let f = p.bodies[b].frame;
+        return Sweep::of(&p.bodies[b], Axis { origin: f.origin, dir: f.z }, false);
+    }
+    Sweep::of(&p.bodies[b], axis, ring || carrier_of(b).is_some())
+}
+
+/// The bodies one rigid member with body `b` (one body, or a cluster's), `b` among them.
+fn rigid_with(p: &Plan, b: usize) -> Vec<usize> {
+    let clusters: Vec<usize> = p.members.iter().filter(|m| m.body == Some(b)).filter_map(|m| m.cluster).collect();
+    let mut out = vec![b];
+    for m in &p.members {
+        if let (Some(c), Some(x)) = (m.cluster, m.body)
+            && clusters.contains(&c)
+            && !out.contains(&x)
+        {
+            out.push(x);
+        }
+    }
+    out
+}
+
+/// Every shaft cut back where another body (not one rigid member with it) is in its way: a
+/// Shaft item's bar runs along its line as far as it goes, and a gear's shaft along its drawn
+/// line, but each stops short of a gear it doesn't carry (on its line, or a bevel's mate where
+/// two shafts meet). The stretch between the gears it carries is never cut: what is in the way
+/// there is a collision, said by [`collisions`]. Each cut is said in the notes.
+fn trim_shafts(items: &[GearItem], out: &mut SystemPlan, sweeps: &mut Sweeps) {
+    // Clear of a body in the way by this much (mm); the sweeps' own tolerance.
+    const GAP: f64 = 0.5;
+    let eps = 0.05;
+    let mut cuts: Vec<(usize, usize, f64, f64, String)> = Vec::new();
+    {
+        let p = &out.plan;
+        let is_shaft = |r: &GearRef| items.get(r.item).is_some_and(|it| it.kind == ItemKind::Shaft);
+        let on_body = |b: usize, shaft: bool| out.member_of.iter().find(|(r, m)| is_shaft(r) == shaft && p.members.get(*m).and_then(|x| x.body) == Some(b)).map(|(r, _)| *r);
+        let name = |b: usize| on_body(b, false).or_else(|| on_body(b, true)).map_or_else(|| p.bodies.get(b).map_or_else(String::new, |x| x.name.clone()), |r| who(items, r));
+        for (k, sh) in p.shafts.iter().enumerate() {
+            let Some(body) = p.bodies.get(sh.body) else { continue };
+            let r = sh.diameter / 2.0;
+            // Its bar: a prism of the shaft's circle about the body's z, the shaft's length.
+            let bar = body.steps.iter().position(|s| match s {
+                Step::Prism { region, height, twist, .. } => {
+                    *twist == 0.0
+                        && (height - sh.length).abs() <= 1e-6
+                        && region.holes.is_empty()
+                        && matches!(&region.outer[..], [o] if matches!(&o.segs[..], [crate::geom::Seg::Circle(c, cr)] if c.len() <= 1e-9 && (cr - r).abs() <= 1e-9))
+                }
+                _ => false,
+            });
+            let Some(j) = bar else { continue };
+            let Step::Prism { z0, height, .. } = body.steps[j] else { continue };
+            let axis = Axis { origin: body.frame.origin, dir: body.frame.z };
+            let rigid = rigid_with(p, sh.body);
+            // The gears it carries on its axis: each the stretch along it that the shaft must
+            // reach (a gear on the shaft's own body its centre; another body as far as it goes
+            // along the axis, so the shaft may stop inside it, short of what lies beyond).
+            let along = |q: V| dot(sub(q, axis.origin), axis.dir);
+            let anchors: Vec<(f64, f64)> = out
+                .member_of
+                .iter()
+                .filter(|(g, m)| !is_shaft(g) && p.members.get(*m).and_then(|x| x.body).is_some_and(|x| rigid.contains(&x)))
+                .filter_map(|(g, m)| Some((crate::items::link_geom(items, *g)?, p.members.get(*m)?.body?)))
+                .filter(|(g, _)| len(cross(g.axis, axis.dir)) < 1e-3 && axis.distance(g.centre) <= crate::items::tol(g.radius.unwrap_or(1.0)))
+                .map(|(g, b)| {
+                    let c = along(g.centre);
+                    if b == sh.body {
+                        return (c, c);
+                    }
+                    let (blo, bhi) = crate::mesh3d::Solid::new(&p.bodies[b], 1.0).bounds();
+                    let zs = (0..8).map(|k| along([if k & 1 == 0 { blo[0] } else { bhi[0] }, if k & 2 == 0 { blo[1] } else { bhi[1] }, if k & 4 == 0 { blo[2] } else { bhi[2] }]));
+                    zs.fold((c, c), |(a, b), z| (a.min(z), b.max(z)))
+                })
+                .filter_map(|(a, b)| {
+                    let (a, b) = (a.max(z0), b.min(z0 + height));
+                    (a <= b).then_some((a, b))
+                })
+                .collect();
+            // Which stretches along it another body takes (the first body found in each).
+            let n = ((height / 0.25).ceil() as usize).clamp(8, 400);
+            let dz = height / n as f64;
+            let mut blocked: Vec<Option<usize>> = vec![None; n];
+            let at = |z: f64| add(axis.origin, mul(axis.dir, z));
+            let e1 = square_to(axis.dir);
+            let e2 = cross(axis.dir, e1);
+            let (ends0, ends1) = (at(z0), at(z0 + height));
+            let lo: V = std::array::from_fn(|i| ends0[i].min(ends1[i]) - r);
+            let hi: V = std::array::from_fn(|i| ends0[i].max(ends1[i]) + r);
+            for o in 0..p.bodies.len() {
+                if rigid.contains(&o) {
+                    continue;
+                }
+                let ob = crate::mesh3d::Solid::new(&p.bodies[o], 1.0).bounds();
+                let orbits = p.assembly.members.get(o).is_some_and(|m| m.carrier.is_some());
+                if !orbits && (0..3).any(|i| hi[i] < ob.0[i] - 1.0 || ob.1[i] < lo[i] - 1.0) {
+                    continue;
+                }
+                let Some(sw) = sweeps.get(p, o) else { continue };
+                for (i, slot) in blocked.iter_mut().enumerate() {
+                    if slot.is_some() {
+                        continue;
+                    }
+                    let c = at(z0 + dz * (i as f64 + 0.5));
+                    let ring = (0..12).flat_map(|q| {
+                        let t = TAU * f64::from(q) / 12.0;
+                        [0.5 * r, r].map(|rr| add(c, add(mul(e1, rr * t.cos()), mul(e2, rr * t.sin()))))
+                    });
+                    if std::iter::once(c).chain(ring).any(|q| sw.holds(q, eps)) {
+                        *slot = Some(o);
+                    }
+                }
+            }
+            if blocked.iter().all(Option::is_none) {
+                continue;
+            }
+            // The free runs of bands; the one kept reaches the most gears it carries (then the
+            // longest).
+            let mut runs: Vec<(usize, usize)> = Vec::new();
+            let mut start = None;
+            for i in 0..=n {
+                match (i < n && blocked[i].is_none(), start) {
+                    (true, None) => start = Some(i),
+                    (false, Some(s)) => {
+                        runs.push((s, i - 1));
+                        start = None;
+                    }
+                    _ => {}
+                }
+            }
+            let reaches = |(a, b): (usize, usize)| anchors.iter().filter(|(lo, hi)| *hi >= z0 + dz * a as f64 - 1e-9 && *lo <= z0 + dz * (b + 1) as f64 + 1e-9).count();
+            let Some((from_band, to_band)) = runs.iter().copied().max_by(|x, y| reaches(*x).cmp(&reaches(*y)).then((x.1 - x.0).cmp(&(y.1 - y.0)))) else { continue };
+            if reaches((from_band, to_band)) < anchors.len() && anchors.iter().any(|(lo, hi)| lo == hi) {
+                // A gear on the shaft's own body is in the way's stretch: a collision, said there.
+                continue;
+            }
+            let below = (0..from_band).rev().find(|i| blocked[*i].is_some());
+            let above = (to_band + 1..n).find(|i| blocked[*i].is_some());
+            let from = below.map_or(z0, |i| z0 + dz * (i + 1) as f64 + GAP);
+            let to = above.map_or(z0 + height, |i| z0 + dz * i as f64 - GAP);
+            if to - from < 1e-3 || (below.is_none() && above.is_none()) {
+                continue;
+            }
+            let mut by: Vec<String> = [below, above].into_iter().flatten().filter_map(|i| blocked[i]).map(name).collect();
+            by.dedup();
+            let shaft = on_body(sh.body, true).map_or_else(|| format!("the shaft of {}", name(sh.body)), |g| who(items, g));
+            cuts.push((k, j, from, to, format!("{shaft} is cut back to {} mm (of {} mm) to stay clear of {}", num(to - from), num(height), by.join(" and "))));
+        }
+    }
+    for (k, j, from, to, note) in cuts {
+        let b = out.plan.shafts[k].body;
+        if let Some(Step::Prism { z0, height, .. }) = out.plan.bodies[b].steps.get_mut(j) {
+            (*z0, *height) = (from, to - from);
+        }
+        out.plan.shafts[k].length = to - from;
+        sweeps.forget(b);
+        out.notes.push(note);
+    }
+}
+
 /// Bodies of different stages that would sweep into each other (not meshing, not one rigid
 /// member): what collides and what to do.
-fn collisions(items: &[GearItem], out: &SystemPlan, units: &[Vec<usize>]) -> Option<String> {
+fn collisions(items: &[GearItem], out: &SystemPlan, units: &[Vec<usize>], sweeps: &mut Sweeps) -> Option<String> {
     let p = &out.plan;
     let gear_of = |b: usize| out.member_of.iter().find(|(_, m)| p.members.get(*m).and_then(|m| m.body) == Some(b)).map(|(r, _)| *r);
     let name = |b: usize| gear_of(b).map_or_else(|| p.bodies.get(b).map_or_else(String::new, |x| x.name.clone()), |r| who(items, r));
@@ -1260,21 +1622,6 @@ fn collisions(items: &[GearItem], out: &SystemPlan, units: &[Vec<usize>]) -> Opt
     let meshing = |a: usize, b: usize| members_on(a).any(|x| members_on(b).any(|y| p.members[x].meshes_with.contains(&y)));
     let rigid = |a: usize, b: usize| members_on(a).any(|x| members_on(b).any(|y| p.members[x].cluster.is_some() && p.members[x].cluster == p.members[y].cluster));
     let carrier_of = |b: usize| p.assembly.members.get(b).and_then(|m| m.carrier);
-    let mut sweeps: Vec<Option<Option<Sweep>>> = (0..p.bodies.len()).map(|_| None).collect();
-    let sweep = |b: usize| -> Option<Sweep> {
-        let axis = match carrier_of(b).and_then(|c| p.assembly.members.get(c)) {
-            Some(c) => c.axis,
-            None => p.assembly.members.get(b).map_or(Axis { origin: p.bodies[b].frame.origin, dir: p.bodies[b].frame.z }, |m| m.axis),
-        };
-        let ring = members_on(b).any(|k| p.members[k].ring);
-        let rack = p.assembly.links.iter().any(|l| matches!(l, AssemblyLink::RackPinion { rack, .. } if *rack == b));
-        if rack {
-            // A rack slides: its envelope is its body (a sweep about its own z).
-            let f = p.bodies[b].frame;
-            return Sweep::of(&p.bodies[b], Axis { origin: f.origin, dir: f.z }, false);
-        }
-        Sweep::of(&p.bodies[b], axis, ring || carrier_of(b).is_some())
-    };
     let eps = 0.05;
     for a in 0..p.bodies.len() {
         for b in a + 1..p.bodies.len() {
@@ -1286,13 +1633,10 @@ fn collisions(items: &[GearItem], out: &SystemPlan, units: &[Vec<usize>]) -> Opt
             if (0..3).any(|i| ba.1[i] < bb.0[i] - 1.0 || bb.1[i] < ba.0[i] - 1.0) && carrier_of(a).is_none() && carrier_of(b).is_none() {
                 continue;
             }
-            if sweeps[a].is_none() {
-                sweeps[a] = Some(sweep(a));
+            if sweeps.get(p, a).is_none() || sweeps.get(p, b).is_none() {
+                continue;
             }
-            if sweeps[b].is_none() {
-                sweeps[b] = Some(sweep(b));
-            }
-            let (Some(Some(sa)), Some(Some(sb))) = (&sweeps[a], &sweeps[b]) else { continue };
+            let (Some(Some(sa)), Some(Some(sb))) = (&sweeps.0[a], &sweeps.0[b]) else { continue };
             if let Some(q) = sa.meets(sb, eps).or_else(|| sb.meets(sa, eps)) {
                 return Some(format!(
                     "{} and {} collide (near {}, {}, {}): they are in different stages and turn into each other; move one (along its shaft or apart), make it smaller, or link them if they share a shaft",

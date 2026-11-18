@@ -53,7 +53,9 @@ The dialog suggests links from the drawing:
 
 - **Mesh:** two circles in one plane that touch from outside; a circle touching a ring from inside;
   a rack line touching a circle.
-- **Same shaft:** gears on one axis, at different places along it (different sketch planes).
+- **Same shaft:** gears on one axis, at different places along it (different sketch planes), of
+  any kind: a spur's circle and a bevel's, hypoid pinion's or worm's axis line on the same line
+  count; a Shaft item and the gears on its line.
 
 Accept the suggestions, or add links by hand. If you build with no links at all, the suggested ones
 are used (the reply notes "no links given: the gears mesh and share shafts as the drawing

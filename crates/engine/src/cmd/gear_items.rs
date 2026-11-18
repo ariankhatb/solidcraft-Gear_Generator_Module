@@ -448,7 +448,7 @@ fn read_items(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemParams])
 }
 
 /// The bodies named by item and gear (see the module docs), each name once.
-fn name_bodies(sp: &mut SystemPlan, ids: &[String]) {
+fn name_bodies(sp: &mut SystemPlan, ids: &[String], items: &[gi::GearItem]) {
     let n = sp.plan.bodies.len();
     let mut refs: Vec<Vec<GearRef>> = vec![Vec::new(); n];
     for (r, m) in &sp.member_of {
@@ -463,6 +463,10 @@ fn name_bodies(sp: &mut SystemPlan, ids: &[String]) {
         .iter()
         .map(|rs| {
             let first = rs.first()?;
+            // A Shaft item's bar, a body of its own: "Shaft S".
+            if items.get(first.item).is_some_and(|it| it.kind == gi::ItemKind::Shaft) {
+                return Some(format!("Shaft {}", id(first.item)));
+            }
             if rs.iter().all(|r| r.item == first.item) {
                 let gears: Vec<String> = rs.iter().map(|r| (r.gear + 1).to_string()).collect();
                 Some(format!("Gear {}·{}", id(first.item), gears.join("+")))
@@ -549,7 +553,7 @@ pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemPar
             }
             tooth_chamfer(&items, &mut system, ToothChamfer { size: tc.size, faces }).map_err(|e| bad(cmd, e))?;
         }
-        name_bodies(&mut system, &ids);
+        name_bodies(&mut system, &ids, &items);
         if keep_out {
             let mut whole = system.plan.clone();
             match solidcraft_gear::clearance::clearance_body(&base, &mut whole) {

@@ -484,6 +484,38 @@ fn ring_member(s: &Spec, g: &Geometry, spiral: f64, phase: f64, p: &mut Plan) ->
     Some(Member { steps, ra: r_root, zv: f64::from(zr) / dr.cos(), ends: ConeEnds { back: z0, front: z0 + height, small_root: r_tip * small } })
 }
 
+/// The name the carrier body ends with ("Carrier (4 planets)"): the assembly and the housing
+/// cutout tell it from the gears by it.
+pub(crate) const CARRIER: &str = "Carrier (";
+
+/// The carrier: a hub round the apex, inside every member's small end (so it touches no teeth),
+/// and a pin of Ø`pin` from the apex along each planet's axis through its bore, out past its back
+/// (flush with it in ring mode, where the ring's blank lies beyond).
+fn carrier(s: &Spec, g: &Geometry, planet: &ConeEnds, pin: f64, h_planet: f64) -> Body {
+    let (re, face) = (g.re, g.face);
+    let toe = (re - face).max(0.0);
+    let mut near = toe * g.delta_sun.cos().min(g.delta_planet.cos());
+    if g.mode == BevelPlanetMode::Differential {
+        near = near.min(toe * (PI - g.delta_far).cos().abs());
+    }
+    let hub = (0.55 * near).max(0.6 * pin);
+    let disc = |r: f64| Region { outer: vec![Outline::circle(V2::ZERO, r)], holes: vec![] };
+    let mut steps = vec![Step::Prism { region: disc(hub), z0: -hub, height: 2.0 * hub, twist: 0.0, op: Op::New }];
+    let past = if g.mode == BevelPlanetMode::Ring { 0.0 } else { s.hub_length.max(0.0) + 1.5 * s.module };
+    let length = h_planet - planet.back.min(0.0) + past;
+    for th in &g.azimuths {
+        // From the apex out along the planet's axis (its frame's z points at the apex).
+        let out = rot([g.sigma.sin(), 0.0, -g.sigma.cos()], *th);
+        let x = rot([g.sigma.cos(), 0.0, g.sigma.sin()], *th);
+        steps.push(Step::Placed {
+            frame: Frame { origin: [0.0; 3], x, z: out },
+            step: Box::new(Step::Prism { region: disc(pin / 2.0), z0: 0.0, height: length, twist: 0.0, op: Op::Join }),
+        });
+    }
+    let frame = Frame { origin: s.origin, x: [1.0, 0.0, 0.0], z: [0.0, 0.0, 1.0] };
+    Body { name: name(s, &format!("{CARRIER}{} planet{})", g.azimuths.len(), if g.azimuths.len() == 1 { "" } else { "s" })), frame, steps }
+}
+
 fn rot(v: [f64; 3], t: f64) -> [f64; 3] {
     let (sn, c) = t.sin_cos();
     [v[0] * c - v[1] * sn, v[0] * sn + v[1] * c, v[2]]
@@ -541,6 +573,19 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
     bevel_hub(s, &s.bore, m_r(s, zs) * 0.6, &sun.ends, &mut sun_steps, p, "sun");
     let sun_body = Body { name: name(s, &format!("Sun z{zs}")), frame: sun_frame, steps: sun_steps };
 
+    // The carrier (the whole set built): a hub round the apex with a pin along every planet's
+    // axis, the planets turning on the pins. A planet with no bore of its own gets one for its pin
+    // (half its root Ø at the small end, so its roots keep their wall).
+    let whole = s.only == 0;
+    let pin_bore = if s.bore2.outline().is_some() { s.bore2.diameter } else { planet.ends.small_root };
+    let pin = (pin_bore - 0.2).max(0.0);
+    let with_pin_bore;
+    let sp: &Spec = if whole && s.bore2.outline().is_none() && pin > 0.5 {
+        with_pin_bore = Spec { bore2: crate::hub::Bore { kind: crate::hub::BoreKind::Round, diameter: pin_bore, ..crate::hub::Bore::default() }, ..s.clone() };
+        &with_pin_bore
+    } else {
+        s
+    };
     let mut planets = Vec::new();
     for (k, th) in g.azimuths.iter().enumerate() {
         let phase = PI + PI / fp + fs * th / fp;
@@ -552,7 +597,7 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
                 other => other.clone(),
             })
             .collect();
-        bevel_hub(s, &s.bore2, m_r(s, zp) * 0.6, &planet.ends, &mut steps, p, "planet");
+        bevel_hub(sp, &sp.bore2, m_r(s, zp) * 0.6, &planet.ends, &mut steps, p, "planet");
         let ax = rot([-sigma.sin(), 0.0, sigma.cos()], *th);
         let frame = Frame { origin: [0, 1, 2].map(|i| apex[i] - ax[i] * h_planet), x: rot([sigma.cos(), 0.0, sigma.sin()], *th), z: ax };
         planets.push(Body { name: name(s, &format!("Planet {} z{zp}", k + 1)), frame, steps });
@@ -673,6 +718,10 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
         && let Some(b) = far_body
     {
         p.bodies.push(b);
+    }
+    if whole && pin > 0.5 {
+        p.bodies.push(carrier(s, &g, &planet.ends, pin, h_planet));
+        p.fact("carrier pin diameter", pin, Unit::Mm);
     }
 
     // ---- Preview: one spoke developed on the back cones (Tredgold) at the large end. ----

@@ -65,7 +65,8 @@ fn every_set_is_an_assembly_of_its_bodies() {
         // (A differential has two degrees of freedom: its case is driven and side gear A is free,
         // the pinions and side gear B following it relative to the case.)
         if s.kind.is_set() && s.kind != Kind::CycloidalDrive && s.kind != Kind::Differential && p.bodies.len() >= 2 {
-            for i in 1..a.members.len() {
+            // (A carrier is driven on its own: the planets ride on it.)
+            for i in (1..a.members.len()).filter(|i| !a.members.iter().any(|m| m.carrier == Some(*i))) {
                 assert!(a.ratio(0, i).is_some(), "{label}: member {i} is not linked to member 1");
             }
         }

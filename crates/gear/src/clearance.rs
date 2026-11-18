@@ -182,6 +182,8 @@ pub(crate) fn motions(kind: Kind, bodies: &[Body]) -> Vec<Motion> {
             Kind::CycloidalDrive if n >= 2 && i == 0 => orbit(&bodies[1].frame, &bodies[0].frame),
             // Sun first; members off its axis are planets; on it, the ring has the sun's
             // apex-pointing z (a second sun's points the other way).
+            // The carrier turns about the sun's axis.
+            Kind::BevelPlanetary if bodies[i].name.contains(crate::plan::bevel_planet::CARRIER) => Motion::Turns,
             Kind::BevelPlanetary if i > 0 => {
                 let (sun, f) = (&bodies[0].frame, &bodies[i].frame);
                 if coaxial(sun, f) {

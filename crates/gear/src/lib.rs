@@ -130,3 +130,5 @@ mod solid_tests;
 mod system_compose_tests;
 #[cfg(test)]
 mod system_shaft_tests;
+#[cfg(test)]
+mod system_motion_tests;

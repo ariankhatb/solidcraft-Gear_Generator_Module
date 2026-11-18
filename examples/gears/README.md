@@ -7,7 +7,7 @@ Designs made with the Gears feature (`gear.create` with `items`). In each one, t
 | `01-spur-pair.sc` | Two touching pitch circles in one sketch: z20 / z30, module 2, 1.5 : 1. Ø8 bore circles on both gears and a Ø16 hub circle on A (concentric, dimensioned). Gear A's shaft line in an upright sketch with bearing points 20 mm below and 28 mm above the gear, and the **housing cutout** on: one body "Housing cutout" with a 608 seat at each bearing point |
 | `02-helical-pair-face-sides.sc` | Helix 20° with opposite hands. Face sides: A grows on side A only, B is custom (16 mm on side A, 4 mm on side B) |
 | `03-compound-train.sc` | Compound gear: a big circle in layer 1 and a small one in layer 2, joined by a shaft line, driving a third gear. Ø10 bore circles on both of the compound's gears |
-| `04-bevel-side-view.sc` | Bevel drawn as one side-view sketch: an apex point, the two shaft lines, and a contact line whose angle (33.7°) sets the ratio (1.5 : 1) and whose length (54 mm) sets the cone distance. z30 / z45, module 2. Needs a build with `gear-drivetrain-fixes` or later |
+| `04-bevel-side-view.sc` | Bevel drawn as one side-view sketch: an apex point, the two shaft lines, and a contact line whose angle (33.7°) sets the ratio (1.5 : 1) and whose length (54 mm) sets the cone distance. z30 / z45, module 2. |
 | `05-worm-and-wheel.sc` | Wheel pitch circle plus the worm's axis line in one sketch, 1 start, 20 : 1 |
 | `06-planetary.sc` | Sun, one planet and the ring (concentric), 4 planets on a generated carrier |
 | `07-internal-ring.sc` | Ring gear with a pinion inside it |

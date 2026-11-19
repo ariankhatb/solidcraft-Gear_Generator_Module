@@ -135,6 +135,12 @@ fn rename_members(text: &str, names: &[String]) -> String {
     out
 }
 
+/// `text` with a stage plan's "gear N" ("gears N and M") named as `names[N - 1]`, so a stage's
+/// warnings name the items' gears.
+fn gear_names(text: &str, names: &[String]) -> String {
+    crate::sketch_rules::rename_gears(text, &|k| names.get(k).cloned().unwrap_or_else(|| format!("gear {}", k + 1)))
+}
+
 /// The text after a refusal's last ": " (what to do), for a link's hint.
 fn hint_of(e: &str) -> Option<String> {
     e.rsplit_once(": ").map(|(_, h)| h.to_string()).filter(|h| !h.is_empty())
@@ -676,7 +682,9 @@ fn train_unit(items: &[GearItem], gears: &[GearRef], mapped: &crate::items::Mapp
         format!("train {}", ids.join(", "))
     };
     let mut u = Unit { label, plan: p, refs, shifts, carrier: None, tags: Vec::new(), contact: Vec::new(), notes: Vec::new() };
-    u.plan.warnings = u.plan.warnings.iter().map(|w| rename_members(w, &names)).collect();
+    // (The plan's "gear N" is its member N, the train's gear N.)
+    let by_gear: Vec<String> = u.refs.iter().enumerate().map(|(k, r)| r.map_or_else(|| format!("gear {}", k + 1), |r| who(items, r))).collect();
+    u.plan.warnings = u.plan.warnings.iter().map(|w| rename_members(&gear_names(w, &by_gear), &names)).collect();
     // A gear meshing nothing at a fixed module (decision 3): the closest tooth count at that
     // module, so its pitch circle is not the drawn one; say both.
     for &i in &o.gears {
@@ -794,6 +802,12 @@ fn pair_unit(items: &[GearItem], s: &Stage, mapped: &crate::items::Mapped, base:
     let [Some(b0), Some(b1)] = body_of else {
         return Err(format!("{}: the planned pair is not where the drawing puts it", names.join(" and ")));
     };
+    // The plan's warnings name its gears by number, gear N its body N.
+    if p.bodies.len() == 2 && b0 != b1 {
+        let mut by_gear = vec![String::new(); 2];
+        (by_gear[b0], by_gear[b1]) = (names[0].clone(), names[1].clone());
+        p.warnings = p.warnings.iter().map(|w| gear_names(w, &by_gear)).collect();
+    }
     let face = solved.spec.face_width;
     let mut members = Vec::new();
     for (k, b) in [(0usize, b0), (1, b1)] {

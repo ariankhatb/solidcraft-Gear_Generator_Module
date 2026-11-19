@@ -562,3 +562,22 @@ fn crossed_helical_and_chevron_bevel_are_what_they_say() {
     };
     assert_ne!(bevel(BevelStyle::Chevron), bevel(BevelStyle::Spiral), "chevron teeth differ from the spiral's");
 }
+
+/// A stage's warnings name the items' gears, not the stage plan's own "gear 1" and "gear 2": a
+/// spur train's undercut pinion, and whatever the bevel and worm stages of a chain warn of.
+#[test]
+fn stage_warnings_name_the_items_gears() {
+    let module2 = vec![GearSettings { module: Some(2.0), ..GearSettings::default() }];
+    let mut a = item("A", ItemKind::Spur, vec![circ([0.0; 3], Z, 10.0)]);
+    a.gears = module2.clone();
+    let mut b = item("B", ItemKind::Spur, vec![circ([40.0, 0.0, 0.0], Z, 30.0)]);
+    b.gears = module2;
+    let sp = planned(&[a, b], &[mesh(g(0, 0), g(1, 0))], None);
+    let w = &sp.plan.warnings;
+    assert!(w.iter().any(|w| w.contains("Gear A: undercut")), "{w:?}");
+    let (items, links) = chain();
+    let chain = planned(&items, &links, None);
+    for w in [w, &chain.plan.warnings] {
+        assert!(!w.iter().any(|w| w.contains("gear 1") || w.contains("gear 2")), "{w:?}");
+    }
+}

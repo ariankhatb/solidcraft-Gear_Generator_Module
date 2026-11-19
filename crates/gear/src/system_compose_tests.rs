@@ -502,6 +502,20 @@ fn a_tooth_chamfer_goes_on_every_gear_of_the_set() {
     assert_eq!(ring(&one, top), 0);
     assert!(ring(&one, bottom) > 0, "side B left plain");
     assert_eq!(ring(&both, 0.0), ring(&plain, 0.0), "the middle of the face untouched");
+    // The builders make both ends' cuts as one intersect (chamfers_as_one): the same solid,
+    // at the edges and everywhere else, out past the faces and the tip.
+    let cut = &both.plan.bodies[body];
+    let n = cut.steps.len();
+    let merged = crate::plan::chamfer::chamfers_as_one(cut, n - 2).expect("both ends of A as one step");
+    let one_step = crate::plan::Body { steps: cut.steps[..n - 2].iter().cloned().chain([merged]).collect(), ..cut.clone() };
+    let (sc, sm) = (Solid::new(cut, 0.01), Solid::new(&one_step, 0.01));
+    for (r, z) in (0..=60).flat_map(|i| (0..=60).map(move |j| (0.05 + (tip + 3.0) * f64::from(i) / 60.0, -face + 2.0 * face * f64::from(j) / 60.0))) {
+        for a in [0.0f64, 0.7, 2.1, 4.0] {
+            let p = [r * a.cos(), r * a.sin(), z];
+            assert_eq!(sc.contains(p), sm.contains(p), "at r {r}, z {z}");
+        }
+    }
+    assert!(crate::plan::chamfer::chamfers_as_one(&one.plan.bodies[body], one.plan.bodies[body].steps.len() - 2).is_none(), "one side: no pair");
     // Too big: named.
     let mut sp = plain.clone();
     let e = tooth_chamfer(&items, &mut sp, ToothChamfer { size: 1.2 * module, faces: ChamferFaces::Both }).unwrap_err();

@@ -287,7 +287,20 @@ fn checked(body: &Body) -> Option<String> {
 /// One planned body: its steps in order, each on what the ones before made.
 fn build_body(b: &Planned, notes: &mut Vec<String>) -> Result<Body> {
     let mut made: Option<Body> = None;
+    let mut skip = false;
     for (i, step) in b.steps.iter().enumerate() {
+        if std::mem::take(&mut skip) {
+            continue;
+        }
+        // Both ends' tooth chamfers of a gear: one intersect in place of two cuts (the same
+        // solid), else the two cuts as planned.
+        if let (Some(lower), Some(one)) = (&made, solidcraft_gear::plan::chamfer::chamfers_as_one(b, i))
+            && let Ok(body) = tool(&b.frame, &one, 0.0).and_then(|t| combine(Some(lower), t, Op::Intersect))
+        {
+            made = Some(body);
+            skip = true;
+            continue;
+        }
         let op = solid::op_of(step);
         let tries = solid::attempts(step);
         let mut failed = None;

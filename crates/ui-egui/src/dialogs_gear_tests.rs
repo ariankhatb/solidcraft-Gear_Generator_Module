@@ -1134,6 +1134,24 @@ fn with_dialog(h: &mut crate::scenario::Harness, f: impl FnOnce(&mut Gear, &mut 
     h.frames(3);
 }
 
+/// The wheel turned over the dialog's tab body: it scrolls down to its foot.
+fn scroll_down(h: &mut crate::scenario::Harness) {
+    let Some(body) = crate::scenario::rect_of("dialog:body:viewport") else { return };
+    for _ in 0..10 {
+        h.app.synthetic.push(egui::Event::PointerMoved(body.center()));
+        h.app.synthetic.push(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -400.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        });
+        h.frame();
+    }
+    h.app.synthetic.push(egui::Event::PointerGone);
+    h.frames(60);
+}
+
 /// A bevel pair from two axis lines and a circle, in the harness's design.
 fn bevel_pair(app: &mut SolveApp) -> crate::dialogs_gear_graph::GearItem {
     let s1 = app.session.execute("sketch.create", &json!({"plane": "XY"})).unwrap()["sketch"].as_u64().unwrap();
@@ -1276,9 +1294,11 @@ fn a_differential_switch_on_a_ring_gear_and_its_tab() {
     crate::dialogs_gear::DIFF_SUPPORTED.with(|d| d.set(Some(true)));
     h.frames(3);
     assert!(handle_at("gear:tab:differential").is_none());
+    scroll_down(&mut h);
     tap(&mut h, "gear:group:differential");
     assert_eq!(drawn(&h).items[0].diff, Some(DiffForm::default()));
     assert!(handle_at("gear:tab:differential").is_some());
+    scroll_down(&mut h);
     tap(&mut h, "gear:to_differential");
     assert_eq!(drawn(&h).tab, Tab::Differential);
     assert!(handle_at("dialog:section:Half-shafts").is_some());
@@ -1292,6 +1312,7 @@ fn a_differential_switch_on_a_ring_gear_and_its_tab() {
     let back = crate::dialogs_gear_items::items_of(p.as_object().unwrap(), p.get("ui"), &mut graph);
     assert_eq!(back[0].diff, drawn(&h).items[0].diff);
     // Switched off on its own tab: nothing sent, the tab goes and Gears shows.
+    scroll_down(&mut h);
     tap(&mut h, "gear:group:differential");
     let g = drawn(&h);
     assert_eq!((g.items[0].diff.clone(), g.tab), (None, Tab::Gears));

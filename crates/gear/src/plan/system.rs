@@ -550,7 +550,7 @@ fn shaft_unit(items: &[GearItem], i: usize, line: &GearGeom, carried: &[GearRef]
     let mut reached: Vec<String> = Vec::new();
     for r in carried {
         let Some(g) = crate::items::link_geom(items, *r) else { continue };
-        let coaxial = len(cross(g.axis, u)) < 1e-3 && Axis { origin: a, dir: u }.distance(g.centre) <= crate::items::tol(g.radius.unwrap_or(1.0));
+        let coaxial = gear_on_line(u, &g, |c| Axis { origin: a, dir: u }.distance(c));
         if !coaxial || crate::items::on_shaft_line(line, &g) || others.iter().any(|o| crate::items::on_shaft_line(o, &g)) {
             continue;
         }
@@ -558,9 +558,8 @@ fn shaft_unit(items: &[GearItem], i: usize, line: &GearGeom, carried: &[GearRef]
         // axis passes the ring's, past its teeth), else to its centre.
         let at = match planned.iter().find(|x| x.gear == *r) {
             Some(x) => {
-                let (blo, bhi) = crate::mesh3d::Solid::new(&x.body, 1.0).bounds();
-                let zs: Vec<f64> = (0..8).map(|k| dot(sub([if k & 1 == 0 { blo[0] } else { bhi[0] }, if k & 2 == 0 { blo[1] } else { bhi[1] }, if k & 4 == 0 { blo[2] } else { bhi[2] }], a), u)).collect();
-                0.5 * (zs.iter().copied().fold(f64::INFINITY, f64::min) + zs.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+                let (lo, hi) = body_span(&x.body, |q| dot(sub(q, a), u));
+                0.5 * (lo + hi)
             }
             None => dot(sub(g.centre, a), u),
         };
@@ -621,7 +620,7 @@ fn reader_items(items: &[GearItem], gears: &[GearRef], mapped: &crate::items::Ma
             let (Source::Line { item, k: n } | Source::Point { item, k: n }) = *s else { continue };
             let on_axis = |it: &dt::Item| match it.thing {
                 dt::Thing::Line(l) => gears.iter().filter_map(|r| gear_geoms(&items[r.item]).get(r.gear).copied()).any(|g| {
-                    l.dir().is_some_and(|u| len(cross(u, g.axis)) < 1e-3) && l.distance(g.centre) <= crate::items::tol(g.radius.unwrap_or(1.0))
+                    l.dir().is_some_and(|u| gear_on_line(u, &g, |c| l.distance(c)))
                 }),
                 _ => true,
             };
@@ -645,7 +644,7 @@ fn train_unit(items: &[GearItem], gears: &[GearRef], mapped: &crate::items::Mapp
         for (k, r) in refs.iter().enumerate() {
             let g = gear_geoms(&items[r.item]).get(r.gear).copied();
             let drawn = its.iter().any(|i| match (i.thing, g) {
-                (dt::Thing::Line(l), Some(g)) => l.dir().is_some_and(|u| len(cross(u, g.axis)) < 1e-3) && l.distance(g.centre) <= crate::items::tol(g.radius.unwrap_or(1.0)),
+                (dt::Thing::Line(l), Some(g)) => l.dir().is_some_and(|u| gear_on_line(u, &g, |c| l.distance(c))),
                 _ => false,
             });
             if !drawn {
@@ -732,8 +731,11 @@ fn pair_unit(items: &[GearItem], s: &Stage, mapped: &crate::items::Mapped, base:
             i.ask.role = Some(dt::Role::Gear(Kind::SpiralBevel));
         }
     }
+    // What the item asks of the pair: a worm's thread starts, a spiral bevel's or hypoid's
+    // spiral angle.
+    let asked = |f: fn(&GearSettings) -> Option<f64>| s.gears.iter().find_map(|r| items.get(r.item).and_then(|i| (0..i.gear_count().max(1)).find_map(|g| f(&i.settings(g)))));
     // A hypoid's asked spiral angle sizes the set (its largest offset follows from it).
-    let spiral_asked = s.gears.iter().find_map(|r| items.get(r.item).and_then(|i| (0..i.gear_count().max(1)).find_map(|g| i.settings(g).spiral_angle)));
+    let spiral_asked = asked(|g| g.spiral_angle);
     let hypoid_base;
     let read_base = match spiral_asked.filter(|a| s.kind == StageKind::Hypoid && a.is_finite() && a.abs() < 89.0) {
         Some(a) => {
@@ -748,9 +750,6 @@ fn pair_unit(items: &[GearItem], s: &Stage, mapped: &crate::items::Mapped, base:
         return Err(rename_members(&e, &names));
     }
     let mut solved = o.solved.clone().ok_or_else(|| format!("{}: no set fits these shafts", names.join(" and ")))?;
-    // What the item asks of the pair: a worm's thread starts, a spiral bevel's or hypoid's
-    // spiral angle.
-    let asked = |f: fn(&GearSettings) -> Option<f64>| s.gears.iter().find_map(|r| items.get(r.item).and_then(|i| (0..i.gear_count().max(1)).find_map(|g| f(&i.settings(g)))));
     if s.kind == StageKind::Worm
         && let Some(z) = asked(|g| g.starts.map(f64::from)).filter(|z| *z >= 1.0)
     {
@@ -864,6 +863,21 @@ fn pair_unit(items: &[GearItem], s: &Stage, mapped: &crate::items::Mapped, base:
     // The duplicate of a gear planned already is dropped when merging; its member stays (refs).
     let u = Unit { label: format!("{} {}", stage_name(s.kind), label.join(", ")), plan: p, refs, shifts: vec![None, None], carrier: None, tags: Vec::new(), contact: Vec::new(), notes: Vec::new() };
     Ok(tagged(u, &solved.spec, stage_mesh(s)))
+}
+
+/// Whether gear `g` sits on a line along `u`: parallel to it, its centre on it (`distance`: a
+/// point's distance from the line).
+fn gear_on_line(u: V, g: &GearGeom, distance: impl FnOnce(V) -> f64) -> bool {
+    len(cross(u, g.axis)) < 1e-3 && distance(g.centre) <= crate::items::tol(g.radius.unwrap_or(1.0))
+}
+
+/// Where `body` reaches along a line: the least and most of `along` (a point's place on it)
+/// over the corners of the body's box.
+fn body_span(body: &Body, along: impl Fn(V) -> f64) -> (f64, f64) {
+    let (lo, hi) = crate::mesh3d::Solid::new(body, 1.0).bounds();
+    (0..8)
+        .map(|k| along([if k & 1 == 0 { lo[0] } else { hi[0] }, if k & 2 == 0 { lo[1] } else { hi[1] }, if k & 4 == 0 { lo[2] } else { hi[2] }]))
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), z| (a.min(z), b.max(z)))
 }
 
 /// Whether `frame`'s z lies along the axis through `c` along `u`.
@@ -1516,15 +1530,14 @@ fn trim_shafts(items: &[GearItem], out: &mut SystemPlan, sweeps: &mut Sweeps) {
                 .iter()
                 .filter(|(g, m)| !is_shaft(g) && p.members.get(*m).and_then(|x| x.body).is_some_and(|x| rigid.contains(&x)))
                 .filter_map(|(g, m)| Some((crate::items::link_geom(items, *g)?, p.members.get(*m)?.body?)))
-                .filter(|(g, _)| len(cross(g.axis, axis.dir)) < 1e-3 && axis.distance(g.centre) <= crate::items::tol(g.radius.unwrap_or(1.0)))
+                .filter(|(g, _)| gear_on_line(axis.dir, g, |c| axis.distance(c)))
                 .map(|(g, b)| {
                     let c = along(g.centre);
                     if b == sh.body {
                         return (c, c);
                     }
-                    let (blo, bhi) = crate::mesh3d::Solid::new(&p.bodies[b], 1.0).bounds();
-                    let zs = (0..8).map(|k| along([if k & 1 == 0 { blo[0] } else { bhi[0] }, if k & 2 == 0 { blo[1] } else { bhi[1] }, if k & 4 == 0 { blo[2] } else { bhi[2] }]));
-                    zs.fold((c, c), |(a, b), z| (a.min(z), b.max(z)))
+                    let (lo, hi) = body_span(&p.bodies[b], &along);
+                    (lo.min(c), hi.max(c))
                 })
                 .filter_map(|(a, b)| {
                     let (a, b) = (a.max(z0), b.min(z0 + height));

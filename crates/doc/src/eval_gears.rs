@@ -414,9 +414,8 @@ fn tool(f: &Frame, step: &Step, nudge: f64) -> Result<Body> {
         let n = if twist.abs() <= 1e-12 { 2 } else { solidcraft_gear::plan::taper_sections(o, twist, scale) };
         let sections: Vec<(Plane, Region2)> = (0..n)
             .map(|i| {
-                let t = i as f64 / (n - 1) as f64;
-                let k = 1.0 + (scale - 1.0) * t;
-                let section = outline_loop(&o.scaled(k).rotated(solidcraft_gear::plan::taper_turn(twist, scale, k)));
+                let (section, t) = solidcraft_gear::plan::taper_section(o, twist, scale, i, n);
+                let section = outline_loop(&section);
                 let region = match rim {
                     Some(r) => Region2 { outer: Loop2::circle(Vec2::ZERO, r), holes: vec![section] },
                     None => Region2 { outer: section, holes: Vec::new() },

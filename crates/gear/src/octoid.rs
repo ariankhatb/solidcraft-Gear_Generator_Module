@@ -11,16 +11,11 @@
 
 use std::f64::consts::PI;
 
+use crate::axes::{cross, dot};
 use crate::involute::{FILLET_TOLERANCE, PROFILE_TOLERANCE, ToothFlank, ToothSides, side_points};
 
 type P3 = [f64; 3];
 
-fn dot(a: P3, b: P3) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-fn cross(a: P3, b: P3) -> P3 {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-}
 fn unit(a: P3) -> P3 {
     let l = dot(a, a).sqrt();
     a.map(|v| v / l)

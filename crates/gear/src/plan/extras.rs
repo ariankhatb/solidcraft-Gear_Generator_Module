@@ -210,27 +210,9 @@ pub(super) fn sprocket(s: &Spec, p: &mut Plan) {
             .filter(|a| a.sin() > 0.05)
             .map(|a| Outline::circle(V2::polar(r1, a), roller / 2.0))
             .collect();
-        p.preview.push(PreviewGear {
-            name: "sprocket".into(),
-            region: with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore),
-            center: V2::ZERO,
-            speed: 1.0,
-            slide: 0.0,
-            pitch_radius: r1,
-            period: 0.0,
-            orbit: 0.0,
-        });
+        p.preview.push(PreviewGear::turning("sprocket", with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore), V2::ZERO, 1.0, r1));
         if !rollers.is_empty() {
-            p.preview.push(PreviewGear {
-                name: "chain".into(),
-                region: Region { outer: rollers, holes: vec![] },
-                center: V2::ZERO,
-                speed: 1.0,
-                slide: 0.0,
-                pitch_radius: 0.0,
-                period: 0.0,
-                orbit: 0.0,
-            });
+            p.preview.push(PreviewGear::turning("chain", Region { outer: rollers, holes: vec![] }, V2::ZERO, 1.0, 0.0));
         }
         return;
     }
@@ -269,37 +251,16 @@ pub(super) fn sprocket(s: &Spec, p: &mut Plan) {
         p.bodies.push(Body { name: name(s, &format!("Sprocket {label} z{z2}")), frame: Frame::at(s.origin).shifted([a, 0.0, 0.0]), steps: st2 });
     }
     if let (Some(outer), Some(inner)) = (belt_path(r1, r2, a, roller / 2.0), belt_path(r1, r2, a, -roller / 2.0)) {
-        p.preview.push(PreviewGear {
-            name: "chain".into(),
-            region: Region { outer: vec![outer], holes: vec![inner] },
-            center: V2::ZERO,
-            speed: 0.0,
-            slide: 0.0,
-            pitch_radius: 0.0,
-            period: 0.0,
-            orbit: 0.0,
-        });
+        p.preview.push(PreviewGear::turning("chain", Region { outer: vec![outer], holes: vec![inner] }, V2::ZERO, 0.0, 0.0));
     }
-    p.preview.push(PreviewGear {
-        name: "sprocket 1".into(),
-        region: with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore),
-        center: V2::ZERO,
-        speed: 1.0,
-        slide: 0.0,
-        pitch_radius: r1,
-        period: 0.0,
-        orbit: 0.0,
-    });
-    p.preview.push(PreviewGear {
-        name: "sprocket 2".into(),
-        region: with_bore(Region { outer: vec![o2], holes: vec![] }, &s.bore2),
-        center: V2::new(a, 0.0),
-        speed: zf1 / zf2,
-        slide: 0.0,
-        pitch_radius: r2,
-        period: 0.0,
-        orbit: 0.0,
-    });
+    p.preview.push(PreviewGear::turning("sprocket 1", with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore), V2::ZERO, 1.0, r1));
+    p.preview.push(PreviewGear::turning(
+        "sprocket 2",
+        with_bore(Region { outer: vec![o2], holes: vec![] }, &s.bore2),
+        V2::new(a, 0.0),
+        zf1 / zf2,
+        r2,
+    ));
 }
 
 // ------------------------------------------------------------------------------------------
@@ -383,16 +344,7 @@ pub(super) fn pulley(s: &Spec, p: &mut Plan) {
         if wanted(s, 1) {
             p.bodies.push(Body { name: name(s, &format!("Pulley {label} z{z1}")), frame: Frame::at(s.origin), steps: st1 });
         }
-        p.preview.push(PreviewGear {
-            name: "pulley".into(),
-            region: with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore),
-            center: V2::ZERO,
-            speed: 1.0,
-            slide: 0.0,
-            pitch_radius: r1,
-            period: 0.0,
-            orbit: 0.0,
-        });
+        p.preview.push(PreviewGear::turning("pulley", with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore), V2::ZERO, 1.0, r1));
         return;
     }
     let r2 = Pulley { belt, teeth: z2 }.pitch_diameter() / 2.0;
@@ -419,37 +371,16 @@ pub(super) fn pulley(s: &Spec, p: &mut Plan) {
         p.bodies.push(Body { name: name(s, &format!("Pulley {label} z{z2}")), frame: Frame::at(s.origin).shifted([a, 0.0, 0.0]), steps: st2 });
     }
     if let (Some(outer), Some(inner)) = (belt_path(r1, r2, a, 1.5 * belt.pld), belt_path(r1, r2, a, -belt.pld - depth)) {
-        p.preview.push(PreviewGear {
-            name: "belt".into(),
-            region: Region { outer: vec![outer], holes: vec![inner] },
-            center: V2::ZERO,
-            speed: 0.0,
-            slide: 0.0,
-            pitch_radius: 0.0,
-            period: 0.0,
-            orbit: 0.0,
-        });
+        p.preview.push(PreviewGear::turning("belt", Region { outer: vec![outer], holes: vec![inner] }, V2::ZERO, 0.0, 0.0));
     }
-    p.preview.push(PreviewGear {
-        name: "pulley 1".into(),
-        region: with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore),
-        center: V2::ZERO,
-        speed: 1.0,
-        slide: 0.0,
-        pitch_radius: r1,
-        period: 0.0,
-        orbit: 0.0,
-    });
-    p.preview.push(PreviewGear {
-        name: "pulley 2".into(),
-        region: with_bore(Region { outer: vec![o2], holes: vec![] }, &s.bore2),
-        center: V2::new(a, 0.0),
-        speed: f64::from(z1) / f64::from(z2),
-        slide: 0.0,
-        pitch_radius: r2,
-        period: 0.0,
-        orbit: 0.0,
-    });
+    p.preview.push(PreviewGear::turning("pulley 1", with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore), V2::ZERO, 1.0, r1));
+    p.preview.push(PreviewGear::turning(
+        "pulley 2",
+        with_bore(Region { outer: vec![o2], holes: vec![] }, &s.bore2),
+        V2::new(a, 0.0),
+        f64::from(z1) / f64::from(z2),
+        r2,
+    ));
 }
 
 // ------------------------------------------------------------------------------------------
@@ -572,17 +503,8 @@ pub(super) fn spline(s: &Spec, p: &mut Plan) {
         let steps = vec![Step::Prism { region: hub_region.clone(), z0: 0.0, height: face, twist: 0.0, op: Op::New }];
         p.bodies.push(Body { name: name(s, &format!("Spline hub z{}", s.teeth)), frame: Frame::at(s.origin), steps });
     }
-    p.preview.push(PreviewGear { name: "hub".into(), region: hub_region, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: 0.0, period: 0.0, orbit: 0.0 });
-    p.preview.push(PreviewGear {
-        name: "shaft".into(),
-        region: with_bore(Region { outer: vec![o_shaft], holes: vec![] }, &s.bore),
-        center: V2::ZERO,
-        speed: 1.0,
-        slide: 0.0,
-        pitch_radius: shaft.r(),
-        period: 0.0,
-        orbit: 0.0,
-    });
+    p.preview.push(PreviewGear::turning("hub", hub_region, V2::ZERO, 1.0, 0.0));
+    p.preview.push(PreviewGear::turning("shaft", with_bore(Region { outer: vec![o_shaft], holes: vec![] }, &s.bore), V2::ZERO, 1.0, shaft.r()));
 }
 
 // ------------------------------------------------------------------------------------------
@@ -685,16 +607,7 @@ pub(super) fn face_gear(s: &Spec, p: &mut Plan) {
     let rw = rm * fg.z1() / fg.z2();
     p.preview_note = "pinion section, and the face gear's teeth at mid length unrolled as a rack".into();
     let pv = external_outline(&pinion, -PI / 2.0 + PI / fg.z1()).0;
-    p.preview.push(PreviewGear {
-        name: "pinion".into(),
-        region: Region { outer: vec![pv], holes: vec![] },
-        center: V2::ZERO,
-        speed: 1.0,
-        slide: 0.0,
-        pitch_radius: rw,
-        period: 0.0,
-        orbit: 0.0,
-    });
+    p.preview.push(PreviewGear::turning("pinion", Region { outer: vec![pv], holes: vec![] }, V2::ZERO, 1.0, rw));
     p.preview.push(PreviewGear {
         name: "face gear".into(),
         region: Region { outer: vec![rack], holes: vec![] },
@@ -755,24 +668,6 @@ pub(super) fn elliptical(s: &Spec, p: &mut Plan) {
         p.bodies.push(Body { name: name(s, &format!("Conjugate gear z{}", s.teeth)), frame: Frame::at(s.origin).shifted([a, 0.0, 0.0]), steps });
     }
     p.preview_note = "shown still: the speed ratio changes through the turn".into();
-    p.preview.push(PreviewGear {
-        name: "gear 1".into(),
-        region: with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore),
-        center: V2::ZERO,
-        speed: 0.0,
-        slide: 0.0,
-        pitch_radius: 0.0,
-        period: 0.0,
-        orbit: 0.0,
-    });
-    p.preview.push(PreviewGear {
-        name: "gear 2".into(),
-        region: with_bore(Region { outer: vec![o2], holes: vec![] }, &s.bore2),
-        center: V2::new(a, 0.0),
-        speed: 0.0,
-        slide: 0.0,
-        pitch_radius: 0.0,
-        period: 0.0,
-        orbit: 0.0,
-    });
+    p.preview.push(PreviewGear::turning("gear 1", with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore), V2::ZERO, 0.0, 0.0));
+    p.preview.push(PreviewGear::turning("gear 2", with_bore(Region { outer: vec![o2], holes: vec![] }, &s.bore2), V2::new(a, 0.0), 0.0, 0.0));
 }

@@ -1441,16 +1441,6 @@ pub fn train_placement(origin: V2, frame: &Frame, turn: [f64; 3]) -> Frame {
     frame.compose(&Frame { origin: sub3(o, r(o)), x: r([1.0, 0.0, 0.0]), z: r([0.0, 0.0, 1.0]) })
 }
 
-/// The circles of a flat drawing that touch no other (neither tangent outside or inside nor
-/// concentric): gears that would mesh with nothing. One circle alone is a single gear, none.
-pub fn meshes_nothing(circles: &[Circle]) -> Vec<usize> {
-    let n = circles.len();
-    if n < 2 {
-        return Vec::new();
-    }
-    (0..n).filter(|i| (0..n).all(|j| j == *i || matches!(touch(&circles[*i], &circles[j]), Touch::Apart | Touch::Inside | Touch::Crossing))).collect()
-}
-
 /// `text` with the gears it names by number ("gear 3", "gears 2 and 3") named by `name` (from
 /// the gear's index: "circle c3", "member 5").
 pub fn rename_gears(text: &str, name: &dyn Fn(usize) -> String) -> String {

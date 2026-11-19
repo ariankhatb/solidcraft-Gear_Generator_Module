@@ -55,7 +55,7 @@
 
 use std::f64::consts::{PI, TAU};
 
-use crate::axes::{Axis, num};
+use crate::axes::{Axis, dot, len as norm, num, sub};
 use crate::geom::{Outline, Region, Seg, V2};
 use crate::hub::{Bore, BoreKind};
 use crate::involute::{Involute, external_outline, mesh_external, mesh_phase};
@@ -489,15 +489,6 @@ pub fn check(s: &Spec) -> Result<(), String> {
 
 type V3 = [f64; 3];
 
-fn sub(a: V3, b: V3) -> V3 {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-fn dot(a: V3, b: V3) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-fn norm(a: V3) -> f64 {
-    dot(a, a).sqrt()
-}
 fn unit(a: V3) -> V3 {
     let l = norm(a);
     [a[0] / l, a[1] / l, a[2] / l]
@@ -957,16 +948,13 @@ fn torsen_b_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
     let mut roles = vec![Role::Side, Role::Side];
     let mut meshes = Vec::new();
     let mut links = Vec::new();
-    let mut preview = vec![PreviewGear {
-        name: "side gear A".into(),
-        region: Region { outer: vec![external_outline(&ga, 0.0).0], holes: vec![Outline::circle(V2::ZERO, axle / 2.0)] },
-        center: V2::ZERO,
-        speed: 1.0,
-        slide: 0.0,
-        pitch_radius: ga.r(),
-        period: 0.0,
-        orbit: 0.0,
-    }];
+    let mut preview = vec![PreviewGear::turning(
+        "side gear A",
+        Region { outer: vec![external_outline(&ga, 0.0).0], holes: vec![Outline::circle(V2::ZERO, axle / 2.0)] },
+        V2::ZERO,
+        1.0,
+        ga.r(),
+    )];
     let gap = d.backlash * d.pa().to_radians().cos() * beta.to_radians().cos();
     let cuts = Vec::new();
     let (fs, fe) = (f64::from(zs), f64::from(ze));
@@ -994,8 +982,8 @@ fn torsen_b_core(s: &Spec, p: &mut Plan) -> Result<Core, String> {
         links.push((0, i1, ga.r(), e1.r()));
         links.push((i1, i1 + 1, e1.r(), e2.r()));
         links.push((i1 + 1, 1, e2.r(), gb.r()));
-        preview.push(PreviewGear { name: label(1), region: Region { outer: vec![external_outline(&e1, p1).0], holes: vec![] }, center: c1, speed: -fs / fe, slide: 0.0, pitch_radius: e1.r(), period: 0.0, orbit: 0.0 });
-        preview.push(PreviewGear { name: label(2), region: Region { outer: vec![external_outline(&e2, p2).0], holes: vec![] }, center: c2, speed: fs / fe, slide: 0.0, pitch_radius: e2.r(), period: 0.0, orbit: 0.0 });
+        preview.push(PreviewGear::turning(label(1), Region { outer: vec![external_outline(&e1, p1).0], holes: vec![] }, c1, -fs / fe, e1.r()));
+        preview.push(PreviewGear::turning(label(2), Region { outer: vec![external_outline(&e2, p2).0], holes: vec![] }, c2, fs / fe, e2.r()));
     }
     let wall = if d.wall > 0.0 { d.wall } else { (2.0 * m).max(3.0) };
     let case_r = a + ra_e + clr + wall;

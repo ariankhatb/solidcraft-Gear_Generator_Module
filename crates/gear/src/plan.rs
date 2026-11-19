@@ -667,6 +667,23 @@ pub enum Step {
     Placed { frame: Frame, step: Box<Step> },
 }
 
+impl Step {
+    /// What the step does to its body (a placed step's own).
+    pub fn op(&self) -> Op {
+        match self {
+            Step::Placed { step, .. } => step.op(),
+            Step::Prism { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => *op,
+        }
+    }
+    /// The step's operation, to change (a placed step's own).
+    pub fn op_mut(&mut self) -> &mut Op {
+        match self {
+            Step::Placed { step, .. } => step.op_mut(),
+            Step::Prism { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => op,
+        }
+    }
+}
+
 /// The most curves the kernel takes in one loft (all sections together, each spline counted as
 /// its spans: [`loft_curves`]).
 pub const LOFT_CURVE_LIMIT: usize = 16_384;
@@ -707,6 +724,14 @@ pub fn taper_turn(twist: f64, scale: f64, s: f64) -> f64 {
     if (scale - 1.0).abs() < 1e-12 || scale <= 0.0 || s <= 0.0 { 0.0 } else { twist * s.ln() / scale.ln() }
 }
 
+/// Section `i` of `n` (n ≥ 2) of a taper ([`Step::Taper`], [`Step::RingTaper`]): the outline
+/// scaled and turned, and how far along the taper's height it lies (0…1).
+pub fn taper_section(outline: &Outline, twist: f64, scale: f64, i: usize, n: usize) -> (Outline, f64) {
+    let t = i as f64 / (n - 1) as f64;
+    let k = 1.0 + (scale - 1.0) * t;
+    (outline.scaled(k).rotated(taper_turn(twist, scale, k)), t)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Body {
     pub name: String,
@@ -734,6 +759,10 @@ pub struct PreviewGear {
 }
 
 impl PreviewGear {
+    /// A member that turns about its own centre at `speed` (no slide, no orbit).
+    pub fn turning(name: impl Into<String>, region: Region, center: V2, speed: f64, pitch_radius: f64) -> PreviewGear {
+        PreviewGear { name: name.into(), region, center, speed, slide: 0.0, pitch_radius, period: 0.0, orbit: 0.0 }
+    }
     /// Where the outline's point `q` is when the driver has turned `t` radians: turned about the
     /// centre (which itself goes round the origin when `orbit` is set), or slid along +x (a
     /// worm's axial section along +y) by whole-pitch-wrapped steps.
@@ -1510,7 +1539,7 @@ fn single(s: &Spec, p: &mut Plan) {
     let mut steps = crate::body::tooth_body(s, &g, &f, 0.0, s.face_width, s.kind == Kind::Herringbone, p, "gear");
     hub_steps(s, &s.bore, f.rf - s.elephant_foot, s.face_width, &mut steps, p, "gear");
     p.bodies.push(Body { name: name(s, &format!("Gear z{}", s.teeth)), frame: Frame::at(s.origin), steps });
-    p.preview.push(PreviewGear { name: "gear".into(), region: with_bore(region, &s.bore), center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: g.r() , orbit: 0.0, period: 0.0});
+    p.preview.push(PreviewGear::turning("gear", with_bore(region, &s.bore), V2::ZERO, 1.0, g.r()));
 }
 
 /// A ring gear's tooth data for [`Plan::teeth`].
@@ -1692,16 +1721,14 @@ fn pair(s: &Spec, p: &mut Plan) {
             p.teeth_phase("gear 2", "gear2_phase", format!("pi * 1 rad + pi / {{teeth2}} * 1 rad{turn}"));
         }
     }
-    p.preview.push(PreviewGear { name: "gear 1".into(), region: with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore), center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: g1.r(), orbit: 0.0, period: 0.0 });
-    p.preview.push(PreviewGear {
-        name: "gear 2".into(),
-        region: with_bore(Region { outer: vec![o2], holes: vec![] }, &s.bore2),
-        center: V2::new(a, 0.0),
-        speed: -f64::from(s.teeth) / f64::from(s.teeth2),
-        slide: 0.0,
-        pitch_radius: g2.r(),
-        orbit: 0.0, period: 0.0,
-    });
+    p.preview.push(PreviewGear::turning("gear 1", with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore), V2::ZERO, 1.0, g1.r()));
+    p.preview.push(PreviewGear::turning(
+        "gear 2",
+        with_bore(Region { outer: vec![o2], holes: vec![] }, &s.bore2),
+        V2::new(a, 0.0),
+        -f64::from(s.teeth) / f64::from(s.teeth2),
+        g2.r(),
+    ));
 }
 
 fn mesh_facts(p: &mut Plan, m: &crate::involute::Mesh) {
@@ -1870,15 +1897,13 @@ fn planetary(s: &Spec, p: &mut Plan) {
                 p.teeth_phase("planet", &format!("planet{}_phase", k + 1), format!("{t} * 1 rad + pi * 1 rad + pi / {{teeth2}} * 1 rad + {{teeth}} / {{teeth2}} * {t} * 1 rad"));
             }
         }
-        p.preview.push(PreviewGear {
-            name: format!("planet {}", k + 1),
-            region: with_bore(Region { outer: vec![o.clone()], holes: vec![] }, &s.bore2),
-            center: c,
-            speed: -f64::from(zs) / f64::from(zp),
-            slide: 0.0,
-            pitch_radius: planet.r(),
-            orbit: 0.0, period: 0.0,
-        });
+        p.preview.push(PreviewGear::turning(
+            format!("planet {}", k + 1),
+            with_bore(Region { outer: vec![o.clone()], holes: vec![] }, &s.bore2),
+            c,
+            -f64::from(zs) / f64::from(zp),
+            planet.r(),
+        ));
     }
     if placed {
         p.placing.vars = placing;
@@ -1891,8 +1916,8 @@ fn planetary(s: &Spec, p: &mut Plan) {
         crate::body::ring_chamfers(s, ring_flank.rf, ring_gear.r_root() + rim, s.face_width, &mut steps, p, "ring");
         p.bodies.push(Body { name: name(s, &format!("Ring z{zr}")), frame: Frame::at(s.origin), steps });
     }
-    p.preview.insert(0, PreviewGear { name: "sun".into(), region: with_bore(Region { outer: vec![o_sun], holes: vec![] }, &s.bore), center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: sun.r(), orbit: 0.0, period: 0.0 });
-    p.preview.push(PreviewGear { name: "ring".into(), region: ring_region, center: V2::ZERO, speed: -f64::from(zs) / f64::from(zr), slide: 0.0, pitch_radius: ring_gear.gear.r() , orbit: 0.0, period: 0.0});
+    p.preview.insert(0, PreviewGear::turning("sun", with_bore(Region { outer: vec![o_sun], holes: vec![] }, &s.bore), V2::ZERO, 1.0, sun.r()));
+    p.preview.push(PreviewGear::turning("ring", ring_region, V2::ZERO, -f64::from(zs) / f64::from(zr), ring_gear.gear.r()));
 }
 
 /// Where a bevel member's teeth run along its pitch cone: from the toe (`heel − width` from the
@@ -1959,6 +1984,22 @@ pub(crate) fn faces_overlap(s: &Spec, re: f64) -> (f64, f64) {
 /// cone distance `re`) on z = 0 and the cone's apex on +z: cut by a crown gear ([`Crown`]), so
 /// the two members of a pair (cut by the two sides of the same one) are conjugate along the
 /// whole face; the teeth run along `face` and end on the back and front cones.
+/// A bevel gear's virtual spur gear on its back cone (Tredgold): `teeth` at the normal module
+/// m·cos `spiral`, the helix `helix`.
+pub(crate) fn bevel_involute(s: &Spec, teeth: u32, spiral: f64, helix: f64, shift: f64, virtual_teeth: f64) -> Involute {
+    Involute {
+        teeth,
+        module: s.module * spiral.cos(),
+        pressure_angle: s.pressure_angle.to_radians(),
+        helix,
+        shift,
+        rack: s.rack,
+        backlash: s.backlash,
+        tip_shortening: 0.0,
+        virtual_teeth,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, face: ConeFace, p: &mut Plan, who: &str) -> (ConeTeeth, ToothFlank) {
     let m = s.module;
@@ -1969,17 +2010,7 @@ fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, face: Con
     // count. The module is the transverse one at the large end: the normal module is m·cos β.
     let zv = f64::from(z) / delta.cos();
     let shift = if who.contains('1') { s.shift } else { -s.shift };
-    let v = Involute {
-        teeth: z,
-        module: m * spiral.cos(),
-        pressure_angle: s.pressure_angle.to_radians(),
-        helix: spiral,
-        shift,
-        rack: s.rack,
-        backlash: s.backlash,
-        tip_shortening: 0.0,
-        virtual_teeth: zv,
-    };
+    let v = bevel_involute(s, z, spiral, spiral, shift, zv);
     let mn = v.module;
     let at = v.alpha_t();
     // The crown gear's tooth in this gear's spaces: where the gear's teeth are thicker (a
@@ -2308,30 +2339,18 @@ fn bevel(s: &Spec, p: &mut Plan) {
     // (teeth / cos of the pitch cone angle) is rarely whole, and a gear drawn all the way round
     // needs a whole count, so each is drawn with the nearest: the teeth are the 3D ones to
     // within that rounding, and the pair meshes all the way round.
-    let virt = |z: f64, d: f64, helix: f64, shift: f64| Involute {
-        teeth: (z / d.cos().max(1e-3)).round().clamp(3.0, 2000.0) as u32,
-        module: s.module * spiral.cos(),
-        pressure_angle: s.pressure_angle.to_radians(),
-        helix,
-        shift,
-        rack: s.rack,
-        backlash: s.backlash,
-        tip_shortening: 0.0,
-        virtual_teeth: 0.0,
-    };
+    let virt = |z: f64, d: f64, helix: f64, shift: f64| bevel_involute(s, (z / d.cos().max(1e-3)).round().clamp(3.0, 2000.0) as u32, spiral, helix, shift, 0.0);
     let (v1, v2) = (virt(z1, d1, spiral, s.shift), virt(z2, d2, -spiral, -s.shift));
     let (rv1, rv2) = (v1.r(), v2.r());
     p.preview_note = "back-cone (Tredgold) development at the large end, virtual tooth counts rounded".into();
-    p.preview.push(PreviewGear { name: "gear 1".into(), region: Region { outer: vec![external_outline(&v1, 0.0).0], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: rv1, orbit: 0.0, period: 0.0 });
-    p.preview.push(PreviewGear {
-        name: "gear 2".into(),
-        region: Region { outer: vec![external_outline(&v2, mesh_phase(v1.teeth, 0.0, v2.teeth, 0.0)).0], holes: vec![] },
-        center: V2::new(rv1 + rv2, 0.0),
-        speed: -f64::from(v1.teeth) / f64::from(v2.teeth),
-        slide: 0.0,
-        pitch_radius: rv2,
-        orbit: 0.0, period: 0.0,
-    });
+    p.preview.push(PreviewGear::turning("gear 1", Region { outer: vec![external_outline(&v1, 0.0).0], holes: vec![] }, V2::ZERO, 1.0, rv1));
+    p.preview.push(PreviewGear::turning(
+        "gear 2",
+        Region { outer: vec![external_outline(&v2, mesh_phase(v1.teeth, 0.0, v2.teeth, 0.0)).0], holes: vec![] },
+        V2::new(rv1 + rv2, 0.0),
+        -f64::from(v1.teeth) / f64::from(v2.teeth),
+        rv2,
+    ));
 }
 
 /// A bevel's hub on its back face and its bore.
@@ -2426,16 +2445,14 @@ fn crossed(s: &Spec, p: &mut Plan) {
 /// Two gears drawn apart (their axes don't share a plane), each turning at its own speed.
 fn side_by_side(p: &mut Plan, o1: Outline, r1: f64, o2: Outline, r2: f64, speed2: f64) {
     let gap = 0.3 * (r1 + r2);
-    p.preview.push(PreviewGear { name: "gear 1".into(), region: Region { outer: vec![o1], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: r1, orbit: 0.0, period: 0.0 });
-    p.preview.push(PreviewGear {
-        name: "gear 2".into(),
-        region: Region { outer: vec![o2], holes: vec![] },
-        center: V2::new(r1 + r2 + gap + 0.0 * FRAC_PI_2, 0.0),
-        speed: -speed2,
-        slide: 0.0,
-        pitch_radius: r2,
-        orbit: 0.0, period: 0.0,
-    });
+    p.preview.push(PreviewGear::turning("gear 1", Region { outer: vec![o1], holes: vec![] }, V2::ZERO, 1.0, r1));
+    p.preview.push(PreviewGear::turning(
+        "gear 2",
+        Region { outer: vec![o2], holes: vec![] },
+        V2::new(r1 + r2 + gap + 0.0 * FRAC_PI_2, 0.0),
+        -speed2,
+        r2,
+    ));
 }
 
 /// Like [`hub_steps`] for a gear whose face runs from −face/2 to face/2.
@@ -2706,7 +2723,7 @@ fn worm(s: &Spec, p: &mut Plan) {
     // wheel's mid plane at rest (the preview slides it from half a pitch back), as the 3D
     // worm's is.
     let rack_o = rack_outline(&rack_g, n, ha + 0.5 * m).map(&|q: V2| V2::new(-q.y, q.x - PI * m * f64::from(n / 2)), false);
-    p.preview.push(PreviewGear { name: "wheel".into(), region: Region { outer: vec![mid_outline], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: r2, orbit: 0.0, period: 0.0 });
+    p.preview.push(PreviewGear::turning("wheel", Region { outer: vec![mid_outline], holes: vec![] }, V2::ZERO, 1.0, r2));
     p.preview.push(PreviewGear {
         name: "worm".into(),
         region: Region { outer: vec![rack_o], holes: vec![] },
@@ -2742,7 +2759,7 @@ fn cycloidal(s: &Spec, p: &mut Plan) {
         hub_steps(s, &s.bore, f1.rf, s.face_width, &mut steps, p, "gear 1");
         p.bodies.push(Body { name: name(s, &format!("Cycloidal z{z1}")), frame: Frame::at(s.origin), steps });
     }
-    p.preview.push(PreviewGear { name: "gear 1".into(), region: with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore), center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: r1, orbit: 0.0, period: 0.0 });
+    p.preview.push(PreviewGear::turning("gear 1", with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore), V2::ZERO, 1.0, r1));
     if !single_only {
         let c2 = Cycloidal { teeth: z2, module: m, rolling_radius_addendum: r1 / 2.0, rolling_radius_dedendum: r2 / 2.0, addendum: 1.0, dedendum: s.rack.dedendum.max(1.2), backlash: s.backlash };
         let ph2 = mesh_phase(z1, 0.0, z2, 0.0);
@@ -2756,15 +2773,13 @@ fn cycloidal(s: &Spec, p: &mut Plan) {
             hub_steps(s, &s.bore2, f2.rf, s.face_width, &mut steps, p, "gear 2");
             p.bodies.push(Body { name: name(s, &format!("Cycloidal z{z2}")), frame: Frame::at(s.origin).shifted([r1 + r2, 0.0, 0.0]), steps });
         }
-        p.preview.push(PreviewGear {
-            name: "gear 2".into(),
-            region: with_bore(Region { outer: vec![o2], holes: vec![] }, &s.bore2),
-            center: V2::new(r1 + r2, 0.0),
-            speed: -f64::from(z1) / f64::from(z2),
-            slide: 0.0,
-            pitch_radius: r2,
-            orbit: 0.0, period: 0.0,
-        });
+        p.preview.push(PreviewGear::turning(
+            "gear 2",
+            with_bore(Region { outer: vec![o2], holes: vec![] }, &s.bore2),
+            V2::new(r1 + r2, 0.0),
+            -f64::from(z1) / f64::from(z2),
+            r2,
+        ));
     }
 }
 
@@ -2843,6 +2858,6 @@ fn drive(s: &Spec, p: &mut Plan) {
     // The input crank carries the disc's centre round the pin circle's; the pins turn the disc
     // back one lobe per turn of the crank.
     p.preview.push(PreviewGear { name: "disc".into(), region, center: V2::new(s.eccentricity, 0.0), speed: -1.0 / (n - 1.0), slide: 0.0, pitch_radius: 0.0, orbit: 1.0, period: 0.0 });
-    p.preview.push(PreviewGear { name: "pins".into(), region: Region { outer: pins, holes: vec![] }, center: V2::ZERO, speed: 0.0, slide: 0.0, pitch_radius: 0.0, orbit: 0.0, period: 0.0 });
+    p.preview.push(PreviewGear::turning("pins", Region { outer: pins, holes: vec![] }, V2::ZERO, 0.0, 0.0));
     p.preview_note = "the disc turns slowly backwards while its centre goes round with the input".into();
 }

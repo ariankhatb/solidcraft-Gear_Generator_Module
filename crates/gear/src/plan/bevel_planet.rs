@@ -63,9 +63,9 @@
 use std::f64::consts::{PI, TAU};
 
 use crate::axes::num;
-use super::{Body, ConeEnds, ConeFace, Frame, Op, Plan, PreviewGear, Spec, Step, Unit, bevel_hub, cone_faces, lined_up_cone_teeth, name, tooth_warnings, wanted};
+use super::{Body, ConeEnds, ConeFace, Frame, Op, Plan, PreviewGear, Spec, Step, Unit, bevel_hub, bevel_involute, cone_faces, lined_up_cone_teeth, name, tooth_warnings, wanted};
 use crate::geom::{Outline, Region, V2};
-use crate::involute::{Internal, Involute, PROFILE_TOLERANCE, ToothSides, external_outline, mesh_phase, mesh_phase_internal, side_points, sided_outline, teeth_outline};
+use crate::involute::{Internal, PROFILE_TOLERANCE, ToothSides, external_outline, mesh_phase, mesh_phase_internal, side_points, sided_outline, teeth_outline};
 use crate::mesh3d::MeshPair3;
 use crate::octoid::Crown;
 
@@ -297,17 +297,7 @@ fn member(s: &Spec, g: &Geometry, z: u32, delta: f64, spiral: f64, phase: f64, f
     let re = g.re;
     let h = re * delta.cos();
     let zv = f64::from(z) / delta.cos();
-    let v = Involute {
-        teeth: z,
-        module: m * spiral.cos(),
-        pressure_angle: s.pressure_angle.to_radians(),
-        helix: spiral,
-        shift: 0.0,
-        rack: s.rack,
-        backlash: s.backlash,
-        tip_shortening: 0.0,
-        virtual_teeth: zv,
-    };
+    let v = bevel_involute(s, z, spiral, spiral, 0.0, zv);
     let mn = v.module;
 
     let crown = crown_of(s, g, delta, spiral);
@@ -725,17 +715,7 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
     }
 
     // ---- Preview: one spoke developed on the back cones (Tredgold) at the large end. ----
-    let virt = |z: u32, d: f64, helix: f64| Involute {
-        teeth: (f64::from(z) / d.cos().abs().max(1e-3)).round().clamp(3.0, 2000.0) as u32,
-        module: s.module * beta.cos(),
-        pressure_angle: s.pressure_angle.to_radians(),
-        helix,
-        shift: 0.0,
-        rack: s.rack,
-        backlash: s.backlash,
-        tip_shortening: 0.0,
-        virtual_teeth: 0.0,
-    };
+    let virt = |z: u32, d: f64, helix: f64| bevel_involute(s, (f64::from(z) / d.cos().abs().max(1e-3)).round().clamp(3.0, 2000.0) as u32, beta, helix, 0.0, 0.0);
     let (vs, vp) = (virt(zs, g.delta_sun, beta), virt(zp, g.delta_planet, -beta));
     let (rs, rp) = (vs.r(), vp.r());
     let php = mesh_phase(vs.teeth, 0.0, vp.teeth, 0.0);
@@ -745,33 +725,27 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
         g.azimuths.len(),
         if g.azimuths.len() == 1 { "" } else { "s" }
     );
-    p.preview.push(PreviewGear { name: "sun".into(), region: Region { outer: vec![external_outline(&vs, 0.0).0], holes: vec![] }, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: rs, orbit: 0.0, period: 0.0 });
-    p.preview.push(PreviewGear {
-        name: "planet 1".into(),
-        region: Region { outer: vec![external_outline(&vp, php).0], holes: vec![] },
-        center: V2::new(rs + rp, 0.0),
-        speed: speed_p,
-        slide: 0.0,
-        pitch_radius: rp,
-        orbit: 0.0,
-        period: 0.0,
-    });
+    p.preview.push(PreviewGear::turning("sun", Region { outer: vec![external_outline(&vs, 0.0).0], holes: vec![] }, V2::ZERO, 1.0, rs));
+    p.preview.push(PreviewGear::turning(
+        "planet 1",
+        Region { outer: vec![external_outline(&vp, php).0], holes: vec![] },
+        V2::new(rs + rp, 0.0),
+        speed_p,
+        rp,
+    ));
     match mode {
         BevelPlanetMode::Single => {}
         BevelPlanetMode::Differential => {
             let vf = virt(zf, PI - g.delta_far, beta);
             let rf = vf.r();
             let ph = mesh_phase(vp.teeth, php, vf.teeth, 0.0);
-            p.preview.push(PreviewGear {
-                name: far_name.into(),
-                region: Region { outer: vec![external_outline(&vf, ph).0], holes: vec![] },
-                center: V2::new(rs + 2.0 * rp + rf, 0.0),
-                speed: -speed_p * f64::from(vp.teeth) / f64::from(vf.teeth),
-                slide: 0.0,
-                pitch_radius: rf,
-                orbit: 0.0,
-                period: 0.0,
-            });
+            p.preview.push(PreviewGear::turning(
+                far_name,
+                Region { outer: vec![external_outline(&vf, ph).0], holes: vec![] },
+                V2::new(rs + 2.0 * rp + rf, 0.0),
+                -speed_p * f64::from(vp.teeth) / f64::from(vf.teeth),
+                rf,
+            ));
         }
         BevelPlanetMode::Ring => {
             let vf = virt(zf, g.delta_far, 0.0);
@@ -780,16 +754,13 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
             let ph = mesh_phase_internal(vp.teeth, php, vf.teeth, 0.0);
             let rim = if s.rim > 0.0 { s.rim } else { 3.0 * s.module };
             let teeth = teeth_outline(&flank, vf.teeth, ph + PI / f64::from(vf.teeth));
-            p.preview.push(PreviewGear {
-                name: far_name.into(),
-                region: Region { outer: vec![Outline::circle(V2::ZERO, ring.r_root() + rim)], holes: vec![teeth] },
-                center: V2::new(rs + 2.0 * rp - vf.r(), 0.0),
-                speed: speed_p * f64::from(vp.teeth) / f64::from(vf.teeth),
-                slide: 0.0,
-                pitch_radius: vf.r(),
-                orbit: 0.0,
-                period: 0.0,
-            });
+            p.preview.push(PreviewGear::turning(
+                far_name,
+                Region { outer: vec![Outline::circle(V2::ZERO, ring.r_root() + rim)], holes: vec![teeth] },
+                V2::new(rs + 2.0 * rp - vf.r(), 0.0),
+                speed_p * f64::from(vp.teeth) / f64::from(vf.teeth),
+                vf.r(),
+            ));
         }
     }
 }

@@ -119,10 +119,7 @@ pub fn trims(step: &Step) -> bool {
 
 /// What a step does to its body.
 pub fn op_of(step: &Step) -> Op {
-    match step {
-        Step::Prism { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => *op,
-        Step::Placed { step, .. } => op_of(step),
-    }
+    step.op()
 }
 
 /// The tries a step gets, in order, each with the blank's move along the axis: a trimming blank

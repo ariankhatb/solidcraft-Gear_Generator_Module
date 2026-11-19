@@ -11,7 +11,11 @@ pick becomes a gear at the size you drew it. The whole drivetrain is built as **
 feature**: the gear bodies, a revolute joint per shaft and a gear link per mesh, so turning one gear
 turns the others. Change the sketch and the gears follow.
 
-<p align="center"><img src="docs/gears/img/hero-drivetrain.png" width="760" alt="A mixed drivetrain built by one Gears feature"/></p>
+<p align="center"><img src="docs/gears/img/hero/solidcraft-gears-loop.gif" width="800" alt="A 4x4 car drivetrain built by one Gears feature, turning: input gear, two compound gears, the main reduction gear, 20° bevel bends in both prop shafts and a hypoid final drive at each end"/></p>
+
+<p align="center"><b><a href="docs/gears/media/solidcraft-gears-trailer-720p.mp4">▶ Watch the one-minute trailer</a></b> <sub>(MP4, 720p, 19 MB)</sub><br/><sub>A 4x4 drivetrain drawn as a sketch and finished by one Gears feature: 14.8 : 1, front and rear turning together.</sub></p>
+
+<p align="center"><img src="docs/gears/img/hero-drivetrain.png" width="600" alt="A mixed drivetrain built by one Gears feature"/></p>
 
 <p align="center"><img src="crates/look/icons/design/svg/model/gear_generator.svg" width="72" height="72" alt="Gears"/></p>
 

@@ -793,7 +793,7 @@ fn teeth_tab(ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], input: &m
                 enter |= helix_rows(ui, s, kind);
             }
             // The shift is the planner's: it holds the drawn centre distance (read-only).
-            let shift = reply.and_then(|r| r.profile_shift).map_or_else(|| "worked out to hold the drawn centre distance".to_string(), |x| format!("{} (worked out to hold the drawn centre distance)", dg::fmt((x * 1000.0).round() / 1000.0)));
+            let shift = reply.and_then(|r| r.profile_shift).map_or_else(|| "worked out".to_string(), |x| format!("{} (worked out)", dg::fmt((x * 1000.0).round() / 1000.0)));
             ui.scope(|ui| ui_kit::caption(ui, "Profile shift", &format!("Profile shift: {shift}"))).response.backing_on_hover_text(TIP_SHIFT);
         });
     }

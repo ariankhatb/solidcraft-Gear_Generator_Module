@@ -157,8 +157,9 @@ differential tab), every one optional.
 | `axle.diameter` | the half-shafts' (and the side gears' bores') diameter, mm | that Shaft item's, else 0.4 × side gear A's pitch Ø (in half mm) |
 
 Values outside these ranges are refused when the request is read, with the generator's own words
-(`items[6].differential: a torque-biasing differential needs side gear B with a different tooth
-count…`). The differential's own `drive`, `mount`, `parts` and `keep_out` (single-set keys) don't
+(`items[6].differential: pinions must be between 1 and 6`); what only shows once the gears are
+sized comes back as the reply's `error` (`… a torque-biasing differential needs side gear B with a
+different tooth count …`). The differential's own `drive`, `mount`, `parts` and `keep_out` (single-set keys) don't
 apply: the drivetrain's ring is the drive, every part is built, and the housing cutout is the
 drivetrain's.
 

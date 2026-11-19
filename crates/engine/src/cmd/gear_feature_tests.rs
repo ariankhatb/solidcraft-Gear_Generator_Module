@@ -508,8 +508,9 @@ fn a_hypoid_ring_with_a_differential_builds_it_with_its_joints() {
     let items = json!([{"id": "F", "type": "hypoid", "components": [pick(sk, "ring"), pick(sk, "pin")], "gears": gears, "differential": {"style": "open"}}]);
     let bad = s.execute("gear.calculate", &json!({"items": [{"id": "A", "type": "spur", "components": [pick(sk, "ring")], "differential": {}}]}));
     assert!(bad.is_err_and(|e| e.to_string().contains("rides on a ring gear")), "a differential only on a ring gear");
-    let bad = s.execute("gear.calculate", &json!({"items": [{"id": "F", "type": "hypoid", "components": [pick(sk, "ring"), pick(sk, "pin")], "differential": {"style": "biased", "side_teeth2": 12}}]}));
-    assert!(bad.is_err_and(|e| e.to_string().contains("different tooth count")), "the generator's own checks");
+    let bad = s.execute("gear.calculate", &json!({"items": [{"id": "F", "type": "hypoid", "components": [pick(sk, "ring"), pick(sk, "pin")], "gears": gears, "differential": {"style": "biased", "side_teeth2": 12}}]}));
+    let said = match bad { Err(e) => e.to_string(), Ok(r) => r["error"].as_str().unwrap_or_default().to_string() };
+    assert!(said.contains("different tooth count"), "the generator's own checks: {said}");
     // Its facts for a differential tab: the module chosen, the teeth, case and bolts.
     let calc = run(&mut s, "gear.calculate", json!({"items": items}));
     assert!(calc.get("error").is_none(), "{calc}");

@@ -561,7 +561,7 @@ fn teeth_points(b: &Body, h: f64) -> Vec<V3> {
 
 /// The least radius about its own axis of a body's first step (its tooth roots at their
 /// smallest).
-fn least_root(b: &Body, h: f64) -> f64 {
+pub(crate) fn least_root(b: &Body, h: f64) -> f64 {
     let first = Body { name: String::new(), frame: b.frame, steps: teeth_steps(b) };
     Solid::new(&first, h).material_points(4.0 * h).iter().map(|q| q[0].hypot(q[1])).fold(f64::INFINITY, f64::min)
 }
@@ -1328,6 +1328,20 @@ pub(crate) fn drive_spec_for_tests(s: &Spec) -> Option<Spec> {
     drive_spec(s, 0.0)
 }
 
+/// Ring bolts between a case of radius `r_bore` (the ring's bore) and the ring's least tooth root
+/// radius `root`: (bolts, bolt size M, bolt circle radius, flange radius, flange thickness), the
+/// sizes asked in `d` (0: the largest bolt that fits, as many as the bolt circle takes), or
+/// `None` when no bolt fits between them. Shared by a differential's own drive and a drivetrain's
+/// ring gear carrying one.
+pub(crate) fn ring_bolt_layout(d: &Diff, r_bore: f64, root: f64, wall: f64) -> Option<(u32, f64, f64, f64, f64)> {
+    let room = root - r_bore;
+    let size = if d.bolt_diameter > 0.0 { Some(d.bolt_diameter) } else { [16.0, 14.0, 12.0, 10.0, 8.0, 6.0, 5.0, 4.0, 3.0].into_iter().find(|b| *b <= room / 1.8) };
+    let b = size.filter(|b| *b <= room / 1.65)?;
+    let rbc = r_bore + room / 2.0;
+    let n = if d.bolts > 0 { d.bolts } else { ((((TAU * rbc / (4.0 * b)).round() as u32) / 2) * 2).clamp(6, 16) };
+    Some((n, b, rbc, rbc + 0.55 * b + (0.8 * b).max(2.0), (1.2 * b).max(wall)))
+}
+
 fn plan_drive(s: &Spec, core: &Core, r_case: f64, p: &mut Plan) -> Result<Option<Drive>, String> {
     let d = &s.diff;
     let bolted = d.mount == Mount::Bolted && d.ring_bolts;
@@ -1399,19 +1413,15 @@ fn plan_drive(s: &Spec, core: &Core, r_case: f64, p: &mut Plan) -> Result<Option
     let mut bolts = None;
     let mut flange = None;
     if bolted {
-        let room = root - r_bore;
-        let size = if d.bolt_diameter > 0.0 { Some(d.bolt_diameter) } else { [16.0, 14.0, 12.0, 10.0, 8.0, 6.0, 5.0, 4.0, 3.0].into_iter().find(|b| *b <= room / 1.8) };
-        match size {
-            Some(b) if b <= room / 1.65 => {
-                let rbc = r_bore + room / 2.0;
-                let n = if d.bolts > 0 { d.bolts } else { ((((TAU * rbc / (4.0 * b)).round() as u32) / 2) * 2).clamp(6, 16) };
+        match ring_bolt_layout(d, r_bore, root, core.wall) {
+            Some((n, b, rbc, rf, t)) => {
                 let depth = 1.5 * b;
                 let holes = crate::hub::lightening_holes(n, 0.85 * b, rbc, PI / f64::from(n));
                 ring.steps.push(Step::Prism { region: Region { outer: holes, holes: vec![] }, z0: lo - 1.0, height: depth + 1.0, twist: 0.0, op: Op::Cut });
                 bolts = Some((n, b, rbc));
-                flange = Some((rbc + 0.55 * b + (0.8 * b).max(2.0), (1.2 * b).max(core.wall)));
+                flange = Some((rf, t));
             }
-            _ => {
+            None => {
                 p.warn(format!(
                     "no room for ring bolts between the case (Ø{}) and the ring's tooth roots (Ø{}): bolts left out; use a bigger ring gear or the integral mount",
                     num(2.0 * r_bore),

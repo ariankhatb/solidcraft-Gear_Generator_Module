@@ -130,6 +130,43 @@ angle (usually 90°) and **offset** from it by less than the ring's pitch radius
 tooth counts (Size by Teeth) to set the ratio. Without them the pinion is taken as a quarter of the
 ring (a note says so). Example `10`: ring 37, pinion 9, 15 mm offset.
 
+### A differential in the ring gear
+
+A Hypoid Pair (or a Bevel Pair: its larger gear is the ring) can carry a whole **differential** in
+its ring gear, as a car's axle does: switched on for the ring gear (`differential` in a script; the Gears dialog's differential settings), it is a design of its own with every setting of the single-set Differential type ([scripting](scripting.md#a-differential-on-a-ring-gear)). You draw nothing
+more: the planner knows the ring's axis (usually square to your sketch) and builds on it.
+
+| Part | Bodies | How it moves |
+|---|---|---|
+| **Case**, with its pinion pins and a flange the ring is bolted to | `Diff F case` | fixed to the ring gear |
+| **Side gears**, each with its **half-shaft** | `Diff F side A + axle`, `Diff F side B + axle` | on the ring's axis, jointed to the case |
+| **Spider pinions** (2 by default) | `Diff F pinion 1`, … | each on its pin, jointed to the case |
+
+- **Where:** its middle on the ring's axis where the pinion's axis passes it (a bevel's apex, a
+  hypoid pinion's closest approach). Side gear B is on the side the ring's teeth face, side A
+  behind the ring.
+- **Size:** Auto takes the largest module (16-tooth side gears and 10-tooth pinions for an open
+  one) whose case is at most 0.6 × the ring's pitch diameter, so it sits inside the ring like a
+  real differential; the ring's bore is opened to the case (or the case grows out to the bore).
+  The module (and every other setting) can be set.
+- **Half-shafts:** each reaches 1.5 × the ring's pitch diameter from the middle (half-shaft
+  length), Ø 0.4 × the side gears' pitch diameter. A **Shaft** item drawn on
+  the ring's axis is used instead: the half-shafts run to its ends, at its diameter, and it is not
+  made as a bar of its own.
+- **Style:** Open (equal side gears), Torque-biasing (uneven side gears: a fixed torque
+  split), Torsen B (helical elements), Torsen A (worm elements): the single-set Differential type's
+  styles, with their own teeth, pinions (Torsen: element pairs), angles, pins, case wall, bearings and windows.
+
+**Motion.** An open differential has two degrees of freedom, so with both wheels free the
+assembly has to pick one. As the single-set differential does, side gear A is left free and the
+pinions and side gear B follow it relative to the case. Every side gear and pinion is jointed to
+the case, so turning the drivetrain turns both half-shafts with the case: the car driving
+straight. Drive side gear A's joint to see a wheel slip: the pinions spin on their pins and side
+gear B turns the other way relative to the case.
+
+With a housing cutout, the cutout holds the case's turning envelope and both half-shafts'
+channels. A ring too small for a differential is refused with what would fit.
+
 ## Worm and Wheel
 
 **Sketch:** the wheel's pitch circle and the worm's axis line in the **wheel's plane**, square to

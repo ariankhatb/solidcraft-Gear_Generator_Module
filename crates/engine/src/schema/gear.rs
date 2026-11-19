@@ -1106,6 +1106,101 @@ pub struct GearItemParams {
     pub planets: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub carrier: Option<bool>,
+    /// Hypoid or bevel pair: a differential carried by its ring gear (the case rigid with the
+    /// ring, side gears and half-shafts on the ring's axis, pinions on the case).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub differential: Option<GearItemDiffParams>,
+}
+
+/// An item's differential: its ring gear becomes a differential's ring, the whole differential
+/// designed with the drivetrain (the single-set differential's settings, without its own drive).
+/// Every field is optional: left out, the style's default (or Auto, worked out from the ring).
+/// Lengths in mm, angles in degrees; ranges as `docs/gears/scripting.md` lists them.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct GearItemDiffParams {
+    /// open (default) | biased | torsen_b | torsen_a; a style starts from its own defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    /// The side gears' and pinions' module (bevel: large end; Torsen: normal); Auto: the largest
+    /// whose case is at most 0.6 × the ring's pitch diameter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module: Option<f64>,
+    /// Side gear A's teeth (open 16, biased 12, Torsen B 18, Torsen A 6 worm starts).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side_teeth: Option<u32>,
+    /// Side gear B's teeth (0: as A; biased 18: it needs a different count).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side_teeth2: Option<u32>,
+    /// The spider pinions' or element gears' teeth (open 10, biased 12, Torsen B 11, Torsen A 15).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinion_teeth: Option<u32>,
+    /// Spider pinions (bevel styles, 1 to 6) or element pairs (Torsen, 1 to 8); default 2
+    /// (Torsen B 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinions: Option<u32>,
+    /// The side gears' face width (0: 0.3 × cone distance; Torsen 8 modules).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face_width: Option<f64>,
+    /// Spiral angle of the bevel side gears and pinions, ±45 (0: straight).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spiral_angle: Option<f64>,
+    /// Torsen helix angle, 0 to 80 (Torsen B 30, Torsen A 60).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub helix_angle: Option<f64>,
+    /// Pressure angle, 14.5 to 30 (0: 20).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pressure_angle: Option<f64>,
+    /// Backlash, mm (default 0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backlash: Option<f64>,
+    /// Friction coefficient the Torsen bias estimate assumes, 0 to 0.5 (default 0.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub friction: Option<f64>,
+    /// Pinion pin diameter (0: from the pinions' small ends).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_diameter: Option<f64>,
+    /// Case wall (0: from the size), thrust washer allowance (0: from the size) and running
+    /// clearance round the gears inside the case (default 0.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub washer: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<f64>,
+    /// The case bearings on its journals, by name ("6800", "30205"...; absent: the smallest
+    /// whose bore takes the side gear hubs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bearing: Option<String>,
+    /// Assembly windows in the case between the pinions (default false: plain stock).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows: Option<bool>,
+    /// The ring bolted to a flange on the case (default true; false: the ring sits on the case,
+    /// fixed to it all the same), the bolts (0: from the bolt circle) and their size (0: the
+    /// largest that fits).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ring_bolts: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bolts: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bolt_diameter: Option<f64>,
+    /// The half-shafts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axle: Option<GearAxleParams>,
+}
+
+/// A differential's half-shafts: each one's reach from the differential's middle along the
+/// ring's axis (mm; Auto 1.5 × the ring's pitch diameter, or to the ends of a Shaft item drawn on
+/// the axis) and their diameter (mm; Auto from the side gears, or that Shaft item's).
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct GearAxleParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diameter: Option<f64>,
 }
 
 /// A gear of an item: the item (its id, or its index) and which of its gears (0-based; `port`
@@ -1869,10 +1964,28 @@ pub struct GearResult {
     /// circles in its sketch that nothing picks), not used until picked.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub detail_suggestions: Vec<GearDetailSuggestion>,
+    /// `items`: each differential on a ring gear (an item's `differential`): what its planner
+    /// worked out (module and teeth chosen, case, bearings, pins, ring bolts, half-shafts, speeds,
+    /// torque split, Torsen bias), its warnings and summary, for a differential tab.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub differentials: Vec<GearDiffReply>,
     /// `items`: why nothing can be built (`gear.calculate` still says per gear and per link
     /// what was found; `gear.create` refuses with it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// A differential on a ring gear as planned (`GearResult::differentials`).
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct GearDiffReply {
+    /// The item's id and its ring gear.
+    pub ring: GearEndReply,
+    /// Its facts, labels without the "differential Gear X: " the set's `facts` have.
+    pub facts: Vec<GearFact>,
+    pub warnings: Vec<String>,
+    /// One line for people: style, module, pinions, case and half-shaft sizes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// A gear of an item in a reply.

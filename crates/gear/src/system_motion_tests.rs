@@ -123,3 +123,141 @@ fn front_and_rear_axles_turn_the_same_way_about_y() {
     assert!(front * rear > 0.0, "the front axle turns {front} about +y per turn of the prop shaft, the rear {rear}");
 }
 
+// ---------------------------------------------------------------------------------------------
+// Differentials on the hypoid rings (the 4×4's axles)
+// ---------------------------------------------------------------------------------------------
+
+fn with_diff(mut it: GearItem) -> GearItem {
+    it.differential = Some(crate::items::DiffItem::default());
+    it
+}
+
+fn body_named(sp: &SystemPlan, name: &str) -> usize {
+    sp.plan.bodies.iter().position(|b| b.name == name).unwrap_or_else(|| panic!("no body {name}: {:?}", sp.plan.bodies.iter().map(|b| b.name.clone()).collect::<Vec<_>>()))
+}
+
+/// Member `m`'s turn about the world's y per turn of `root`, as the joints have it: through the
+/// links where they reach it, else (a differential's side gears and pinions, whose links start
+/// at the free side gear A) with the member it turns on: its carrier, or a mate's carrier on its
+/// own axis (the engine's joint base), its own turn on it 0 while nothing drives it.
+fn world_y(sp: &SystemPlan, root: usize, m: usize) -> f64 {
+    let asm = &sp.plan.assembly;
+    if let Some(r) = asm.ratio(root, m) {
+        return r * asm.members[m].axis.dir[1];
+    }
+    let coaxial = |a: usize, b: usize| {
+        let (x, y) = (&asm.members[a].axis, &asm.members[b].axis);
+        crate::axes::len(crate::axes::cross(x.dir, y.dir)) < 1e-9 && x.distance(y.origin) < 1e-6
+    };
+    let base = asm.members[m].carrier.or_else(|| {
+        asm.links.iter().find_map(|l| {
+            let (a, b) = l.members();
+            let other = if a == m {
+                b
+            } else if b == m {
+                a
+            } else {
+                return None;
+            };
+            asm.members[other].carrier.filter(|c| *c != m && coaxial(*c, m))
+        })
+    });
+    world_y(sp, root, base.unwrap_or_else(|| panic!("member {m} turns on nothing the drive reaches")))
+}
+
+fn rigid_pair(sp: &SystemPlan, p: usize, q: usize) -> bool {
+    sp.plan.assembly.links.iter().any(|l| {
+        let (x, y) = l.members();
+        matches!(l, crate::plan::AssemblyLink::Rigid { .. }) && ((x, y) == (p, q) || (x, y) == (q, p))
+    })
+}
+
+#[test]
+fn a_hypoid_ring_carries_a_differential_that_turns_with_it_and_meshes() {
+    for x in [80.0, -80.0] {
+        let sp = planned(&[with_diff(hypoid(x))], &[]);
+        let ring = sp.body(g(0, 0)).unwrap();
+        let pinion = sp.body(g(0, 1)).unwrap();
+        let case = body_named(&sp, "Diff H case");
+        let (a, b) = (body_named(&sp, "Diff H side A + axle"), body_named(&sp, "Diff H side B + axle"));
+        let p1 = body_named(&sp, "Diff H pinion 1");
+        let asm = &sp.plan.assembly;
+        // The case is bolted to the ring; the pinions turn on the case; the sides on the ring's axis.
+        assert!(rigid_pair(&sp, ring, case));
+        assert_eq!(asm.members[p1].carrier, Some(case));
+        let ring_axis = &asm.members[ring].axis;
+        for s in [case, a, b] {
+            assert!(ring_axis.distance(asm.members[s].axis.origin) < 1e-6 && crate::axes::len(crate::axes::cross(ring_axis.dir, asm.members[s].axis.dir)) < 1e-9);
+        }
+        // Driven straight: the half-shafts turn with the case, which turns with the ring.
+        let (wr, wc, wa, wb) = (world_y(&sp, pinion, ring), world_y(&sp, pinion, case), world_y(&sp, pinion, a), world_y(&sp, pinion, b));
+        assert!(wr.abs() > 0.1 && (wc - wr).abs() < 1e-9 && (wa - wr).abs() < 1e-9 && (wb - wr).abs() < 1e-9, "ring {wr} case {wc} sides {wa} {wb}");
+        // Open: with the case held, side B turns back as fast as side A turns on.
+        let same = |k: usize| if crate::axes::dot(asm.members[k].axis.dir, ring_axis.dir) < 0.0 { -1.0 } else { 1.0 };
+        let rel = asm.ratio(a, b).unwrap() * same(a) * same(b);
+        assert!((rel + 1.0).abs() < 1e-9, "side B per side A, the case held: {rel}");
+        // The side gear and the pinion mesh as the assembly turns them (the case held).
+        let m = sp.plan.facts.iter().find(|f| f.label.ends_with("differential module")).map_or(0.5, |f| f.value);
+        let ratio = spin_ratio(&sp, a, p1);
+        let turn = 1.5 * std::f64::consts::TAU / 16.0;
+        let mut pair = crate::mesh3d::Pair::for_run(&sp.plan.bodies[a], &sp.plan.bodies[p1], 0.05, 0.2, ratio, -turn, turn);
+        let rest = pair.at(0.0, 0.0).penetration;
+        let good = pair.run(ratio, 0.0, -turn, turn, 5).penetration;
+        let bad = pair.run(-ratio, 0.0, -turn, turn, 5).penetration;
+        assert!(rest <= 0.05 * m && good <= 0.05 * m && bad > 0.2 * m, "side A and pinion 1: at rest {rest}, turned {good}, the other way {bad}");
+        // Each half-shaft reaches 1.5 ring diameters (75 mm) from the middle, along the axis.
+        for s in [a, b] {
+            let (lo, hi) = crate::mesh3d::Solid::new(&sp.plan.bodies[s], 1.0).bounds();
+            assert!((lo[1].abs().max(hi[1].abs()) - 75.0).abs() < 1.0, "{lo:?} {hi:?}");
+        }
+        assert!(sp.notes.iter().any(|n| n.contains("Gear H carries an open differential")), "{:?}", sp.notes);
+    }
+}
+
+#[test]
+fn front_and_rear_differentials_turn_their_axles_the_same_way_about_y() {
+    let mut prop = GearItem::new("P", ItemKind::Shaft).with(vec![Thing::line([-80.0, 0.0, 0.0], [80.0, 0.0, 0.0])]);
+    prop.shaft_diameter = Some(6.0);
+    let (mut front, mut rear) = (with_diff(hypoid(80.0)), with_diff(hypoid(-80.0)));
+    (front.id, rear.id) = ("F".into(), "B".into());
+    let items = vec![bevel(80.0), bevel(-80.0), front, rear, prop];
+    let sh = |a: GearRef, b: GearRef| ItemLink { a, b, kind: LinkKind::Shaft };
+    let links = vec![sh(g(4, 0), g(0, 0)), sh(g(4, 0), g(1, 0)), sh(g(0, 1), g(2, 1)), sh(g(1, 1), g(3, 1))];
+    let sp = planned(&items, &links);
+    let p = sp.body(g(4, 0)).unwrap();
+    let mut turns = Vec::new();
+    for id in ["F", "B"] {
+        let ring = world_y(&sp, p, body_named(&sp, &format!("Diff {id} case")));
+        let a = world_y(&sp, p, body_named(&sp, &format!("Diff {id} side A + axle")));
+        let b = world_y(&sp, p, body_named(&sp, &format!("Diff {id} side B + axle")));
+        assert!((a - ring).abs() < 1e-9 && (b - ring).abs() < 1e-9, "{id}: case {ring}, half-shafts {a} {b}");
+        turns.push(a);
+    }
+    assert!(turns[0] * turns[1] > 0.0 && (turns[0].abs() - turns[1].abs()).abs() < 1e-9, "front axle {} and rear {} about +y per turn of the prop shaft", turns[0], turns[1]);
+}
+
+#[test]
+fn a_shaft_drawn_on_the_ring_axis_is_the_half_shafts() {
+    let mut axle = GearItem::new("S", ItemKind::Shaft).with(vec![Thing::line([125.0, -60.0, 20.0], [125.0, 50.0, 20.0])]);
+    axle.shaft_diameter = Some(5.0);
+    let sp = planned(&[with_diff(hypoid(80.0)), axle], &[]);
+    let names: Vec<String> = sp.plan.bodies.iter().map(|b| b.name.clone()).collect();
+    assert_eq!(names.iter().filter(|n| n.starts_with("Diff H")).count(), 5, "{names:?}");
+    assert_eq!(names.len(), 7, "the ring, its pinion and the differential's five: {names:?}");
+    let (a, b) = (body_named(&sp, "Diff H side A + axle"), body_named(&sp, "Diff H side B + axle"));
+    let ys: Vec<(f64, f64)> = [a, b].iter().map(|k| crate::mesh3d::Solid::new(&sp.plan.bodies[*k], 1.0).bounds()).map(|(lo, hi)| (lo[1], hi[1])).collect();
+    let (lo, hi) = (ys.iter().map(|y| y.0).fold(f64::MAX, f64::min), ys.iter().map(|y| y.1).fold(f64::MIN, f64::max));
+    assert!((lo + 60.0).abs() < 0.5 && (hi - 50.0).abs() < 0.5, "the half-shafts run {lo} … {hi}");
+    let d = sp.plan.facts.iter().find(|f| f.label.ends_with("half-shaft diameter")).map(|f| f.value);
+    assert_eq!(d, Some(5.0));
+    assert!(sp.notes.iter().any(|n| n.contains("the Shaft item on its axis is the half-shafts")), "{:?}", sp.notes);
+}
+
+#[test]
+fn a_differential_needs_a_ring_gear() {
+    let mut it = GearItem::new("A", ItemKind::Spur).with(vec![Thing::circle([0.0; 3], [0.0, 0.0, 1.0], 20.0)]);
+    it.differential = Some(crate::items::DiffItem::default());
+    let sp = plan_items(&[it], &[], &[], None, &Spec::default()).unwrap();
+    assert!(sp.error.as_deref().is_some_and(|e| e.contains("rides on a ring gear")), "{:?}", sp.error);
+}
+

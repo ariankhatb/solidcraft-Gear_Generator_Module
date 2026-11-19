@@ -76,6 +76,7 @@ Don't mix `items` with the older single-set keys `sketch`, `selection`, `axis1`,
 | `module_block` | The id of a block in `module_blocks`. |
 | `planets`, `carrier` | Planetary: number of planets (Auto: as many as fit, at most 3) and whether a carrier is made (default true). |
 | `diameter` | Shaft: its diameter (mm; Auto: half the smallest root diameter of the gears it carries). |
+| `differential` | Hypoid or bevel pair: its ring gear (the hypoid's ring, the bevel pair's larger gear) becomes a differential, `{style?, module?, side_teeth?, …, axle?: {length?, diameter?}}`; every key in [the table below](#a-differential-on-a-ring-gear). On any other type: refused. |
 | `rim`, `starts`, `throated`, `bevel_style`, `spiral_angle`, `back_height`, `keyway` | Type-specific settings. They are read and checked, but in this build the drivetrain planner doesn't apply them yet (see [UI_TEXT_GAPS.md](UI_TEXT_GAPS.md)); `bevel_style` (straight, spiral, chevron) is applied. |
 
 **Slots.** The order of the components decides what each is, as in the dialog: the first circle of
@@ -113,6 +114,94 @@ bore or hub of the gear it is concentric with.
 | `profile_shift` | −5 … 5, or `"auto"` | `"auto"` |
 | `bore` | `"auto"`, `null` or `"none"` (no hole), or a diameter | `"auto"` |
 | `hub` | `{diameter, length_a, length_b}` | none |
+
+### A differential on a ring gear
+
+`differential` on a hypoid or bevel pair turns its ring gear (the hypoid's ring, the bevel pair's
+larger gear) into a differential's ring: the whole differential is designed with the drivetrain,
+as the single-set `differential` type designs it (`crate::diff`), with the drivetrain's ring as its
+drive. It is its own design: every setting below can be shown and edited (a front end's
+differential tab), every one optional.
+
+```json
+{"id": "F", "type": "hypoid",
+ "components": [{"sketch": "Sketch4", "curve": "c1", "slot": "ring"}, {"sketch": "Sketch4", "curve": "l2", "slot": "axis"}],
+ "gears": [{"gear": 0, "size_by": "teeth", "teeth": 37}, {"gear": 1, "size_by": "teeth", "teeth": 9}],
+ "differential": {"style": "open", "pinions": 2, "axle": {"length": 75}}}
+```
+
+| Key | Values | Default (open / biased / torsen_b / torsen_a) |
+|---|---|---|
+| `style` | `open` (equal bevel side gears, spider pinions) \| `biased` (uneven bevel side gears: a fixed torque split) \| `torsen_b` (helical side gears, paired helical elements) \| `torsen_a` (worm side gears, worm-wheel elements) | `open`. A style starts from its own defaults; the keys given are laid over them. |
+| `module` | mm, > 0 (bevel: large end; Torsen: normal) | Auto: the largest (in 0.05 steps) whose case is at most 0.6 × the ring's pitch Ø |
+| `side_teeth` | side gear A, 6 … 200 (Torsen A: worm starts, 1 … 200) | 16 / 12 / 18 / 6 |
+| `side_teeth2` | side gear B, 0 (as A) or 6 … 200; `biased` needs it different from A | 0 / 18 / 0 / 0 |
+| `pinion_teeth` | spider pinions or element gears, 6 … 200 | 10 / 12 / 11 / 15 |
+| `pinions` | spider pinions 1 … 6 (bevel styles), element pairs 1 … 8 (Torsen) | 2 / 2 / 3 / 2 |
+| `face_width` | side gears' face, mm, ≥ 0 (0: 0.3 × cone distance; Torsen 8 modules) | 0 |
+| `spiral_angle` | bevel side gears and pinions, degrees, −45 … 45 | 0 (straight) |
+| `helix_angle` | Torsen, degrees, 0 … 80 | 30 / 30 / 30 / 60 |
+| `pressure_angle` | degrees, 0 (20) or 14.5 … 30 | 0 |
+| `backlash` | mm, ≥ 0 | 0 |
+| `friction` | Torsen bias estimate's coefficient, 0 … 0.5 | 0.1 |
+| `pin_diameter` | mm, ≥ 0 (0: about half the pinions' small-end roots) | 0 |
+| `wall` | case wall, mm, ≥ 0 (0: 15 % of the gear sphere, at least 3) | 0 |
+| `washer` | thrust washer allowance, mm, ≥ 0 (0: from the size) | 0 |
+| `clearance` | running clearance round the gears in the case, mm, ≥ 0 | 0.5 |
+| `bearing` | case journal bearings by name (`6800`, `6001`, `30205`, …) | the smallest whose bore takes the journal round the axle |
+| `windows` | assembly windows in the case between the pinions | false (plain stock) |
+| `ring_bolts` | the ring bolted to a flange on the case: tapped holes in the ring's back, through holes in the flange | true (false: the ring sits on the case, fixed all the same) |
+| `bolts` | ring bolts, 0 … 64 (0: from the bolt circle, 6 … 16) | 0 |
+| `bolt_diameter` | bolt size M, mm (0: the largest that fits between the case and the ring's roots, M3 … M16) | 0 |
+| `axle.length` | each half-shaft's reach from the differential's middle along the ring's axis, mm | 1.5 × the ring's pitch Ø, or to the ends of a Shaft item drawn on that axis |
+| `axle.diameter` | the half-shafts' (and the side gears' bores') diameter, mm | that Shaft item's, else 0.4 × side gear A's pitch Ø (in half mm) |
+
+Values outside these ranges are refused when the request is read, with the generator's own words
+(`items[6].differential: a torque-biasing differential needs side gear B with a different tooth
+count…`). The differential's own `drive`, `mount`, `parts` and `keep_out` (single-set keys) don't
+apply: the drivetrain's ring is the drive, every part is built, and the housing cutout is the
+drivetrain's.
+
+**Where and what.** Its middle sits on the ring's axis where the pinion's axis passes it (a
+bevel's apex, a hypoid pinion's closest approach). The bodies (item F):
+
+| Body | Joint |
+|---|---|
+| `Diff F case` (with its pinion pins and flange) | `Diff F case fixed`: rigid on the ring gear |
+| `Diff F side A + axle`, `Diff F side B + axle` | `… shaft`: revolute on the case, on the ring's axis |
+| `Diff F pinion 1`, `Diff F pinion 2`, … (`element` for Torsen) | `… shaft`: revolute on the case, on its pin |
+
+The ring's bore is opened to the case's outside (or the case grows out to the ring's bore), and
+with `ring_bolts` a flange on the case sits against the ring's back face. Side B is the side the
+ring's teeth face. A Shaft item drawn on the ring's axis becomes the half-shafts (it is not made
+as a bar of its own).
+
+**Motion.** Side gear A turns each pinion and pinion 1 turns side gear B, all relative to the
+case. An open differential has two degrees of freedom; side gear A is left free (as the single-set
+differential leaves it), so driving the drivetrain turns both half-shafts with the case: driving
+straight. Driving side gear A's joint turns side gear B the other way relative to the case.
+
+**The reply.** `gear.calculate` and `gear.create` reply with `differentials`, one per item with a
+differential, for a differential tab:
+
+```json
+{"ring": {"item": "F", "gear": 0},
+ "facts": [{"label": "differential module", "value": 1.05, "unit": "mm"},
+           {"label": "side gear A teeth", "value": 16, "unit": ""},
+           {"label": "case outside diameter", "value": 29.6, "unit": "mm"},
+           {"label": "ring bolts", "value": 8, "unit": ""}, "…"],
+ "warnings": ["…"],
+ "note": "Gear F carries an open differential: module 1.05, 2 pinions, case Ø29.6, …"}
+```
+
+The facts are the generator's (gear sizes, pin and hub sizes, case outside diameter and length,
+wall, journal bearings and their spread, axle bore, torque share per side, speeds with one side
+held, the biased style's torque split, Torsen bias and lead angles) plus the module and teeth
+chosen, the pinions, the ring bolts and flange, the half-shaft diameter, reach and length. The
+same facts are in the set's `facts` as `differential Gear F: …`. A ring too small for any
+differential is refused: "Gear F's ring gear (Ø…) is too small for a differential (…): use a
+bigger ring, or give the differential a module". With `clearance_body`, the housing cutout holds
+the case's turning envelope (pinions going round with it) and both half-shafts' channels.
 
 ## gear.calculate
 

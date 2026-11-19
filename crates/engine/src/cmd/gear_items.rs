@@ -52,6 +52,8 @@ pub(super) struct Extra {
     built: Vec<(GearRef, Option<f64>, Option<f64>)>,
     /// Concentric circles the drawing suggests as bores and hubs.
     suggested: Vec<GearDetailSuggestion>,
+    /// Each differential on a ring gear, as planned (`GearResult::differentials`).
+    diffs: Vec<solidcraft_gear::plan::system::DiffReply>,
 }
 
 fn ids_of(items: &[GearItemParams]) -> Vec<String> {
@@ -185,6 +187,66 @@ fn positive(cmd: &str, what: &str, v: Option<f64>) -> Result<Option<f64>> {
         Some(x) if !(x.is_finite() && x > 0.0 && x < 1e6) => Err(bad(cmd, format!("`{what}` must be a number greater than 0"))),
         _ => Ok(v),
     }
+}
+
+/// An item's differential as the gear crate takes it (`what`: where it is in the request).
+fn diff_of(cmd: &str, what: &str, kind: gi::ItemKind, d: &crate::schema::gear::GearItemDiffParams) -> Result<gi::DiffItem> {
+    use solidcraft_gear::diff::Style;
+    if !matches!(kind, gi::ItemKind::Hypoid | gi::ItemKind::Bevel) {
+        return Err(bad(cmd, format!("`{what}.differential`: a differential rides on a ring gear: give it to a hypoid or bevel pair")));
+    }
+    let style = match d.style.as_deref() {
+        None => Style::Open,
+        Some(s) => Style::parse(s).ok_or_else(|| {
+            let names: Vec<&str> = Style::ALL.iter().map(|k| k.name()).collect();
+            bad(cmd, format!("`{what}.differential.style` must be one of {}, not `{s}`", names.join(", ")))
+        })?,
+    };
+    let mut out = gi::DiffItem::of(style);
+    let s = &mut out.settings;
+    macro_rules! put {
+        ($field:ident, $src:expr) => {
+            if let Some(v) = $src.clone() {
+                s.$field = v;
+            }
+        };
+    }
+    put!(side_teeth, d.side_teeth);
+    put!(side_teeth2, d.side_teeth2);
+    put!(pinion_teeth, d.pinion_teeth);
+    put!(pinions, d.pinions);
+    put!(face_width, d.face_width);
+    put!(spiral, d.spiral_angle);
+    put!(helix, d.helix_angle);
+    put!(pressure_angle, d.pressure_angle);
+    put!(backlash, d.backlash);
+    put!(friction, d.friction);
+    put!(pin_diameter, d.pin_diameter);
+    put!(wall, d.wall);
+    put!(washer, d.washer);
+    put!(clearance, d.clearance);
+    put!(bearing, d.bearing);
+    put!(windows, d.windows);
+    put!(ring_bolts, d.ring_bolts);
+    put!(bolts, d.bolts);
+    put!(bolt_diameter, d.bolt_diameter);
+    let axle = d.axle.clone().unwrap_or_default();
+    out.module = positive(cmd, &format!("{what}.differential.module"), d.module)?;
+    out.axle_length = positive(cmd, &format!("{what}.differential.axle.length"), axle.length)?;
+    out.axle_diameter = positive(cmd, &format!("{what}.differential.axle.diameter"), axle.diameter)?;
+    // The settings checked as the differential generator checks them (at a stand-in module and
+    // axle where those are Auto: the planner sizes them to the ring).
+    let probe = solidcraft_gear::plan::Spec {
+        diff: solidcraft_gear::diff::Diff {
+            module: out.module.unwrap_or(1.0),
+            axle_diameter: out.axle_diameter.unwrap_or(1.0),
+            drive: solidcraft_gear::diff::DriveKind::None,
+            ..out.settings.clone()
+        },
+        ..solidcraft_gear::plan::Spec::defaults_for(solidcraft_gear::plan::Kind::Differential)
+    };
+    solidcraft_gear::diff::check(&probe).map_err(|e| bad(cmd, format!("`{what}.differential`: {e}")))?;
+    Ok(out)
 }
 
 fn bevel_style(cmd: &str, what: &str, s: Option<&str>) -> Result<Option<gi::BevelStyle>> {
@@ -397,6 +459,9 @@ fn read_items(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemParams])
         item.back_height = positive(cmd, &format!("{what}.back_height"), it.back_height)?;
         item.shaft_diameter = positive(cmd, &format!("{what}.diameter"), it.diameter)?;
         item.keyway = it.keyway == Some(true);
+        if let Some(d) = &it.differential {
+            item.differential = Some(diff_of(cmd, &what, kind, d)?);
+        }
         items.push(item);
     }
     let end = |what: &str, e: &crate::schema::gear::GearEnd| -> Result<GearRef> {
@@ -567,6 +632,7 @@ pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemPar
             }
         }
     }
+    extra.diffs = solidcraft_gear::plan::system::differential_replies(&items, &system);
     let plan = std::mem::take(&mut system.plan);
     Ok((Items { ids, system, extra }, plan, base))
 }
@@ -971,6 +1037,12 @@ pub(super) fn fill(r: &mut GearResult, it: &Items, plan: &Plan, names: Option<&[
         .collect();
     r.suggestions = sp.suggestions.iter().map(|x| GearSuggestionReply { a: end_reply(&it.ids, x.a), b: end_reply(&it.ids, x.b), kind: x.kind.name().into(), why: x.why.clone() }).collect();
     r.detail_suggestions = it.extra.suggested.clone();
+    r.differentials = it
+        .extra
+        .diffs
+        .iter()
+        .map(|d| crate::schema::gear::GearDiffReply { ring: end_reply(&it.ids, d.ring), facts: d.facts.iter().map(super::fact_of).collect(), warnings: d.warnings.clone(), note: d.note.clone() })
+        .collect();
     r.error = sp.error.clone();
     for n in &sp.notes {
         if !r.notes.contains(n) {

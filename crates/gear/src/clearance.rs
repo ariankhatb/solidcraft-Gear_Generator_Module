@@ -367,7 +367,11 @@ pub fn clearance_body(s: &Spec, p: &mut Plan) -> Result<Body, String> {
     let follows = if s.only == 0 { member_follows(s, p, bodies) } else { vec![None; bodies.len()] };
     let mut placed = Vec::new();
     let built_shafts = if s.only == 0 { on_built_shaft(p) } else { vec![false; bodies.len()] };
-    let (body, follow) = build(s, &c, bodies, preview, &follows, &built_shafts, &mut facts, &mut warnings, &mut placed)?;
+    // Members turning on a carrier at an angle to its axis (a differential's pinions on its
+    // case): they go round with it.
+    let own_kind = matches!(s.kind, Kind::Planetary | Kind::BevelPlanetary | Kind::Differential);
+    let carried = if s.only == 0 && !own_kind { tilted_on_carrier(p) } else { vec![None; bodies.len()] };
+    let (body, follow) = build(s, &c, bodies, preview, &follows, &built_shafts, &carried, &mut facts, &mut warnings, &mut placed)?;
     p.clearance_follow = follow;
     p.bearings = placed;
     for (label, value, unit) in facts {
@@ -423,6 +427,22 @@ fn on_built_shaft(p: &Plan) -> Vec<bool> {
         .collect()
 }
 
+/// Per body, the axis it goes round when it turns on a carrier whose axis is at an angle to its
+/// own (a differential's pinions on its case; a planetary set's planets, parallel to theirs, keep
+/// what [`motions`] makes of them).
+fn tilted_on_carrier(p: &Plan) -> Vec<Option<Frame>> {
+    let mut out = vec![None; p.bodies.len()];
+    for m in &p.assembly.members {
+        let Some(c) = m.carrier.and_then(|c| p.assembly.members.get(c)) else { continue };
+        if len(cross(m.axis.dir, c.axis.dir)) > 1e-6
+            && let Some(slot) = out.get_mut(m.body)
+        {
+            *slot = Some(Frame { origin: c.axis.origin, x: crate::axes::square_to(c.axis.dir), z: c.axis.dir });
+        }
+    }
+    out
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build(
     s: &Spec,
@@ -431,6 +451,7 @@ fn build(
     preview: &[PreviewGear],
     follows: &[Option<MemberFollow>],
     built_shafts: &[bool],
+    carried: &[Option<Frame>],
     facts: &mut Vec<(String, f64, Unit)>,
     warn: &mut Vec<String>,
     placed: &mut Vec<PlacedBearing>,
@@ -439,7 +460,17 @@ fn build(
         return Err("clearance: the set has no bodies".into());
     }
     let bearing = c.chosen_bearing()?;
-    let motions = motions(s.kind, bodies);
+    let mut motions = motions(s.kind, bodies);
+    for (k, about) in carried.iter().enumerate() {
+        if let (Some(about), Some(m), Some(b)) = (about, motions.get_mut(k), bodies.get(k)) {
+            let distance = match orbit(about, &b.frame) {
+                Motion::Orbits { distance, .. } => distance,
+                _ => 0.0,
+            };
+            // (Above 0: taken as tilted to the axis it goes round.)
+            *m = Motion::Orbits { about: *about, distance: distance.max(1e-9) };
+        }
+    }
     let ext = if c.shaft_extension > 0.0 { c.shaft_extension } else { 2.0 * s.face_width };
     let (rad, ax) = (c.radial, c.axial);
 
@@ -457,7 +488,7 @@ fn build(
         let z = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q[2]), a.1.max(q[2])));
         let first = Solid::new(&Body { name: String::new(), frame: b.frame, steps: b.steps.iter().take(1).cloned().collect() }, 1.0);
         let mid = 0.5 * (first.z.0 + first.z.1);
-        let planet = matches!(motion, Motion::Orbits { .. }) && matches!(s.kind, Kind::Planetary | Kind::BevelPlanetary);
+        let planet = matches!(motion, Motion::Orbits { .. }) && (matches!(s.kind, Kind::Planetary | Kind::BevelPlanetary) || carried.get(i).is_some_and(Option::is_some));
         let role = match motion {
             Motion::Ring => 0,
             _ if i == 0 => 1,

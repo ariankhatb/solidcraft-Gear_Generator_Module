@@ -38,6 +38,10 @@ use crate::plan::{Assembly, AssemblyLink, AssemblyMember, Body, Frame, Kind, Op,
 use crate::simple::Simple;
 use crate::sketch_rules::{StageGear, auto_module, size_stage};
 
+#[path = "diff_item.rs"]
+mod diff_item;
+pub use diff_item::{DiffReply, differential_replies};
+
 type V = [f64; 3];
 
 /// A whole drivetrain planned from items ([`plan_items`]).
@@ -491,9 +495,18 @@ fn plan_units(items: &[GearItem], st: &[Stage], mapped: &crate::items::Mapped, b
             Err(e) => fail(err, &s.gears, Some(k), e),
         }
     }
-    // Shaft items: each a bar along its line, joined to the gears its cluster holds.
+    // Differentials on ring gears: a unit each (its ring bored to take the case).
+    let diffs = diff_item::plan_diffs(items, &planned, &mut units);
+    for (ring, made) in diffs.units {
+        match made {
+            Ok(u) => units.push(u),
+            Err(e) => fail(err, &[ring], None, e),
+        }
+    }
+    // Shaft items: each a bar along its line, joined to the gears its cluster holds (one on a
+    // differential's axis is its half-shafts).
     for (i, it) in items.iter().enumerate() {
-        let Some(line) = crate::items::shaft_geom(it) else { continue };
+        let Some(line) = crate::items::shaft_geom(it).filter(|_| !diffs.axle_items.contains(&i)) else { continue };
         let me = GearRef::new(i, 0);
         let carried: Vec<GearRef> = st
             .iter()

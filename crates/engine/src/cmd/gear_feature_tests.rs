@@ -495,6 +495,56 @@ fn a_bevel_pair_from_a_side_view_sketch() {
     assert_eq!(made["bodies"].as_array().map(Vec::len), Some(2), "{made}");
 }
 
+/// A hypoid pair whose ring carries a differential (the 4×4's front axle, drawn in one XZ
+/// sketch): the case, the side gears with their half-shafts and the pinions are bodies of the
+/// feature, each with its joint (the case fixed to the ring, the rest turning on the case), and
+/// driving the pinion turns the ring with the whole differential, the half-shafts with the case.
+#[test]
+fn a_hypoid_ring_with_a_differential_builds_it_with_its_joints() {
+    let mut s = Session::default();
+    let a = 20f64.to_radians();
+    let sk = sketch_on(&mut s, plane([0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]), &[circle(125.0, 20.0, 25.0, "ring"), line([80.0, 0.0], [80.0 + 24.36 * a.cos(), 24.36 * a.sin()], "pin")]);
+    let gears = json!([{"gear": 0, "size_by": "teeth", "teeth": 37}, {"gear": 1, "size_by": "teeth", "teeth": 9}]);
+    let items = json!([{"id": "F", "type": "hypoid", "components": [pick(sk, "ring"), pick(sk, "pin")], "gears": gears, "differential": {"style": "open"}}]);
+    let bad = s.execute("gear.calculate", &json!({"items": [{"id": "A", "type": "spur", "components": [pick(sk, "ring")], "differential": {}}]}));
+    assert!(bad.is_err_and(|e| e.to_string().contains("rides on a ring gear")), "a differential only on a ring gear");
+    let bad = s.execute("gear.calculate", &json!({"items": [{"id": "F", "type": "hypoid", "components": [pick(sk, "ring"), pick(sk, "pin")], "differential": {"style": "biased", "side_teeth2": 12}}]}));
+    assert!(bad.is_err_and(|e| e.to_string().contains("different tooth count")), "the generator's own checks");
+    // Its facts for a differential tab: the module chosen, the teeth, case and bolts.
+    let calc = run(&mut s, "gear.calculate", json!({"items": items}));
+    assert!(calc.get("error").is_none(), "{calc}");
+    let d = &calc["differentials"][0];
+    assert_eq!(d["ring"], json!({"item": "F", "gear": 0}), "{calc}");
+    let fact = |l: &str| d["facts"].as_array().unwrap().iter().find(|f| f["label"] == l).and_then(|f| f["value"].as_f64());
+    let module = fact("differential module").unwrap_or(0.0);
+    assert!(module > 0.3 && fact("case outside diameter").is_some_and(|c| c <= 0.6 * 50.0 + 1e-9), "the case fits in the Ø50 ring: {d}");
+    assert_eq!((fact("side gear A teeth"), fact("pinion teeth"), fact("pinions")), (Some(16.0), Some(10.0), Some(2.0)), "{d}");
+    assert!(fact("ring bolts").is_some() || d["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("ring bolts")), "{d}");
+    assert!(d["note"].as_str().is_some_and(|n| n.contains("open differential")), "{d}");
+    let r = run(&mut s, "gear.create", json!({"items": items, "assembly": true, "drive": {"item": "F", "gear": 1}}));
+    no_errors(&s);
+    let bodies: Vec<String> = r["bodies"].as_array().unwrap().iter().map(|b| b.as_str().unwrap().to_string()).collect();
+    for name in ["Gear F·1", "Gear F·2", "Diff F case", "Diff F side A + axle", "Diff F side B + axle", "Diff F pinion 1", "Diff F pinion 2"] {
+        assert!(bodies.iter().any(|b| b == name), "{name}: {bodies:?}");
+    }
+    let joints = |s: &mut Session| -> Vec<(String, f64)> {
+        let l = run(s, "joint.list", json!({}));
+        l["joints"].as_array().unwrap().iter().map(|j| (j["name"].as_str().unwrap().to_string(), j["values"][0]["value"].as_f64().unwrap_or(0.0))).collect()
+    };
+    let names: Vec<String> = joints(&mut s).into_iter().map(|j| j.0).collect();
+    assert!(names.iter().any(|n| n == "Diff F case fixed"), "the case is fixed to the ring: {names:?}");
+    for n in ["Diff F side A + axle shaft", "Diff F side B + axle shaft", "Diff F pinion 1 shaft"] {
+        assert!(names.iter().any(|x| x == n), "{n}: {names:?}");
+    }
+    run(&mut s, "joint.drive", json!({"joint": "Gear F·2 shaft", "value": 90}));
+    let now = joints(&mut s);
+    let value = |n: &str| now.iter().find(|j| j.0 == n).map(|j| j.1).unwrap();
+    assert!(value("Gear F·1 shaft").abs() > 1.0, "the ring turns: {now:?}");
+    for n in ["Diff F side A + axle shaft", "Diff F side B + axle shaft", "Diff F pinion 1 shaft", "Diff F pinion 2 shaft"] {
+        assert!(value(n).abs() < 1e-6, "driving straight, {n} stays put on the case: {now:?}");
+    }
+}
+
 /// A set with its assembly sits in a timeline folder beside its Gears feature: `group` names the
 /// set by either id (the timeline lists the feature), for gear.inspect and gear.update alike.
 #[test]

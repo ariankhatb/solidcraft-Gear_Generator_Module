@@ -389,6 +389,47 @@ pub struct GearItem {
     /// Shaft: diameter (`None`: Auto) and a keyway.
     pub shaft_diameter: Option<f64>,
     pub keyway: bool,
+    /// Hypoid or bevel pair: a differential carried by its ring gear (`None`: none).
+    pub differential: Option<DiffItem>,
+}
+
+/// A differential carried by a hypoid or bevel pair's ring gear (planned with the drivetrain,
+/// its gear set and case by [`crate::diff`]): a case rigid with the ring, two side gears on the
+/// ring's axis with a half-shaft each, and the spider pinions or element gears on the case.
+/// `None`s are Auto.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiffItem {
+    /// The differential's own settings ([`crate::diff::Diff`]: style, teeth, pinions, face,
+    /// angles, pins, case wall, washers, clearance, bearings, windows, ring bolts): the style's
+    /// defaults with what is asked laid over them. Its `module` and `axle_diameter` are used
+    /// only when asked (below); its drive, mount, parts and keep-out are the drivetrain's own
+    /// and not used (the ring gear is the drivetrain's, bolted to a flange on the case when
+    /// `ring_bolts`, the default here).
+    pub settings: crate::diff::Diff,
+    /// The side gears' and pinions' module; Auto: the largest whose case fits inside the ring.
+    pub module: Option<f64>,
+    /// Each half-shaft's reach from the differential's middle along the ring's axis (Auto: 1.5 ×
+    /// the ring's pitch diameter, or to the ends of a Shaft item drawn on that axis) and its
+    /// diameter (Auto: that Shaft item's, else 0.4 × the side gears' pitch diameter).
+    pub axle_length: Option<f64>,
+    pub axle_diameter: Option<f64>,
+}
+
+impl Default for DiffItem {
+    fn default() -> Self {
+        DiffItem::of(crate::diff::Style::Open)
+    }
+}
+
+impl DiffItem {
+    /// A differential of `style` with that style's own settings, its ring bolted to the case.
+    pub fn of(style: crate::diff::Style) -> DiffItem {
+        let settings = crate::diff::Diff { ring_bolts: true, ..crate::diff::Diff::defaults_for(style) };
+        DiffItem { settings, module: None, axle_length: None, axle_diameter: None }
+    }
+    pub fn style(&self) -> crate::diff::Style {
+        self.settings.style
+    }
 }
 
 impl GearItem {
@@ -403,6 +444,7 @@ impl GearItem {
             back_height: None,
             shaft_diameter: None,
             keyway: false,
+            differential: None,
         }
     }
     /// With these things.

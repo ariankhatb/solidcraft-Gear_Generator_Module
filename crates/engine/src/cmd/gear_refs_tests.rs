@@ -11,10 +11,7 @@ use serde_json::{Value, json};
 use solidcraft_doc::FeatureKind;
 
 use crate::Session;
-
-fn run(s: &mut Session, id: &str, p: Value) -> Value {
-    s.execute(id, &p).unwrap_or_else(|e| panic!("{id} {p}: {e}"))
-}
+use super::test_util::{gears_features, run, volume};
 
 fn errors(s: &Session) -> Vec<String> {
     s.model.results.iter().filter_map(|r| r.error.as_ref().map(|e| format!("{}: {e}", r.name))).collect()
@@ -23,14 +20,6 @@ fn errors(s: &Session) -> Vec<String> {
 fn no_errors(s: &Session) {
     let e = errors(s);
     assert!(e.is_empty(), "{e:?}");
-}
-
-fn gears_features(s: &Session) -> Vec<u64> {
-    s.doc.features.iter().filter(|f| matches!(f.kind, FeatureKind::Gears { .. })).map(|f| f.id).collect()
-}
-
-fn volume(s: &mut Session, body: &str) -> f64 {
-    run(s, "inspect.center_of_mass", json!({"bodies": [body]}))["volume"].as_f64().unwrap()
 }
 
 /// A script of `examples/gears/scripts`, run up to (and with) its `gear.create`; the dimensions
@@ -933,23 +922,29 @@ fn a_bored_gear_on_a_shaft_line_gets_no_stub() {
 /// Gears turned, then a sketch edit that changes a tooth count: the driven gear follows its
 /// driver at the new ratio from where they meshed as built (not at the old ratio's angle), so
 /// the teeth stay in mesh at that pose and when driven back to 0.
-#[test]
-fn turned_gears_stay_in_mesh_after_a_tooth_count_changes() {
-    let mut s = Session::default();
-    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Pitch"}));
-    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 20.0, "id": "a"}));
-    run(&mut s, "sketch.circle.center", json!({"center": [50, 0], "radius": 30.0, "id": "b"}));
-    run(&mut s, "sketch.constraint.coincident", json!({"a": "a.center", "b": "origin"}));
-    run(&mut s, "sketch.dimension", json!({"entities": ["a"], "type": "diameter", "value": "40 mm"}));
-    run(&mut s, "sketch.dimension", json!({"entities": ["b"], "type": "diameter", "value": "d2 = 60 mm"}));
-    run(&mut s, "sketch.constraint.tangent", json!({"a": "a", "b": "b"}));
-    run(&mut s, "sketch.dimension", json!({"entities": ["origin", "b.center"], "type": "vertical", "value": "0 mm"}));
-    run(&mut s, "sketch.finish", json!({}));
-    run(&mut s, "gear.create", json!({"assembly": true, "items": [
+/// Example 01's pair: gears A (Ø40, at the origin) and B (Ø`d2` = 60 mm) on tangent pitch
+/// circles in sketch "Pitch", one Gears feature at module 2 with its assembly, A driving.
+fn tangent_pair(s: &mut Session) {
+    run(s, "sketch.create", json!({"plane": "XY", "name": "Pitch"}));
+    run(s, "sketch.circle.center", json!({"center": [0, 0], "radius": 20.0, "id": "a"}));
+    run(s, "sketch.circle.center", json!({"center": [50, 0], "radius": 30.0, "id": "b"}));
+    run(s, "sketch.constraint.coincident", json!({"a": "a.center", "b": "origin"}));
+    run(s, "sketch.dimension", json!({"entities": ["a"], "type": "diameter", "value": "40 mm"}));
+    run(s, "sketch.dimension", json!({"entities": ["b"], "type": "diameter", "value": "d2 = 60 mm"}));
+    run(s, "sketch.constraint.tangent", json!({"a": "a", "b": "b"}));
+    run(s, "sketch.dimension", json!({"entities": ["origin", "b.center"], "type": "vertical", "value": "0 mm"}));
+    run(s, "sketch.finish", json!({}));
+    run(s, "gear.create", json!({"assembly": true, "items": [
         {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a", "slot": "pitch"}]},
         {"id": "B", "type": "spur", "components": [{"sketch": "Pitch", "curve": "b", "slot": "pitch"}]}],
         "links": [{"a": {"item": "A"}, "b": {"item": "B"}, "kind": "mesh"}],
         "module_blocks": [{"id": "M", "module": 2, "members": ["A", "B"]}], "drive": {"item": "A", "gear": 0}}));
+}
+
+#[test]
+fn turned_gears_stay_in_mesh_after_a_tooth_count_changes() {
+    let mut s = Session::default();
+    tangent_pair(&mut s);
     no_errors(&s);
     // Each joint's value as the solve has it (a driven gear's from its link).
     let value = |s: &mut Session, name: &str| {
@@ -974,20 +969,7 @@ fn turned_gears_stay_in_mesh_after_a_tooth_count_changes() {
 #[test]
 fn stepping_a_diameter_keeps_the_teeth_meshed_at_rest_and_turned() {
     let mut s = Session::default();
-    run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Pitch"}));
-    run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 20.0, "id": "a"}));
-    run(&mut s, "sketch.circle.center", json!({"center": [50, 0], "radius": 30.0, "id": "b"}));
-    run(&mut s, "sketch.constraint.coincident", json!({"a": "a.center", "b": "origin"}));
-    run(&mut s, "sketch.dimension", json!({"entities": ["a"], "type": "diameter", "value": "40 mm"}));
-    run(&mut s, "sketch.dimension", json!({"entities": ["b"], "type": "diameter", "value": "d2 = 60 mm"}));
-    run(&mut s, "sketch.constraint.tangent", json!({"a": "a", "b": "b"}));
-    run(&mut s, "sketch.dimension", json!({"entities": ["origin", "b.center"], "type": "vertical", "value": "0 mm"}));
-    run(&mut s, "sketch.finish", json!({}));
-    run(&mut s, "gear.create", json!({"assembly": true, "items": [
-        {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a", "slot": "pitch"}]},
-        {"id": "B", "type": "spur", "components": [{"sketch": "Pitch", "curve": "b", "slot": "pitch"}]}],
-        "links": [{"a": {"item": "A"}, "b": {"item": "B"}, "kind": "mesh"}],
-        "module_blocks": [{"id": "M", "module": 2, "members": ["A", "B"]}], "drive": {"item": "A", "gear": 0}}));
+    tangent_pair(&mut s);
     no_errors(&s);
     let clash = |s: &mut Session| -> f64 {
         let r = run(s, "inspect.interference", json!({"bodies": ["Gear A·1", "Gear B·1"]}));

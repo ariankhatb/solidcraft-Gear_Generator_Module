@@ -4,9 +4,7 @@ use crate::geom::{Seg, V2, inv, inv_inv};
 use crate::involute::{Involute, external_flank, external_outline, mesh_external, shift_sum_for_center};
 use crate::plan::{Kind, Spec, Step, plan};
 
-fn close(a: f64, b: f64, tol: f64) -> bool {
-    (a - b).abs() <= tol
-}
+use crate::test_util::close;
 
 #[test]
 fn involute_function_round_trips() {

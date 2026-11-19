@@ -7,9 +7,7 @@ use std::f64::consts::PI;
 use crate::geom::{Seg, V2, inv, natural_spline};
 use crate::involute::{BasicRack, Internal, Involute, external_flank, external_outline, mesh_external, mesh_internal};
 
-fn close(a: f64, b: f64, tol: f64) -> bool {
-    (a - b).abs() <= tol
-}
+use crate::test_util::close;
 
 fn spur(z: u32, m: f64, x: f64) -> Involute {
     Involute { teeth: z, module: m, shift: x, ..Involute::default() }

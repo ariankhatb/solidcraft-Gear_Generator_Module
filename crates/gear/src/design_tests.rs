@@ -192,7 +192,7 @@ fn suggesting_is_quick() {
     eprintln!("suggest, widest search: {ms:.1} ms, {} results", out.len());
     assert_eq!(out.len(), goal.limit);
     if !cfg!(debug_assertions) {
-        assert!(ms < 1000.0);
+        crate::test_util::assert_quick("suggest, widest search", ms, 1000.0);
     }
 }
 

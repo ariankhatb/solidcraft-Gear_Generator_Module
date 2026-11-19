@@ -4,9 +4,7 @@
 use crate::clearance::Clearance;
 use crate::plan::{AssemblyLink, BevelPlanetMode, Frame, Kind, Plan, Spec, plan};
 
-fn close(a: f64, b: f64) -> bool {
-    (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
-}
+use crate::test_util::close_rel as close;
 
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]

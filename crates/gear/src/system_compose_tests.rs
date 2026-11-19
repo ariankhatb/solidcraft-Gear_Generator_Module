@@ -2,7 +2,7 @@
 //! planners, placed where the drawing puts them and merged into one plan and one assembly.
 
 use crate::analysis::{Efficiencies, drive_table, ratio_between};
-use crate::items::{Drive, GearItem, GearRef, ItemKind, ItemLink, LinkKind, Thing};
+use crate::items::{Drive, GearItem, GearRef, GearSettings, ItemKind, ItemLink, Thing};
 use crate::plan::system::{SystemPlan, plan_items};
 use crate::plan::{AssemblyLink, Spec};
 
@@ -18,15 +18,7 @@ fn circ(c: [f64; 3], n: [f64; 3], r: f64) -> Thing {
 fn line(a: [f64; 3], b: [f64; 3]) -> Thing {
     Thing::line(a, b)
 }
-fn g(item: usize, gear: usize) -> GearRef {
-    GearRef::new(item, gear)
-}
-fn mesh(a: GearRef, b: GearRef) -> ItemLink {
-    ItemLink { a, b, kind: LinkKind::Mesh }
-}
-fn shaft(a: GearRef, b: GearRef) -> ItemLink {
-    ItemLink { a, b, kind: LinkKind::Shaft }
-}
+use crate::test_util::{g, mesh, shaft};
 
 fn planned(items: &[GearItem], links: &[ItemLink], drive: Option<&Drive>) -> SystemPlan {
     let sp = plan_items(items, links, &[], drive, &Spec::default()).unwrap_or_else(|e| panic!("{e}"));
@@ -48,9 +40,7 @@ fn reply_ratio(sp: &SystemPlan, r: GearRef) -> f64 {
     sp.gears.iter().find(|x| x.item == r.item && x.gear == r.gear).and_then(|x| x.ratio).unwrap_or_else(|| panic!("{r:?} has no ratio"))
 }
 
-fn close(a: f64, b: f64) -> bool {
-    (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
-}
+use crate::test_util::close_rel as close;
 
 /// A spur pair; the driven spur's shaft carries a bevel pinion (z up, apex 20 above it), whose
 /// mate (on an x shaft) shares its shaft with a worm wheel; the worm lies across the wheel.

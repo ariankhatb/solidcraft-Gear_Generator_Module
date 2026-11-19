@@ -774,7 +774,7 @@ fn big_gears_plan_quickly() {
             _ => 0,
         };
         eprintln!("timing {kind:?}: {best:.2} ms, first sketch {points} points");
-        assert!(best < 50.0, "{kind:?} took {best:.1} ms");
+        crate::test_util::assert_quick(&format!("{kind:?}"), best, 50.0);
     }
 }
 

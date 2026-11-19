@@ -6,27 +6,10 @@ use serde_json::{Value, json};
 use solidcraft_doc::FeatureKind;
 
 use crate::Session;
-
-fn run(s: &mut Session, id: &str, p: Value) -> Value {
-    s.execute(id, &p).unwrap_or_else(|e| panic!("{id} {p}: {e}"))
-}
-
-fn no_errors(s: &Session) {
-    for r in &s.model.results {
-        assert!(r.error.is_none(), "{}: {:?}", r.name, r.error);
-    }
-}
-
-fn gears_features(s: &Session) -> Vec<u64> {
-    s.doc.features.iter().filter(|f| matches!(f.kind, FeatureKind::Gears { .. })).map(|f| f.id).collect()
-}
+use super::super::test_util::{circle, gears_features, line, no_errors, run, volume};
 
 fn sketches(s: &Session) -> usize {
     s.doc.features.iter().filter(|f| matches!(f.kind, FeatureKind::Sketch { .. })).count()
-}
-
-fn volume(s: &mut Session, body: &str) -> f64 {
-    run(s, "inspect.center_of_mass", json!({"bodies": [body]}))["volume"].as_f64().unwrap()
 }
 
 fn one_feature(p: Value) -> (Session, Value) {
@@ -91,18 +74,7 @@ fn a_sketch_edit_recomputes_the_set_with_its_bodies_components_and_joints() {
     let joints = |r: &Value| r["assembly"]["joints"].clone();
     let bodies = r["bodies"].clone();
     // Gear 2 grows (and gear 1 moves away from it): the circle's radius and centre edited.
-    if let Some(FeatureKind::Sketch { sketch, .. }) = s.doc_mut().feature_mut(sk).map(|f| &mut f.kind) {
-        for c in &mut sketch.curves {
-            if c.id == "g2"
-                && let solidcraft_sketch::CurveKind::Circle { r, .. } = &mut c.kind
-            {
-                *r = 36.0;
-            }
-        }
-        if let Some(p) = sketch.points.iter_mut().find(|p| (p.pos.x - 50.0).abs() < 1e-9) {
-            p.pos.x = 56.0;
-        }
-    }
+    grow_gear_2(&mut s, sk);
     s.refresh();
     no_errors(&s);
     // The feature recomputed by itself; following the sketch moves the joints onto the shafts.
@@ -205,14 +177,6 @@ fn sketch_on(s: &mut Session, plane: Value, draw: &[(&str, Value)]) -> u64 {
     }
     run(s, "sketch.finish", json!({}));
     sk
-}
-
-fn circle(x: f64, y: f64, r: f64, id: &str) -> (&'static str, Value) {
-    ("sketch.circle.center", json!({"center": [x, y], "radius": r, "id": id}))
-}
-
-fn line(a: [f64; 2], b: [f64; 2], id: &str) -> (&'static str, Value) {
-    ("sketch.line", json!({"points": [a, b], "ids": [id]}))
 }
 
 fn plane(origin: [f64; 3], x: [f64; 3], y: [f64; 3]) -> Value {

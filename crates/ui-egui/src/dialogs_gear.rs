@@ -203,6 +203,134 @@ pub struct Gear {
     /// The set's request as the dialog first made it when opened on the set (Edit), its numbers as
     /// f64 and without `ui`: an OK with nothing changed since closes without running.
     pub original: Option<Value>,
+    /// The tab the form shows (the row of icon tabs at its top).
+    pub tab: Tab,
+    /// The Tooth chamfer group is switched on (its size may still be empty: no chamfer).
+    pub chamfer_open: bool,
+    /// The engine's facts on the set as last worked out: (label, value, unit).
+    pub facts: Vec<(String, f64, String)>,
+}
+
+/// The form's tabs, in the order of the tab row. Gears holds the cards and the selected gear's
+/// size; Teeth and Shafts show the selected gear's tooth and shaft settings beside the set's own;
+/// Motion the links, the drive and ratios; Housing the cutout and the output; Differential (only
+/// while a ring gear carries one) the differential; Results what the set came to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Tab {
+    #[default]
+    Gears,
+    Teeth,
+    Shafts,
+    Motion,
+    Housing,
+    Differential,
+    Results,
+}
+
+impl Tab {
+    pub const ALL: [Tab; 7] = [Tab::Gears, Tab::Teeth, Tab::Shafts, Tab::Motion, Tab::Housing, Tab::Differential, Tab::Results];
+
+    /// Its name (the heading under the tab row, and its hover text's first line).
+    pub fn label(self) -> &'static str {
+        match self {
+            Tab::Gears => "Gears",
+            Tab::Teeth => "Teeth",
+            Tab::Shafts => "Shafts & Bearings",
+            Tab::Motion => "Links & Motion",
+            Tab::Housing => "Housing & Output",
+            Tab::Differential => "Differential",
+            Tab::Results => "Results",
+        }
+    }
+
+    /// Its stable key: the tab's handle is `gear:tab:<key>`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Tab::Gears => "gears",
+            Tab::Teeth => "teeth",
+            Tab::Shafts => "shafts",
+            Tab::Motion => "motion",
+            Tab::Housing => "housing",
+            Tab::Differential => "differential",
+            Tab::Results => "results",
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            Tab::Gears => "gear_generator",
+            Tab::Teeth => "gear_helical",
+            Tab::Shafts => "gear_bearing_seat",
+            Tab::Motion => "motion_link",
+            Tab::Housing => "gear_housing_cutout",
+            Tab::Differential => "gear_differential",
+            Tab::Results => "list",
+        }
+    }
+
+    /// What it holds (its hover text).
+    pub fn tip(self) -> &'static str {
+        match self {
+            Tab::Gears => "Gears: the type, New gear, a card per gear with its picks, and the selected gear's size and face.",
+            Tab::Teeth => "Teeth: the selected gear's helix or spiral and profile shift, and the tooth form and chamfer of every gear.",
+            Tab::Shafts => "Shafts & Bearings: the selected gear's bore and hub, a shaft's Ø, and the bearing points.",
+            Tab::Motion => "Links & Motion: meshes and shared shafts, the suggested links, the driver, rpm and torque, the ratio between two gears and the graph.",
+            Tab::Housing => "Housing & Output: the housing cutout with its bearing seats, the operation, Targets, keep-out and assembly.",
+            Tab::Differential => "Differential: the differential carried by a ring gear (its style, pinions, module and half-shafts) and its facts.",
+            Tab::Results => "Results: each gear's teeth, module, speed and torque, the planner's facts and notes, and every warning.",
+        }
+    }
+}
+
+/// The tabs shown: Differential only while a gear carries a differential (and the engine takes
+/// one).
+pub(crate) fn tabs(k: &Gear) -> Vec<Tab> {
+    let diff = differential_supported() && k.items.iter().any(|it| it.diff.is_some());
+    Tab::ALL.into_iter().filter(|t| *t != Tab::Differential || diff).collect()
+}
+
+/// The tab shown: the one chosen, or Gears when that one is gone (a differential switched off).
+pub(crate) fn shown_tab(k: &Gear) -> Tab {
+    if tabs(k).contains(&k.tab) { k.tab } else { Tab::Gears }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: whether the engine takes a differential, in place of asking it.
+    pub(crate) static DIFF_SUPPORTED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether the engine takes an item's `differential` (its schema refuses keys it doesn't know):
+/// the bevel and hypoid gears' Differential toggle and tab show only then.
+pub fn differential_supported() -> bool {
+    #[cfg(test)]
+    if let Some(v) = DIFF_SUPPORTED.with(std::cell::Cell::get) {
+        return v;
+    }
+    static KNOWN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *KNOWN.get_or_init(|| serde_json::from_value::<solidcraft_engine::schema::gear::GearItemParams>(json!({"type": "hypoid", "differential": {"style": "open"}})).is_ok())
+}
+
+/// The gear items a differential can ride on: bevel and hypoid pairs (in the ring gear).
+pub(crate) fn takes_differential(kind: ItemKind) -> bool {
+    matches!(kind, ItemKind::Bevel | ItemKind::Hypoid)
+}
+
+/// The item the Differential tab shows: the selected gear when it carries one, else the first
+/// that does.
+pub(crate) fn diff_item(k: &Gear) -> Option<usize> {
+    let has = |i: usize| k.items.get(i).is_some_and(|it| it.diff.is_some());
+    k.active.filter(|a| has(*a)).or_else(|| (0..k.items.len()).find(|i| has(*i)))
+}
+
+/// The engine's facts of a calculate reply.
+pub(crate) fn facts_of(r: &Value) -> Vec<(String, f64, String)> {
+    r.get("facts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|f| Some((f.get("label")?.as_str()?.to_string(), f.get("value")?.as_f64()?, f.get("unit").and_then(Value::as_str).unwrap_or("").to_string())))
+        .collect()
 }
 
 /// Where the form scrolls to on its next frame.
@@ -578,6 +706,9 @@ fn new(sketch: Option<u64>) -> Gear {
         cutout_rings: Vec::new(),
         scroll: Scroll::Top,
         original: None,
+        tab: Tab::Gears,
+        chamfer_open: false,
+        facts: Vec::new(),
     }
 }
 
@@ -762,6 +893,7 @@ pub fn for_set(set: &solidcraft_engine::schema::gear::GearSet) -> Gear {
         g.chamfer = c.get("size").and_then(Value::as_f64).filter(|v| *v > 0.0).map(|v| shown(v, ValueKind::Length)).unwrap_or_default();
         g.chamfer_faces = CHAMFER_FACES.iter().position(|f| Some(*f) == c.get("faces").and_then(Value::as_str)).unwrap_or(0);
     }
+    g.chamfer_open = !g.chamfer.is_empty();
     g.keep_out_gap = r.get("keep_out_gap").and_then(Value::as_f64).map(|v| shown(v, ValueKind::Length)).unwrap_or_default();
     if r.get("items").is_some_and(Value::is_array) {
         g.items = crate::dialogs_gear_items::items_of(&r, ui.as_ref(), &mut g.graph);
@@ -1129,7 +1261,7 @@ pub(crate) fn next_step(app: &SolveApp, k: &Gear) -> (String, bool) {
         None => match it.optional_slot(app) {
             // A bevel side view without its contact line: sized by its gears' settings.
             Some(more) if it.kind == ItemKind::Bevel && more == "contact line" => (
-                format!("{name} is complete — sized by its gears' teeth and module ({} teeth each at module {} until you set them in Gear {} settings below); or click its contact line to size it from the drawing", gi::SIDE_VIEW_TEETH, gi::SIDE_VIEW_MODULE, crate::dialogs_gear_graph::item_id(a)),
+                format!("{name} is complete — sized by its gears' teeth and module ({} teeth each at module {} until you set them under Gear {} on the Gears tab); or click its contact line to size it from the drawing", gi::SIDE_VIEW_TEETH, gi::SIDE_VIEW_MODULE, crate::dialogs_gear_graph::item_id(a)),
                 false,
             ),
             Some(more) => (format!("{name} is complete — optional: {more}; or New gear for the next one"), false),
@@ -1232,10 +1364,10 @@ fn output(app: &SolveApp, k: &Gear, inputs: &[SelInput], p: &mut Map<String, Val
     p.insert("operation".into(), json!(OPS.get(k.operation).copied().unwrap_or("new")));
     if targets.is_empty() {
         if k.operation != 0 {
-            return Err("Join, Cut and Intersect act on the Targets: pick the bodies (Output › Targets)".into());
+            return Err("Join, Cut and Intersect act on the Targets: pick the bodies (Housing & Output tab › Targets)".into());
         }
         if k.cut_keep_out {
-            return Err("Cut keep-out from Targets needs the housing bodies: pick them under Output › Targets.".into());
+            return Err("Cut keep-out from Targets needs the housing bodies: pick them under Housing & Output › Targets.".into());
         }
     } else {
         p.insert("targets".into(), json!(targets));
@@ -1527,6 +1659,7 @@ pub(crate) fn refresh(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput]) {
                     k.graph.note(r);
                 }
                 k.notes = r.as_ref().map(notes_of).unwrap_or_default();
+                k.facts = r.as_ref().map(facts_of).unwrap_or_default();
                 k.results = r.as_ref().map(|r| results_of(r, &len)).unwrap_or_default();
                 k.contacts = r.as_ref().map(contacts_of).unwrap_or_default();
                 k.built = r.as_ref().map(built_of).unwrap_or_default();

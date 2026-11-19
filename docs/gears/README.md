@@ -13,7 +13,7 @@ This guide is for people who know CAD and gears in general, but not this tool.
 |---|---|
 | [Quick start](quick-start.md) | A spur pair in two minutes, with screenshots |
 | [Sketch conventions](sketch-conventions.md) | What each circle, line and point means; how to fully define the sketch |
-| [The dialog](dialog.md) | Every section and field: what it does, its default and its units |
+| [The dialog](dialog.md) | Every tab, group and field: what it does, its default and its units |
 | [Gear types](gear-types.md) | All 12 types: how to sketch each one and what you get |
 | [Editing and sketch changes](editing.md) | Reopening a set, what follows the sketch, deleted references |
 | [Housing cutout](housing-cutout.md) | One body holding the space the drivetrain needs, with bearing seats |
@@ -40,5 +40,5 @@ joints when Assembly is on).
 5. Each gear picks the tooth count nearest its drawn diameter for the module; the drawn centre
    distances are held exactly by profile shift.
 
-A set-wide **tooth chamfer** is in the dialog's **All gears** section: see
-[The dialog](dialog.md#all-gears).
+A set-wide **tooth chamfer** is on the dialog's **Teeth** tab: see
+[The dialog](dialog.md#teeth).

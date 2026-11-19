@@ -26,7 +26,7 @@ Every gear has a direction along its axis called **side A**:
 - for a gear defined by a circle alone: the sketch plane's normal;
 - when a shaft line is picked for it: the line's direction from its **first point** to its second.
 
-Side B is the other way. Face width is set per side (see [The dialog › Face](dialog.md#face)). The
+Side B is the other way. Face width is set per side (see [The dialog › Face](dialog.md#the-selected-gears-group)). The
 active gear shows a green arrow marked **A** in the view.
 
 ## How the size is decided

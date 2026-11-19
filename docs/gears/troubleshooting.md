@@ -74,8 +74,8 @@ The status line reads "That pick doesn't fit: …" followed by one of these.
 | Gear G1 meshes with two pinions: a rack with several pinions is not made yet; give each pinion its own rack | |
 | the drive gear (Gear C) doesn't exist: make another gear the driver | |
 | item B, gear 1: the bore (Ø12) must be smaller than the hub (Ø10) | Swap or resize the circles. |
-| Join, Cut and Intersect act on the Targets: pick the bodies (Output › Targets) | |
-| Cut Keep-Out cuts the gears' room out of the Targets: pick the housing bodies (Output › Targets) | |
+| Join, Cut and Intersect act on the Targets: pick the bodies (Housing & Output tab › Targets) | |
+| Cut Keep-Out cuts the gears' room out of the Targets: pick the housing bodies (Housing & Output › Targets) | |
 | Housing cutout: type the custom bearing's OD and width | Custom bearing needs OD and width. |
 
 Tooth-limit refusals name sizes that would work, e.g. a profile shift that would undercut or point
@@ -105,7 +105,7 @@ See [Editing › Deleted or renamed references](editing.md#deleted-or-renamed-re
 | clearance: … | Housing cutout checks (seat past a shaft, seat on the teeth, bearing bore ≠ shaft). |
 | undercut, pointed teeth, low contact ratio … | Tooth checks; hover the Results row for the gear's warnings. |
 
-## 5. Notes (small text under Drivetrain)
+## 5. Notes (Results tab › Notes)
 
 - "no links given: the gears mesh and share shafts as the drawing suggests"
 - "module block M1: module 2"
@@ -116,10 +116,10 @@ See [Editing › Deleted or renamed references](editing.md#deleted-or-renamed-re
 ## Other problems
 
 **Nothing happens when I click a circle.** Check the status line: the click may have been refused
-(warning colour). If the Targets chip is active (Output), picks go to Targets; click a gear's card
+(warning colour). If the Targets chip is active (Housing & Output tab), picks go to Targets; click a gear's card
 to go back to picking gears.
 
-**The gears don't mesh.** Make sure there is a link in Drivetrain. Accept the suggestion, or add a
+**The gears don't mesh.** Make sure there is a link on the Links & Motion tab. Accept the suggestion, or add a
 Mesh link by hand. Circles must be exactly tangent (constrain them).
 
 **The bore circle I drew isn't used.** On a reopened set, bore and hub circles are offered with a

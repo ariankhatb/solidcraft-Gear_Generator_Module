@@ -20,7 +20,7 @@ mesh because the circles touch.
 
 ## 2. Open Gears and pick the circles
 
-Click **Model › Create › Gears**. The panel opens with the type list set to **Spur** and a short
+Click **Model › Create › Gears**. The panel opens on its **Gears** tab, with the type list set to **Spur** and a short
 guide.
 
 ![The empty dialog: Type, New gear, the status line and the three-step guide](img/w1-01-empty.png)
@@ -41,7 +41,7 @@ one gear per circle.
 
 ## 3. Link them
 
-The **Drivetrain** section appears once there are two gears. Because the circles touch, the
+Open the **Links & Motion** tab (the motion-link icon in the tab row). Because the circles touch, the
 dialog suggests the link: *A ⟷ B mesh · suggested*. Press **Accept suggested (1)**.
 
 The link row now reads **A ⟷ B mesh 0.67 : 1 opposite**: B turns at 0.67 times A's speed, the
@@ -51,7 +51,7 @@ other way round.
 
 ## 4. Check the size
 
-Click Gear A's card. Under **Gear A settings**:
+Back on the **Gears** tab, click Gear A's card. In the group **Gear A · Spur** under the cards:
 
 - **Size by: Module**, **Module: auto**. The caption shows *Teeth: 20 (worked out)*. Auto picked
   module 2, the largest standard module that gives the smaller gear 17 teeth or more.
@@ -62,7 +62,7 @@ Face width is Auto: about 10 × module (here 20 mm), split evenly on both sides 
 
 ## 5. Build
 
-Optional: under Drivetrain, set **Driver** to **A**. Press **OK**.
+Optional: on **Links & Motion**, under **Drive**, set **Driver** to **A**. Press **OK**.
 
 ![Built: two gears, two revolute joints and a gear link, one timeline row](img/w1-06-built.png)
 

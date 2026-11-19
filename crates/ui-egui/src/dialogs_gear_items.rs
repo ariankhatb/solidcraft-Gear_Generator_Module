@@ -359,6 +359,62 @@ pub struct GearItem {
     pub carrier: bool,
     pub shaft_d: String,
     pub keyway: bool,
+    /// Bevel and hypoid pairs: the differential its ring gear carries (`None`: none).
+    pub diff: Option<DiffForm>,
+}
+
+/// A differential in a bevel or hypoid pair's ring gear (the item's `differential`), as typed
+/// (empty: Auto).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DiffForm {
+    /// An index into [`solidcraft_gear::diff::Style::ALL`]: open, biased, Torsen B, Torsen A.
+    pub style: usize,
+    pub pinions: String,
+    pub module: String,
+    pub axle_length: String,
+    pub axle_d: String,
+}
+
+impl DiffForm {
+    pub fn style(&self) -> solidcraft_gear::diff::Style {
+        solidcraft_gear::diff::Style::ALL.get(self.style).copied().unwrap_or_default()
+    }
+
+    /// The item's `differential`: `{style, pinions?, module?, axle?: {length?, diameter?}}`.
+    pub fn json(&self, app: &SolveApp, who: &str) -> Result<Value, String> {
+        let num = |t: &str, kind: ValueKind, f: &str| eval(app, t, kind, &format!("{who}: differential {f}"));
+        let mut d = json!({"style": self.style().name()});
+        if let Some(n) = num(&self.pinions, ValueKind::Unitless, "pinions")? {
+            d["pinions"] = json!(n.round().max(1.0) as u64);
+        }
+        if let Some(m) = num(&self.module, ValueKind::Length, "module")? {
+            d["module"] = json!(m);
+        }
+        let mut axle = Map::new();
+        if let Some(l) = num(&self.axle_length, ValueKind::Length, "half-shaft length")? {
+            axle.insert("length".into(), json!(l));
+        }
+        if let Some(dia) = num(&self.axle_d, ValueKind::Length, "half-shaft Ø")? {
+            axle.insert("diameter".into(), json!(dia));
+        }
+        if !axle.is_empty() {
+            d["axle"] = Value::Object(axle);
+        }
+        Ok(d)
+    }
+
+    /// What an item's `differential` was made with (Edit).
+    pub fn of(v: &Value) -> DiffForm {
+        let style = v.get("style").and_then(Value::as_str).and_then(solidcraft_gear::diff::Style::parse).unwrap_or_default();
+        let axle = v.get("axle");
+        DiffForm {
+            style: solidcraft_gear::diff::Style::ALL.iter().position(|s| *s == style).unwrap_or(0),
+            pinions: shown(v.get("pinions").and_then(Value::as_f64), ValueKind::Unitless),
+            module: shown(v.get("module").and_then(Value::as_f64), ValueKind::Length),
+            axle_length: shown(axle.and_then(|a| a.get("length")).and_then(Value::as_f64), ValueKind::Length),
+            axle_d: shown(axle.and_then(|a| a.get("diameter")).and_then(Value::as_f64), ValueKind::Length),
+        }
+    }
 }
 
 const BEVEL_STYLES: [BevelStyle; 3] = [BevelStyle::Straight, BevelStyle::Spiral, BevelStyle::Chevron];
@@ -388,6 +444,7 @@ impl GearItem {
             carrier: true,
             shaft_d: String::new(),
             keyway: false,
+            diff: None,
         };
         if matches!(kind, ItemKind::Helical | ItemKind::Herringbone) {
             it.gears.push(GearSettings { helix: "20 deg".into(), v: kind == ItemKind::Herringbone, ..Default::default() });
@@ -634,6 +691,9 @@ pub fn items_request(app: &SolveApp, items: &[GearItem], graph: &Graph) -> Resul
             ItemKind::Bevel | ItemKind::Hypoid => {
                 item["bevel_style"] = json!(BEVEL_STYLES[it.bevel_style.min(2)].name());
                 item["spiral_angle"] = json!(num(&it.spiral, ValueKind::Angle, "spiral angle")?);
+                if let Some(d) = &it.diff {
+                    item["differential"] = d.json(app, &who)?;
+                }
             }
             ItemKind::Rack => item["back_height"] = json!(num(&it.back_height, ValueKind::Length, "back height")?),
             ItemKind::Planetary => {
@@ -714,6 +774,7 @@ pub fn items_of(r: &Map<String, Value>, ui: Option<&Value>, graph: &mut Graph) -
         it.carrier = v.get("carrier").and_then(Value::as_bool) != Some(false);
         it.shaft_d = s("diameter", ValueKind::Length);
         it.keyway = v.get("keyway").and_then(Value::as_bool) == Some(true);
+        it.diff = v.get("differential").filter(|d| d.is_object()).map(DiffForm::of);
         // Saved with the circles it keeps out: it takes any new one the drawing gets by itself.
         if let Some(d) = ui.and_then(|u| u.get("gear_dropped")).and_then(|d| d.get(i)).and_then(|d| serde_json::from_value::<Vec<Sel>>(d.clone()).ok()) {
             it.auto_details = true;

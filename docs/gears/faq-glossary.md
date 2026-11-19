@@ -13,7 +13,7 @@ everywhere and the dialog picks the largest standard module that gives the small
 or more.
 
 **Why are two of my gears not meshing?**
-They need a Mesh link (Drivetrain). Touching circles are suggested: press Accept suggested. Circles
+They need a Mesh link (Links & Motion tab). Touching circles are suggested: press Accept suggested. Circles
 that only nearly touch are not suggested; make them Tangent in the sketch.
 
 **What's the difference between a Compound and two gears with a Same shaft link?**
@@ -59,10 +59,10 @@ No. If nothing changed, OK just closes.
 | **Teeth (z)** | The number of teeth. |
 | **Addendum** | How far a tooth reaches outside the pitch circle: 1 × module for a standard tooth. Tip diameter = d + 2m. |
 | **Dedendum** | How far the tooth space reaches inside the pitch circle: 1.25 × module. Root diameter = d − 2.5m. |
-| **Pressure angle** | The angle of the tooth flank's line of action; 20° is standard (Advanced). |
+| **Pressure angle** | The angle of the tooth flank's line of action; 20° is standard (Teeth tab › Tooth form). |
 | **Profile shift (x)** | Moving the cutting rack out from the gear by x × module. Used here to hold the drawn centre distance and to avoid undercut on small gears. |
 | **Undercut** | On gears with few teeth (under about 17 at 20°) the cutter removes part of the tooth root, weakening it. Profile shift prevents it. |
-| **Backlash** | Play between meshing teeth (Advanced). Taken from each tooth's thickness. |
+| **Backlash** | Play between meshing teeth (Teeth tab › Tooth form). Taken from each tooth's thickness. |
 | **Contact ratio** | How many tooth pairs are in contact on average. Above about 1.2 is good; under 1 the gears don't turn smoothly. Shown in Results. |
 | **Face width** | The length of the teeth along the axis. |
 | **Face side A / B** | The two sides of a gear's sketch plane along its axis. Side A is the sketch normal (or its shaft line's direction from its first point). The face is set per side. |

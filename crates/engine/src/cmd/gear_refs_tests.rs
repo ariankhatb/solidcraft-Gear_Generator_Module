@@ -989,3 +989,21 @@ fn stepping_a_diameter_keeps_the_teeth_meshed_at_rest_and_turned() {
         assert!(turned < 0.05, "d2 {d}: {turned} mm3 with A at 13°");
     }
 }
+
+/// Example 01 with d2 edited 60 → 64 mm while A stands at 17°: at 16.99°, 17° and 35° the
+/// teeth's flanks touch along lines, where the kernel's boolean gave back a whole tooth of A as
+/// the part the gears share (174 mm³, but none at 16.9° or 17.01°). The check finds no clash.
+#[test]
+fn touching_flanks_are_not_a_clash() {
+    let mut s = Session::default();
+    tangent_pair(&mut s);
+    run(&mut s, "joint.drive", json!({"joint": "Gear A·1 shaft", "value": 17}));
+    run(&mut s, "parameters.change", json!({"name": "d2", "expression": "64 mm"}));
+    no_errors(&s);
+    for a in [16.99, 17.0, 35.0] {
+        run(&mut s, "joint.drive", json!({"joint": "Gear A·1 shaft", "value": a}));
+        let r = run(&mut s, "inspect.interference", json!({"bodies": ["Gear A·1", "Gear B·1"]}));
+        let v: f64 = r["interferences"].as_array().map_or(0.0, |v| v.iter().filter_map(|i| i["volume_mm3"].as_f64()).sum());
+        assert!(v < 0.05, "A at {a}°: {v} mm³ ({r})");
+    }
+}

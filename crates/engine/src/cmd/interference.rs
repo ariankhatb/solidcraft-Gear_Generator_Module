@@ -217,7 +217,7 @@ fn check_pair(a: &Body, b: &Body, (na, nb): &(String, String)) -> Outcome {
         Ok(m) => m,
         Err(e) => return Outcome::Unchecked(e.to_string()),
     };
-    if m.volume > threshold {
+    if m.volume > threshold && !phantom(a, b, &shared, &m.bbox) {
         return Outcome::Hit(Overlap {
             a: na.clone(),
             b: nb.clone(),
@@ -228,6 +228,35 @@ fn check_pair(a: &Body, b: &Body, (na, nb): &(String, String)) -> Outcome {
         });
     }
     Outcome::Clear
+}
+
+/// Points on a grid through a shared part's box, per side.
+const PROBE_GRID: usize = 7;
+
+/// Whether the part a boolean found `a` and `b` to share is a phantom: none of its inside is in
+/// both. Where faces of the two touch along a line or lie on each other (two gears' flanks
+/// tangent at one angle of their turn), the boolean can classify a whole region wrongly and give
+/// back a piece of one body (a tooth) as shared. Points on a grid through the part's box that
+/// lie inside the part are checked against both bodies themselves: a real overlap has its inside
+/// in both. A part too thin for the grid to find a point inside, or one whose points can't be
+/// classified, is kept as found.
+fn phantom(a: &Body, b: &Body, shared: &Body, bbox: &Aabb3) -> bool {
+    let (lo, size) = (bbox.min, bbox.size());
+    let at = |i: usize| (i as f64 + 0.5) / PROBE_GRID as f64;
+    let grid: Vec<solidcore_record::Vec3> = (0..PROBE_GRID.pow(3))
+        .map(|k| {
+            let (i, j, l) = (k % PROBE_GRID, (k / PROBE_GRID) % PROBE_GRID, k / (PROBE_GRID * PROBE_GRID));
+            solidcore_record::Vec3::new(lo.x + size.x * at(i), lo.y + size.y * at(j), lo.z + size.z * at(l))
+        })
+        .collect();
+    use solidcraft_kernel::PointClass::{Inside, Outside};
+    let Ok(in_part) = shared.classify_points(&grid) else { return false };
+    let inside: Vec<solidcore_record::Vec3> = grid.iter().zip(in_part).filter(|(_, c)| *c == Inside).map(|(p, _)| *p).collect();
+    if inside.is_empty() {
+        return false;
+    }
+    let (Ok(in_a), Ok(in_b)) = (a.classify_points(&inside), b.classify_points(&inside)) else { return false };
+    !in_a.iter().zip(&in_b).any(|(x, y)| *x != Outside && *y != Outside)
 }
 
 /// The part `a` and `b` share, exactly (`None`: nothing). Two copies of one solid in one place
@@ -280,7 +309,11 @@ fn clipped_to_overlap(a: &Body, b: &Body) -> Option<Option<(Body, Body)>> {
         if o.contains(bx.min) && o.contains(bx.max) {
             return Some(Some(x.clone()));
         }
-        solidcraft_kernel::boolean(x, &tool, solidcraft_kernel::BoolOp::Intersect).ok()
+        // A piece is only intersected with the other, never kept or measured: SMLib's full check of
+        // it (on a gear cluster of a thousand faces, minutes) is left out. The intersection of the
+        // pieces is checked as any boolean is.
+        let (piece, _) = solidcraft_kernel::validating(solidcraft_kernel::Validation::Off, || solidcraft_kernel::boolean(x, &tool, solidcraft_kernel::BoolOp::Intersect));
+        piece.ok()
     };
     let ca = cut(a, &ba)?;
     let cb = cut(b, &bb)?;

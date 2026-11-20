@@ -115,5 +115,5 @@ items. Either wire them up or hide them / mark them "(not applied yet)". The gui
 ## Tooth chamfer
 
 Done: the set-wide tooth chamfer is the **All gears** section (**Tooth chamfer**, **Chamfer faces**),
-sent as `tooth_chamfer {size, faces}`; its texts are in [The dialog](dialog.md#all-gears) and
+sent as `tooth_chamfer {size, faces}`; its texts are in [The dialog](dialog.md#teeth) and
 [Scripting](scripting.md).

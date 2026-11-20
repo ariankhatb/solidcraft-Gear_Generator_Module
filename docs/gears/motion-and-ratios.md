@@ -2,7 +2,7 @@
 
 ## The assembly
 
-With **Output › Assembly (components, joints and gear ratios)** on (the default), OK builds:
+With **Assembly (joints and gear links)** on (Housing & Output tab › Output; the default), OK builds:
 
 - one **component** per rigid part: a gear, a compound gear (all its gears in one body), a gear with
   the shaft built along its line, a planetary carrier, each planet;
@@ -15,7 +15,7 @@ The joints and links live in the set's timeline folder. An update keeps them on 
 moves them onto the new shafts and gives the links the new ratios. Joints you add to the gears
 yourself are kept too.
 
-The **Driver** (Drivetrain section) is the gear the assembly is rooted on. Without one, the first
+The **Driver** (Links & Motion tab › Drive) is the gear the assembly is rooted on. Without one, the first
 gear is used.
 
 ## Turning the gears
@@ -34,7 +34,7 @@ direction (*same way* or *opposite*).
 
 | Where | Shows | Example (A z20 driving B z30) |
 |---|---|---|
-| Drivetrain link row | the speed of the link's second gear over its first's | A ⟷ B mesh **0.67 : 1** opposite |
+| Links & Motion link row | the speed of the link's second gear over its first's | A ⟷ B mesh **0.67 : 1** opposite |
 | Results (per gear) | the gear's speed over the driver's | B: 0.67 : 1 |
 | Ratio from / to | to's speed over from's, the path between them, efficiency | Ratio 0.67 : 1, opposite direction · Path … · Efficiency … % |
 

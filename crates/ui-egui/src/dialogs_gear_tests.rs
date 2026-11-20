@@ -1118,3 +1118,205 @@ fn the_tooth_chamfer_shows_in_the_preview() {
     refresh(&mut app, &mut g, &inputs);
     assert_eq!(rings(&g), plain + 1, "side A only");
 }
+
+/// The Gears dialog as the harness draws it, and its state.
+fn drawn(h: &crate::scenario::Harness) -> Gear {
+    gear(&h.app)
+}
+
+/// Changes the open Gears dialog's state (as the form would) and draws it again.
+fn with_dialog(h: &mut crate::scenario::Harness, f: impl FnOnce(&mut Gear, &mut Vec<SelInput>)) {
+    if let Some(d) = h.app.dialog.as_mut()
+        && let Kind::Gear(g) = &mut d.kind
+    {
+        f(g, &mut d.inputs);
+    }
+    h.frames(3);
+}
+
+/// The wheel turned over the dialog's tab body: it scrolls down to its foot.
+fn scroll_down(h: &mut crate::scenario::Harness) {
+    let Some(body) = crate::scenario::rect_of("dialog:body:viewport") else { return };
+    for _ in 0..10 {
+        h.app.synthetic.push(egui::Event::PointerMoved(body.center()));
+        h.app.synthetic.push(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -400.0),
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        });
+        h.frame();
+    }
+    h.app.synthetic.push(egui::Event::PointerGone);
+    h.frames(60);
+}
+
+/// A bevel pair from two axis lines and a circle, in the harness's design.
+fn bevel_pair(app: &mut SolveApp) -> crate::dialogs_gear_graph::GearItem {
+    let s1 = app.session.execute("sketch.create", &json!({"plane": "XY"})).unwrap()["sketch"].as_u64().unwrap();
+    app.session.execute("sketch.line", &json!({"points": [[10, 0], [50, 0]], "ids": ["l1"]})).unwrap();
+    app.session.execute("sketch.line", &json!({"points": [[10, 0], [10, 40]], "ids": ["l2"]})).unwrap();
+    app.session.execute("sketch.finish", &json!({})).unwrap();
+    let s2 = app.session.execute("sketch.create", &json!({"plane": {"origin": [30, 0, 0], "x_dir": [0, 1, 0], "y_dir": [0, 0, 1]}})).unwrap()["sketch"].as_u64().unwrap();
+    app.session.execute("sketch.circle.center", &json!({"center": [0, 0], "radius": 10, "id": "c"})).unwrap();
+    app.session.execute("sketch.finish", &json!({})).unwrap();
+    let at = |sk: u64, id: &str| Sel::SketchCurve { id: id.into(), sketch: Some(sk) };
+    crate::dialogs_gear_graph::GearItem { picks: vec![at(s1, "l1"), at(s1, "l2"), at(s2, "c")], ..crate::dialogs_gear_graph::GearItem::new(ItemKind::Bevel) }
+}
+
+/// The tab row: the dialog opens on Gears with its type list and New gear; each tab clicked shows
+/// its own groups and none of the others'; the choice stays while the dialog is open. Without a
+/// differential there is no Differential tab, and a tab that goes away falls back to Gears.
+#[test]
+fn tabs_switch_and_show_their_own_groups() {
+    use crate::scenario::handle_at;
+    use crate::test_support::click as tap;
+    crate::dialogs_gear::DIFF_SUPPORTED.with(|d| d.set(Some(false)));
+    let mut h = crate::scenario::Harness::new();
+    h.app.start("gear.create");
+    h.frames(3);
+    assert_eq!(drawn(&h).tab, Tab::Gears);
+    for t in [Tab::Gears, Tab::Teeth, Tab::Shafts, Tab::Motion, Tab::Housing, Tab::Results] {
+        assert!(handle_at(crate::dialogs_gear_view::tab_handle(t)).is_some(), "{t:?} is in the tab row");
+    }
+    assert!(handle_at("gear:tab:differential").is_none(), "no differential, no tab");
+    assert!(handle_at("gear:new").is_some() && crate::scenario::rect_of("gear:status").is_some());
+    // Teeth: the set's tooth form and chamfer; Gears' New gear is gone, the status line stays.
+    tap(&mut h, "gear:tab:teeth");
+    assert_eq!(drawn(&h).tab, Tab::Teeth);
+    assert!(handle_at("gear:new").is_none(), "Gears' rows are not drawn on Teeth");
+    assert!(crate::scenario::rect_of("gear:status").is_some(), "the status line stays at the top");
+    assert!(handle_at("gear:group:chamfer").is_some());
+    assert!(handle_at("dialog:section:Tooth form · every gear").is_some());
+    // Housing & Output: the cutout's switch and the output; Teeth's chamfer is gone.
+    tap(&mut h, "gear:tab:housing");
+    assert_eq!(drawn(&h).tab, Tab::Housing);
+    assert!(handle_at("gear:group:housing_cutout").is_some() && handle_at("gear:group:keep_out").is_some());
+    assert!(handle_at("gear:group:chamfer").is_none());
+    // Links & Motion with no gears says to make some; Results says nothing is worked out yet.
+    tap(&mut h, "gear:tab:motion");
+    assert_eq!(drawn(&h).tab, Tab::Motion);
+    assert!(handle_at("gear:group:graph").is_none(), "no links without two gears");
+    tap(&mut h, "gear:tab:results");
+    assert_eq!(drawn(&h).tab, Tab::Results);
+    h.frames(2);
+    assert_eq!(drawn(&h).tab, Tab::Results, "the tab chosen stays");
+    tap(&mut h, "gear:tab:gears");
+    assert!(handle_at("gear:new").is_some());
+    // A tab that isn't offered (Differential with no differential) shows Gears.
+    with_dialog(&mut h, |g, _| g.tab = Tab::Differential);
+    assert_eq!(drawn(&h).tab, Tab::Gears);
+    crate::dialogs_gear::DIFF_SUPPORTED.with(|d| d.set(None));
+}
+
+/// Groups a checkbox switches on show their rows only while on: the tooth chamfer (switched off,
+/// its size goes, so no chamfer is sent), the housing cutout, the keep-out and a gear's hub; the
+/// per-gear tabs follow the gear chosen on them, which becomes the one picks go to.
+#[test]
+fn checkbox_groups_switch_their_rows_and_the_request() {
+    use crate::scenario::handle_at;
+    use crate::test_support::click as tap;
+    let mut h = crate::scenario::Harness::new();
+    let (s1, _, _) = items_drawing(&mut h.app);
+    h.app.start("gear.create");
+    h.frames(3);
+    with_dialog(&mut h, |g, inputs| {
+        g.new_kind = type_of(ItemKind::Spur);
+        new_gear(g, inputs);
+        inputs[0].items.push(Sel::SketchCurve { id: "c1".into(), sketch: Some(s1) });
+    });
+    assert_eq!(drawn(&h).items.len(), 1);
+    // Tooth chamfer: off, then on (its size row), a size typed, then off again: no chamfer.
+    tap(&mut h, "gear:tab:teeth");
+    assert!(!drawn(&h).chamfer_open);
+    tap(&mut h, "gear:group:chamfer");
+    assert!(drawn(&h).chamfer_open, "the group is on");
+    with_dialog(&mut h, |g, _| g.chamfer = "0.4 mm".into());
+    let p = request(&h.app, &drawn(&h), &h.app.dialog.as_ref().unwrap().inputs).unwrap();
+    assert_eq!(p["tooth_chamfer"]["size"].as_f64(), Some(0.4));
+    tap(&mut h, "gear:group:chamfer");
+    let g = drawn(&h);
+    assert!(!g.chamfer_open && g.chamfer.is_empty(), "off clears the size");
+    assert!(request(&h.app, &g, &h.app.dialog.as_ref().unwrap().inputs).unwrap().get("tooth_chamfer").is_none());
+    // Shafts & Bearings: the selected gear's bore and its hub group.
+    tap(&mut h, "gear:tab:shafts");
+    assert!(handle_at("gear:group:hub:A:0").is_some(), "the selected gear's hub switch");
+    tap(&mut h, "gear:group:hub:A:0");
+    assert!(drawn(&h).items[0].gears[0].hub, "the hub is on");
+    tap(&mut h, "gear:group:hub:A:0");
+    assert!(!drawn(&h).items[0].gears[0].hub);
+    // No gear selected: the per-gear rows wait for one; the set's rows still show.
+    with_dialog(&mut h, |g, _| g.active = None);
+    assert!(handle_at("gear:group:hub:A:0").is_none());
+    tap(&mut h, "gear:tab:teeth");
+    assert!(handle_at("gear:group:chamfer").is_some());
+    // Housing cutout and keep-out.
+    tap(&mut h, "gear:tab:housing");
+    tap(&mut h, "gear:group:housing_cutout");
+    assert!(drawn(&h).cutout.on);
+    tap(&mut h, "gear:group:keep_out");
+    assert!(drawn(&h).cut_keep_out);
+    assert!(handle_at("gear:targets").is_some(), "keep-out asks for its Targets");
+    tap(&mut h, "gear:group:keep_out");
+    tap(&mut h, "gear:group:housing_cutout");
+    let g = drawn(&h);
+    assert!(!g.cutout.on && !g.cut_keep_out);
+}
+
+/// A bevel or hypoid pair carries a differential in its ring gear when the engine takes one: its
+/// switch on the Gears tab adds the Differential tab, which sends the item's `differential`
+/// ({style, pinions, module, axle}); Edit restores it; switched off, nothing is sent and the tab
+/// goes. With an engine that doesn't take one, neither the switch nor the tab shows.
+#[test]
+fn a_differential_switch_on_a_ring_gear_and_its_tab() {
+    use crate::dialogs_gear_items::DiffForm;
+    use crate::scenario::handle_at;
+    use crate::test_support::click as tap;
+    let mut h = crate::scenario::Harness::new();
+    let bevel = bevel_pair(&mut h.app);
+    assert!(bevel.complete(&h.app));
+    h.app.start("gear.create");
+    h.frames(3);
+    with_dialog(&mut h, |g, inputs| {
+        g.items = vec![bevel.clone()];
+        g.graph.node_of(0);
+        make_active(g, 0, inputs);
+    });
+    // An engine without differentials: no switch, no tab, nothing sent.
+    crate::dialogs_gear::DIFF_SUPPORTED.with(|d| d.set(Some(false)));
+    h.frames(3);
+    assert!(handle_at("gear:group:differential").is_none() && handle_at("gear:tab:differential").is_none());
+    let inputs = h.app.dialog.as_ref().unwrap().inputs.clone();
+    let p = request(&h.app, &drawn(&h), &inputs).unwrap();
+    assert!(p["items"][0].get("differential").is_none(), "{p}");
+    // One that takes them: the switch on the bevel's group adds the tab.
+    crate::dialogs_gear::DIFF_SUPPORTED.with(|d| d.set(Some(true)));
+    h.frames(3);
+    assert!(handle_at("gear:tab:differential").is_none());
+    scroll_down(&mut h);
+    tap(&mut h, "gear:group:differential");
+    assert_eq!(drawn(&h).items[0].diff, Some(DiffForm::default()));
+    assert!(handle_at("gear:tab:differential").is_some());
+    scroll_down(&mut h);
+    tap(&mut h, "gear:to_differential");
+    assert_eq!(drawn(&h).tab, Tab::Differential);
+    assert!(handle_at("dialog:section:Half-shafts").is_some());
+    with_dialog(&mut h, |g, _| {
+        g.items[0].diff = Some(DiffForm { style: 2, pinions: "4".into(), module: "1.5 mm".into(), axle_length: "60 mm".into(), axle_d: String::new() });
+    });
+    let p = request(&h.app, &drawn(&h), &inputs).unwrap();
+    assert_eq!(p["items"][0]["differential"], json!({"style": "torsen_b", "pinions": 4, "module": 1.5, "axle": {"length": 60.0}}), "{p}");
+    // Edit reads it back as typed.
+    let mut graph = crate::dialogs_gear_graph::Graph::default();
+    let back = crate::dialogs_gear_items::items_of(p.as_object().unwrap(), p.get("ui"), &mut graph);
+    assert_eq!(back[0].diff, drawn(&h).items[0].diff);
+    // Switched off on its own tab: nothing sent, the tab goes and Gears shows.
+    scroll_down(&mut h);
+    tap(&mut h, "gear:group:differential");
+    let g = drawn(&h);
+    assert_eq!((g.items[0].diff.clone(), g.tab), (None, Tab::Gears));
+    assert!(handle_at("gear:tab:differential").is_none());
+    assert!(request(&h.app, &g, &inputs).unwrap()["items"][0].get("differential").is_none());
+    crate::dialogs_gear::DIFF_SUPPORTED.with(|d| d.set(None));
+}

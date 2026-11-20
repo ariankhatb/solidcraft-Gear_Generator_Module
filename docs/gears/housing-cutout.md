@@ -17,7 +17,7 @@ It is a plain body: no component and no joint, so it doesn't take part in the mo
 
 1. Pick **bearing points**: points on a gear's shaft line (spur, helical, herringbone, compound) or
    on a **Shaft** item's line. Pick the shaft line first, then the points on it.
-2. Open the **Housing cutout** section and tick **Make a housing cutout**.
+2. On the **Housing & Output** tab, tick **Housing cutout**.
 3. Choose the **Bearing**: one size for every seat, from the list (shown as "608 — 8 × 22 × 7":
    bore × OD × width, mm), or **Custom…** to type **Bearing OD**, **Bearing width** and, optionally,
    **Bearing bore**.
@@ -29,7 +29,7 @@ the gears' shaft lines (or a Shaft gear's) for the seats.", "1 bearing point: a 
 While the dialog is open the view previews the envelopes as translucent grey rings and each seat as
 rings in its gear's colour.
 
-## Settings (More)
+## Settings (Gaps and fit)
 
 | Field | Default | What it does |
 |---|---|---|
@@ -55,13 +55,13 @@ point and lying along the shaft line.
 
 ## Housing cutout vs. "Cut keep-out from Targets"
 
-| | Housing cutout | Cut keep-out from Targets (Output) |
+| | Housing cutout | Cut keep-out from Targets (Housing & Output › Output) |
 |---|---|---|
 | Result | A separate body you cut yourself | The keep-out is cut straight out of the bodies you pick as Targets |
 | Gap | Radial and axial gaps set separately | One **Keep-out gap**, used for both |
 | When to use | You haven't modelled the housing yet, or want to keep the cut editable | The housing body already exists |
 
-Both are made by the same code. The bearing size comes from the Housing cutout section, so for
+Both are made by the same code. The bearing size comes from the Housing cutout group, so for
 seats in a keep-out cut, turn the housing cutout on as well (with Targets set, its space is cut
 from them instead of being left as a separate body).
 

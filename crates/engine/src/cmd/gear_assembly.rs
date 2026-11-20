@@ -169,6 +169,7 @@ pub(super) fn sync(
     driver: Option<usize>,
     warnings: &mut Vec<String>,
 ) -> Result<(AssemblyRecord, GearAssembly)> {
+    let _span = solidcraft_profile::span("gear", "assembly sync");
     // Driven from the member asked for: the tree turned to point away from it.
     let rerooted;
     let a: &Assembly = match driver.filter(|d| *d > 0 && *d < plan.assembly.members.len()) {

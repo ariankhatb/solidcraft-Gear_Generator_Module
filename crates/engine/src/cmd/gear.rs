@@ -2064,10 +2064,11 @@ enum Read {
 }
 
 fn ask_read(s: &dyn Reads, cmd: &str, p: &Value) -> Result<Read> {
+    let _span = solidcraft_profile::span("gear", "ask");
     let params = read(cmd, p)?;
     // A drivetrain of gear items: planned whole.
     if let Some(list) = &params.items {
-        let (it, plan, spec) = items::plan(s, cmd, &params, list)?;
+        let (it, plan, spec) = planned_items(s, cmd, p, &params, list)?;
         let notes = it.system.notes.clone();
         if let Some(error) = it.system.error.clone() {
             return Ok(Read::Wrong { error, members: Vec::new(), notes, items: Some(Box::new(it)) });
@@ -2099,6 +2100,85 @@ fn ask_read(s: &dyn Reads, cmd: &str, p: &Value) -> Result<Read> {
     };
     let plan = solidcraft_gear::plan(&asked.spec).map_err(|e| bad(cmd, e))?;
     Ok(Read::Set(asked, plan))
+}
+
+/// Drivetrains of items planned before, by [`items_key`]: the dialog's `gear.calculate`, OK's
+/// `gear.create` and the Gears feature's first evaluation read the same request from the same
+/// sketches, and each planned the whole drivetrain again (seconds for a set of bevels and
+/// hypoids). A plan is a function of what it reads, so the same reading gives the plan made
+/// before.
+static PLANNED: std::sync::Mutex<std::collections::VecDeque<(u64, (items::Items, Plan, Spec))>> = std::sync::Mutex::new(std::collections::VecDeque::new());
+
+/// How many plans [`PLANNED`] keeps: the last few edits', with room for an undo.
+const PLANNED_KEPT: usize = 8;
+
+/// [`items::plan`], or the plan made before from the same reading.
+fn planned_items(s: &dyn Reads, cmd: &str, p: &Value, params: &GearParams, list: &[crate::schema::gear::GearItemParams]) -> Result<(items::Items, Plan, Spec)> {
+    let key = items_key(s, cmd, p);
+    if let Some(key) = key {
+        let mut kept = PLANNED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(at) = kept.iter().position(|(k, _)| *k == key)
+            && let Some(entry) = kept.remove(at)
+        {
+            let plan = entry.1.clone();
+            kept.push_front(entry);
+            return Ok(plan);
+        }
+    }
+    let planned = items::plan(s, cmd, params, list)?;
+    if let Some(key) = key {
+        let mut kept = PLANNED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        kept.push_front((key, planned.clone()));
+        kept.truncate(PLANNED_KEPT);
+    }
+    Ok(planned)
+}
+
+/// Keeps `asked`'s plan as the plan of `request`: the request as a Gears feature keeps it (its
+/// sketches by id, its axes as lines: the same reading), so the feature's first evaluation
+/// takes the plan `gear.create` or `gear.update` made.
+fn prime_items(s: &dyn Reads, cmd: &str, request: &Value, asked: &Asked, plan: &Plan) {
+    let (Some(it), Some(key)) = (&asked.items, items_key(s, cmd, request)) else { return };
+    let mut kept = PLANNED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    kept.retain(|(k, _)| *k != key);
+    kept.push_front((key, ((**it).clone(), plan.clone(), asked.spec.clone())));
+    kept.truncate(PLANNED_KEPT);
+}
+
+/// What a request of items reads, hashed: the request, and each sketch it names (its id, its
+/// name, its plane and its solved geometry). `None` (not kept) when it picks an edge or a face,
+/// whose place is the model's, or names a sketch that isn't there.
+fn items_key(s: &dyn Reads, cmd: &str, p: &Value) -> Option<u64> {
+    fn walk(v: &Value, out: &mut Vec<Value>) -> bool {
+        match v {
+            Value::Object(o) => {
+                if ["edge", "face"].iter().any(|k| o.get(*k).is_some_and(|x| !x.is_null())) {
+                    return false;
+                }
+                if let Some(sk) = o.get("sketch").filter(|x| x.is_number() || x.is_string()) {
+                    out.push(sk.clone());
+                }
+                o.values().all(|x| walk(x, out))
+            }
+            Value::Array(a) => a.iter().all(|x| walk(x, out)),
+            _ => true,
+        }
+    }
+    let mut named = Vec::new();
+    if !walk(p, &mut named) {
+        return None;
+    }
+    let mut ids: Vec<u64> = named.iter().map(|v| s.sketch_id(Some(v), cmd, "sketch").ok()).collect::<Option<_>>()?;
+    ids.sort_unstable();
+    ids.dedup();
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    p.to_string().hash(&mut h);
+    for id in ids {
+        let ss = s.solved(id)?;
+        (id, s.sketch_name(id), format!("{:?}{:?}", ss.plane, ss.sketch)).hash(&mut h);
+    }
+    Some(h.finish())
 }
 
 fn ask(s: &dyn Reads, cmd: &str, p: &Value) -> Result<(Asked, Plan)> {

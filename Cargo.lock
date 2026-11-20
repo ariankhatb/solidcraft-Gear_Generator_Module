@@ -6233,6 +6233,9 @@ dependencies = [
 [[package]]
 name = "solidcraft-gear"
 version = "0.45.0"
+dependencies = [
+ "solidcraft-profile",
+]
 
 [[package]]
 name = "solidcraft-geom"

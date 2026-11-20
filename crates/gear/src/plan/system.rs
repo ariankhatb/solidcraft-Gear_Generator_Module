@@ -229,6 +229,7 @@ fn tagged(mut u: Unit, spec: &Spec, kind: Option<MeshKind>) -> Unit {
 /// a drive gear that doesn't exist). Anything wrong with a link, a stage or the stages together
 /// comes back as [`SystemPlan::error`] with an empty plan and the replies.
 pub fn plan_items(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlock], drive: Option<&Drive>, base: &Spec) -> Result<SystemPlan, String> {
+    let _span = solidcraft_profile::span("gear", "plan items");
     if items.is_empty() {
         return Err("Add a gear: press New gear and click a pitch circle.".into());
     }
@@ -271,14 +272,14 @@ pub fn plan_items(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlock]
     check_owners(items, &st, &mut err);
     // Errors of gears in no stage (a lone gear whose train can't be sized).
     let mut loose: Vec<String> = Vec::new();
-    let units = if err.iter().all(Option::is_none) { plan_units(items, &st, &mapped, &blocks, base, &mut err, &mut loose) } else { Vec::new() };
+    let units = if err.iter().all(Option::is_none) { solidcraft_profile::scope("gear", "plan units", || plan_units(items, &st, &mapped, &blocks, base, &mut err, &mut loose)) } else { Vec::new() };
     if err.iter().any(Option::is_some) || !loose.is_empty() {
         return Ok(refused(items, &st, &used, err, loose, out));
     }
     let merged = merge(&st, units, drive, &mut out);
     let mut sweeps = Sweeps::default();
-    trim_shafts(items, &mut out, &mut sweeps);
-    if let Some(e) = collisions(items, &out, &merged.body_units, &mut sweeps) {
+    solidcraft_profile::scope("gear", "trim shafts", || trim_shafts(items, &mut out, &mut sweeps));
+    if let Some(e) = solidcraft_profile::scope("gear", "collisions", || collisions(items, &out, &merged.body_units, &mut sweeps)) {
         out.error = Some(e);
     }
     replies(items, &st, &used, drive, &merged.shifts, &merged.contact, &mut out);
@@ -1365,6 +1366,7 @@ struct Sweep {
 
 impl Sweep {
     fn of(body: &Body, axis: Axis, hollow: bool) -> Option<Sweep> {
+        let _span = solidcraft_profile::span("gear", "sweep");
         let probe = crate::mesh3d::Solid::new(body, 1.0);
         let size = probe.radius.max(probe.z.1 - probe.z.0).max(1e-3);
         let h = (size / 40.0).max(0.05);
@@ -1421,6 +1423,7 @@ impl Sweep {
     }
     /// A point of this sweep inside `other`'s, sampled `h` apart.
     fn meets(&self, other: &Sweep, eps: f64) -> Option<V> {
+        let _span = solidcraft_profile::span("gear", "sweeps meet");
         let h = (self.size.min(other.size) / 12.0).max(0.1);
         let u = self.axis.dir;
         let e1 = square_to(u);
@@ -1515,6 +1518,8 @@ fn trim_shafts(items: &[GearItem], out: &mut SystemPlan, sweeps: &mut Sweeps) {
     let mut cuts: Vec<(usize, usize, f64, f64, String)> = Vec::new();
     {
         let p = &out.plan;
+        // Each body's bounds, worked out once (not once per shaft).
+        let bounds: Vec<([f64; 3], [f64; 3])> = p.bodies.iter().map(|b| crate::mesh3d::Solid::new(b, 1.0).bounds()).collect();
         let is_shaft = |r: &GearRef| items.get(r.item).is_some_and(|it| it.kind == ItemKind::Shaft);
         let on_body = |b: usize, shaft: bool| out.member_of.iter().find(|(r, m)| is_shaft(r) == shaft && p.members.get(*m).and_then(|x| x.body) == Some(b)).map(|(r, _)| *r);
         let name = |b: usize| on_body(b, false).or_else(|| on_body(b, true)).map_or_else(|| p.bodies.get(b).map_or_else(String::new, |x| x.name.clone()), |r| who(items, r));
@@ -1572,7 +1577,7 @@ fn trim_shafts(items: &[GearItem], out: &mut SystemPlan, sweeps: &mut Sweeps) {
                 if rigid.contains(&o) {
                     continue;
                 }
-                let ob = crate::mesh3d::Solid::new(&p.bodies[o], 1.0).bounds();
+                let ob = bounds[o];
                 let orbits = p.assembly.members.get(o).is_some_and(|m| m.carrier.is_some());
                 if !orbits && (0..3).any(|i| hi[i] < ob.0[i] - 1.0 || ob.1[i] < lo[i] - 1.0) {
                     continue;
@@ -1650,13 +1655,15 @@ fn collisions(items: &[GearItem], out: &SystemPlan, units: &[Vec<usize>], sweeps
     let rigid = |a: usize, b: usize| members_on(a).any(|x| members_on(b).any(|y| p.members[x].cluster.is_some() && p.members[x].cluster == p.members[y].cluster));
     let carrier_of = |b: usize| p.assembly.members.get(b).and_then(|m| m.carrier);
     let eps = 0.05;
+    // Each body's bounds, worked out once (not once per pair).
+    let bounds: Vec<([f64; 3], [f64; 3])> = p.bodies.iter().map(|b| crate::mesh3d::Solid::new(b, 1.0).bounds()).collect();
     for a in 0..p.bodies.len() {
         for b in a + 1..p.bodies.len() {
             let (ua, ub) = (units.get(a).cloned().unwrap_or_default(), units.get(b).cloned().unwrap_or_default());
             if ua.iter().any(|u| ub.contains(u)) || meshing(a, b) || rigid(a, b) {
                 continue;
             }
-            let (ba, bb) = (crate::mesh3d::Solid::new(&p.bodies[a], 1.0).bounds(), crate::mesh3d::Solid::new(&p.bodies[b], 1.0).bounds());
+            let (ba, bb) = (bounds[a], bounds[b]);
             if (0..3).any(|i| ba.1[i] < bb.0[i] - 1.0 || bb.1[i] < ba.0[i] - 1.0) && carrier_of(a).is_none() && carrier_of(b).is_none() {
                 continue;
             }

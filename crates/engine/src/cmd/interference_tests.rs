@@ -252,6 +252,8 @@ fn a_body_and_its_copy_in_place_share_all_of_it() {
     let i = run(&mut s, "inspect.interference", json!({}));
     assert_eq!(i["count"], 1, "{i}");
     assert!((f(&i["interferences"][0]["volume_mm3"]) - 6000.0).abs() < 1e-6, "{i}");
+}
+
 /// A component's envelope is left out unless named, never meets a body inside it, and with
 /// `envelopes` is intersected instead of the bodies inside it: a 10 mm housing and a 4 mm insert
 /// sharing 8 mm³ in a component, and a lid that overlaps the envelope but neither part.

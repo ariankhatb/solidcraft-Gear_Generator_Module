@@ -794,7 +794,7 @@ fn teeth_tab(ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], input: &m
             }
             // The shift is the planner's: it holds the drawn centre distance (read-only).
             let shift = reply.and_then(|r| r.profile_shift).map_or_else(|| "worked out".to_string(), |x| format!("{} (worked out)", dg::fmt((x * 1000.0).round() / 1000.0)));
-            ui.scope(|ui| ui_kit::caption(ui, "Profile shift", &format!("Profile shift: {shift}"))).response.backing_on_hover_text(TIP_SHIFT);
+            ui_kit::value_row(ui, "Profile shift", &shift).backing_on_hover_text(TIP_SHIFT);
         });
     }
     ui_kit::section(ui, "gear_tooth_form", "Tooth form · every gear", true, |ui| {
@@ -1151,7 +1151,6 @@ fn differential_tab(ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], in
 
 /// Results: one row per gear, every warning (by gear), the planner's notes and its facts.
 fn results_tab(app: &SolveApp, ui: &mut egui::Ui, k: &Gear) {
-    let t = Tokens::get();
     let len = dg::len_of(app);
     let replies = k.graph.replies();
     if replies.is_empty() && k.notes.is_empty() && k.set_msgs.is_empty() {
@@ -1173,7 +1172,7 @@ fn results_tab(app: &SolveApp, ui: &mut egui::Ui, k: &Gear) {
                 if let Some(c) = r.contact_ratio {
                     parts.push(format!("contact {}", dg::fmt((c * 100.0).round() / 100.0)));
                 }
-                ui_kit::row(ui, &k.gear_name((r.item, r.gear)), |ui| ui.add(egui::Label::new(egui::RichText::new(parts.join(" · ")).size(t.font_small).color(t.form_ink)).wrap()))
+                ui_kit::value_row(ui, &k.gear_name((r.item, r.gear)), &parts.join(" · "))
                     .backing_on_hover_text(crate::dialogs_gear_graph::reply_tip(r));
             }
         });

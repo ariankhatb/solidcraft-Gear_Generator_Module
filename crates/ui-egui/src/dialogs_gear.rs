@@ -636,6 +636,12 @@ impl Gear {
         false
     }
 
+    /// OK computes the set beside the window, the dialog saying so until it is in: a
+    /// drivetrain's teeth take seconds, and the window keeps drawing meanwhile.
+    pub fn computes_off_thread(&self) -> bool {
+        true
+    }
+
     /// The type a new gear is made as.
     pub fn new_type(&self) -> ItemKind {
         TYPES.get(self.new_kind).map_or(ItemKind::Spur, |t| t.0)

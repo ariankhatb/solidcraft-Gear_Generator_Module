@@ -2,7 +2,7 @@
 //! planners, placed where the drawing puts them and merged into one plan and one assembly.
 
 use crate::analysis::{Efficiencies, drive_table, ratio_between};
-use crate::items::{Drive, GearItem, GearRef, ItemKind, ItemLink, LinkKind, Thing};
+use crate::items::{Drive, GearItem, GearRef, GearSettings, ItemKind, ItemLink, Thing};
 use crate::plan::system::{SystemPlan, plan_items};
 use crate::plan::{AssemblyLink, Spec};
 
@@ -18,15 +18,7 @@ fn circ(c: [f64; 3], n: [f64; 3], r: f64) -> Thing {
 fn line(a: [f64; 3], b: [f64; 3]) -> Thing {
     Thing::line(a, b)
 }
-fn g(item: usize, gear: usize) -> GearRef {
-    GearRef::new(item, gear)
-}
-fn mesh(a: GearRef, b: GearRef) -> ItemLink {
-    ItemLink { a, b, kind: LinkKind::Mesh }
-}
-fn shaft(a: GearRef, b: GearRef) -> ItemLink {
-    ItemLink { a, b, kind: LinkKind::Shaft }
-}
+use crate::test_util::{g, mesh, shaft};
 
 fn planned(items: &[GearItem], links: &[ItemLink], drive: Option<&Drive>) -> SystemPlan {
     let sp = plan_items(items, links, &[], drive, &Spec::default()).unwrap_or_else(|e| panic!("{e}"));
@@ -48,9 +40,7 @@ fn reply_ratio(sp: &SystemPlan, r: GearRef) -> f64 {
     sp.gears.iter().find(|x| x.item == r.item && x.gear == r.gear).and_then(|x| x.ratio).unwrap_or_else(|| panic!("{r:?} has no ratio"))
 }
 
-fn close(a: f64, b: f64) -> bool {
-    (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
-}
+use crate::test_util::close_rel as close;
 
 /// A spur pair; the driven spur's shaft carries a bevel pinion (z up, apex 20 above it), whose
 /// mate (on an x shaft) shares its shaft with a worm wheel; the worm lies across the wheel.
@@ -512,6 +502,20 @@ fn a_tooth_chamfer_goes_on_every_gear_of_the_set() {
     assert_eq!(ring(&one, top), 0);
     assert!(ring(&one, bottom) > 0, "side B left plain");
     assert_eq!(ring(&both, 0.0), ring(&plain, 0.0), "the middle of the face untouched");
+    // The builders make both ends' cuts as one intersect (chamfers_as_one): the same solid,
+    // at the edges and everywhere else, out past the faces and the tip.
+    let cut = &both.plan.bodies[body];
+    let n = cut.steps.len();
+    let merged = crate::plan::chamfer::chamfers_as_one(cut, n - 2).expect("both ends of A as one step");
+    let one_step = crate::plan::Body { steps: cut.steps[..n - 2].iter().cloned().chain([merged]).collect(), ..cut.clone() };
+    let (sc, sm) = (Solid::new(cut, 0.01), Solid::new(&one_step, 0.01));
+    for (r, z) in (0..=60).flat_map(|i| (0..=60).map(move |j| (0.05 + (tip + 3.0) * f64::from(i) / 60.0, -face + 2.0 * face * f64::from(j) / 60.0))) {
+        for a in [0.0f64, 0.7, 2.1, 4.0] {
+            let p = [r * a.cos(), r * a.sin(), z];
+            assert_eq!(sc.contains(p), sm.contains(p), "at r {r}, z {z}");
+        }
+    }
+    assert!(crate::plan::chamfer::chamfers_as_one(&one.plan.bodies[body], one.plan.bodies[body].steps.len() - 2).is_none(), "one side: no pair");
     // Too big: named.
     let mut sp = plain.clone();
     let e = tooth_chamfer(&items, &mut sp, ToothChamfer { size: 1.2 * module, faces: ChamferFaces::Both }).unwrap_err();
@@ -571,4 +575,23 @@ fn crossed_helical_and_chevron_bevel_are_what_they_say() {
         sp.plan.bodies.iter().map(|b| b.steps.clone()).collect::<Vec<Vec<Step>>>()
     };
     assert_ne!(bevel(BevelStyle::Chevron), bevel(BevelStyle::Spiral), "chevron teeth differ from the spiral's");
+}
+
+/// A stage's warnings name the items' gears, not the stage plan's own "gear 1" and "gear 2": a
+/// spur train's undercut pinion, and whatever the bevel and worm stages of a chain warn of.
+#[test]
+fn stage_warnings_name_the_items_gears() {
+    let module2 = vec![GearSettings { module: Some(2.0), ..GearSettings::default() }];
+    let mut a = item("A", ItemKind::Spur, vec![circ([0.0; 3], Z, 10.0)]);
+    a.gears = module2.clone();
+    let mut b = item("B", ItemKind::Spur, vec![circ([40.0, 0.0, 0.0], Z, 30.0)]);
+    b.gears = module2;
+    let sp = planned(&[a, b], &[mesh(g(0, 0), g(1, 0))], None);
+    let w = &sp.plan.warnings;
+    assert!(w.iter().any(|w| w.contains("Gear A: undercut")), "{w:?}");
+    let (items, links) = chain();
+    let chain = planned(&items, &links, None);
+    for w in [w, &chain.plan.warnings] {
+        assert!(!w.iter().any(|w| w.contains("gear 1") || w.contains("gear 2")), "{w:?}");
+    }
 }

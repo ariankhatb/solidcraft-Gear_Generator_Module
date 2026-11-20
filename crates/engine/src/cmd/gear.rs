@@ -1258,24 +1258,6 @@ impl GearSketch {
         }
         d
     }
-    /// Circles drawn as gears of a train that mesh with nothing (no circle touching them), and
-    /// centre lines between circles that don't touch: what the reading refuses, in plain words
-    /// naming the circles, and which circles (indices into `circles`) to point at.
-    pub fn mesh_problem(&self) -> Option<(String, Vec<usize>)> {
-        let n = self.circles.len();
-        if n < 2 || !self.lines.is_empty() {
-            return None;
-        }
-        if let Some(found) = self.centre_line_problem() {
-            return Some(found);
-        }
-        // The same rule the sizing names each gear by (sketch_rules::size_train).
-        let circles: Vec<sketch_rules::Circle> = self.circles.iter().map(|(_, c)| *c).collect();
-        let lone = sketch_rules::meshes_nothing(&circles);
-        let first = *lone.first()?;
-        let why = format!("circle {} touches no other gear: make it tangent to the gear it meshes with (Tangent constraint)", self.circles[first].0);
-        Some((why, lone))
-    }
     /// Two circles joined by a centre line (saying they mesh) that don't touch, named, and
     /// which (indices into `circles`).
     pub fn centre_line_problem(&self) -> Option<(String, Vec<usize>)> {
@@ -1418,9 +1400,7 @@ pub(crate) trait Reads {
         self.solved(id).map(|ss| entities_of(id, &ss)).ok_or_else(|| format!("no sketch {id}"))
     }
     /// A sketch's name in the design (also when it isn't solved where the set is read).
-    fn sketch_name(&self, _id: u64) -> Option<String> {
-        None
-    }
+    fn sketch_name(&self, id: u64) -> Option<String>;
 }
 
 impl Reads for Session {
@@ -2584,7 +2564,7 @@ fn must_rebuild(s: &Session, rec: &Record, plan: &Plan, mode: &equations::Mode) 
 fn move_sketch(s: &mut Session, id: u64, def: &SketchDef) -> Result<()> {
     let plane = match def.placed_plane() {
         Some(p) => p,
-        None => super::sketch::plane_ref(s, &json!({"plane": {"origin": def.origin, "x_dir": def.x, "y_dir": def.y}}), "gear.update")?,
+        None => super::sketch::plane_ref(s, &json!({"plane": def.plane_json()}), "gear.update")?,
     };
     match s.doc_mut().feature_mut(id).map(|f| &mut f.kind) {
         Some(FeatureKind::Sketch { plane: slot, .. }) => {
@@ -3037,8 +3017,7 @@ fn new_sketch(s: &mut Session, def: &SketchDef) -> Result<u64> {
     let id = if def.eq.is_some() || def.poly.is_some() {
         equations::new_sketch(s, def)?
     } else {
-        let r = s.execute("sketch.create", &json!({"plane": {"origin": def.origin, "x_dir": def.x, "y_dir": def.y}, "name": def.name, "project_edges": false}))?;
-        let id = r.get("sketch").and_then(Value::as_u64).ok_or_else(|| EngineError::Other("no sketch".into()))?;
+        let id = def.create(s)?;
         let tol = 1e-7;
         edit_solved(s, id, false, Analysis::Freedom, |sk, _| {
             for g in &def.loops {
@@ -3104,6 +3083,15 @@ struct SketchDef {
 }
 
 impl SketchDef {
+    /// The plane as `sketch.create` takes it.
+    fn plane_json(&self) -> Value {
+        json!({"origin": self.origin, "x_dir": self.x, "y_dir": self.y})
+    }
+    /// A new sketch on this plane, named, open for drawing; returns its id.
+    fn create(&self, s: &mut Session) -> Result<u64> {
+        let r = s.execute("sketch.create", &json!({"plane": self.plane_json(), "name": self.name, "project_edges": false}))?;
+        r.get("sketch").and_then(Value::as_u64).ok_or_else(|| EngineError::Other("no sketch".into()))
+    }
     /// Tells this plane from another.
     fn plane_key(&self) -> String {
         match &self.origin_expr {
@@ -3366,9 +3354,7 @@ fn step_def(body: &Body, i: usize, step: &Step, nudge: f64, mode: &equations::Mo
             let n = solidcraft_gear::plan::taper_sections(o, *twist, *scale);
             let sketches = (0..n)
                 .map(|i| {
-                    let t = i as f64 / (n - 1) as f64;
-                    let k = 1.0 + (scale - 1.0) * t;
-                    let section = o.scaled(k).rotated(solidcraft_gear::plan::taper_turn(*twist, *scale, k));
+                    let (section, t) = solidcraft_gear::plan::taper_section(o, *twist, *scale, i, n);
                     sketch(format!("section {}", i + 1), f.world([0.0, 0.0, z0 + height * t]), x, y, outline(&section))
                 })
                 .collect();
@@ -3380,9 +3366,7 @@ fn step_def(body: &Body, i: usize, step: &Step, nudge: f64, mode: &equations::Mo
             let n = if twist.abs() <= 1e-12 { 2 } else { solidcraft_gear::plan::taper_sections(o, *twist, *scale) };
             let sketches = (0..n)
                 .map(|i| {
-                    let t = i as f64 / (n - 1) as f64;
-                    let k = 1.0 + (scale - 1.0) * t;
-                    let section = o.scaled(k).rotated(solidcraft_gear::plan::taper_turn(*twist, *scale, k));
+                    let (section, t) = solidcraft_gear::plan::taper_section(o, *twist, *scale, i, n);
                     let mut loops = vec![vec![Geom2::Circle(Vec2::new(0.0, 0.0), *rim)]];
                     loops.extend(outline(&section));
                     sketch(format!("section {}", i + 1), f.world([0.0, 0.0, z0 + height * t]), x, y, loops)
@@ -3517,7 +3501,7 @@ fn build_body(s: &mut Session, body: &Body, warnings: &mut Vec<String>, mode: &e
         // step that changes a body already made (a hub, web, bore or trim) is left out with a
         // warning if it still fails: the gear is still worth having.
         let trims = solid::trims(step);
-        let optional = !matches!(step_op(step), Op::New);
+        let optional = !matches!(step.op(), Op::New);
         let attempts = solid::attempts(step);
         let mut done = None;
         for (k, (step, nudge)) in attempts.iter().enumerate() {
@@ -3549,7 +3533,7 @@ fn build_body(s: &mut Session, body: &Body, warnings: &mut Vec<String>, mode: &e
                     if trims {
                         warnings.push(format!("{}: the back and front cones could not be trimmed ({e}); the teeth run on a little past them", body.name));
                     } else if optional {
-                        warnings.push(format!("{}: step {} ({}) could not be made ({e}); it is left out", body.name, i + 1, op_name(step_op(step))));
+                        warnings.push(format!("{}: step {} ({}) could not be made ({e}); it is left out", body.name, i + 1, op_name(step.op())));
                     } else {
                         return Err(e);
                     }
@@ -3596,11 +3580,6 @@ fn keep_point_picks(s: &mut Session, feature: Option<u64>, params: &Value) {
     }
 }
 
-/// What a step does to its body.
-fn step_op(step: &Step) -> Op {
-    solid::op_of(step)
-}
-
 fn polygon(pts: &[solidcraft_gear::V2]) -> Vec<Geom2> {
     (0..pts.len()).map(|i| Geom2::Line(v2(pts[i]), v2(pts[(i + 1) % pts.len()]))).collect()
 }
@@ -3620,6 +3599,10 @@ mod assembly;
 #[path = "gear_feature.rs"]
 mod feature;
 pub(crate) use feature::install as install_gears_feature;
+
+#[cfg(test)]
+#[path = "gear_test_util.rs"]
+mod test_util;
 
 #[cfg(test)]
 #[path = "gear_tests.rs"]

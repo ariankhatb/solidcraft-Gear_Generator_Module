@@ -9,9 +9,7 @@ use crate::plan::{Assembly, AssemblyLink, AssemblyMember, Frame, Kind, Plan, Spe
 use crate::simple::Simple;
 use crate::sketch_rules::{Circle, Drawn, Reading, read, train_spec};
 
-fn close(a: f64, b: f64) -> bool {
-    (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
-}
+use crate::test_util::close_rel as close;
 
 fn circle(x: f64, y: f64, r: f64) -> Circle {
     Circle { c: V2::new(x, y), r }

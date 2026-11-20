@@ -193,3 +193,50 @@ pub fn tooth_chamfer(items: &[GearItem], sp: &mut SystemPlan, c: ToothChamfer) -
     }
     Ok(())
 }
+
+/// The two chamfer cuts at `body.steps[i]` and `body.steps[i + 1]`, both ends of one outside
+/// gear as [`tooth_chamfer`] adds them, as one step to intersect the body with: a revolved
+/// profile that holds the whole body but the two chamfer triangles, each notched in from far
+/// outside the tip. One boolean in place of two, and the same solid: the notches reach out only
+/// where the body has no material (past its tip radius), and only the triangles' cones meet it.
+/// For the builders (the plan keeps its two cuts). `None` when that can't be said: the steps
+/// aren't such a pair (in one frame, side A's then side B's, an outside gear's), the chamfer's
+/// axis isn't the body's, the body reaches past the tip, or the notches would overlap.
+pub fn chamfers_as_one(body: &crate::plan::Body, i: usize) -> Option<Step> {
+    use crate::geom::V2;
+    let (Some(Step::Placed { frame, step: a }), Some(Step::Placed { frame: frame_b, step: b })) = (body.steps.get(i), body.steps.get(i + 1)) else { return None };
+    let (Step::Revolve { profile: pa, op: Op::Cut }, Step::Revolve { profile: pb, op: Op::Cut }) = (&**a, &**b) else { return None };
+    // corner_cut's triangles: [a2, corner, b2], b2 on the tip cylinder (past the tip, for an
+    // outside gear), a2 out past the end face: side A's corner above its b2, side B's below.
+    let (&[a2a, _, b2a], &[a2b, _, b2b]) = (&pa[..], &pb[..]) else { return None };
+    let outside = b2a.x > a2a.x && b2b.x > a2b.x && (b2a.x - b2b.x).abs() <= 1e-9 * (1.0 + b2a.x.abs());
+    if frame != frame_b || !outside || !(a2b.y < b2b.y && b2b.y < b2a.y && b2a.y < a2a.y) {
+        return None;
+    }
+    // The chamfer's axis is the body's own (its frame's z through its origin).
+    let on_axis = len([frame.origin[0], frame.origin[1], 0.0]) <= 1e-9 && frame.z[2].abs() >= 1.0 - 1e-12;
+    let solid = crate::mesh3d::Solid::new(body, 1.0);
+    if !on_axis || !(solid.radius < b2a.x.min(b2b.x)) {
+        return None;
+    }
+    let reach = solid.z.0.abs().max(solid.z.1.abs()) + frame.origin[2].abs();
+    let (r, m) = (2.0 * (b2a.x + solid.radius) + 1.0, 2.0 * reach + 1.0);
+    if !(r.is_finite() && m.is_finite()) {
+        return None;
+    }
+    let profile = vec![
+        V2::new(0.0, -m),
+        V2::new(r, -m),
+        V2::new(r, a2b.y),
+        a2b,
+        b2b,
+        V2::new(r, b2b.y),
+        V2::new(r, b2a.y),
+        b2a,
+        a2a,
+        V2::new(r, a2a.y),
+        V2::new(r, m),
+        V2::new(0.0, m),
+    ];
+    Some(Step::Placed { frame: *frame, step: Box::new(Step::Revolve { profile, op: Op::Intersect }) })
+}

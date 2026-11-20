@@ -22,21 +22,13 @@
 use std::f64::consts::{PI, TAU};
 use std::ops::Range;
 
+use crate::axes::{cross, dot, sub};
 use crate::geom::{Outline, Seg, V2, natural_spline};
 use crate::mesh2d::{MeshResult, Verdict};
 use crate::plan::{Body, Frame, Kind, Op, Plan, Spec, Step, taper_turn};
 
 type P3 = [f64; 3];
 
-fn sub(a: P3, b: P3) -> P3 {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-fn dot(a: P3, b: P3) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-fn cross(a: P3, b: P3) -> P3 {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
-}
 
 fn arc_sweep(c: V2, a: V2, b: V2, ccw: bool) -> (f64, f64, f64) {
     let r = c.dist(a);

@@ -3,14 +3,7 @@ use solidcraft_geom::prelude::*;
 use serde_json::{Value, json};
 
 use crate::Session;
-
-fn run(s: &mut Session, id: &str, p: Value) -> Value {
-    s.execute(id, &p).unwrap_or_else(|e| panic!("{id} {p}: {e}"))
-}
-
-fn volume(s: &mut Session, body: &str) -> f64 {
-    run(s, "inspect.center_of_mass", json!({"bodies": [body]}))["volume"].as_f64().unwrap()
-}
+use super::test_util::{circle, line, no_errors, run, volume};
 
 #[test]
 fn a_spur_gear_is_one_body_of_the_right_volume_and_one_undo_step() {
@@ -387,12 +380,6 @@ fn made(s: &mut Session, p: Value) -> (Value, f64) {
     (r, v)
 }
 
-fn no_errors(s: &Session) {
-    for r in &s.model.results {
-        assert!(r.error.is_none(), "{}: {:?}", r.name, r.error);
-    }
-}
-
 /// How many equation curves and patterns the design's sketches hold.
 fn formulas(s: &Session) -> (usize, usize) {
     let mut out = (0, 0);
@@ -543,14 +530,6 @@ fn sketch_with(s: &mut Session, draw: &[(&str, Value)]) -> u64 {
 
 fn fact_opt(r: &Value, label: &str) -> Option<f64> {
     r["facts"].as_array()?.iter().find(|f| f["label"] == label)?["value"].as_f64()
-}
-
-fn circle(x: f64, y: f64, r: f64, id: &str) -> (&'static str, Value) {
-    ("sketch.circle.center", json!({"center": [x, y], "radius": r, "id": id}))
-}
-
-fn line(a: [f64; 2], b: [f64; 2], id: &str) -> (&'static str, Value) {
-    ("sketch.line", json!({"points": [a, b], "ids": [id]}))
 }
 
 #[test]
@@ -1396,19 +1375,7 @@ fn selected_shafts_and_a_bearing_make_a_train_with_a_bearing() {
 /// Ten circles (module 2: radius = teeth): 1 drives 2; 2 and 3 share a shaft; 3 → 4 → 5; 5 and
 /// 6 share a shaft; 6 → 7 → 8 → 9 → 10.
 fn ten_gears(s: &mut Session) -> u64 {
-    let c = [
-        (0.0, 0.0, 20.0),
-        (50.0, 0.0, 30.0),
-        (50.0, 0.0, 15.0),
-        (50.0, 35.0, 20.0),
-        (50.0, 80.0, 25.0),
-        (50.0, 80.0, 12.0),
-        (80.0, 80.0, 18.0),
-        (118.0, 80.0, 20.0),
-        (118.0, 110.0, 10.0),
-        (118.0, 136.0, 16.0),
-    ];
-    let draw: Vec<(&str, Value)> = c.iter().enumerate().map(|(i, (x, y, r))| circle(*x, *y, *r, &format!("g{}", i + 1))).collect();
+    let draw: Vec<(&str, Value)> = TEN.iter().enumerate().map(|(i, (x, y, r))| circle(*x, *y, *r, &format!("g{}", i + 1))).collect();
     sketch_with(s, &draw)
 }
 

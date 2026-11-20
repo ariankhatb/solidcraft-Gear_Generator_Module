@@ -11,9 +11,7 @@ use crate::spline::{Spline, SplineStandard};
 use crate::sprocket::{CHAINS, Sprocket, chain_by_id, chamfer_profile, tooth_width};
 use crate::wrap::{belt_length, belt_path, chain_center, chain_links};
 
-fn close(a: f64, b: f64, tol: f64) -> bool {
-    (a - b).abs() <= tol
-}
+use crate::test_util::close;
 
 fn closed(o: &Outline) {
     for w in o.segs.windows(2) {

@@ -6,18 +6,8 @@
 //! whose pinion lies along the bent line, the rear one the front's mirror image.
 
 use crate::items::{GearItem, GearRef, GearSettings, ItemKind, ItemLink, LinkKind, SizeBy, Thing};
-use crate::plan::Spec;
-use crate::plan::system::{SystemPlan, plan_items};
-
-fn g(item: usize, gear: usize) -> GearRef {
-    GearRef::new(item, gear)
-}
-
-/// The bend: from the prop line's end at `x` (±80) on, 20° up in the xz plane, 24.36 mm long.
-fn bend(x: f64) -> [f64; 3] {
-    let a = 20f64.to_radians();
-    [x + x.signum() * 24.36 * a.cos(), 0.0, 24.36 * a.sin()]
-}
+use crate::plan::system::SystemPlan;
+use crate::test_util::{bend, g, planned_system as planned};
 
 fn teeth(z1: u32, z2: u32, module: Option<f64>) -> Vec<GearSettings> {
     let s = |z| GearSettings { size_by: SizeBy::Teeth, teeth: Some(z), module, ..GearSettings::default() };
@@ -36,12 +26,6 @@ fn hypoid(x: f64) -> GearItem {
     let mut it = GearItem::new("H", ItemKind::Hypoid).with(vec![Thing::circle([x.signum() * 125.0, 0.0, 20.0], [0.0, 1.0, 0.0], 25.0), Thing::line([x, 0.0, 0.0], bend(x))]);
     it.gears = teeth(37, 9, None);
     it
-}
-
-fn planned(items: &[GearItem], links: &[ItemLink]) -> SystemPlan {
-    let sp = plan_items(items, links, &[], None, &Spec::default()).unwrap_or_else(|e| panic!("{e}"));
-    assert!(sp.error.is_none(), "{:?}", sp.error);
-    sp
 }
 
 /// Turn of body `b` about its frame's z per turn of body `a` about its frame's z, as the

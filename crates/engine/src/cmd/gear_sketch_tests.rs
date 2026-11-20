@@ -4,10 +4,7 @@
 use serde_json::{Value, json};
 
 use crate::Session;
-
-fn run(s: &mut Session, id: &str, p: Value) -> Value {
-    s.execute(id, &p).unwrap_or_else(|e| panic!("{id} {p}: {e}"))
-}
+use super::test_util::run;
 
 fn set(s: &mut Session, group: u64) -> Value {
     let r = run(s, "gear.inspect", json!({"group": group}));

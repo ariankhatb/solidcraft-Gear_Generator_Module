@@ -535,8 +535,7 @@ fn draw_poly(s: &mut Session, poly: &[[Value; 2]]) -> Result<()> {
 /// A new sketch for `def` (see [`super::new_sketch`]), its teeth drawn from their formulas.
 pub(super) fn new_sketch(s: &mut Session, def: &SketchDef) -> Result<u64> {
     ensure_params(s, def)?;
-    let r = s.execute("sketch.create", &json!({"plane": {"origin": def.origin, "x_dir": def.x, "y_dir": def.y}, "name": def.name, "project_edges": false}))?;
-    let id = r.get("sketch").and_then(Value::as_u64).ok_or_else(|| EngineError::Other("no sketch".into()))?;
+    let id = def.create(s)?;
     draw(s, id, def)?;
     s.execute("sketch.finish", &json!({}))?;
     Ok(id)

@@ -32,11 +32,7 @@ fn teeth(z: u32) -> f64 {
 
 /// Whether two frames turn about the same line.
 fn coaxial(a: &Frame, b: &Frame) -> bool {
-    let d = [b.origin[0] - a.origin[0], b.origin[1] - a.origin[1], b.origin[2] - a.origin[2]];
-    let along = d[0] * a.z[0] + d[1] * a.z[1] + d[2] * a.z[2];
-    let off = [d[0] - along * a.z[0], d[1] - along * a.z[1], d[2] - along * a.z[2]];
-    let par = a.z[0] * b.z[0] + a.z[1] * b.z[1] + a.z[2] * b.z[2];
-    (off[0] * off[0] + off[1] * off[1] + off[2] * off[2]).sqrt() < 1e-6 && par.abs() > 1.0 - 1e-9
+    turning(a).coaxial(&turning(b))
 }
 
 /// The assembly of the planned set `p` (its bodies placed where they go).

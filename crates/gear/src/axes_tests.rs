@@ -1,9 +1,7 @@
 use crate::axes::{Axis, Drive, Relation, Solved, candidates, natural, relate, solve};
 use crate::plan::{Kind, Spec, plan};
 
-fn close(a: f64, b: f64, tol: f64) -> bool {
-    (a - b).abs() <= tol
-}
+use crate::test_util::close;
 
 fn axis(o: [f64; 3], d: [f64; 3]) -> Axis {
     Axis::new(o, d).unwrap()

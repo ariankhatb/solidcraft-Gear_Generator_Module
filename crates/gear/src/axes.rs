@@ -92,6 +92,15 @@ impl Axis {
     /// World Z through the origin.
     pub const Z: Axis = Axis { origin: [0.0; 3], dir: [0.0, 0.0, 1.0] };
 
+    /// Whether `other` is the same line (either way round): its origin within 1e-6 of this
+    /// line, its direction parallel (unit directions).
+    pub fn coaxial(&self, other: &Axis) -> bool {
+        let d = sub(other.origin, self.origin);
+        let along = dot(d, self.dir);
+        let off = sub(d, mul(self.dir, along));
+        len(off) < 1e-6 && dot(self.dir, other.dir).abs() > 1.0 - 1e-9
+    }
+
     /// The axis through `origin` along `dir` (any length); `None` when `dir` has no direction or
     /// a number isn't finite.
     pub fn new(origin: [f64; 3], dir: [f64; 3]) -> Option<Axis> {

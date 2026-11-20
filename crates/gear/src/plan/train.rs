@@ -19,7 +19,7 @@ use std::f64::consts::{PI, TAU};
 use crate::axes::num;
 use super::{Body, Frame, Kind, Plan, PreviewGear, Spec, Unit, hub_steps, mesh_warnings, name, ring_warnings, tooth_warnings, twist_for, wanted, with_bore};
 use crate::geom::{Outline, Region, V2, wrap_period};
-use crate::involute::{Internal, Involute, ToothFlank, contact_ratio_external, mesh_external, mesh_internal, mesh_phase, mesh_phase_internal, shift_sum_for_center, teeth_outline};
+use crate::involute::{Internal, Involute, ToothFlank, contact_ratio_external, mesh_external, mesh_internal, mesh_phase, mesh_phase_internal, teeth_outline};
 
 /// The most gears a train takes.
 pub const MAX_GEARS: usize = 64;
@@ -344,18 +344,6 @@ pub fn check(t: &Train) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-/// Gear `b`'s profile shift that puts it `a` mm from gear `ga` in mesh, `gb` the gear unshifted
-/// (an internal mesh: `ga` inside ring `gb`, or `gb` inside ring `ga` when `ring_first`).
-pub fn shift_to_reach(ga: &Involute, gb: &Involute, kind: LinkKind, ring_first: bool, a: f64) -> Option<f64> {
-    match kind {
-        LinkKind::External => shift_sum_for_center(ga, gb, a).map(|sum| sum - ga.shift),
-        LinkKind::Internal if !ring_first => super::ring_shift_for_center(ga, gb, a),
-        // The gear inside: the ring's shift less the difference the distance needs.
-        LinkKind::Internal => super::ring_shift_for_center(gb, ga, a).map(|x_ring_less| ga.shift - x_ring_less),
-        LinkKind::Compound => Some(gb.shift),
-    }
 }
 
 /// One gear's involute (its own module and helix) and the spec its body is built with.
@@ -771,7 +759,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
             let b = built[i].take().unwrap_or_else(|| unreachable!());
             let dz = lo[i] - base;
             for st in b.steps {
-                let mut st = shifted(st, dz);
+                let mut st = if dz == 0.0 { st } else { crate::body::shift_z(st, dz) };
                 if !steps.is_empty() {
                     set_new_to_join(&mut st);
                 }
@@ -968,30 +956,10 @@ fn rigid_units(t: &Train) -> Vec<RigidUnit> {
     units
 }
 
-/// A step moved `dz` along its body's z.
-fn shifted(st: super::Step, dz: f64) -> super::Step {
-    use super::Step;
-    if dz == 0.0 {
-        return st;
-    }
-    match st {
-        Step::Prism { region, z0, height, twist, op } => Step::Prism { region, z0: z0 + dz, height, twist, op },
-        Step::Loft { sections, op } => Step::Loft { sections: sections.into_iter().map(|(o, h)| (o, h + dz)).collect(), op },
-        Step::Taper { outline, z0, height, twist, scale, op } => Step::Taper { outline, z0: z0 + dz, height, twist, scale, op },
-        Step::RingTaper { outline, rim, z0, height, twist, scale, op } => Step::RingTaper { outline, rim, z0: z0 + dz, height, twist, scale, op },
-        Step::Revolve { profile, op } => Step::Revolve { profile: profile.into_iter().map(|q| V2::new(q.x, q.y + dz)).collect(), op },
-        Step::Coil { section, pitch, z0, height, left, op } => Step::Coil { section, pitch, z0: z0 + dz, height, left, op },
-        Step::Placed { frame, step } => Step::Placed { frame: frame.shifted([0.0, 0.0, dz]), step },
-    }
-}
-
 /// A step that starts a body joins the one it is added to instead.
 pub(crate) fn set_new_to_join(st: &mut super::Step) {
-    use super::{Op, Step};
-    let op = match st {
-        Step::Prism { op, .. } | Step::Loft { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => op,
-        Step::Placed { step, .. } => return set_new_to_join(step),
-    };
+    use super::Op;
+    let op = st.op_mut();
     if *op == Op::New {
         *op = Op::Join;
     }

@@ -287,7 +287,20 @@ fn checked(body: &Body) -> Option<String> {
 /// One planned body: its steps in order, each on what the ones before made.
 fn build_body(b: &Planned, notes: &mut Vec<String>) -> Result<Body> {
     let mut made: Option<Body> = None;
+    let mut skip = false;
     for (i, step) in b.steps.iter().enumerate() {
+        if std::mem::take(&mut skip) {
+            continue;
+        }
+        // Both ends' tooth chamfers of a gear: one intersect in place of two cuts (the same
+        // solid), else the two cuts as planned.
+        if let (Some(lower), Some(one)) = (&made, solidcraft_gear::plan::chamfer::chamfers_as_one(b, i))
+            && let Ok(body) = tool(&b.frame, &one, 0.0).and_then(|t| combine(Some(lower), t, Op::Intersect))
+        {
+            made = Some(body);
+            skip = true;
+            continue;
+        }
         let op = solid::op_of(step);
         let tries = solid::attempts(step);
         let mut failed = None;
@@ -414,9 +427,8 @@ fn tool(f: &Frame, step: &Step, nudge: f64) -> Result<Body> {
         let n = if twist.abs() <= 1e-12 { 2 } else { solidcraft_gear::plan::taper_sections(o, twist, scale) };
         let sections: Vec<(Plane, Region2)> = (0..n)
             .map(|i| {
-                let t = i as f64 / (n - 1) as f64;
-                let k = 1.0 + (scale - 1.0) * t;
-                let section = outline_loop(&o.scaled(k).rotated(solidcraft_gear::plan::taper_turn(twist, scale, k)));
+                let (section, t) = solidcraft_gear::plan::taper_section(o, twist, scale, i, n);
+                let section = outline_loop(&section);
                 let region = match rim {
                     Some(r) => Region2 { outer: Loop2::circle(Vec2::ZERO, r), holes: vec![section] },
                     None => Region2 { outer: section, holes: Vec::new() },

@@ -125,15 +125,6 @@ fn v3(p: [f64; 3]) -> Vec3 {
     Vec3::new(p[0], p[1], p[2])
 }
 
-/// Whether two axes are one line (either way round).
-fn coaxial(a: &Axis, b: &Axis) -> bool {
-    let d = [b.origin[0] - a.origin[0], b.origin[1] - a.origin[1], b.origin[2] - a.origin[2]];
-    let along = d[0] * a.dir[0] + d[1] * a.dir[1] + d[2] * a.dir[2];
-    let off = [d[0] - along * a.dir[0], d[1] - along * a.dir[1], d[2] - along * a.dir[2]];
-    let par = a.dir[0] * b.dir[0] + a.dir[1] * b.dir[1] + a.dir[2] * b.dir[2];
-    (off[0] * off[0] + off[1] * off[1] + off[2] * off[2]).sqrt() < 1e-6 && par.abs() > 1.0 - 1e-9
-}
-
 /// The member member `i` turns on (its carrier, or the carrier of the planets it meshes with
 /// when it turns on the carrier's axis: a sun or ring of an epicyclic set turns against its
 /// carrier, so its link to the planets, which turn on the carrier, is between turns relative to
@@ -147,13 +138,13 @@ fn base_of(a: &Assembly, i: usize) -> Option<usize> {
         let (x, y) = l.members();
         let other = if x == i { y } else if y == i { x } else { return None };
         let c = a.members.get(other)?.carrier?;
-        (c != i && a.members.get(c).is_some_and(|cm| coaxial(&cm.axis, &m.axis))).then_some(c)
+        (c != i && a.members.get(c).is_some_and(|cm| cm.axis.coaxial(&m.axis))).then_some(c)
     })
 }
 
 /// Whether two shafts (origin, direction) are one line.
 fn same_shaft(a: &[[f64; 3]; 2], b: &Axis) -> bool {
-    coaxial(&Axis { origin: a[0], dir: a[1] }, b)
+    Axis { origin: a[0], dir: a[1] }.coaxial(b)
 }
 
 /// Makes the assembly of a set just built, or brings the one it had (`old`) up to date with it in

@@ -64,9 +64,7 @@ fn gear_teeth(spec: &Spec) -> Vec<u32> {
     spec.train.as_ref().unwrap().gears.iter().map(|g| g.teeth).collect()
 }
 
-fn close(a: f64, b: f64) -> bool {
-    (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
-}
+use crate::test_util::close_rel as close;
 
 /// The body (assembly member) gear `k` of the drawing is on: one body per member that turns as
 /// one (a compound cluster's gears and its shaft joined).

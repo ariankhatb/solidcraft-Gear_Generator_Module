@@ -465,19 +465,13 @@ fn bevel_planet_clearance_is_quick_enough() {
         let p = planned(&s);
         let t_all = t.elapsed();
         eprintln!("{mode:?}: plan {t_bare:?}, with clearance {t_all:?}");
-        assert!(t_all.saturating_sub(t_bare).as_secs_f64() < 1.0, "{mode:?}: {t_bare:?} against {t_all:?}");
+        let extra_ms = t_all.saturating_sub(t_bare).as_secs_f64() * 1e3;
+        crate::test_util::assert_quick(&format!("{mode:?}: the clearance's share ({t_bare:?} against {t_all:?})"), extra_ms, 1000.0);
         assert_eq!(bare.bodies, p.bodies);
         contains_every_member(&s, &p, 0.01);
     }
 }
 
-/// A step's operation (a placed step's own).
-fn op_of(st: &Step) -> Op {
-    match st {
-        Step::Prism { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => *op,
-        Step::Placed { step, .. } => op_of(step),
-    }
-}
 
 /// Members with hubs, bores and integral shafts on both sides, joined after the cone trims of
 /// bevels and hypoids: the keep-out holds every part of their material (each part joined after
@@ -514,11 +508,11 @@ fn keep_out_holds_hubs_and_shafts_joined_after_trims() {
                 if *m == Motion::Ring {
                     continue;
                 }
-                let last_trim = b.steps.iter().rposition(|st| op_of(st) == Op::Intersect);
+                let last_trim = b.steps.iter().rposition(|st| st.op() == Op::Intersect);
                 let whole = Solid::new(b, 0.2).material_points(0.3);
                 let (wlo, whi) = whole.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q[2]), a.1.max(q[2])));
                 for (i, st) in b.steps.iter().enumerate() {
-                    if last_trim.is_none_or(|t| i < t) || !matches!(op_of(st), Op::Join | Op::New) {
+                    if last_trim.is_none_or(|t| i < t) || !matches!(st.op(), Op::Join | Op::New) {
                         continue;
                     }
                     let alone = Body { name: String::new(), frame: b.frame, steps: vec![st.clone()] };

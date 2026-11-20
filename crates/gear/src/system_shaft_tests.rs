@@ -7,18 +7,10 @@
 use crate::items::{GearItem, GearRef, GearSettings, ItemKind, ItemLink, LinkKind, SizeBy, Thing, suggest_links};
 use crate::plan::Spec;
 use crate::plan::system::{SystemPlan, plan_items};
+use crate::test_util::{bend, g, mesh, planned_system as planned, shaft};
 
 const X: [f64; 3] = [1.0, 0.0, 0.0];
 
-fn g(item: usize, gear: usize) -> GearRef {
-    GearRef::new(item, gear)
-}
-fn mesh(a: GearRef, b: GearRef) -> ItemLink {
-    ItemLink { a, b, kind: LinkKind::Mesh }
-}
-fn shaft(a: GearRef, b: GearRef) -> ItemLink {
-    ItemLink { a, b, kind: LinkKind::Shaft }
-}
 fn spur(id: &str, things: Vec<Thing>) -> GearItem {
     let mut it = GearItem::new(id, ItemKind::Spur).with(things);
     it.gears = vec![GearSettings { module: Some(1.0), ..GearSettings::default() }];
@@ -28,12 +20,6 @@ fn shaft_item(id: &str, a: [f64; 3], b: [f64; 3]) -> GearItem {
     let mut it = GearItem::new(id, ItemKind::Shaft).with(vec![Thing::line(a, b)]);
     it.shaft_diameter = Some(6.0);
     it
-}
-
-/// The bend: from the prop line's end at `x` (±80) on, 20° up in the xz plane, 24.36 mm long.
-fn bend(x: f64) -> [f64; 3] {
-    let a = 20f64.to_radians();
-    [x + x.signum() * 24.36 * a.cos(), 0.0, 24.36 * a.sin()]
 }
 
 /// A side-view bevel pair (two shaft lines from one end), 30 : 30 teeth at module 0.6.
@@ -52,12 +38,6 @@ fn drawing(m_axis: Option<Thing>, extra: Vec<GearItem>) -> Vec<GearItem> {
     let mut items = vec![spur("M", m), spur("N", vec![Thing::circle([0.0, 25.0, 0.0], X, 10.0)]), bevel("KF", 80.0), bevel("KB", -80.0)];
     items.extend(extra);
     items
-}
-
-fn planned(items: &[GearItem], links: &[ItemLink]) -> SystemPlan {
-    let sp = plan_items(items, links, &[], None, &Spec::default()).unwrap_or_else(|e| panic!("{e}"));
-    assert!(sp.error.is_none(), "{:?}\nnotes {:?}", sp.error, sp.notes);
-    sp
 }
 
 /// The rigid member (`solid::members`) gear `r`'s body is in: its bodies.

@@ -1773,26 +1773,14 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
         gear_view = gear_view.map(&my, true);
     }
     p.bodies.extend(bodies);
-    p.preview.push(PreviewGear {
-        name: "pinion".into(),
-        region: Region { outer: vec![pinion_view], holes: vec![] },
-        center: centre,
-        speed: 1.0,
-        slide: 0.0,
-        pitch_radius: 0.0,
-        period: 0.0,
-        orbit: 0.0,
-    });
-    p.preview.push(PreviewGear {
-        name: "gear".into(),
-        region: Region { outer: vec![gear_view], holes: s.bore2.outline().into_iter().collect() },
-        center: V2::ZERO,
-        speed: -d.z1 / d.z2,
-        slide: 0.0,
-        pitch_radius: form.radius(0.0, 0.0),
-        period: 0.0,
-        orbit: 0.0,
-    });
+    p.preview.push(PreviewGear::turning("pinion", Region { outer: vec![pinion_view], holes: vec![] }, centre, 1.0, 0.0));
+    p.preview.push(PreviewGear::turning(
+        "gear",
+        Region { outer: vec![gear_view], holes: s.bore2.outline().into_iter().collect() },
+        V2::ZERO,
+        -d.z1 / d.z2,
+        form.radius(0.0, 0.0),
+    ));
     p.preview_note = format!(
         "middle sections of the pinion and the ring gear, side by side at their speeds (the axes are {} mm apart at {}° and don't meet: {hand}-hand pinion)",
         num(d.offset),

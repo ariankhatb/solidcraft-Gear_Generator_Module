@@ -16,8 +16,10 @@ pub mod ai_connect;
 pub use solidcraft_ui_kit::app_bar;
 pub use solidcraft_ui_kit::blur;
 pub mod bom_panel;
+pub mod broken_view_preview;
 pub mod browser;
 pub mod browser_canvas;
+mod browser_defects;
 pub mod browser_prompts;
 pub mod browser_search;
 #[cfg(test)]
@@ -32,6 +34,8 @@ pub mod command_help;
 pub mod context_menu;
 pub mod control;
 pub mod control_job;
+mod control_joint_drive;
+mod control_joint_pose;
 mod control_params;
 pub mod control_switch;
 pub mod crash_ui;
@@ -241,6 +245,7 @@ pub(crate) mod open_meshing;
 pub mod operations;
 pub mod panel_runtime;
 pub mod params_dialog;
+pub(crate) mod pattern_components;
 pub mod pencil;
 pub mod personal_sheet_rules;
 pub(crate) mod pick_index;
@@ -294,6 +299,7 @@ pub mod semantic_content;
 pub mod settings_profiles;
 #[cfg(test)]
 mod settings_profiles_tests;
+pub mod sheet_rule_library;
 pub mod shell;
 #[cfg(test)]
 mod shell_face_sketch_ui_tests;
@@ -355,6 +361,8 @@ pub use solidcraft_ui_kit::theme_files;
 #[cfg(test)]
 mod theme_files_tests;
 use solidcraft_ui_kit::theme_options;
+#[cfg(test)]
+mod test_pictures;
 #[cfg(test)]
 mod thin_extrude_tests;
 pub mod tickets;
@@ -916,6 +924,7 @@ pub struct SolveApp {
     control_held: std::collections::VecDeque<ControlRequest>,
     /// An agent's design change computing off the window thread ([`control_job`]).
     control_job: Option<control_job::ControlJob>,
+    control_joint_drive: control_joint_drive::State,
     /// Replies of agents' commands run after computing off the window thread, on their way to
     /// the agent ([`control_job`]): each is passed on as it comes, its outcome noted.
     agent_replies: Vec<(std::sync::mpsc::Receiver<serde_json::Value>, std::sync::mpsc::Sender<serde_json::Value>)>,
@@ -1173,6 +1182,7 @@ impl SolveApp {
             ai_connect: Default::default(),
             control_held: Default::default(),
             control_job: None,
+            control_joint_drive: Default::default(),
             agent_replies: Vec::new(),
             control_answering: Vec::new(),
             plugin_inspection_versions: Default::default(),
@@ -1224,6 +1234,7 @@ impl SolveApp {
             samples: samples.max(1),
             tess: false,
             oit: false,
+            edges: false,
         };
         let built = Self::build_wgpu(rs, target, target, !self.cpu_meshing);
         self.adopt_wgpu(rs, built);
@@ -1250,8 +1261,9 @@ impl SolveApp {
             samples: samples.max(1),
             tess: false,
             oit: false,
+            edges: false,
         };
-        let window = crate::gpu::GpuTarget { format: rs.target_format, depth: None, samples: 1, tess: false, oit: false };
+        let window = crate::gpu::GpuTarget { format: rs.target_format, depth: None, samples: 1, tess: false, oit: false, edges: false };
         Self::build_wgpu(rs, scene, window, gpu_meshing)
     }
 
@@ -1513,6 +1525,8 @@ impl SolveApp {
         render_workspace::apply_memory_policy(self);
         // Before a design given at start opens: the largest sketch it may build (#10874).
         prefs::apply_sketch_limit(&self.preferences);
+        // Before a file given at start is read: whether its parts are healed (#17689).
+        prefs::apply_tolerance_heal(&self.preferences);
         // Saved before the theme was a preference: the Dark/Light flag says which.
         if v.get("preferences").and_then(|p| p.get("theme")).is_none() {
             self.preferences.theme = if self.ui.dark { "dark" } else { "light" }.into();
@@ -1580,6 +1594,7 @@ impl SolveApp {
             solidcraft_engine::slicers::set_chosen_programs(&self.preferences.custom_slicers);
         }
         self.session.set_validation(self.preferences.validation);
+        drawing_workspace::sync_history(self);
         print_face_ui::sync(&mut self.session, &self.preferences);
         if id == "timeline.play" {
             let reply = self.session.execute(id, &params).map_err(|e| e.to_string())?;
@@ -2209,6 +2224,8 @@ impl SolveApp {
             && !id.starts_with("drawing.")
             && !matches!(id, "assembly.bom" | "sheet.flat_pattern" | "document.metadata" | "document.metadata.set" | "view.layout")
             && !matches!(id, "view.fit" | "view.home" | "view.tool" | "view.tool.zoom")
+            // Undo and Redo take the open drawing's steps here, from a menu as from their keys.
+            && !matches!(id, "edit.undo" | "edit.redo")
         {
             self.set_status(self.tr_label("Return to Design to use this command.").to_string(), true);
             return;
@@ -2564,7 +2581,7 @@ impl SolveApp {
             // Like Insert SVG it asks the host for its own kind of file (on the web a file dialog,
             // not the window that also opens and downloads designs), so the file comes straight
             // back here and nothing has to remember which command asked.
-            self.pick_open_for(&["3mf", "stl", "obj", "ply", "glb", "gltf"], |app, path| {
+            self.pick_open_for(&["3mf", "stl", "obj", "ply", "glb", "gltf", "usd", "usda", "usdc", "usdz"], |app, path| {
                 if let Some(path) = path
                     && !mesh_units::ask_ply_as_mesh(app, &path)
                 {
@@ -3389,6 +3406,11 @@ impl SolveApp {
         self.cam.set_view(StandardView::Iso);
         self.fit_view();
         stand_up::offer(self, path, &[], Some(&r));
+        // The import's warnings, as the desktop's open says them (`file_load`), before the
+        // notices that follow it there too.
+        if let Some(summary) = timeline::import_warning_status(self, &r) {
+            self.set_status(summary, false);
+        }
         self.say_newer_file();
         self.say_plugin_data();
         self.say_signature(&r);
@@ -3478,15 +3500,13 @@ impl SolveApp {
         let r = self.run(cmd, params)?;
         self.fit_view();
         stand_up::offer(self, path, &before, Some(&r));
-        if let Some(summary) = timeline::import_status(self, &r) {
+        if let Some(summary) = timeline::import_warning_status(self, &r) {
             self.set_status(summary, false);
-        } else if let Some(w) = r["warnings"].as_array().filter(|w| !w.is_empty()) {
-            self.set_status(format!("imported with {} warning(s): {}", w.len(), w.first().and_then(Value::as_str).unwrap_or("")), false);
         }
         Ok(())
     }
 
-    /// A dropped CAD, mesh, drawing or point cloud (PLY, XYZ, PTS) file joins a design that has
+    /// A dropped CAD, mesh, drawing or point cloud file joins a design that has
     /// features or point clouds; otherwise it opens. A dropped PNG or JPEG is a canvas to place,
     /// not a design to open: it starts the Canvas tool with that image chosen (#13926).
     /// A dropped ZIP goes through the plugin install review, which validates its contents
@@ -4150,8 +4170,7 @@ impl SolveApp {
         ui_kit::set_viewport_half_height(ui.ctx(), self.cam.half_height());
         prefs::prepare_blur(self, ui.ctx());
         render_workspace::displayed::begin(self);
-        let blur_source = !self.home.open && !render_workspace::result_active(self);
-        let _blur_scope = self.blur.begin(ui.ctx(), blur_source);
+        let _blur_scope = self.blur.begin(ui.ctx());
         value_step::set_enabled(ui.ctx(), self.preferences.step_values);
         canvas::set_boxes_shown(ui.ctx(), self.preferences.value_boxes_in_view);
         // #9841: dialog buttons answer their first letter only when the preference says so;
@@ -4331,6 +4350,7 @@ impl SolveApp {
         /// Held requests beyond this are refused rather than kept.
         const MAX_HELD: usize = 256;
 
+        control_joint_drive::poll(self, ctx);
         // Held requests (and the agent chat's, which it hands over here) run even when the app
         // has no control channel of its own.
         if self.control_rx.is_none() && self.control_held.is_empty() {
@@ -4411,6 +4431,10 @@ impl SolveApp {
     /// Run a control request here, now, and reply (or queue the screenshot it asks for).
     pub(crate) fn run_control(&mut self, ctx: &egui::Context, req: ControlRequest) {
         if req.refuse_cancelled_chat() {
+            return;
+        }
+        if req.method == control_joint_drive::METHOD {
+            control_joint_drive::run(self, ctx, req);
             return;
         }
         let Some(req) = render_workspace::prepare::control(self, req) else {

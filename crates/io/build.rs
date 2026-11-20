@@ -13,7 +13,8 @@ use std::process::Command;
 
 /// The workspace crates a design's model is computed from: `doc` and every workspace crate it
 /// depends on (a test checks the list against their manifests).
-const EVALUATION_CRATES: [&str; 12] = ["color", "geom", "profile", "smlib", "sketch", "kernel", "render", "derive", "doc", "format", "viewport", "gear"];
+const EVALUATION_CRATES: [&str; 13] =
+    ["color", "geom", "profile", "smlib", "sketch", "kernel", "render", "derive", "develop", "doc", "format", "viewport", "gear"];
 /// The other files the saved model depends on, relative to the workspace root: the model cache's
 /// own code, and the Gear Generator's reading of a set, which `doc` evaluates a Gears feature
 /// through (the planner the engine installs: `solidcraft_doc::set_gears_planner`).

@@ -55,7 +55,7 @@ pub(super) fn eval(doc: &Document, f: &Feature, st: &mut ModelState, warning: &m
     };
     let planner = PLANNER.get().ok_or_else(|| DocError::Invalid("gear sets are planned by the Gear Generator, which is not running here".into()))?;
     let ids: Vec<u64> = sketches.iter().map(|s| s.0).collect();
-    let planned = planner(&GearsInput { doc, state: st, params, sketches: &ids });
+    let planned = solidcraft_profile::scope("gear", "plan (feature)", || planner(&GearsInput { doc, state: st, params, sketches: &ids }));
     // A sketch the set reads that isn't there: the planner's error names the picks it held (the
     // item, its slot, the sketch); else the sketch.
     if let Some(gone) = ids.iter().find(|id| st.sketch(**id).is_none()) {
@@ -71,8 +71,11 @@ pub(super) fn eval(doc: &Document, f: &Feature, st: &mut ModelState, warning: &m
     let checks = super::EVAL_VALIDATION.get() != kernel::Validation::Off;
     let mut notes: Vec<String> = Vec::new();
     // Everything inside runs unchecked; what the feature keeps is checked below.
-    let (built, _) = kernel::validating(kernel::Validation::Off, || build(&plan, &mut notes));
-    let (members, keep_out) = built?;
+    let (built, _) = kernel::validating(kernel::Validation::Off, || solidcraft_profile::scope("gear", "build", || build(&plan, &mut notes)));
+    let (members, keep_out, copies) = built?;
+    // Members made as moved copies of others, with the body each was moved from: checked as that
+    // one is (a rigid move changes nothing the check reads).
+    let moved: Vec<(Body, Body)> = copies.iter().enumerate().filter_map(|(m, c)| Some((members[m].1.clone(), members.get((*c)?)?.1.clone()))).collect();
     let cut_by_keep_out = !keep_out_cuts.is_empty();
     if cut_by_keep_out && keep_out.is_none() {
         notes.push("the set has no keep-out body to cut the housing with: ask for one (clearance body)".into());
@@ -114,7 +117,31 @@ pub(super) fn eval(doc: &Document, f: &Feature, st: &mut ModelState, warning: &m
     if checks {
         // Each body's check on a thread of its own (they read nothing of each other's).
         let fresh: Vec<&ModelBody> = st.bodies.iter().filter(|b| !before.iter().any(|old| old.same_shape(&b.body))).collect();
-        let verdicts = kernel::map_on_threads(&fresh, THREADS, |b| checked(&b.body));
+        let _span = solidcraft_profile::span("gear", "check");
+        // A moved copy whose original is among them takes the original's verdict.
+        let original = |b: &ModelBody| moved.iter().find(|(copy, _)| copy.same_shape(&b.body)).and_then(|(_, from)| fresh.iter().position(|o| o.body.same_shape(from)));
+        let of: Vec<Option<usize>> = fresh.iter().map(|b| original(b)).collect();
+        let own: Vec<&ModelBody> = fresh.iter().zip(&of).filter(|(_, o)| o.is_none()).map(|(b, _)| *b).collect();
+        let own_verdicts = kernel::map_on_threads(&own, THREADS, |b| {
+            let _span = solidcraft_profile::span("gear check", solidcraft_profile::intern(&b.name));
+            checked(&b.body)
+        });
+        let mut by_body = own.iter().zip(own_verdicts);
+        let mut verdicts: Vec<Option<Option<String>>> = Vec::with_capacity(fresh.len());
+        for o in &of {
+            verdicts.push(match o {
+                None => by_body.next().and_then(|(_, v)| v),
+                Some(_) => None,
+            });
+        }
+        for (i, o) in of.iter().enumerate() {
+            if let Some(j) = o {
+                verdicts[i] = verdicts[*j].clone();
+                if let Some(v) = &verdicts[i] {
+                    remember(&CHECKED, (fresh[i].body.clone(), v.clone()));
+                }
+            }
+        }
         for (b, verdict) in fresh.iter().zip(verdicts) {
             match verdict {
                 Some(None) => {}
@@ -142,34 +169,76 @@ fn refused_note(name: &str, why: &str) -> String {
     format!("{name}: the kernel's check refuses it: {why}{known}")
 }
 
+/// A set's bodies as built: each rigid member (its generator name and body), the keep-out body,
+/// and for each member the earlier member it is a moved copy of (the same gears the same way
+/// round each other, elsewhere).
+type Built = (Vec<(String, Body)>, Option<(String, Body)>, Vec<Option<usize>>);
+
 /// Builds the plan: each rigid member (its generator name and body) and the keep-out body. A gear
 /// that can't be made fails the set; a step that only changes a gear (a hub, bore or trim) is left
 /// out with a note, and so is the keep-out body.
-#[allow(clippy::type_complexity)]
-fn build(plan: &Plan, notes: &mut Vec<String>) -> Result<(Vec<(String, Body)>, Option<(String, Body)>)> {
-    // Every gear (and the keep-out body) on a thread of its own: each is made from its own plan
-    // alone, and the kernel answers the same on any thread. Notes and errors in plan order.
+///
+/// A body planned the same as one before it but for where it stands (a drivetrain's front and
+/// back axles, a pair of equal bevels) is not made again: the first is moved there
+/// ([`moved_to`]); and so is a rigid member whose bodies are such copies, the same way round
+/// each other, of an earlier member's.
+fn build(plan: &Plan, notes: &mut Vec<String>) -> Result<Built> {
     let jobs: Vec<&Planned> = plan.bodies.iter().chain(plan.clearance.as_ref()).collect();
-    let mut made = kernel::map_on_threads(&jobs, THREADS, |b| made_body(b)).into_iter();
-    let mut next = || made.next().flatten().unwrap_or_else(|| (Err(stopped()), Vec::new()));
+    let shapes: Vec<Option<u64>> = jobs.iter().map(|b| rigid(&b.frame).then(|| shape_key(b))).collect();
+    let source: Vec<Option<usize>> = (0..jobs.len()).map(|i| shapes[i].and_then(|k| (0..i).find(|j| shapes[*j] == Some(k)))).collect();
+    // Every body of a shape of its own (and the keep-out body) on a thread of its own: each is
+    // made from its own plan alone, and the kernel answers the same on any thread.
+    let own: Vec<usize> = (0..jobs.len()).filter(|i| source[*i].is_none()).collect();
+    let own_jobs: Vec<&Planned> = own.iter().map(|i| jobs[*i]).collect();
+    let made_own = kernel::map_on_threads(&own_jobs, THREADS, |b| made_body(b));
+    let mut made: Vec<Option<(Result<Body>, Vec<String>)>> = (0..jobs.len()).map(|_| None).collect();
+    for (i, r) in own.iter().zip(made_own) {
+        made[*i] = Some(r.unwrap_or_else(|| (Err(stopped()), Vec::new())));
+    }
+    for i in 0..jobs.len() {
+        let Some(from) = source[i] else { continue };
+        let copy = match &made[from] {
+            Some((Ok(body), said)) => match moved_to(body, &jobs[from].frame, &jobs[i].frame) {
+                Ok(body) => (Ok(body), said.iter().map(|n| n.replace(&jobs[from].name, &jobs[i].name)).collect()),
+                // (Made where it stands after all.)
+                Err(_) => made_body(jobs[i]),
+            },
+            Some((Err(e), said)) => (Err(DocError::Invalid(e.to_string())), said.clone()),
+            None => (Err(stopped()), Vec::new()),
+        };
+        made[i] = Some(copy);
+    }
+    let mut made = made.into_iter().map(|m| m.unwrap_or_else(|| (Err(stopped()), Vec::new())));
     let mut gears: Vec<Body> = Vec::with_capacity(plan.bodies.len());
     for b in &plan.bodies {
-        let (body, said) = next();
+        let (body, said) = made.next().unwrap_or_else(|| (Err(stopped()), Vec::new()));
         notes.extend(said);
         gears.push(body.map_err(|e| DocError::Invalid(format!("{}: {e}", b.name)))?);
     }
-    let mut members = Vec::new();
-    for r in solid::members(plan) {
-        let parts: Vec<&Body> = r.bodies.iter().filter_map(|k| gears.get(*k)).collect();
-        let body = match parts[..] {
-            [one] => one.clone(),
-            _ => kernel::union_all(&parts).map_err(|e| DocError::Invalid(format!("{}: its gears could not be joined ({e})", r.name)))?,
+    let span = solidcraft_profile::span("gear", "join members");
+    let rigids = solid::members(plan);
+    let keys: Vec<Option<u64>> = rigids.iter().map(|r| member_key(plan, &r.bodies, &shapes)).collect();
+    let mut members: Vec<(String, Body)> = Vec::new();
+    let mut copies: Vec<Option<usize>> = Vec::new();
+    for (m, r) in rigids.iter().enumerate() {
+        // A member of moved copies: the earlier one like it, moved (no union made again).
+        let earlier = keys[m].and_then(|key| (0..m).find(|j| keys[*j] == Some(key))).filter(|_| r.bodies.iter().all(|k| source[*k].is_some()));
+        let moved = earlier.and_then(|j| moved_to(&members[j].1, &plan.bodies[rigids[j].bodies[0]].frame, &plan.bodies[r.bodies[0]].frame).ok());
+        let body = match (moved, &r.bodies[..]) {
+            (Some(body), _) => body,
+            (None, [one]) => gears[*one].clone(),
+            (None, ks) => {
+                let parts: Vec<&Body> = ks.iter().map(|k| &gears[*k]).collect();
+                kernel::union_all(&parts).map_err(|e| DocError::Invalid(format!("{}: its gears could not be joined ({e})", r.name)))?
+            }
         };
-        members.push((r.name, body));
+        copies.push(earlier);
+        members.push((r.name.clone(), body));
     }
+    drop(span);
     let keep_out = match &plan.clearance {
         Some(c) => {
-            let (body, said) = next();
+            let (body, said) = made.next().unwrap_or_else(|| (Err(stopped()), Vec::new()));
             notes.extend(said);
             match body {
                 Ok(b) => Some((c.name.clone(), b)),
@@ -181,7 +250,78 @@ fn build(plan: &Plan, notes: &mut Vec<String>) -> Result<(Vec<(String, Body)>, O
         }
         None => None,
     };
-    Ok((members, keep_out))
+    Ok((members, keep_out, copies))
+}
+
+/// What a planned body is known by apart from where it stands: its [`plan_key`] with the frame
+/// the world's and no name.
+fn shape_key(b: &Planned) -> u64 {
+    hashed(&plan_key(&Planned { name: String::new(), frame: Frame::at([0.0; 3]), steps: b.steps.clone() }))
+}
+
+/// What a rigid member made of the plan's `bodies` is known by apart from where it stands: each
+/// body's shape ([`shape_key`]) and where it stands from the first, to 1e-9 mm. `None` when a
+/// body has no shape key (its frame not a rigid placing).
+fn member_key(plan: &Plan, bodies: &[usize], shapes: &[Option<u64>]) -> Option<u64> {
+    let first = plan.bodies.get(*bodies.first()?)?.frame;
+    let back = inverse(&placing(&first));
+    let mut text = String::new();
+    for k in bodies {
+        let m = times(&placing(&plan.bodies.get(*k)?.frame), &back);
+        text.push_str(&format!("{};", shapes.get(*k).copied().flatten()?));
+        for v in m.iter().flatten() {
+            let near = format!("{v:.9}");
+            text.push_str(if near.parse::<f64>() == Ok(0.0) { "0" } else { &near });
+            text.push(',');
+        }
+    }
+    Some(hashed(&text))
+}
+
+/// Whether a frame's axes are unit and square to each other (a rigid placing).
+fn rigid(f: &Frame) -> bool {
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    (dot(f.x, f.x) - 1.0).abs() <= 1e-12 && (dot(f.z, f.z) - 1.0).abs() <= 1e-12 && dot(f.x, f.z).abs() <= 1e-12
+}
+
+type Mat = [[f64; 4]; 4];
+
+/// The matrix that places a frame's own coordinates in the world (rows: x, y, z, origin; a point
+/// is a row times it, as the kernel's transforms take it).
+fn placing(f: &Frame) -> Mat {
+    let (x, y, z, o) = (f.x, f.y(), f.z, f.origin);
+    [[x[0], x[1], x[2], 0.0], [y[0], y[1], y[2], 0.0], [z[0], z[1], z[2], 0.0], [o[0], o[1], o[2], 1.0]]
+}
+
+/// The inverse of a rigid [`placing`].
+fn inverse(m: &Mat) -> Mat {
+    let mut out = [[0.0; 4]; 4];
+    for i in 0..3 {
+        for j in 0..3 {
+            out[i][j] = m[j][i];
+        }
+        out[3][i] = -(0..3).map(|k| m[3][k] * m[i][k]).sum::<f64>();
+    }
+    out[3][3] = 1.0;
+    out
+}
+
+/// `a` then `b`, for row points.
+fn times(a: &Mat, b: &Mat) -> Mat {
+    std::array::from_fn(|i| std::array::from_fn(|j| (0..4).map(|k| a[i][k] * b[k][j]).sum()))
+}
+
+/// A body made in frame `from`, moved to stand in frame `to` the same way.
+fn moved_to(body: &Body, from: &Frame, to: &Frame) -> Result<Body> {
+    Ok(kernel::transform_matrix(body, times(&inverse(&placing(from)), &placing(to)))?)
+}
+
+/// A text's 64-bit hash: what the caches know a plan by.
+fn hashed(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    h.finish()
 }
 
 /// Most threads a set's gears are made and checked on at once.
@@ -200,7 +340,7 @@ const KEPT: usize = 64;
 /// another item added) makes only the bodies whose plan changed; the others are the bodies made
 /// before, which are what making them again gives: the kernel answers the same on any thread
 /// and after any other work.
-static MADE: Mutex<VecDeque<(String, Body, Vec<String>)>> = Mutex::new(VecDeque::new());
+static MADE: Mutex<VecDeque<(u64, Body, Vec<String>)>> = Mutex::new(VecDeque::new());
 
 /// SMLib's verdict on bodies checked before (`None`: valid; else why it refuses), so a body made
 /// before ([`MADE`]) is not checked again.
@@ -227,7 +367,8 @@ fn recall<T, R>(cache: &Mutex<VecDeque<T>>, wanted: impl Fn(&T) -> bool, take: i
 /// One planned body made ([`build_body`]), or the body made from the same plan before, with the
 /// notes making it gave.
 fn made_body(b: &Planned) -> (Result<Body>, Vec<String>) {
-    let key = plan_key(b);
+    // (By the key's hash: a body's plan can be megabytes of text.)
+    let key = hashed(&plan_key(b));
     if let Some((body, notes)) = recall(&MADE, |(k, ..)| *k == key, |(_, body, notes)| (body.clone(), notes.clone())) {
         return (Ok(body), notes);
     }
@@ -286,6 +427,7 @@ fn checked(body: &Body) -> Option<String> {
 
 /// One planned body: its steps in order, each on what the ones before made.
 fn build_body(b: &Planned, notes: &mut Vec<String>) -> Result<Body> {
+    let _span = solidcraft_profile::span("gear body", solidcraft_profile::intern(&b.name));
     let mut made: Option<Body> = None;
     let mut skip = false;
     for (i, step) in b.steps.iter().enumerate() {

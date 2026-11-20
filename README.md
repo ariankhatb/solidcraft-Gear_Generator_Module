@@ -3,6 +3,8 @@
 > User guide: [docs/gears/](docs/gears/README.md) (start with the [quick start](docs/gears/quick-start.md)).
 > The upstream SolidCraft README follows below the line.
 > Work in progress, shared for testing: issues and pull requests are welcome here.
+>
+> **Try it:** download the Windows test build from [Releases](https://github.com/ariankhatb/solidcraft-Gear_Generator_Module/releases) (portable zip, no install).
 
 # Gears for SolidCraft
 
@@ -63,6 +65,8 @@ An RC-car 4x4 drawn as plain sketches by the project owner and finished by **one
   every gear's speed and torque; read the ratio and path between any two gears.
 - **Housing cutout.** Points on the shaft lines become bearing seats in one "Housing cutout" body
   that also holds the gears' swept space: cut it from a housing block.
+- **The dialog in tabs.** Gears, Teeth, Shafts & Bearings, Links & Motion, Housing & Output and
+  Results, like a CAM operation dialog, in place of one long panel; options come in check-box groups.
 - **Tooth chamfer.** One setting chamfers the tooth tips of every gear in the set at 45°, on both
   end faces or one side; gears it can't apply to (bevel, worm, hypoid, crossed helical, rack,
   planetary) stay plain with a note.
@@ -73,16 +77,16 @@ An RC-car 4x4 drawn as plain sketches by the project owner and finished by **one
    bearing, and smaller circles on a gear's centre are its bore and hub. A bevel pair is one side
    view: two shaft lines meeting at the apex (and optionally a contact line between them). Fully
    define the sketch so the gears can't drift.
-2. **Click Gears** (Model › Create). Pick a type, then click the sketch pieces the status line asks
+2. **Click Gears** (Model › Create). The dialog is in tabs: Gears, Teeth, Shafts & Bearings, Links &
+   Motion, Housing & Output and Results. On Gears, pick a type, then click the sketch pieces the status line asks
    for, or box-select several circles. Each gear gets a card with a checklist and its own settings:
    module or teeth, face sides, helix.
-3. **Link them** under Drivetrain: accept the suggested meshes, add links by hand, pick the driver.
+3. **Link them** on Links & Motion: accept the suggested meshes, add links by hand, pick the driver.
 4. **OK.** The gears, joints and links are built as one feature.
 
 <table align="center">
-<tr><td align="center"><img src="docs/gears/img/w1-01-empty.png" width="400" alt="The Gears dialog before any pick: type, New gear, status line and a three-step guide"/><br/><sub>The dialog: type, New gear, the status line and a guide</sub></td><td align="center"><img src="docs/gears/img/w1-05-linked.png" width="400" alt="Two gears picked and linked: the mesh row shows 0.67 : 1 opposite"/><br/><sub>Two circles picked, the mesh accepted: 0.67 : 1</sub></td></tr>
-<tr><td align="center"><img src="docs/gears/img/w2-03-compound-complete.png" width="400" alt="A compound gear: a shaft line and two circles in parallel sketches"/><br/><sub>A compound: a shaft line and a circle in each of two layers</sub></td><td align="center"><img src="docs/gears/img/spur-04-edit.png" width="400" alt="Editing a built pair: both gear cards come back with z20 m2 and z30 m2"/><br/><sub>Edit reopens the set with every gear's card</sub></td></tr>
-<tr><td align="center"><img src="docs/gears/img/w7-04-missing-pick-named.png" width="400" alt="A deleted pitch circle named on its card"/><br/><sub>A deleted reference is named, not guessed</sub></td><td align="center"><img src="docs/gears/img/w1-06-built.png" width="400" alt="The built spur pair with its joints and gear link in the browser"/><br/><sub>Built: bodies, joints and a gear link in one feature</sub></td></tr>
+<tr><td align="center" width="50%"><img src="docs/gears/img/dialog/tabs-fresh-gears.png" width="420" alt="Gears tab: two circles picked, each gear with its card and checklist"/><br/><sub><b>Gears</b>: one card per gear, its picks and size</sub></td><td align="center" width="50%"><img src="docs/gears/img/dialog/tabs-fresh-motion.png" width="420" alt="Links and Motion tab: the A to B mesh at 0.67 : 1 and the drive"/><br/><sub><b>Links &amp; Motion</b>: meshes, the driver, rpm and torque</sub></td></tr>
+<tr><td align="center" width="50%"><img src="docs/gears/img/dialog/tabs-tab09-teeth.png" width="420" alt="Teeth tab on the everything drivetrain example"/><br/><sub><b>Teeth</b>: helix, pressure angle, backlash, chamfer</sub></td><td align="center" width="50%"><img src="docs/gears/img/dialog/tabs-tab09-results.png" width="420" alt="Results tab: every gear with teeth, module, ratio, speed and torque"/><br/><sub><b>Results</b>: every gear with its speed and torque</sub></td></tr>
 </table>
 
 Ten example designs, from a spur pair to a mixed drivetrain, are in

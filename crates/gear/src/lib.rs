@@ -33,7 +33,6 @@
 //!   same in 3D, from the bodies' steps, for bevel, hypoid, crossed helical and worm sets.
 //! - [`octoid`]: bevel teeth cut by a crown gear (conjugate along the face, straight or spiral);
 //!   [`worm`]: the throated worm wheel, cut plane by plane by the worm's thread as a hob.
-//! - [`sheet`]: a design sheet (Markdown) of a planned set and a gear profile as a DXF.
 //! - [`strength`]: load capacity (ISO 6336 Method B simplified, Lewis; simplified bevel and
 //!   worm): forces, stresses and safety factors for a given torque or power.
 //!
@@ -65,7 +64,6 @@ pub mod plan;
 pub mod pulley;
 pub mod spline;
 pub mod sprocket;
-pub mod sheet;
 pub mod select;
 pub mod simple;
 pub mod sketch_rules;

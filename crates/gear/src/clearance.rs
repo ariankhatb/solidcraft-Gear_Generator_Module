@@ -443,18 +443,24 @@ fn build(
     let ext = if c.shaft_extension > 0.0 { c.shaft_extension } else { 2.0 * s.face_width };
     let (rad, ax) = (c.radial, c.axial);
 
-    // Every member: its material's points, its shaft.
-    let mut members: Vec<Member> = Vec::new();
-    for (i, (b, motion)) in bodies.iter().zip(&motions).enumerate() {
+    // Every member: its material's points (each member on a thread of its own), its shaft.
+    let sampled = crate::par::map(bodies.len(), |i| {
+        let b = &bodies[i];
         let coarse = Solid::new(b, 1.0);
         let span = (coarse.z.1 - coarse.z.0).max(1e-3);
         let (h, hz) = spacing(s.module, span);
         // A bevel planetary set's carrier has no teeth: plain round parts, sampled four times
         // coarser (its margin grows with the spacing, so it is still cleared).
         let (h, hz) = if b.name.contains(crate::plan::bevel_planet::CARRIER) { (4.0 * h, 4.0 * hz) } else { (h, hz) };
+        // A slide's box reads every point; anything else only each row's farthest from its axis
+        // (the same envelope: a ring gear's rows hold millions of points).
         let solid = Solid::new(b, h);
-        let pts = solid.material_points(hz);
+        let pts = if matches!(motions.get(i), Some(Motion::Slides)) { solid.material_points(hz) } else { solid.farthest_per_row(hz) };
         let z = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q[2]), a.1.max(q[2])));
+        (h, hz, pts, z)
+    });
+    let mut members: Vec<Member> = Vec::new();
+    for (i, ((b, motion), (h, hz, pts, z))) in bodies.iter().zip(&motions).zip(sampled).enumerate() {
         let first = Solid::new(&Body { name: String::new(), frame: b.frame, steps: b.steps.iter().take(1).cloned().collect() }, 1.0);
         let mid = 0.5 * (first.z.0 + first.z.1);
         let planet = matches!(motion, Motion::Orbits { .. }) && matches!(s.kind, Kind::Planetary | Kind::BevelPlanetary);
@@ -549,7 +555,7 @@ fn build(
             // The samples' need in bands along the group's axis: each band's largest radius at
             // both its edges (every sample in it is within them, at that radius or less).
             const BAND: f64 = 0.05;
-            let mut bands: std::collections::BTreeMap<i64, f64> = std::collections::BTreeMap::new();
+            let mut bands: std::collections::HashMap<i64, f64> = std::collections::HashMap::new();
             for (z, rho) in rims {
                 let rho = rho + rad;
                 // Round the rim at the point spacing: a tilted rim's steps go along the group's
@@ -564,6 +570,8 @@ fn build(
                     *b = b.max(r);
                 }
             }
+            let mut bands: Vec<(i64, f64)> = bands.into_iter().collect();
+            bands.sort_by_key(|(k, _)| *k);
             for (k, r) in bands {
                 push(k as f64 * BAND, r, fine);
                 push((k + 1) as f64 * BAND, r, fine);

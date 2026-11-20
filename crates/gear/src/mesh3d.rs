@@ -501,6 +501,55 @@ impl Part {
             }
         }
     }
+    /// [`Part::sheets`] with the sheets whose every row is one outline turned and scaled (a
+    /// prism's, a taper's) kept as that outline and each row's turn, scale and z: the same rows,
+    /// not made. The other sheets as `sheets` makes them; with `first_revolved`, a revolved sheet
+    /// (every row the same profile turned: the same radius at each z in every row) only its
+    /// first row.
+    #[allow(clippy::type_complexity)]
+    fn turned_rows(&self, h: f64, hz: f64, first_revolved: bool) -> (Vec<(Vec<V2>, Vec<(f64, f64, f64)>)>, Vec<Vec<Vec<P3>>>) {
+        let layers = |len: f64| ((len.abs() / hz).ceil() as usize).clamp(1, 20000);
+        match self {
+            Part::Prism { outer, holes, z0, height, twist } => {
+                let turned = outer
+                    .iter()
+                    .chain(holes)
+                    .map(|poly| {
+                        let n = layers(height.hypot(poly.rmax * twist.abs()));
+                        let rows = (0..=n)
+                            .map(|j| {
+                                let t = j as f64 / n as f64;
+                                (twist * t, 1.0, z0 + height * t)
+                            })
+                            .collect();
+                        (poly.pts.clone(), rows)
+                    })
+                    .collect();
+                (turned, Vec::new())
+            }
+            Part::Taper { poly, z0, height, twist, scale } => {
+                let n = layers(height.hypot(poly.rmax * (1.0 - scale).abs() * scale.max(1.0)).hypot(poly.rmax * twist.abs()));
+                let rows = (0..=n)
+                    .map(|j| {
+                        let t = j as f64 / n as f64;
+                        let s = 1.0 + (scale - 1.0) * t;
+                        (taper_turn(*twist, *scale, s), s, z0 + height * t)
+                    })
+                    .collect();
+                (vec![(poly.pts.clone(), rows)], Vec::new())
+            }
+            Part::RingTaper { poly, rim, z0, height, twist, scale } => {
+                let teeth = Part::Taper { poly: poly.clone(), z0: *z0, height: *height, twist: *twist, scale: *scale };
+                let wall = Part::Revolve { profile: vec![V2::new(0.0, *z0), V2::new(*rim, *z0), V2::new(*rim, z0 + height), V2::new(0.0, z0 + height)] };
+                (teeth.turned_rows(h, hz, false).0, wall.turned_rows(h, hz, first_revolved).1)
+            }
+            Part::Revolve { profile } if first_revolved => {
+                let pts = refined(profile, h);
+                (Vec::new(), vec![vec![pts.iter().map(|q| [q.x, 0.0, q.y]).collect()]])
+            }
+            _ => (Vec::new(), self.sheets(h, hz, (f64::MIN, f64::MAX))),
+        }
+    }
     /// The part's side surface as rows of corresponding points (each row a closed loop), the
     /// rows about `hz` apart: one list of rows per sheet. A coil's rows are only those that
     /// reach into the `band` of heights.
@@ -686,6 +735,80 @@ impl Solid {
                 }
             }
         }
+        out
+    }
+    /// Of [`Solid::material_points`], at each z (its own coordinates) the point farthest from the
+    /// axis, by z: what an envelope about the axis reads of them. The same points, found without
+    /// testing the rest of a row against the trims: a row's points are tried from the farthest
+    /// in, and a row at one z stops at the first the trims keep.
+    pub fn farthest_per_row(&self, hz: f64) -> Vec<P3> {
+        let trims: Vec<usize> = self.parts.iter().enumerate().filter(|(_, (_, op))| *op == Op::Intersect).map(|(i, _)| i).collect();
+        let kept = |p: &P3, own: usize| trims.iter().all(|&t| t <= own || self.parts[t].0.contains(*p));
+        let made_before = |p: &P3, trim: usize| self.parts[..trim].iter().any(|(q, o)| matches!(o, Op::New | Op::Join) && q.contains(*p));
+        let reach = |p: &P3| p[0].hypot(p[1]);
+        let mut best: std::collections::HashMap<u64, P3> = std::collections::HashMap::new();
+        let mut take = |p: P3| {
+            let row = best.entry(p[2].to_bits()).or_insert(p);
+            if reach(&p) > reach(row) {
+                *row = p;
+            }
+        };
+        for (i, (part, op)) in self.parts.iter().enumerate() {
+            let adds = matches!(op, Op::New | Op::Join);
+            if !adds && *op != Op::Intersect {
+                continue;
+            }
+            // A revolved sheet adding material with no trim after it: its first row holds every
+            // radius.
+            let (turned, rest) = part.turned_rows(self.h, hz, adds && trims.iter().all(|&t| t <= i));
+            for (outline, rows) in turned {
+                // Every row is the outline turned and scaled: the same points farthest out.
+                let stride = if adds { 1 } else { (rows.len() / 96).max(1) };
+                let mut order: Vec<usize> = (0..outline.len()).collect();
+                order.sort_by(|a, b| outline[*b].len().total_cmp(&outline[*a].len()));
+                for &(turn, scale, z) in rows.iter().step_by(stride) {
+                    for &k in &order {
+                        let q = outline[k].rot(turn) * scale;
+                        let p = [q.x, q.y, z];
+                        if trims.is_empty() || (kept(&p, i) && (adds || made_before(&p, i))) {
+                            take(p);
+                            break;
+                        }
+                    }
+                }
+            }
+            for sheet in rest {
+                let stride = if adds { 1 } else { (sheet.len() / 96).max(1) };
+                for row in sheet.into_iter().step_by(stride) {
+                    if trims.is_empty() {
+                        row.into_iter().for_each(&mut take);
+                        continue;
+                    }
+                    // Farthest first (ties in the row's order); each z of the row done at its
+                    // first point kept.
+                    let mut order: Vec<usize> = (0..row.len()).collect();
+                    order.sort_by(|a, b| reach(&row[*b]).total_cmp(&reach(&row[*a])));
+                    let one_z = row.iter().all(|p| p[2].to_bits() == row[0][2].to_bits());
+                    let mut done: std::collections::HashSet<u64> = std::collections::HashSet::new();
+                    for k in order {
+                        let p = row[k];
+                        let key = p[2].to_bits();
+                        if done.contains(&key) {
+                            continue;
+                        }
+                        if kept(&p, i) && (adds || made_before(&p, i)) {
+                            take(p);
+                            if one_z {
+                                break;
+                            }
+                            done.insert(key);
+                        }
+                    }
+                }
+            }
+        }
+        let mut out: Vec<P3> = best.into_values().collect();
+        out.sort_by(|a, b| a[2].total_cmp(&b[2]));
         out
     }
     /// Is the world point inside the body?

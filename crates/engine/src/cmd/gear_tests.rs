@@ -703,6 +703,46 @@ fn a_clearance_body_comes_with_the_set_and_cuts_a_housing() {
     assert!(u.get("clearance").is_none(), "{u}");
 }
 
+/// An explicit 0 for both gaps builds a kernel body that touches the gears: its box is the
+/// gears' box along their axes (z) exactly and round them within the sampling allowance; the
+/// defaults (0.5) stand 0.5 past it each way.
+#[test]
+fn a_zero_gap_clearance_body_has_the_gears_box() {
+    let bbox = |s: &mut Session, name: &str| -> ([f64; 3], [f64; 3]) {
+        let m = run(s, "inspect.measure", json!({"bodies": [name]}));
+        let b = m["bodies"].as_array().and_then(|a| a.first()).map(|b| b["bbox"].clone()).unwrap_or_else(|| m["total"]["bbox"].clone());
+        let v = |k: &str, i: usize| b[k][i].as_f64().unwrap_or_else(|| panic!("{m}"));
+        ([0, 1, 2].map(|i| v("min", i)), [0, 1, 2].map(|i| v("max", i)))
+    };
+    for gap in [0.0, 0.5] {
+        let mut s = Session::default();
+        let r = run(&mut s, "gear.create", json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 32, "face_width": 10, "name": "Drive",
+            "clearance_body": {"radial": gap, "axial": gap}}));
+        let made = names(&r);
+        assert_eq!(made.len(), 3, "{r}");
+        no_errors(&s);
+        let (mut lo, mut hi) = ([f64::MAX; 3], [f64::MIN; 3]);
+        for g in &made[..2] {
+            let (a, b) = bbox(&mut s, g);
+            for i in 0..3 {
+                lo[i] = lo[i].min(a[i]);
+                hi[i] = hi[i].max(b[i]);
+            }
+        }
+        let (klo, khi) = bbox(&mut s, "Drive clearance");
+        eprintln!("gap {gap}: gears {lo:?}..{hi:?}, clearance {klo:?}..{khi:?}");
+        // Along the axes: exactly the faces (plus the gap).
+        assert!((klo[2] - (lo[2] - gap)).abs() < 2e-3 && (khi[2] - (hi[2] + gap)).abs() < 2e-3, "gap {gap}: z {klo:?}..{khi:?} vs {lo:?}..{hi:?}");
+        // Round them: the tip circles (22 and 34 mm, gear 2 at x 52; the gears' own boxes fall
+        // inside them where no tooth points along x or y) plus the gap, and at most 0.03 more
+        // (the sampling allowance).
+        for (got, want) in [(-klo[0], 22.0), (khi[0], 52.0 + 34.0), (-klo[1], 34.0), (khi[1], 34.0)] {
+            assert!(got >= want + gap - 1e-6 && got <= want + gap + 0.03, "gap {gap}: {klo:?}..{khi:?}: {got} vs {want}");
+        }
+        assert!(-lo[0] <= 22.0 + 1e-6 && hi[0] <= 86.0 + 1e-6, "{lo:?}..{hi:?}");
+    }
+}
+
 #[test]
 fn clearance_parameters_round_trip_and_bad_ones_are_refused() {
     use solidcraft_gear::clearance::{BearingSize, Clearance, Seat};

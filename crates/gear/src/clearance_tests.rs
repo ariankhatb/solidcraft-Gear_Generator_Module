@@ -540,3 +540,155 @@ fn keep_out_holds_hubs_and_shafts_joined_after_trims() {
     }
     assert!(checked > 500, "only {checked} points of parts joined after a trim");
 }
+
+
+/// How far over the material an envelope may stand with zero gaps (mm): the sampling allowance
+/// (an eighth of the point spacing, 0.04 × module ≤ 0.25 mm, plus 0.002) and the 0.005 the
+/// simplified profile is moved out by; 0.02 holds it for module 2 (0.017).
+const ZERO_TOL: f64 = 0.02;
+
+/// A keep-out's revolves about `f`'s axis, their vertices (radius, z along the axis), and the
+/// material of the bodies on that axis as (z, radius) points, both in `f`'s coordinates.
+fn on_axis(keep: &Body, bodies: &[Body], f: &Frame) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
+    let along = |w: P3| {
+        let d = [w[0] - f.origin[0], w[1] - f.origin[1], w[2] - f.origin[2]];
+        let z = d[0] * f.z[0] + d[1] * f.z[1] + d[2] * f.z[2];
+        let off = [d[0] - z * f.z[0], d[1] - z * f.z[1], d[2] - z * f.z[2]];
+        (z, (off[0] * off[0] + off[1] * off[1] + off[2] * off[2]).sqrt())
+    };
+    let coaxial = |g: &Frame| {
+        let par = (g.z[0] * f.z[0] + g.z[1] * f.z[1] + g.z[2] * f.z[2]).abs() > 1.0 - 1e-9;
+        par && along(g.origin).1 < 1e-6
+    };
+    let mut verts = Vec::new();
+    for st in &keep.steps {
+        if let Step::Placed { frame, step } = st
+            && let Step::Revolve { profile, .. } = step.as_ref()
+            && coaxial(frame)
+        {
+            let flip = if frame.z[0] * f.z[0] + frame.z[1] * f.z[1] + frame.z[2] * f.z[2] > 0.0 { 1.0 } else { -1.0 };
+            let z0 = along(frame.origin).0;
+            verts.extend(profile.iter().filter(|q| q.x > 1e-9).map(|q| (q.x, z0 + flip * q.y)));
+        }
+    }
+    let mut mat = Vec::new();
+    for b in bodies.iter().filter(|b| coaxial(&b.frame)) {
+        // (Each row's farthest point is what the radius along the axis reads.)
+        mat.extend(Solid::new(b, 0.01).farthest_per_row(0.02).into_iter().map(|q| along(b.frame.world(q))));
+    }
+    mat.sort_by(|a, b| a.0.total_cmp(&b.0));
+    (verts, mat)
+}
+
+/// With both gaps at `gap`, every member's envelope stands `gap` (and at most ZERO_TOL more)
+/// past its material: its largest radius, its ends along the axis exactly, and at any place along
+/// the axis no more than the material within `inner` of it (a step inside one axis's material;
+/// and the 0.02 the material is sampled at here).
+fn hugs(what: &str, keep: &Body, bodies: &[Body], gap: f64, inner: f64) {
+    for b in bodies {
+        let (verts, mat) = on_axis(keep, bodies, &b.frame);
+        assert!(!verts.is_empty(), "{what}: no envelope on {}'s axis", b.name);
+        let rk = verts.iter().map(|v| v.0).fold(0.0, f64::max);
+        let rm = mat.iter().map(|m| m.1).fold(0.0, f64::max);
+        assert!(rk >= rm + gap - 1e-4 && rk <= rm + gap + ZERO_TOL, "{what}: {} envelope radius {rk}, material {rm}, gap {gap}", b.name);
+        let (k0, k1) = verts.iter().fold((f64::MAX, f64::MIN), |a, v| (a.0.min(v.1), a.1.max(v.1)));
+        let (m0, m1) = mat.iter().fold((f64::MAX, f64::MIN), |a, m| (a.0.min(m.0), a.1.max(m.0)));
+        assert!((k0 - (m0 - gap)).abs() <= 2e-3 && (k1 - (m1 + gap)).abs() <= 2e-3, "{what}: {} envelope runs {k0}..{k1} along its axis, material {m0}..{m1}, gap {gap}", b.name);
+        // And it holds the material: every point (a hair inside its ends) is in it.
+        let solid = Solid::new(keep, 0.002);
+        let pts = Solid::new(b, 0.05).material_points(0.05);
+        let (z0, z1) = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q[2]), a.1.max(q[2])));
+        for q in pts.iter().step_by((pts.len() / 3000).max(1)) {
+            let k = 1.0 - 1e-4 / q[0].hypot(q[1]).max(1e-3);
+            let w = b.frame.world([q[0] * k, q[1] * k, q[2].clamp(z0 + 1e-4, z1 - 1e-4)]);
+            assert!(solid.contains(w), "{what}: {} point {q:?} is outside the envelope", b.name);
+        }
+        for (r, z) in &verts {
+            let w = gap + inner + 0.021;
+            let (i0, i1) = (mat.partition_point(|m| m.0 < z - w), mat.partition_point(|m| m.0 <= z + w));
+            let near = mat[i0..i1].iter().map(|m| m.1).fold(0.0, f64::max);
+            // (A sloped need's simplified chords may stand 0.02 over it.)
+            assert!(*r <= near + gap + ZERO_TOL + 0.02, "{what}: {} envelope radius {r} at {z}, the material within {inner} of it only {near}", b.name);
+        }
+    }
+}
+
+/// An explicit 0 for both gaps is 0: the envelope touches the gears' outermost material, along
+/// their axes and round them (the user's report: with the axial gap 0 the cutout still ran past
+/// the gears). Auto (the default) is still 0.5 mm each way.
+#[test]
+fn an_explicit_zero_gap_touches_the_gears() {
+    for kind in [Kind::Spur, Kind::Helical, Kind::Herringbone, Kind::Pair, Kind::Bevel] {
+        for gap in [0.0, 0.5] {
+            let c = if gap == 0.0 { Clearance { radial: 0.0, axial: 0.0, ..Clearance::default() } } else { Clearance::default() };
+            let s = Spec { clearance_body: Some(c), ..Spec::defaults_for(kind) };
+            let p = planned(&s);
+            // (A bevel's back cone drops steeply at the heel: its need is read a row, 0.083 mm,
+            // either way, and a cell of 0.02 more.)
+            let inner = if kind == Kind::Bevel { 0.11 } else { 0.0 };
+            hugs(&format!("{kind:?} gap {gap}"), p.clearance.as_ref().unwrap(), &p.bodies, gap, inner);
+            if gap > 0.0 {
+                contains_every_member(&s, &p, 0.01);
+            }
+        }
+    }
+    // A spur gear: the tip radius, and its faces 0..10, exactly.
+    let s = Spec { clearance_body: Some(Clearance { radial: 0.0, axial: 0.0, ..Clearance::default() }), ..Spec::defaults_for(Kind::Spur) };
+    let p = planned(&s);
+    let keep = Solid::new(p.clearance.as_ref().unwrap(), 0.002);
+    assert!(keep.contains([21.99, 0.0, 0.01]) && keep.contains([21.99, 0.0, 9.99]));
+    assert!(!keep.contains([22.03, 0.0, 5.0]) && !keep.contains([10.0, 0.0, -0.01]) && !keep.contains([10.0, 0.0, 10.01]));
+}
+
+/// A long member on the axis (an integral shaft, a compound's layers, two gears on one shaft)
+/// does not stretch the gears' envelopes along it: each ends at its gear's faces.
+#[test]
+fn a_zero_axial_gap_holds_on_long_and_shared_axes() {
+    use crate::items::{GearItem, ItemKind, ItemLink, Thing};
+    use crate::plan::system::plan_items;
+    use crate::test_util::{g, shaft};
+    let zero = Clearance { radial: 0.0, axial: 0.0, ..Clearance::default() };
+    // A spur gear with a 100 mm integral shaft: its row spacing was 0.9 mm, and its 22 mm
+    // envelope ran 0.9 mm past its back face.
+    let sh = crate::hub::Shaft { diameter: 6.0, length: 100.0, ..crate::hub::Shaft::default() };
+    let s = Spec { shaft_front: sh, clearance_body: Some(zero.clone()), ..Spec::defaults_for(Kind::Spur) };
+    let p = planned(&s);
+    hugs("spur on a long shaft", p.clearance.as_ref().unwrap(), &p.bodies, 0.0, 0.25);
+    let z = [0.0, 0.0, 1.0];
+    let items_plan = |items: Vec<GearItem>, links: Vec<ItemLink>| {
+        let base = Spec { clearance_body: Some(zero.clone()), ..Spec::default() };
+        let mut sp = plan_items(&items, &links, &[], None, &Spec { clearance_body: None, ..base.clone() }).unwrap_or_else(|e| panic!("{e}"));
+        assert!(sp.error.is_none(), "{:?}", sp.error);
+        let body = crate::clearance::clearance_body(&base, &mut sp.plan).unwrap_or_else(|e| panic!("{e}"));
+        (body, sp.plan.bodies)
+    };
+    // A compound of two layers face to face.
+    let compound = vec![GearItem::new("E", ItemKind::Compound).with(vec![Thing::line([0.0, 0.0, -10.0], [0.0, 0.0, 30.0]), Thing::circle([0.0; 3], z, 20.0), Thing::circle([0.0, 0.0, 20.0], z, 12.0)])];
+    let (keep, bodies) = items_plan(compound, vec![]);
+    hugs("compound", &keep, &bodies, 0.0, 0.25);
+    // Two gears on one shaft, apart along it.
+    let two = vec![
+        GearItem::new("A", ItemKind::Spur).with(vec![Thing::circle([0.0; 3], z, 20.0), Thing::line([0.0, 0.0, -40.0], [0.0, 0.0, 60.0])]),
+        GearItem::new("B", ItemKind::Spur).with(vec![Thing::circle([0.0, 0.0, 30.0], z, 12.0), Thing::line([0.0, 0.0, -40.0], [0.0, 0.0, 60.0])]),
+    ];
+    let (keep, bodies) = items_plan(two, vec![shaft(g(0, 0), g(1, 0))]);
+    // (One body, the shaft and both gears: the steps from shaft to gear are inside it.)
+    hugs("two gears on a shaft", &keep, &bodies, 0.0, 0.25);
+}
+
+/// No bearing points: no bearing is taken (no seats, no warning); a bearing named with no seats
+/// says what to do and adds nothing.
+#[test]
+fn a_bearing_with_no_seats_makes_nothing_and_says_what_to_do() {
+    let s = Spec { clearance_body: Some(Clearance::default()), ..Spec::defaults_for(Kind::Pair) };
+    let bare = planned(&s);
+    assert!(bare.warnings.iter().all(|w| !w.contains("bearing")), "{:?}", bare.warnings);
+    let named = Spec { clearance_body: Some(Clearance { bearing: Some("608".into()), ..Clearance::default() }), ..s.clone() };
+    let p = planned(&named);
+    assert!(p.bearings.is_empty());
+    assert_eq!(p.clearance, bare.clearance, "a bearing with no seats adds nothing");
+    let w: Vec<&String> = p.warnings.iter().filter(|w| w.contains("bearing")).collect();
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].contains("608 has nowhere to sit: put bearing points on a shaft line (Shafts & Bores tab), or turn bearings off"), "{}", w[0]);
+    assert!(p.facts.iter().all(|f| !f.label.contains("clearance bearing")), "no bearing facts");
+}

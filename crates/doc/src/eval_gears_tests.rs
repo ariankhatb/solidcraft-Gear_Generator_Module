@@ -174,7 +174,7 @@ fn a_plan_differing_in_the_last_bits_is_known_as_the_same_body() {
 
 /// A gear with a bore, keyway, lightening holes, a hub, a shaft, chamfers and a set screw built
 /// fused (fewer booleans on its teeth) is the gear its steps make in order: the same volume,
-/// area and box, and members of gears on a shaft joined in lots are their union.
+/// area and box.
 #[test]
 fn a_fused_build_is_the_planned_steps_solid() {
     use solidcraft_gear::hub::{Bore, BoreKind, Chamfer, Hardware, Shaft};
@@ -207,18 +207,4 @@ fn a_fused_build_is_the_planned_steps_solid() {
     assert!((mf.area - mp.area).abs() <= 1e-6 * mp.area, "{} vs {}", mf.area, mp.area);
     let (bf, bp) = (fused.exact_bounds().unwrap(), planned.exact_bounds().unwrap());
     assert!((bf.min - bp.min).length() < 1e-6 && (bf.max - bp.max).length() < 1e-6, "{bf:?} vs {bp:?}");
-    // Two gears on one shaft: the gears apart (one lot), then the shaft.
-    let rod = solidcraft_kernel::extrude(
-        &solidcore_record::Plane { origin: Vec3::new(0.0, 0.0, -20.0), x: Vec3::new(1.0, 0.0, 0.0), y: Vec3::new(0.0, 1.0, 0.0) },
-        &[solidcore_record::Region2 { outer: solidcore_record::Loop2::circle(Vec2::new(0.0, 0.0), 2.5), holes: Vec::new() }],
-        0.0,
-        60.0,
-    )
-    .unwrap()
-    .remove(0);
-    let up = solidcraft_kernel::transform_matrix(&planned, [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 30.0, 1.0]]).unwrap();
-    let lots = super::joined(&[&planned, &up, &rod]).unwrap();
-    let all = solidcraft_kernel::union_all(&[&planned, &up, &rod]).unwrap();
-    let (ml, ma) = (measure(&lots).unwrap(), measure(&all).unwrap());
-    assert!((ml.volume - ma.volume).abs() <= 1e-6 * ma.volume, "{} vs {}", ml.volume, ma.volume);
 }

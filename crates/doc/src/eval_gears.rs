@@ -229,7 +229,7 @@ fn build(plan: &Plan, notes: &mut Vec<String>) -> Result<Built> {
             (None, [one]) => gears[*one].clone(),
             (None, ks) => {
                 let parts: Vec<&Body> = ks.iter().map(|k| &gears[*k]).collect();
-                joined(&parts).map_err(|e| DocError::Invalid(format!("{}: its gears could not be joined ({e})", r.name)))?
+                kernel::union_all(&parts).map_err(|e| DocError::Invalid(format!("{}: its gears could not be joined ({e})", r.name)))?
             }
         };
         copies.push(earlier);
@@ -251,51 +251,6 @@ fn build(plan: &Plan, notes: &mut Vec<String>) -> Result<Built> {
         None => None,
     };
     Ok((members, keep_out, copies))
-}
-
-/// A rigid member's bodies as one: the bodies parted into lots whose bodies are apart from
-/// each other (the gears along a shaft), each lot one body of pieces, side by side (no
-/// intersection work), and the lots unioned in one kernel call: the same union with fewer
-/// operands, none when all are apart.
-fn joined(parts: &[&Body]) -> kernel::Result<Body> {
-    // Apart as `kernel::apart` tells it: bodies whose vertices' boxes meet are not (measured
-    // at once: the gears and shafts of one member mostly are); others by their exact boxes,
-    // each grown by twice its tolerance, each body's measured once.
-    let grown = |b: &Body, by: f64| -> Option<solidcraft_geom::Aabb3> {
-        let v: solidcraft_geom::Aabb3 = b.record().vertices.iter().map(|v| Vec3::new(v.point[0], v.point[1], v.point[2])).collect();
-        (!v.is_empty()).then(|| v.inflated(by))
-    };
-    let vertex_boxes: Vec<Option<solidcraft_geom::Aabb3>> = parts.iter().map(|b| if b.is_mesh() { None } else { grown(b, 2.0 * b.record().tolerance) }).collect();
-    let exact: Vec<std::cell::OnceCell<Option<solidcraft_geom::Aabb3>>> = parts.iter().map(|_| std::cell::OnceCell::new()).collect();
-    let exact_of = |i: usize| *exact[i].get_or_init(|| parts[i].exact_bounds().ok().map(|bb| bb.inflated(2.0 * parts[i].record().tolerance)));
-    let apart = |i: usize, j: usize| match (vertex_boxes[i], vertex_boxes[j]) {
-        (Some(a), Some(b)) if !a.meets(&b) => exact_of(i).zip(exact_of(j)).is_some_and(|(a, b)| !a.meets(&b)),
-        _ => false,
-    };
-    let mut lots: Vec<Vec<usize>> = Vec::new();
-    for i in 0..parts.len() {
-        let home = lots.iter().position(|lot| lot.iter().all(|j| apart(i, *j)));
-        match home {
-            Some(k) => lots[k].push(i),
-            None => lots.push(vec![i]),
-        }
-    }
-    if lots.len() == parts.len() {
-        return kernel::union_all(parts);
-    }
-    let mut bodies = Vec::with_capacity(lots.len());
-    for lot in &lots {
-        let pieces: Vec<Body> = lot.iter().map(|i| parts[*i].clone()).collect();
-        match (kernel::join_apart(&pieces)?, &pieces[..]) {
-            (Some(b), _) => bodies.push(b),
-            (None, [one]) => bodies.push(one.clone()),
-            (None, _) => return kernel::union_all(parts),
-        }
-    }
-    match &bodies[..] {
-        [one] => Ok(one.clone()),
-        _ => kernel::union_all(&bodies.iter().collect::<Vec<_>>()),
-    }
 }
 
 /// What a planned body is known by apart from where it stands: its [`plan_key`] with the frame

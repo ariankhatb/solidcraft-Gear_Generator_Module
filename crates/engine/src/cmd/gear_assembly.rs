@@ -339,18 +339,28 @@ pub(super) fn sync(
     }
     // New members are grounded or freed as the plan says (a design's first part is grounded by
     // itself); kept ones keep what they are (the user may have grounded one), unless now held.
-    for (i, m) in a.members.iter().enumerate() {
-        if kept[i].is_none() || m.grounded {
-            s.execute("occurrence.ground", &json!({"occurrence": occs[i], "grounded": m.grounded}))?;
+    // All of them (and a new keep-out body, grounded) at once, then one solve: what
+    // `occurrence.ground` does for each.
+    let mut grounds: Vec<(u64, bool)> = a.members.iter().enumerate().filter(|(i, m)| kept[*i].is_none() || m.grounded).map(|(i, m)| (occs[i], m.grounded)).collect();
+    let new_keep_out_component = match (keep_out_kept, &new_keep_out) {
+        (None, Some(body)) => made_component(body),
+        _ => None,
+    };
+    grounds.extend(new_keep_out_component.and_then(|c| occurrence_of(s, c)).map(|o| (o, true)));
+    if !grounds.is_empty() {
+        let doc = s.doc_mut();
+        for (o, g) in &grounds {
+            let o = doc.occurrences.iter_mut().find(|x| x.id == *o).ok_or_else(|| EngineError::Other(format!("assembly: occurrence {o} is gone")))?;
+            o.grounded = *g;
         }
+        s.joints_settled = None;
+        let _ = s.refresh_with_joint_report();
     }
     let keep_out_component = match (keep_out_kept, &new_keep_out) {
         (Some(c), _) => Some(c),
-        (None, Some(body)) => {
-            let c = made_component(body);
+        (None, Some(_)) => {
+            let c = new_keep_out_component;
             if let Some(c) = c {
-                let o = occurrence_of(s, c).unwrap_or(0);
-                s.execute("occurrence.ground", &json!({"occurrence": o, "grounded": true}))?;
                 if let Err(e) = s.execute("component.rename", &json!({"component": c, "name": format!("{set} keep-out")})) {
                     warnings.push(format!("assembly: the keep-out component keeps its body's name ({e})"));
                 }

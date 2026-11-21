@@ -1231,7 +1231,7 @@ fn checkbox_groups_switch_their_rows_and_the_request() {
     let g = drawn(&h);
     assert!(!g.chamfer_open && g.chamfer.is_empty(), "off clears the size");
     assert!(request(&h.app, &g, &h.app.dialog.as_ref().unwrap().inputs).unwrap().get("tooth_chamfer").is_none());
-    // Shafts & Bearings: the selected gear's bore and its hub group.
+    // Shafts & Bores: the selected gear's bore and its hub group.
     tap(&mut h, "gear:tab:shafts");
     assert!(handle_at("gear:group:hub:A:0").is_some(), "the selected gear's hub switch");
     tap(&mut h, "gear:group:hub:A:0");
@@ -1363,7 +1363,38 @@ fn a_block_puts_gears_under_shared_settings() {
     assert!(g.block_shafts.iter().all(|s| s.block == 0 && s.diameter == 6.0 && s.existing.is_none()));
     tap(&mut h, "gear:tab:shafts");
     assert!(handle_at("dialog:section:Shafts · 2").is_some(), "the Shafts tab lists both");
-    // Edit: the block back as typed, with its gears.
+    assert!(handle_at("dialog:section:Gear bores · 2").is_some(), "the bores apart from the shafts");
+    // Make shaft: each gear fused to its shaft (S1, S2), so no bore is drawn.
+    let app = &h.app;
+    let (d, from) = bore_of(app, &g, &g.block_shafts, 0, 0);
+    assert_eq!((d, from.as_str()), (None, "fused to shaft S1: one body, no bore"));
+    assert!(g.bores.is_empty(), "{:?}", g.bores);
+    // Bore only: every gear bored to the Ø, no shaft made.
+    with_dialog(&mut h, |g, _| g.links.block_mut(0).unwrap().shaft_mode = 1);
+    let g = drawn(&h);
+    assert!(g.block_shafts.is_empty());
+    assert_eq!(bore_of(&h.app, &g, &g.block_shafts, 1, 0), (Some(6.0), "Main (Bore only)".to_string()));
+    assert_eq!(g.bores.len(), 2, "a bore drawn on each gear");
+    let pb = request(&h.app, &g, &inputs).unwrap();
+    assert_eq!((pb["module_blocks"][0]["shaft"].as_str(), pb["module_blocks"][0]["shaft_diameter"].as_f64()), (Some("bore"), Some(6.0)));
+    let set_of = |request: Value| solidcraft_engine::schema::gear::GearSet {
+        group: 7,
+        feature: Some(8),
+        name: "Gears".into(),
+        bodies: Vec::new(),
+        features: Vec::new(),
+        request,
+        params: json!({}),
+        sketch: None,
+        sketch_changed: false,
+    };
+    assert_eq!(for_set(&set_of(pb)).links.blocks()[0].shaft_mode, 1);
+    // None: no Ø sent, the gears keep their own bores.
+    with_dialog(&mut h, |g, _| g.links.block_mut(0).unwrap().shaft_mode = 2);
+    let pn = request(&h.app, &drawn(&h), &inputs).unwrap();
+    assert!(pn["module_blocks"][0].get("shaft_diameter").is_none() && pn["module_blocks"][0]["shaft"] == "none", "{pn}");
+    with_dialog(&mut h, |g, _| g.links.block_mut(0).unwrap().shaft_mode = 0);
+    // Edit: the block back as typed, with its gears (an old block with a Ø is Make shaft).
     let set = solidcraft_engine::schema::gear::GearSet {
         group: 7,
         feature: Some(8),
@@ -1376,7 +1407,7 @@ fn a_block_puts_gears_under_shared_settings() {
         sketch_changed: false,
     };
     let e = for_set(&set);
-    assert_eq!(e.links.blocks(), g.links.blocks());
+    assert_eq!(e.links.blocks(), drawn(&h).links.blocks());
     // × takes the block away: its gears keep their own settings.
     tap(&mut h, "gear:tab:gears");
     scroll_down(&mut h);

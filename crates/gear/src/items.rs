@@ -502,9 +502,21 @@ pub struct BlockSettings {
     /// The whole face width, half each side of the sketch plane.
     pub face_width: Option<f64>,
     pub backlash: Option<f64>,
-    /// Every member gear's bore, and a shaft of this Ø along each axis the members are on
-    /// ([`crate::blocks::block_shafts`]).
+    /// The block's Ø, used as [`BlockSettings::shaft`] says: the shafts made, or the bores.
     pub shaft_diameter: Option<f64>,
+    pub shaft: ShaftMode,
+}
+
+/// What a block's Ø makes. A **shaft** is a solid rod along an axis; a **bore** is the hole
+/// through a gear.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShaftMode {
+    /// A shaft of the Ø along each axis the block's gears are on, each gear on it one body with
+    /// it (no bore: they are one solid) ([`crate::blocks::block_shafts`]).
+    #[default]
+    Make,
+    /// Every gear of the block bored to the Ø; no shaft is made (the rod is the user's own).
+    BoreOnly,
 }
 
 /// The gear that is turned, and optionally how fast and how hard.

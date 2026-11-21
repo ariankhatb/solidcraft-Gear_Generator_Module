@@ -171,3 +171,41 @@ fn a_plan_differing_in_the_last_bits_is_known_as_the_same_body() {
     renamed.name = format!("{} 2", b.name);
     assert_ne!(super::plan_key(&renamed), key);
 }
+
+/// A gear with a bore, keyway, lightening holes, a hub, a shaft, chamfers and a set screw built
+/// fused (fewer booleans on its teeth) is the gear its steps make in order: the same volume,
+/// area and box.
+#[test]
+fn a_fused_build_is_the_planned_steps_solid() {
+    use solidcraft_gear::hub::{Bore, BoreKind, Chamfer, Hardware, Shaft};
+    let shaft = Shaft { diameter: 8.0, length: 10.0, chamfer: 0.5, ..Shaft::default() };
+    let s = Spec {
+        teeth: 30,
+        module: 1.5,
+        face_width: 8.0,
+        bore: Bore { kind: BoreKind::Keyway, diameter: 5.0, ..Bore::default() },
+        hub_diameter: 16.0,
+        hub_length: 6.0,
+        hub_chamfer: 0.8,
+        bore_chamfer: 0.3,
+        holes: 5,
+        shaft_back: shaft,
+        tooth_chamfer_front: Chamfer { size: 0.4, angle: 45.0 },
+        tooth_chamfer_back: Chamfer { size: 0.4, angle: 45.0 },
+        hardware: Hardware { set_screw: 3.0, set_screws: 2, ..Hardware::default() },
+        ..Spec::defaults_for(Kind::Spur)
+    };
+    let plan = solidcraft_gear::plan(&s).unwrap();
+    let b = &plan.bodies[0];
+    let f = solidcraft_gear::plan::fused::fused(b).expect("fused");
+    let mut notes = Vec::new();
+    let fused = super::build_fused(b, &f, &mut notes).unwrap();
+    let planned = super::run_steps(b, 0, None, &mut notes).unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    let (mf, mp) = (measure(&fused).unwrap(), measure(&planned).unwrap());
+    assert!((mf.volume - mp.volume).abs() <= 1e-6 * mp.volume, "{} vs {}", mf.volume, mp.volume);
+    assert!((mf.area - mp.area).abs() <= 1e-6 * mp.area, "{} vs {}", mf.area, mp.area);
+    let (bf, bp) = (fused.exact_bounds().unwrap(), planned.exact_bounds().unwrap());
+    let near = |a: Vec3, b: Vec3| (a.x - b.x).abs().max((a.y - b.y).abs()).max((a.z - b.z).abs()) < 1e-6;
+    assert!(near(bf.min, bp.min) && near(bf.max, bp.max), "{bf:?} vs {bp:?}");
+}

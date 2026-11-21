@@ -1135,8 +1135,9 @@ pub struct GearLinkParams {
 /// in their `module_block`, and those in `members`. Its other settings (each optional) go on
 /// every member gear that gives none of its own: `tooth_chamfer` (mm, over the set's),
 /// `pressure_angle`, `helix_angle` (deg), `face_width`, `backlash` (mm) and `shaft_diameter`
-/// (mm: every member's bore, and a shaft of that Ø along each axis its gears are on, one body
-/// with them).
+/// (mm), used as `shaft` says: `make` (the default) a shaft (a solid rod) of that Ø along each
+/// axis its gears are on, one body with them (no bore); `bore` every member's bore (the hole
+/// through the gear) at that Ø and no shaft; `none` neither.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
@@ -1163,6 +1164,9 @@ pub struct GearModuleBlockParams {
     pub backlash: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shaft_diameter: Option<f64>,
+    /// make (default) | bore | none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shaft: Option<String>,
 }
 
 /// The gear that is turned (the assembly is driven from it) and, optionally, its speed (rpm)

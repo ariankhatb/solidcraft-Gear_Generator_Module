@@ -425,12 +425,49 @@ fn checked(body: &Body) -> Option<String> {
     verdict
 }
 
-/// One planned body: its steps in order, each on what the ones before made.
+/// One planned body: its steps in order, each on what the ones before made; or, the same solid,
+/// with fewer booleans on its teeth ([`solidcraft_gear::plan::fused`]: through holes in the
+/// teeth's regions, the hub and shafts a blank of their own joined in one union). A fused build
+/// that fails or leaves a step out is dropped for the plan's own.
 fn build_body(b: &Planned, notes: &mut Vec<String>) -> Result<Body> {
     let _span = solidcraft_profile::span("gear body", solidcraft_profile::intern(&b.name));
-    let mut made: Option<Body> = None;
+    if let Some(f) = solidcraft_gear::plan::fused::fused(b) {
+        let mut said = Vec::new();
+        let made = build_fused(b, &f, &mut said);
+        if let (Ok(body), true) = (made, said.is_empty()) {
+            return Ok(body);
+        }
+    }
+    run_steps(b, 0, None, notes)
+}
+
+/// [`build_body`]'s fused build: the teeth, the blank joined to them, the cuts left.
+fn build_fused(b: &Planned, f: &solidcraft_gear::plan::fused::Fused, notes: &mut Vec<String>) -> Result<Body> {
+    let _span = solidcraft_profile::span("gear", "fused build");
+    let part = |steps: &[Step]| Planned { name: b.name.clone(), frame: b.frame, steps: steps.to_vec() };
+    let teeth = run_steps(&part(&f.teeth), 0, None, notes)?;
+    let joined = if f.blank.is_empty() {
+        teeth
+    } else {
+        let blank = run_steps(&part(&f.blank), 0, None, notes)?;
+        combine(Some(&teeth), blank, Op::Join)?
+    };
+    if f.after.is_empty() {
+        return Ok(joined);
+    }
+    // The cuts after the body's own solids as planned (what a step reads of the body before it,
+    // the tooth chamfers' reach, is the planned body's).
+    let solids = b.steps.iter().take_while(|s| matches!(s.op(), Op::New | Op::Join)).count();
+    let rest = Planned { steps: b.steps[..solids].iter().chain(&f.after).cloned().collect(), ..part(&[]) };
+    run_steps(&rest, solids, Some(joined), notes)
+}
+
+/// The steps of `b` from step `from` on in order, each on what the ones before made (`start`:
+/// what the steps before `from` made).
+fn run_steps(b: &Planned, from: usize, start: Option<Body>, notes: &mut Vec<String>) -> Result<Body> {
+    let mut made: Option<Body> = start;
     let mut skip = false;
-    for (i, step) in b.steps.iter().enumerate() {
+    for (i, step) in b.steps.iter().enumerate().skip(from) {
         if std::mem::take(&mut skip) {
             continue;
         }
@@ -554,9 +591,13 @@ fn regions_of(r: &Region) -> Vec<Region2> {
     solid::region_parts(r).into_iter().map(|(o, holes)| Region2 { outer: outline_loop(&r.outer[o]), holes: holes.iter().map(|h| outline_loop(&r.holes[*h])).collect() }).collect()
 }
 
-/// One body of several (a region of more than one outline): their union.
+/// One body of several (a region of more than one outline): their union, side by side when
+/// they are apart (lightening holes, a cross's corners).
 fn one(bodies: Vec<Body>) -> Result<Body> {
     if bodies.len() > 1 {
+        if let Ok(Some(apart)) = kernel::union_apart(&bodies) {
+            return Ok(apart);
+        }
         return Ok(kernel::union_all(&bodies.iter().collect::<Vec<_>>())?);
     }
     bodies.into_iter().next().ok_or_else(|| DocError::Invalid("the step makes nothing".into()))

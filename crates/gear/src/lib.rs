@@ -89,6 +89,8 @@ mod axes_tests;
 #[cfg(test)]
 mod blocks_tests;
 #[cfg(test)]
+mod fused_tests;
+#[cfg(test)]
 mod accuracy_tests;
 #[cfg(test)]
 mod body_tests;

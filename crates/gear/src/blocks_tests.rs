@@ -2,7 +2,7 @@
 //! and a block's shaft Ø makes one shaft per axis, one body with the gears on it.
 
 use crate::blocks::{block_settings, block_shafts, block_spec, chamfer_groups, expand_blocks, only_items, with_blocks};
-use crate::items::{BlockSettings, Bore, FacePreset, FaceSides, GearItem, GearRef, GearSettings, ItemKind, ItemLink, ModuleBlock, Thing, gear_geoms};
+use crate::items::{BlockSettings, Bore, ShaftMode, FacePreset, FaceSides, GearItem, GearRef, GearSettings, ItemKind, ItemLink, ModuleBlock, Thing, gear_geoms};
 use crate::plan::Spec;
 use crate::plan::system::{SystemPlan, plan_items};
 use crate::test_util::{close, g, mesh};
@@ -40,11 +40,14 @@ fn rigid_of(sp: &SystemPlan, r: GearRef) -> Vec<usize> {
 #[test]
 fn a_blocks_settings_fill_what_a_member_leaves_on_auto() {
     let b = BlockSettings { helix: Some(15.0), face_width: Some(12.0), shaft_diameter: Some(6.0), ..BlockSettings::default() };
-    // All Auto: the block's helix, its face half each side, its shaft Ø as the bore.
+    // All Auto: the block's helix, its face half each side; on a made shaft no bore (the gear
+    // and its shaft are one body), Bore only its Ø as the bore.
     let s = block_settings(&b, ItemKind::Spur, &GearSettings::default());
     assert_eq!(s.helix, Some(15.0));
     assert_eq!((s.face.preset, s.face.a, s.face.b), (FacePreset::Symmetric, Some(6.0), None));
-    assert_eq!(s.bore, Bore::Diameter(6.0));
+    assert_eq!(s.bore, Bore::Auto, "fused to the shaft: no bore");
+    let bore_only = BlockSettings { shaft: ShaftMode::BoreOnly, ..b };
+    assert_eq!(block_settings(&bore_only, ItemKind::Spur, &GearSettings::default()).bore, Bore::Diameter(6.0));
     // A member's own values stay: its helix, its face, its bore.
     let own = GearSettings {
         helix: Some(0.0),
@@ -120,6 +123,13 @@ fn a_blocks_shaft_runs_along_each_axis_over_its_gears() {
     items[1].things.push(Thing::point([25.0, 0.0, 30.0]));
     let b = block_shafts(&items, &blocks).into_iter().find(|s| s.gears == vec![g(1, 0)]).unwrap();
     assert!(close(b.b[2], 30.0, 1e-9) && close(b.a[2], -5.0, 1e-9), "from the gear's face to the bearing: {b:?}");
+    // Named S1, S2 across the set; Bore only makes none (the bores only).
+    assert_eq!(crate::blocks::shaft_ids(&shafts), vec![Some("S1".to_string()), Some("S2".to_string())]);
+    let bore_only = [block(vec![0, 1, 2], BlockSettings { shaft_diameter: Some(6.0), shaft: ShaftMode::BoreOnly, ..BlockSettings::default() })];
+    assert!(block_shafts(&drawing(), &bore_only).is_empty());
+    let e = expand_blocks(&drawing(), &[], &bore_only);
+    assert!(e.added.is_empty() && e.items.len() == 3);
+    assert_eq!(e.items[2].settings(0).bore, Bore::Diameter(6.0));
     // A Shaft item already on A's axis takes the Ø: no second shaft there.
     let mut items = drawing();
     items.push(GearItem::new("S", ItemKind::Shaft).with(vec![Thing::line([0.0, 0.0, -20.0], [0.0, 0.0, 30.0])]));
@@ -143,6 +153,6 @@ fn a_blocks_shaft_and_the_gears_on_it_are_one_body_per_axis() {
         }
         assert!(b.contains(&sp.body(g(4, 0)).unwrap()), "B's shaft with B: {b:?}");
         assert!(!a.contains(&sp.body(g(1, 0)).unwrap()), "B turns apart from A");
-        assert!(sp.plan.bodies[sp.body(g(3, 0)).unwrap()].name.starts_with("Shaft"), "{}", sp.plan.bodies[sp.body(g(3, 0)).unwrap()].name);
+        assert!(sp.plan.bodies[sp.body(g(3, 0)).unwrap()].name.starts_with("Shaft S1"), "{}", sp.plan.bodies[sp.body(g(3, 0)).unwrap()].name);
     }
 }

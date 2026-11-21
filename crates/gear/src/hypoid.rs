@@ -1544,15 +1544,25 @@ fn work_out_design(s: &Spec, d: Design) -> Result<Set, String> {
             }
         }
     }
-    let Some(gear_n) = gear_n else {
-        if KERNEL_CURVES / (s.teeth2 as usize * 2 * 4) < 4 {
-            return Err(format!("too many ring gear teeth to loft: use at most {}", KERNEL_CURVES / (4 * 2 * 4)));
+    // Teeth that turn too far between sections for the kernel's matching to follow still loft:
+    // the engine lofts the sections as given, piece for piece (`kernel::loft_as_given`), each wall
+    // on its own tooth. They keep the full flank and get as many sections as the kernel takes.
+    let gear_n = match gear_n {
+        Some(n) => n,
+        None => {
+            form.side = GEAR_SIDE;
+            let most = (KERNEL_CURVES / (s.teeth2 as usize * 2 * GEAR_SIDE)).min(50);
+            if most < 4 {
+                return Err(format!("too many ring gear teeth to loft: use at most {}", KERNEL_CURVES / (4 * 2 * GEAR_SIDE)));
+            }
+            most
         }
-        return Err("ring gear teeth twist too fast to loft: use a smaller face width or spiral angle".into());
     };
     // The pinion's teeth turn fast along its axis: the kernel would line its sections up
     // tooth to tooth only when they are close enough, so it gets as many as that takes.
+    // (When none lines up, the most sections drawn: lofted as given, as the ring gear's.)
     let mut lofted = None;
+    let mut densest = None;
     let most = KERNEL_CURVES / (s.teeth as usize * 2 * PINION_SIDE);
     for n in LOFT_COUNTS.into_iter().filter(|n| *n <= most) {
         let (z, t) = dense(&zeta, &teeth, n);
@@ -1569,9 +1579,10 @@ fn work_out_design(s: &Spec, d: Design) -> Result<Set, String> {
             lofted = Some((z, t));
             break;
         }
+        densest = Some((z, t));
     }
-    let Some((loft_z, loft)) = lofted else {
-        return Err("pinion teeth twist too fast to loft: use a smaller spiral angle, offset or face width".into());
+    let Some((loft_z, loft)) = lofted.or(densest) else {
+        return Err("pinion tooth can't be drawn at any number of sections: use a smaller offset or face width".into());
     };
     Ok(Set { d, form, op, xp, zp, heel_first, face, forward, s_min, s_max, zeta, teeth, loft_z, loft, gear_n })
 }

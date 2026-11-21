@@ -584,7 +584,9 @@ fn stage_warnings_name_the_items_gears() {
     let module2 = vec![GearSettings { module: Some(2.0), ..GearSettings::default() }];
     let mut a = item("A", ItemKind::Spur, vec![circ([0.0; 3], Z, 10.0)]);
     a.gears = module2.clone();
-    let mut b = item("B", ItemKind::Spur, vec![circ([40.0, 0.0, 0.0], Z, 30.0)]);
+    // (Two 10-tooth gears at their reference distance: no split of the shift clears both. A
+    // 30-tooth mate would take the shift that clears the pinion.)
+    let mut b = item("B", ItemKind::Spur, vec![circ([20.0, 0.0, 0.0], Z, 10.0)]);
     b.gears = module2;
     let sp = planned(&[a, b], &[mesh(g(0, 0), g(1, 0))], None);
     let w = &sp.plan.warnings;

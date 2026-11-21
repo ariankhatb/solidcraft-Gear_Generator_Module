@@ -311,3 +311,60 @@ fn extras_are_placed_on_their_axes() {
     assert!(solve(&Axis::Z, Some(&par), Some(Kind::Spline), &Spec::default(), &Drive::default()).is_err());
     assert!(solve(&Axis::Z, None, Some(Kind::Spline), &Spec::default(), &Drive::default()).is_ok());
 }
+
+/// An 11-tooth pinion across a drawn distance takes the shift that clears its undercut, its mate
+/// the rest (the distance held), when the mate keeps its own teeth whole: no undercut warning.
+#[test]
+fn the_shift_goes_to_the_pinion_that_would_be_undercut() {
+    let a1 = axis([0.0; 3], [0.0, 0.0, 1.0]);
+    for a in [25.5, 25.9] {
+        let a2 = axis([a, 0.0, 0.0], [0.0, 0.0, 1.0]);
+        let base = Spec { module: 1.0, teeth: 11, teeth2: 40, ..Spec::defaults_for(Kind::Pair) };
+        let s = solve(&a1, Some(&a2), Some(Kind::Pair), &base, &Drive::default()).unwrap();
+        let (g1, g2) = (s.spec.involute(11, s.spec.shift, 0.0), s.spec.involute2(40, s.spec.shift2, 0.0));
+        assert!(!g1.undercut() && !g2.undercut(), "{a}: shifts {} and {}", s.spec.shift, s.spec.shift2);
+        let p = on_axes(&s, &a1, &a2);
+        assert!(close(plan_fact(&p, "centre distance"), a, 1e-6), "{a}: {}", plan_fact(&p, "centre distance"));
+        assert!(p.warnings.iter().all(|w| !w.contains("undercut") && !w.contains("thin tooth tips") && !w.contains("point")), "{a}: {:?}", p.warnings);
+    }
+    // A train's meshing group the same: the 11-tooth gear between two others.
+    let g = |z: u32| Spec { module: 1.0, ..Spec::defaults_for(Kind::Pair) }.involute(z, 0.0, 0.0);
+    let gears = [g(30), g(11), g(25)];
+    let meshes = [crate::sketch_rules::GroupMesh { a: 0, b: 1, internal: false, dist: 20.5 }, crate::sketch_rules::GroupMesh { a: 1, b: 2, internal: false, dist: 18.0 }];
+    let xs = crate::sketch_rules::group_shifts(&gears, &[false; 3], &meshes).unwrap();
+    for (k, x) in xs.iter().enumerate() {
+        assert!(!crate::involute::Involute { shift: *x, ..gears[k] }.undercut(), "gear {k}: shifts {xs:?}");
+    }
+    assert!(close(xs[0] + xs[1], 0.0, 1e-9) && close(xs[1] + xs[2], 0.0, 1e-9), "{xs:?}");
+}
+
+/// Where no split of the shift keeps both gears clear, the undercut warning says what to change
+/// (the planner picks the shift to hold the distance, so it is not the user's to raise).
+#[test]
+fn an_unavoidable_undercut_says_what_to_change() {
+    let a1 = axis([0.0; 3], [0.0, 0.0, 1.0]);
+    let a2 = axis([10.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+    let base = Spec { module: 1.0, teeth: 10, teeth2: 10, ..Spec::defaults_for(Kind::Pair) };
+    let s = solve(&a1, Some(&a2), Some(Kind::Pair), &base, &Drive::default()).unwrap();
+    let p = plan(&s.spec).unwrap();
+    let w: Vec<&String> = p.warnings.iter().filter(|w| w.contains("undercut")).collect();
+    assert!(!w.is_empty(), "{:?}", p.warnings);
+    assert!(w.iter().all(|w| w.contains("more teeth") && w.contains("pressure angle") && !w.contains("raise the profile shift")), "{w:?}");
+}
+
+/// A hypoid whose teeth twist further between sections than the kernel's matching followed is
+/// built at the face width asked (the engine lofts the sections as given, piece for piece).
+#[test]
+fn a_wide_hypoid_keeps_the_face_width_asked() {
+    let base = Spec::defaults_for(Kind::Hypoid);
+    let mut cut = None;
+    for k in [1.5, 2.0] {
+        let s = Spec { face_width: base.face_width * k, ..base.clone() };
+        let p = plan(&s).unwrap_or_else(|e| panic!("×{k}: {e}"));
+        if p.warnings.iter().any(|w| w.contains("face width cut")) {
+            cut = Some((k, p.warnings.clone()));
+            break;
+        }
+    }
+    assert!(cut.is_none(), "{cut:?}");
+}

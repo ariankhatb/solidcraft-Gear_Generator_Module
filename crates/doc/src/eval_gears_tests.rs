@@ -259,3 +259,43 @@ fn a_flat_bevels_trimmed_teeth_pass_the_kernels_check() {
     // The RC drivetrain's bevels: 30 and 30 teeth of module 0.6 at 160°, cones of 80°.
     bodies_pass_the_check(&Spec { module: 0.6, teeth: 30, teeth2: 30, shaft_angle: 160.0, ..Spec::defaults_for(Kind::Bevel) });
 }
+
+/// Each body's volume as the gear crate's own solid model has it: a grid of points over its
+/// bounds, each counted where the model holds it.
+fn sampled_volume(b: &solidcraft_gear::plan::Body) -> f64 {
+    let solid = solidcraft_gear::mesh3d::Solid::new(b, 0.05);
+    let (lo, hi) = solid.bounds();
+    let n = 70;
+    let step = [0, 1, 2].map(|i| (hi[i] - lo[i]) / n as f64);
+    let mut inside = 0usize;
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..n {
+                let p = [lo[0] + (i as f64 + 0.5) * step[0], lo[1] + (j as f64 + 0.5) * step[1], lo[2] + (k as f64 + 0.5) * step[2]];
+                if solid.contains(p) {
+                    inside += 1;
+                }
+            }
+        }
+    }
+    inside as f64 * step[0] * step[1] * step[2]
+}
+
+/// A hypoid half again as wide as the default, whose teeth turn further between sections than
+/// the kernel's matching followed (its face was cut to 36 mm for it), is built at the full width:
+/// lofted as given, each body passes the check and holds the volume of the planned teeth.
+#[test]
+fn a_wide_hypoid_is_built_at_its_full_face_width() {
+    let base = Spec::defaults_for(Kind::Hypoid);
+    let spec = Spec { face_width: base.face_width * 1.5, ..base };
+    let plan = solidcraft_gear::plan(&spec).unwrap();
+    assert!(plan.warnings.iter().all(|w| !w.contains("face width cut")), "{:?}", plan.warnings);
+    bodies_pass_the_check(&spec);
+    for b in &plan.bodies {
+        let mut notes = Vec::new();
+        let (body, _) = solidcraft_kernel::validating(solidcraft_kernel::Validation::Off, || super::build_body(b, &mut notes));
+        let v = measure(&body.unwrap()).unwrap().volume;
+        let want = sampled_volume(b);
+        assert!((v - want).abs() < 0.03 * want, "{}: {v} against {want}", b.name);
+    }
+}

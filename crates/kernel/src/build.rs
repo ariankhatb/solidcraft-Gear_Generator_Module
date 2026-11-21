@@ -1013,11 +1013,27 @@ pub fn loft(sections: &[(Plane, Loop2)]) -> Result<Body> {
 /// a minute and more). Any other sections go to [`loft`].
 pub fn loft_corresponding(sections: &[(Plane, Loop2)]) -> Result<Body> {
     let _span = solidcraft_profile::span("kernel", "loft_corresponding");
+    loft_given(sections, true)
+}
+
+/// [`loft_corresponding`] for sections the caller knows correspond piece for piece (segment `i`
+/// of each the same piece of the same tooth in the next, however far it has turned: a spiral
+/// gear's teeth, followed tooth by tooth): only the segment counts and windings are checked, not
+/// which start lines the vertices up best. Where the teeth turn by more than about half a piece
+/// from one section to the next, the matching would start a section elsewhere and the walls cut
+/// across the teeth; as given, each wall stays on its own tooth.
+pub fn loft_as_given(sections: &[(Plane, Loop2)]) -> Result<Body> {
+    let _span = solidcraft_profile::span("kernel", "loft_as_given");
+    loft_given(sections, false)
+}
+
+/// [`loft_corresponding`] (`starts`: each section's start checked) or [`loft_as_given`].
+fn loft_given(sections: &[(Plane, Loop2)], starts: bool) -> Result<Body> {
     let reversed = loft_reversed(sections)?;
     for (_, l) in sections {
         region_ok(&Region2 { outer: l.clone(), holes: Vec::new() })?;
     }
-    if !corresponding(sections) {
+    if !corresponding(sections, starts) {
         return loft(sections);
     }
     let mut numbered = sections.iter().map(|(p, _)| *p).zip(numbered::number_loops(sections.iter().map(|(_, l)| l))).collect::<Vec<_>>();
@@ -1033,9 +1049,9 @@ pub fn loft_corresponding(sections: &[(Plane, Loop2)]) -> Result<Body> {
 }
 
 /// Whether [`loft_corresponding`] may loft `sections` as given: the same number of segments in
-/// each (none of no length), the same winding about the first plane's normal, and each section
-/// started where its vertices line up best with the section before it's.
-fn corresponding(sections: &[(Plane, Loop2)]) -> bool {
+/// each (none of no length), the same winding about the first plane's normal, and (`starts`)
+/// each section started where its vertices line up best with the section before it's.
+fn corresponding(sections: &[(Plane, Loop2)], starts: bool) -> bool {
     let Some((p0, l0)) = sections.first() else { return false };
     let m = l0.segs.len();
     let normal = p0.normal();
@@ -1043,6 +1059,9 @@ fn corresponding(sections: &[(Plane, Loop2)]) -> bool {
     let first = winding(p0, l0);
     if m < 2 || sections.iter().any(|(p, l)| l.segs.len() != m || winding(p, l) != first || l.segs.iter().any(|s| !(s.length() > 0.0))) {
         return false;
+    }
+    if !starts {
+        return true;
     }
     let dirs = |p: &Plane, l: &Loop2| -> Vec<Vec3> {
         let c = p.to_world(l.centroid());

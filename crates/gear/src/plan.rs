@@ -1416,7 +1416,7 @@ fn tooth_warnings(p: &mut Plan, who: &str, g: &Involute, f: &ToothFlank) {
     }
     if f.undercut {
         p.warn(format!(
-            "{who}: undercut ({} teeth; about {:.1} or more avoid it at this shift, or raise the profile shift)",
+            "{who}: undercut ({} teeth; about {:.1} or more avoid it at this profile shift): use more teeth (a finer module) or a larger pressure angle",
             g.teeth,
             g.min_teeth_no_undercut()
         ));
@@ -2685,7 +2685,7 @@ fn worm(s: &Spec, p: &mut Plan) {
     // In the mid plane the wheel is a spur gear of the worm's axial module and pressure angle.
     let mid_gear = Involute { teeth: zw, module: m, pressure_angle: ax, helix: 0.0, shift: s.shift, rack: s.rack, backlash: s.backlash / 2.0, tip_shortening: 0.0, virtual_teeth: 0.0 };
     if mid_gear.undercut() {
-        p.warn(format!("wheel: undercut ({zw} teeth; about {:.1} or more avoid it at this shift, or raise the profile shift)", mid_gear.min_teeth_no_undercut()));
+        p.warn(format!("wheel: undercut ({zw} teeth; about {:.1} or more avoid it at this profile shift): use more teeth (a finer module) or a larger pressure angle", mid_gear.min_teeth_no_undercut()));
     }
     if wanted(s, 1) {
         let mut steps = vec![Step::Loft { sections: outlines, op: Op::New }];

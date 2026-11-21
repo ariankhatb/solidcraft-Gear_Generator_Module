@@ -777,10 +777,10 @@ fn tool(f: &Frame, step: &Step, nudge: f64) -> Result<Body> {
                 (plane_at(f, z0 + height * t), region)
             })
             .collect();
-        // The sections are one outline's, piece for piece: lofted as given ([kernel::loft_corresponding]).
+        // The sections are one outline's, piece for piece: lofted as given ([`kernel::loft_as_given`]).
         if rim.is_none() {
             let loops: Vec<(Plane, Loop2)> = sections.into_iter().map(|(p, r)| (p, r.outer)).collect();
-            return Ok(kernel::loft_corresponding(&loops)?);
+            return Ok(kernel::loft_as_given(&loops)?);
         }
         Ok(kernel::loft_regions(&sections)?)
     };
@@ -802,7 +802,7 @@ fn tool(f: &Frame, step: &Step, nudge: f64) -> Result<Body> {
             // Every section is the planner's outline of the same teeth, piece for piece: lofted as
             // given, without the kernel's matching of their vertices (a minute on a hypoid's).
             let s: Vec<(Plane, Loop2)> = sections.iter().map(|(o, h)| (plane_at(f, *h), section_loop(o))).collect();
-            Ok(kernel::loft_corresponding(&s)?)
+            Ok(kernel::loft_as_given(&s)?)
         }
         Step::Revolve { profile, .. } => {
             let pts: Vec<Vec2> = solid::nudged(profile, nudge).into_iter().map(v2).collect();

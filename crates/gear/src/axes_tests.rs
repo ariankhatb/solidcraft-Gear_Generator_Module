@@ -351,3 +351,20 @@ fn an_unavoidable_undercut_says_what_to_change() {
     assert!(!w.is_empty(), "{:?}", p.warnings);
     assert!(w.iter().all(|w| w.contains("more teeth") && w.contains("pressure angle") && !w.contains("raise the profile shift")), "{w:?}");
 }
+
+/// A hypoid whose teeth twist further between sections than the kernel's matching followed is
+/// built at the face width asked (the engine lofts the sections as given, piece for piece).
+#[test]
+fn a_wide_hypoid_keeps_the_face_width_asked() {
+    let base = Spec::defaults_for(Kind::Hypoid);
+    let mut cut = None;
+    for k in [1.5, 2.0] {
+        let s = Spec { face_width: base.face_width * k, ..base.clone() };
+        let p = plan(&s).unwrap_or_else(|e| panic!("×{k}: {e}"));
+        if p.warnings.iter().any(|w| w.contains("face width cut")) {
+            cut = Some((k, p.warnings.clone()));
+            break;
+        }
+    }
+    assert!(cut.is_none(), "{cut:?}");
+}

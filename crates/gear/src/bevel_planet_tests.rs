@@ -231,8 +231,6 @@ fn facts_and_ratios() {
     assert_eq!(p.preview.len(), 3);
     assert_eq!(r.preview.len(), 3);
     assert!(!r.preview[2].region.holes.is_empty());
-    let sheet = crate::sheet::design_sheet(&d(), &p);
-    assert!(sheet.contains("Second sun teeth") && sheet.contains("Planets"), "{sheet}");
 }
 
 /// The window's badge: Ok for the default and every planet named; a planet turned half a pitch

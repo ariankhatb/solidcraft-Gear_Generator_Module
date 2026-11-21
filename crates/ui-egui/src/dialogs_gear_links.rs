@@ -74,6 +74,8 @@ pub struct Block {
     pub shaft_mode: usize,
     pub face: String,
     pub helix: String,
+    /// With a helix: herringbone (V) teeth, not helical.
+    pub herringbone: bool,
     pub pressure_angle: String,
     pub backlash: String,
     pub chamfer: String,
@@ -101,6 +103,7 @@ impl Block {
                 tooth_chamfer: num(&self.chamfer, ValueKind::Length, "tooth chamfer")?.filter(|v| *v > 0.0),
                 pressure_angle: num(&self.pressure_angle, ValueKind::Angle, "pressure angle")?,
                 helix: num(&self.helix, ValueKind::Angle, "helix angle")?,
+                herringbone: self.herringbone,
                 face_width: num(&self.face, ValueKind::Length, "face width")?,
                 backlash: num(&self.backlash, ValueKind::Length, "backlash")?,
                 shaft_diameter: match self.shaft_mode {
@@ -133,6 +136,9 @@ impl Block {
                 v[key] = json!(x);
             }
         }
+        if s.herringbone && s.helix.is_some() {
+            v["herringbone"] = json!(true);
+        }
         match self.shaft_mode {
             1 => v["shaft"] = json!("bore"),
             2 => v["shaft"] = json!("none"),
@@ -155,6 +161,7 @@ impl Block {
             },
             face: s("face_width", ValueKind::Length),
             helix: s("helix_angle", ValueKind::Angle),
+            herringbone: v.get("herringbone").and_then(Value::as_bool) == Some(true),
             pressure_angle: s("pressure_angle", ValueKind::Angle),
             backlash: s("backlash", ValueKind::Length),
             chamfer: s("tooth_chamfer", ValueKind::Length),

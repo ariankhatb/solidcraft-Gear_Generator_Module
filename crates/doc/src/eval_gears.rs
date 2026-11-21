@@ -229,7 +229,7 @@ fn build(plan: &Plan, notes: &mut Vec<String>) -> Result<Built> {
             (None, [one]) => gears[*one].clone(),
             (None, ks) => {
                 let parts: Vec<&Body> = ks.iter().map(|k| &gears[*k]).collect();
-                kernel::union_all(&parts).map_err(|e| DocError::Invalid(format!("{}: its gears could not be joined ({e})", r.name)))?
+                joined(&parts).map_err(|e| DocError::Invalid(format!("{}: its gears could not be joined ({e})", r.name)))?
             }
         };
         copies.push(earlier);
@@ -251,6 +251,51 @@ fn build(plan: &Plan, notes: &mut Vec<String>) -> Result<Built> {
         None => None,
     };
     Ok((members, keep_out, copies))
+}
+
+/// A rigid member's bodies as one: the bodies parted into lots whose bodies are apart from
+/// each other (the gears along a shaft), each lot one body of pieces, side by side (no
+/// intersection work), and the lots unioned in one kernel call: the same union with fewer
+/// operands, none when all are apart.
+fn joined(parts: &[&Body]) -> kernel::Result<Body> {
+    // Apart as `kernel::apart` tells it: bodies whose vertices' boxes meet are not (measured
+    // at once: the gears and shafts of one member mostly are); others by their exact boxes,
+    // each grown by twice its tolerance, each body's measured once.
+    let grown = |b: &Body, by: f64| -> Option<solidcraft_geom::Aabb3> {
+        let v: solidcraft_geom::Aabb3 = b.record().vertices.iter().map(|v| Vec3::new(v.point[0], v.point[1], v.point[2])).collect();
+        (!v.is_empty()).then(|| v.inflated(by))
+    };
+    let vertex_boxes: Vec<Option<solidcraft_geom::Aabb3>> = parts.iter().map(|b| if b.is_mesh() { None } else { grown(b, 2.0 * b.record().tolerance) }).collect();
+    let exact: Vec<std::cell::OnceCell<Option<solidcraft_geom::Aabb3>>> = parts.iter().map(|_| std::cell::OnceCell::new()).collect();
+    let exact_of = |i: usize| *exact[i].get_or_init(|| parts[i].exact_bounds().ok().map(|bb| bb.inflated(2.0 * parts[i].record().tolerance)));
+    let apart = |i: usize, j: usize| match (vertex_boxes[i], vertex_boxes[j]) {
+        (Some(a), Some(b)) if !a.meets(&b) => exact_of(i).zip(exact_of(j)).is_some_and(|(a, b)| !a.meets(&b)),
+        _ => false,
+    };
+    let mut lots: Vec<Vec<usize>> = Vec::new();
+    for i in 0..parts.len() {
+        let home = lots.iter().position(|lot| lot.iter().all(|j| apart(i, *j)));
+        match home {
+            Some(k) => lots[k].push(i),
+            None => lots.push(vec![i]),
+        }
+    }
+    if lots.len() == parts.len() {
+        return kernel::union_all(parts);
+    }
+    let mut bodies = Vec::with_capacity(lots.len());
+    for lot in &lots {
+        let pieces: Vec<Body> = lot.iter().map(|i| parts[*i].clone()).collect();
+        match (kernel::join_apart(&pieces)?, &pieces[..]) {
+            (Some(b), _) => bodies.push(b),
+            (None, [one]) => bodies.push(one.clone()),
+            (None, _) => return kernel::union_all(parts),
+        }
+    }
+    match &bodies[..] {
+        [one] => Ok(one.clone()),
+        _ => kernel::union_all(&bodies.iter().collect::<Vec<_>>()),
+    }
 }
 
 /// What a planned body is known by apart from where it stands: its [`plan_key`] with the frame
@@ -425,12 +470,49 @@ fn checked(body: &Body) -> Option<String> {
     verdict
 }
 
-/// One planned body: its steps in order, each on what the ones before made.
+/// One planned body: its steps in order, each on what the ones before made; or, the same solid,
+/// with fewer booleans on its teeth ([`solidcraft_gear::plan::fused`]: through holes in the
+/// teeth's regions, the hub and shafts a blank of their own joined in one union). A fused build
+/// that fails or leaves a step out is dropped for the plan's own.
 fn build_body(b: &Planned, notes: &mut Vec<String>) -> Result<Body> {
     let _span = solidcraft_profile::span("gear body", solidcraft_profile::intern(&b.name));
-    let mut made: Option<Body> = None;
+    if let Some(f) = solidcraft_gear::plan::fused::fused(b) {
+        let mut said = Vec::new();
+        let made = build_fused(b, &f, &mut said);
+        if let (Ok(body), true) = (made, said.is_empty()) {
+            return Ok(body);
+        }
+    }
+    run_steps(b, 0, None, notes)
+}
+
+/// [`build_body`]'s fused build: the teeth, the blank joined to them, the cuts left.
+fn build_fused(b: &Planned, f: &solidcraft_gear::plan::fused::Fused, notes: &mut Vec<String>) -> Result<Body> {
+    let _span = solidcraft_profile::span("gear", "fused build");
+    let part = |steps: &[Step]| Planned { name: b.name.clone(), frame: b.frame, steps: steps.to_vec() };
+    let teeth = run_steps(&part(&f.teeth), 0, None, notes)?;
+    let joined = if f.blank.is_empty() {
+        teeth
+    } else {
+        let blank = run_steps(&part(&f.blank), 0, None, notes)?;
+        combine(Some(&teeth), blank, Op::Join)?
+    };
+    if f.after.is_empty() {
+        return Ok(joined);
+    }
+    // The cuts after the body's own solids as planned (what a step reads of the body before it,
+    // the tooth chamfers' reach, is the planned body's).
+    let solids = b.steps.iter().take_while(|s| matches!(s.op(), Op::New | Op::Join)).count();
+    let rest = Planned { steps: b.steps[..solids].iter().chain(&f.after).cloned().collect(), ..part(&[]) };
+    run_steps(&rest, solids, Some(joined), notes)
+}
+
+/// The steps of `b` from step `from` on in order, each on what the ones before made (`start`:
+/// what the steps before `from` made).
+fn run_steps(b: &Planned, from: usize, start: Option<Body>, notes: &mut Vec<String>) -> Result<Body> {
+    let mut made: Option<Body> = start;
     let mut skip = false;
-    for (i, step) in b.steps.iter().enumerate() {
+    for (i, step) in b.steps.iter().enumerate().skip(from) {
         if std::mem::take(&mut skip) {
             continue;
         }
@@ -554,9 +636,13 @@ fn regions_of(r: &Region) -> Vec<Region2> {
     solid::region_parts(r).into_iter().map(|(o, holes)| Region2 { outer: outline_loop(&r.outer[o]), holes: holes.iter().map(|h| outline_loop(&r.holes[*h])).collect() }).collect()
 }
 
-/// One body of several (a region of more than one outline): their union.
+/// One body of several (a region of more than one outline): their union, side by side when
+/// they are apart (lightening holes, a cross's corners).
 fn one(bodies: Vec<Body>) -> Result<Body> {
     if bodies.len() > 1 {
+        if let Ok(Some(apart)) = kernel::union_apart(&bodies) {
+            return Ok(apart);
+        }
         return Ok(kernel::union_all(&bodies.iter().collect::<Vec<_>>())?);
     }
     bodies.into_iter().next().ok_or_else(|| DocError::Invalid("the step makes nothing".into()))

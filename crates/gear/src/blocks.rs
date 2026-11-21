@@ -17,7 +17,7 @@
 
 use crate::axes::{Axis, add, cross, dot, len, mul, sub, unit};
 use crate::items::{
-    ANGLE_TOL, BlockSettings, Bore, FacePreset, FaceSides, GearGeom, GearItem, GearRef, GearSettings, ItemKind, ItemLink, LinkKind, ModuleBlock,
+    ANGLE_TOL, BlockSettings, Bore, ShaftMode, FacePreset, FaceSides, GearGeom, GearItem, GearRef, GearSettings, ItemKind, ItemLink, LinkKind, ModuleBlock,
     Thing, face_extent, gear_geoms, resolve_module, tol,
 };
 use crate::plan::Spec;
@@ -44,7 +44,7 @@ fn takes_helix(kind: ItemKind) -> bool {
 
 /// Gear settings `s` (of an item of `kind`) with block `b`'s filled in where `s` gives none: its
 /// helix angle, its face width (half each side; an A only or B only face all on that side), and
-/// its shaft Ø as the bore.
+/// (Bore only) its Ø as the bore. A gear on a made shaft gets no bore: it is one body with it.
 pub fn block_settings(b: &BlockSettings, kind: ItemKind, s: &GearSettings) -> GearSettings {
     let mut out = *s;
     if let Some(h) = b.helix.filter(|h| h.is_finite())
@@ -64,6 +64,7 @@ pub fn block_settings(b: &BlockSettings, kind: ItemKind, s: &GearSettings) -> Ge
         };
     }
     if let Some(d) = positive(b.shaft_diameter)
+        && b.shaft == ShaftMode::BoreOnly
         && s.bore == Bore::Auto
     {
         out.bore = Bore::Diameter(d);
@@ -83,7 +84,7 @@ pub fn with_blocks(items: &[GearItem], blocks: &[ModuleBlock]) -> Vec<GearItem> 
             let mut out = it.clone();
             let n = it.gear_count().max(it.gears.len()).max(1);
             out.gears = (0..n).map(|g| block_settings(b, it.kind, &it.settings(g))).collect();
-            if out.shaft_diameter.is_none() {
+            if out.shaft_diameter.is_none() && b.shaft == ShaftMode::Make {
                 out.shaft_diameter = positive(b.shaft_diameter);
             }
             out
@@ -203,7 +204,7 @@ pub fn block_shafts_linked(items: &[GearItem], links: &[ItemLink], blocks: &[Mod
     let turning = turnings(&items, links);
     let mut out = Vec::new();
     for (k, b) in blocks.iter().enumerate() {
-        let Some(d) = positive(b.settings.shaft_diameter) else { continue };
+        let Some(d) = positive(b.settings.shaft_diameter).filter(|_| b.settings.shaft == ShaftMode::Make) else { continue };
         let mut members: Vec<usize> = b.members.iter().copied().filter(|i| block_of(blocks, *i) == Some(k) && *i < items.len()).collect();
         members.sort_unstable();
         members.dedup();
@@ -270,9 +271,25 @@ pub fn block_shafts_linked(items: &[GearItem], links: &[ItemLink], blocks: &[Mod
     out
 }
 
-/// The id of a block's `n`-th shaft (from 1): "M1·2"; its body is "Shaft M1·2".
-pub fn shaft_id(block: &str, n: usize) -> String {
-    format!("{block}·{n}")
+/// The id of the set's `n`-th block shaft (from 1, across its blocks): "S2"; its body is
+/// "Shaft S2".
+pub fn shaft_id(n: usize) -> String {
+    format!("S{n}")
+}
+
+/// Each of `shafts`' ids ([`shaft_id`], numbered in order), `None` for one that is a shaft line
+/// already there ([`BlockShaft::existing`]).
+pub fn shaft_ids(shafts: &[BlockShaft]) -> Vec<Option<String>> {
+    let mut n = 0;
+    shafts
+        .iter()
+        .map(|s| {
+            s.existing.is_none().then(|| {
+                n += 1;
+                shaft_id(n)
+            })
+        })
+        .collect()
 }
 
 /// The items and links with the blocks applied, for planning: every member given its block's
@@ -295,10 +312,8 @@ pub fn expand_blocks(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlo
     let shafts = block_shafts_linked(items, links, blocks);
     let mut out = Expanded { items: with_blocks(items, blocks), links: links.to_vec(), shafts: Vec::new(), added: Vec::new() };
     let given = !links.is_empty();
-    let mut made = vec![0usize; blocks.len()];
-    for s in &shafts {
-        // A free-turning gear's bore (the block's Ø, where the gear left it on Auto) clears the
-        // shaft.
+    for (s, id) in shafts.iter().zip(shaft_ids(&shafts)) {
+        // A free-turning gear's bore (where the gear left it on Auto) clears the shaft.
         for r in &s.free {
             if items.get(r.item).is_some_and(|it| it.settings(r.gear).bore == Bore::Auto) {
                 let it = &mut out.items[r.item];
@@ -317,8 +332,7 @@ pub fn expand_blocks(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlo
                 }
             }
             None => {
-                made[s.block] += 1;
-                let mut it = GearItem::new(&shaft_id(&blocks[s.block].id, made[s.block]), ItemKind::Shaft).with(vec![Thing::line(s.a, s.b)]);
+                let mut it = GearItem::new(&id.unwrap_or_default(), ItemKind::Shaft).with(vec![Thing::line(s.a, s.b)]);
                 it.shaft_diameter = Some(s.diameter);
                 let at = out.items.len();
                 out.items.push(it);

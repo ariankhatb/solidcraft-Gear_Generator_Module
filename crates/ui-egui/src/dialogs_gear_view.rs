@@ -9,13 +9,14 @@
 //!   with what to do; click a card to make it the one picks go to, × to remove it), and under the
 //!   cards the selected gear's own settings and size (Size by, Module / Teeth, Face). A bevel or
 //!   hypoid pair has the switch for a differential in its ring gear here. Under the cards, the
-//!   **blocks**: gears put in a block share its module, shaft Ø (bores and one shaft per axis),
+//!   **blocks**: gears put in a block share its module, its shaft (Make shaft: one per axis, fused to its gears) or bore (Bore only),
 //!   face width and, under More, helix, pressure angle, backlash and tooth chamfer.
 //! - **Teeth**: the selected gear's helix (or bevel style and spiral) and profile shift; the
 //!   tooth form every gear takes (pressure angle, backlash, tip rounding, XY compensation); the
 //!   tooth chamfer.
-//! - **Shafts & Bearings**: the shaft each axis gets and from which block, the selected gear's
-//!   bore and hub (a shaft's Ø) and the bearing points.
+//! - **Shafts & Bores**: the shafts (solid rods along an axis: each block shaft, fused to its
+//!   gears or turning free) and their bearing points, kept apart from each gear's bore (the hole
+//!   through it: its Ø and where it comes from), and the selected gear's bore and hub.
 //! - **Links & Motion**: the links (each drawn in the view; hovering a row lights it), the
 //!   suggested ones, a link by hand, the drive and the ratio between two gears.
 //! - **Housing & Output**: the housing cutout, the operation, Targets, keep-out and assembly.
@@ -53,7 +54,7 @@ const TIP_HAND: &str = "Left or right helix. The mating gear is set to the other
 const TIP_V: &str = "Herringbone: two opposite helices meeting in the middle — no axial thrust.";
 const TIP_V_BEVEL: &str = "Straight: straight teeth. Spiral: curved teeth, smoother and quieter. Chevron: the spiral changes hand at mid-face, so the axial thrust cancels.";
 const TIP_SHIFT: &str = "Worked out for you: it holds the drawn centre distance and clears undercut on small gears.";
-const TIP_BORE: &str = "Hole through the gear. Auto: fits the shaft when a shaft line is picked; otherwise none, unless a bore circle is drawn. Ø: this diameter. A drawn bore circle wins.";
+const TIP_BORE: &str = "The bore: the hole through this gear. Auto: a bore circle drawn on the gear, else one that fits its shaft line when one is picked, else its block's Bore only Ø; none on a made shaft (the gear and the shaft are one body). Ø: this diameter. A drawn bore circle wins.";
 const TIP_SPIRAL: &str = "Spiral bevel/hypoid tooth angle at mid-face. 35° is typical.";
 const TIP_STARTS: &str = "Thread starts on the worm. More starts = faster, less self-locking.";
 const TIP_DRIVER: &str = "The gear you turn. Every other gear's speed and direction follow from it. — : none; the assembly is driven from the first gear.";
@@ -67,7 +68,7 @@ const TIP_TORQUE: &str = "Optional: the driver's torque in N·m. Fills torque fo
 const TIP_RIM: &str = "Rim thickness outside the tooth roots. Auto: 2.5 × module.";
 const TIP_BACK: &str = "Material behind the rack's tooth roots. Auto from the module.";
 const TIP_CARRIER: &str = "Make a carrier body: the planets turn on its pins. Off: the planets have no carrier.";
-const TIP_SHAFT_D: &str = "Shaft diameter. Auto: from the smallest gear's root.";
+const TIP_SHAFT_D: &str = "The shaft's diameter (a solid rod along this line). Auto: from the smallest root of the gears it carries.";
 const TIP_HUB: &str = "A boss on the gear's face round its bore. A drawn hub circle sets its Ø.";
 const TIP_HUB_D: &str = "Hub diameter (mm), smaller than the tooth roots. Auto: 1.6 × the bore (or about half the root Ø with no bore).";
 const TIP_HUB_LEN: &str = "How far the hub reaches past the face on this side. Both empty: half the face width on side A.";
@@ -80,10 +81,12 @@ const TIP_MESH: &str = "Mesh: the two gears' teeth engage; their distance is che
 const TIP_SHAFT: &str = "Same shaft: the two gears turn together.";
 const TIP_PICKER: &str = "The gear these settings are for. Choosing one selects it, as clicking its card on the Gears tab does: your picks go to it.";
 const TIP_DIFF: &str = "Put a differential in this pair's ring gear (the hypoid's ring, the bevel pair's larger gear): a case rigid with the ring, two side gears with a half-shaft each on the ring's axis, and pinions on the case. Its settings are on the Differential tab.";
-const TIP_BLOCK: &str = "A block puts gears under shared settings: set the module, shaft Ø or face width once and every gear in it follows. A gear's own value (in its settings below) wins over the block's.";
+const TIP_BLOCK: &str = "A block puts gears under shared settings: set the module, the shaft or bore, or the face width once and every gear in it follows. A gear's own value (in its settings below) wins over the block's.";
 const TIP_BLOCK_GEARS: &str = "The gears in this block. A gear is in one block at most: ticking it here takes it out of any other.";
 const TIP_BLOCK_MODULE: &str = "One module for every gear in the block, so they can mesh. Auto: the largest standard module giving the smallest gear in the block 17 teeth or more.";
-const TIP_BLOCK_SHAFT: &str = "Every gear in the block gets a bore of this Ø, and each axis its gears are on gets a shaft of this Ø joined to the gears on it (one body per axis). The shaft runs over the gears' faces and a little past them, or out to the bearing points on that axis. Empty: no block shafts.";
+const TIP_BLOCK_SHAFT_MODE: &str = "What the block's Ø makes. Make shaft: a shaft (a solid rod) along each axis its gears are on, the gears on it fused to it, one body per axis: no bore is cut. Bore only: every gear gets a bore (a hole) of the Ø and no shaft is made, for a rod of your own. None: the gears keep their own bores.";
+const TIP_BLOCK_SHAFT: &str = "The shafts' diameter. Each runs over its gears' faces and a little past them, or out to the bearing points on its axis.";
+const TIP_BLOCK_BORE: &str = "The bore (the hole through each gear) of every gear in the block that leaves its own bore on Auto.";
 const TIP_BLOCK_FACE: &str = "The whole face width of every gear in the block, half each side of the sketch plane (A only / B only gears: all on that side). Empty: each gear's own, or Auto.";
 const TIP_BLOCK_HELIX: &str = "Helix angle for every spur, helical, herringbone, ring, rack and planetary gear in the block; meshing gears get opposite hands. Empty: each gear's own.";
 const TIP_BLOCK_PA: &str = "Pressure angle of the block's gears (20° is standard). Empty: the set's (Teeth tab).";
@@ -93,8 +96,8 @@ const TIP_DIFF_STYLE: &str = "Open: bevel side gears and spider pinions. Biased:
 const TIP_DIFF_PINIONS: &str = "Spider pinions on the case, 1 to 6. Auto: 2.";
 const TIP_DIFF_ELEMENTS: &str = "Element gear pairs, 1 to 8. Auto: 3 (Torsen B) or 2 (Torsen A).";
 const TIP_DIFF_MODULE: &str = "The side gears' and pinions' module (mm). Auto: the largest whose case is at most 0.6 × the ring's pitch Ø.";
-const TIP_DIFF_AXLE: &str = "Each half-shaft's reach from the differential's middle along the ring's axis (mm). Auto: 1.5 × the ring's pitch Ø, or to the ends of a Shaft gear drawn on that axis.";
-const TIP_DIFF_AXLE_D: &str = "The half-shafts' diameter (mm). Auto: that Shaft gear's, else 0.4 × the side gears' pitch Ø.";
+const TIP_DIFF_AXLE: &str = "Each half-shaft's reach from the differential's middle along the ring's axis (mm). Auto: 1.5 × the ring's pitch Ø, or to the ends of a Shaft drawn on that axis.";
+const TIP_DIFF_AXLE_D: &str = "The half-shafts' diameter (mm). Auto: that Shaft's, else 0.4 × the side gears' pitch Ø.";
 
 /// What each type needs, for the line under the type list.
 fn needs(kind: ItemKind) -> &'static str {
@@ -643,7 +646,7 @@ fn blocks_group(ui: &mut egui::Ui, k: &mut Gear) -> bool {
     let title = if n == 0 { "Blocks".to_string() } else { format!("Blocks · {n}") };
     ui_kit::section(ui, "gear_blocks", &title, true, |ui| {
         if n == 0 {
-            ui_kit::text(ui, "Put the gears in a block to set their module, shaft Ø and face width once for all of them.", ui_kit::Text::Note("gear_blocks_none"));
+            ui_kit::text(ui, "Put the gears in a block to set their module, their shaft or bore, and their face width once for all of them.", ui_kit::Text::Note("gear_blocks_none"));
             let r = ui_kit::button(ui, "Put all gears in one block", ui_kit::Button::Normal).backing_on_hover_text(TIP_BLOCK);
             solidcraft_ui_registry::publish_target("gear:block:all", r.rect);
             if r.clicked() {
@@ -713,24 +716,39 @@ fn block_rows(ui: &mut egui::Ui, k: &mut Gear, b: usize, remove: &mut Option<usi
     let shafts: Vec<String> = k
         .block_shafts
         .iter()
-        .filter(|s| s.block == b)
-        .map(|s| format!("{} ({} mm)", s.gears.iter().map(|g| k.gear_name((g.item, g.gear))).collect::<Vec<_>>().join(" + "), dg::fmt((s.length() * 10.0).round() / 10.0)))
+        .zip(solidcraft_gear::blocks::shaft_ids(&k.block_shafts))
+        .filter(|(s, _)| s.block == b)
+        .map(|(s, id)| {
+            let gears = s.gears.iter().map(|g| k.gear_name((g.item, g.gear))).collect::<Vec<_>>().join(" + ");
+            let name = id.unwrap_or_else(|| s.existing.map(|i| format!("{}'s line", item_id(i))).unwrap_or_default());
+            format!("{name}: {gears} ({} mm)", dg::fmt((s.length() * 10.0).round() / 10.0))
+        })
         .collect();
     let Some(bl) = k.links.block_mut(b) else { return enter };
     enter |= field(ui, "Name", &mut bl.name, &format!("Block {}", b + 1), "The block's name, in the view and the lists.");
+    let mut mode = bl.shaft_mode.min(2);
+    segments(ui, "Shaft", &mut mode, &["Make shaft", "Bore only", "None"], TIP_BLOCK_SHAFT_MODE);
+    bl.shaft_mode = mode;
     ui.columns(2, |c| {
         enter |= field(&mut c[0], "Module", &mut bl.module, "auto", TIP_BLOCK_MODULE);
-        enter |= field(&mut c[1], "Shaft Ø", &mut bl.shaft_d, "none", TIP_BLOCK_SHAFT);
+        match mode {
+            0 => enter |= field(&mut c[1], "Shaft Ø", &mut bl.shaft_d, "mm", TIP_BLOCK_SHAFT),
+            1 => enter |= field(&mut c[1], "Bore Ø", &mut bl.shaft_d, "mm", TIP_BLOCK_BORE),
+            _ => {}
+        }
     });
     ui.columns(2, |c| {
         enter |= field(&mut c[0], "Face width", &mut bl.face, "each gear's", TIP_BLOCK_FACE);
     });
-    if !bl.shaft_d.trim().is_empty() {
-        let said = match shafts.len() {
-            0 => "No shaft yet: the block's gears aren't complete.".to_string(),
-            1 => format!("1 shaft, bored into its gears: {}", shafts[0]),
-            n => format!("{n} shafts, bored into their gears: {}", shafts.join(", ")),
-        };
+    let d = bl.shaft_d.trim().to_string();
+    let said = match (mode, d.is_empty(), shafts.len()) {
+        (2, ..) | (_, true, _) => None,
+        (1, ..) => Some(format!("Every gear in the block bored to {d}; no shaft is made (the rod is your own).")),
+        (_, _, 0) => Some("No shaft yet: the block's gears aren't complete.".to_string()),
+        (_, _, 1) => Some(format!("1 shaft, {}. Its gears are fused to it (one body): no bore.", shafts[0])),
+        (_, _, n) => Some(format!("{n} shafts: {}. The gears on each are fused to it (one body): no bore.", shafts.join(", "))),
+    };
+    if let Some(said) = said {
         ui.add(egui::Label::new(egui::RichText::new(said).size(t.font_small).color(t.form_dim)).wrap());
     }
     let more = bl.has_more();
@@ -980,33 +998,52 @@ fn helix_rows(ui: &mut egui::Ui, s: &mut GearSettings, kind: ItemKind) -> bool {
     enter
 }
 
-/// Shafts & Bearings: the shaft each axis gets (a block's, a Shaft gear's) and from where; the
-/// selected gear's bore and hub (a shaft's Ø); the bearing points.
+/// Shafts & Bores, kept apart: **Shafts** (solid rods along an axis: one row per shaft with its Ø ×
+/// length, its gears, where it comes from and whether they are fused to it or turn free) and
+/// the bearing points on them; **Gear bores** (the hole through each gear: its Ø and where it
+/// comes from); then the selected gear's own bore and hub.
 fn shafts_tab(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], input: &mut usize) -> bool {
     let mut enter = false;
     let t = Tokens::get();
-    shafts_made(ui, k);
+    shafts_made(app, ui, k);
+    // The bearing points every shaft line carries: a seat each in the housing cutout.
+    let points: Vec<(usize, usize)> =
+        k.items.iter().enumerate().map(|(i, it)| (i, it.things(app).iter().filter(|x| matches!(x, solidcraft_gear::items::Thing::Point { .. })).count())).filter(|(_, n)| *n > 0).collect();
+    let total: usize = points.iter().map(|p| p.1).sum();
+    ui_kit::section(ui, "gear_bearing_points", &format!("Bearing points · {total}"), true, |ui| {
+        for (i, n) in &points {
+            ui_kit::value_row(ui, &format!("Gear {}", item_id(*i)), &format!("{n} point{}", if *n == 1 { "" } else { "s" }));
+        }
+        let said = if total == 0 {
+            "No bearing points yet: pick points on a shaft line (a gear's or a Shaft's) on the Gears tab."
+        } else if k.cutout.on {
+            "Each gets a bearing seat in the housing cutout (Housing & Output tab)."
+        } else {
+            "Turn on the housing cutout (Housing & Output tab) for a bearing seat at each."
+        };
+        ui.add(egui::Label::new(egui::RichText::new(said).size(t.font_small).color(t.form_dim)).wrap());
+    });
+    gear_bores(app, ui, k);
     if let Some(a) = item_picker(ui, k, inputs, input, "shafts") {
         let kind = k.items[a].kind;
-        let title = item_title(k, a);
-        let block_shaft = k.links.block_of(a).map(|b| (k.links.blocks()[b].title(b), k.links.blocks()[b].shaft_d.trim().to_string())).filter(|x| !x.1.is_empty());
+        let title = format!("{} · bore and hub", item_title(k, a));
+        let n = k.gear_counts.get(a).copied().unwrap_or(1);
         ui_kit::section(ui, ("gear_shafts", a), &title, true, |ui| {
             if kind == ItemKind::Shaft {
                 enter |= field(ui, "Shaft Ø", &mut k.items[a].shaft_d, "auto", TIP_SHAFT_D);
                 return;
             }
-            let n = k.gear_counts.get(a).copied().unwrap_or(1);
             let g = gear_switch(ui, k, a);
+            let (_, from) = dg::bore_of(app, k, &k.block_shafts, a, g);
+            let fused = dg::shaft_of(&k.block_shafts, a, g).is_some();
             let s: &mut GearSettings = &mut k.items[a].settings_mut(n)[g];
             let mut bore = usize::from(s.bore == 2);
             choice_row(ui, "Bore", &format!("gear_bore_{a}_{g}"), &mut bore, &["Auto", "Ø"]).backing_on_hover_text(TIP_BORE);
             s.bore = if bore == 1 { 2 } else if s.bore == 2 { 0 } else { s.bore };
-            if s.bore == 2 {
+            if s.bore == 2 && !fused {
                 enter |= field(ui, "Bore Ø", &mut s.bore_d, "mm", TIP_BORE_D);
-            } else if let Some((block, d)) = &block_shaft
-                && s.bore == 0
-            {
-                ui_kit::caption(ui, "Bore", &format!("Auto: {d}, the shaft Ø of {block}"));
+            } else {
+                ui_kit::caption(ui, "Bore", &format!("Bore: {from}"));
             }
             let mut hub = s.hub;
             check_group(ui, &format!("hub:{}:{g}", item_id(a)), "Hub", &mut hub, TIP_HUB, |ui| {
@@ -1017,58 +1054,59 @@ fn shafts_tab(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [Sel
             s.hub = hub;
         });
     }
-    // The bearing points every shaft line carries: a seat each in the housing cutout.
-    let points: Vec<(usize, usize)> =
-        k.items.iter().enumerate().map(|(i, it)| (i, it.things(app).iter().filter(|x| matches!(x, solidcraft_gear::items::Thing::Point { .. })).count())).filter(|(_, n)| *n > 0).collect();
-    let total: usize = points.iter().map(|p| p.1).sum();
-    ui_kit::section(ui, "gear_bearing_points", &format!("Bearing points · {total}"), true, |ui| {
-        for (i, n) in &points {
-            ui_kit::value_row(ui, &format!("Gear {}", item_id(*i)), &format!("{n} point{}", if *n == 1 { "" } else { "s" }));
-        }
-        let said = if total == 0 {
-            "No bearing points yet: pick points on a gear's shaft line (or a Shaft gear's) on the Gears tab."
-        } else if k.cutout.on {
-            "Each gets a bearing seat in the housing cutout (Housing & Output tab)."
-        } else {
-            "Turn on the housing cutout (Housing & Output tab) for a bearing seat at each."
-        };
-        ui.add(egui::Label::new(egui::RichText::new(said).size(t.font_small).color(t.form_dim)).wrap());
-    });
     enter
 }
 
-/// The shafts the set makes, one row per axis: each block shaft (its gears, Ø × length, and its
-/// block), then each Shaft gear drawn by hand. With none, how to get them.
-fn shafts_made(ui: &mut egui::Ui, k: &mut Gear) {
+/// **Shafts**: the shafts (solid rods) the set makes, one row per axis: each block shaft ("Shaft
+/// S1": Ø × length, its gears, its block, fused or turning free), each shaft line on a block's
+/// axis that takes its Ø, then each Shaft drawn by hand. With none, how to get them.
+fn shafts_made(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear) {
     let t = Tokens::get();
     let drawn: Vec<usize> = (0..k.items.len()).filter(|i| k.items[*i].kind == ItemKind::Shaft).collect();
-    let n = k.block_shafts.iter().filter(|s| s.existing.is_none()).count() + drawn.len();
+    let ids = solidcraft_gear::blocks::shaft_ids(&k.block_shafts);
+    let n = ids.iter().flatten().count() + drawn.len();
     ui_kit::section(ui, "gear_shafts_made", &format!("Shafts · {n}"), true, |ui| {
-        let mut made = vec![0usize; k.links.blocks().len()];
-        for sh in &k.block_shafts {
+        for (sh, id) in k.block_shafts.iter().zip(&ids) {
             let gears = sh.gears.iter().map(|g| k.gear_name((g.item, g.gear))).collect::<Vec<_>>().join(" + ");
             let block = k.links.blocks().get(sh.block).map(|b| b.title(sh.block)).unwrap_or_default();
-            let name = match sh.existing {
-                Some(i) => format!("Gear {}'s line", item_id(i)),
-                None => {
-                    if let Some(m) = made.get_mut(sh.block) {
-                        *m += 1;
-                    }
-                    format!("Shaft {}", solidcraft_gear::blocks::shaft_id(&crate::dialogs_gear_links::block_id(sh.block), made.get(sh.block).copied().unwrap_or(1)))
-                }
+            let name = match (id, sh.existing) {
+                (Some(id), _) => format!("Shaft {id}"),
+                (None, Some(i)) => format!("Gear {}'s line", item_id(i)),
+                (None, None) => String::new(),
             };
-            let what = format!("Ø{} × {} mm · gears {gears} · from {block}", dg::fmt(sh.diameter), dg::fmt((sh.length() * 10.0).round() / 10.0));
+            // Fused: one body with the shaft; free: the engine bores it to turn on the shaft.
+            let free: Vec<String> = sh.gears.iter().filter(|g| dg::bore_of(app, k, &k.block_shafts, g.item, g.gear).1.starts_with("free")).map(|g| k.gear_name((g.item, g.gear))).collect();
+            let how = if free.is_empty() { "fused".to_string() } else { format!("{} turn free", free.join(", ")) };
+            let what = format!("Ø{} × {} mm · gears {gears} · {block} · {how}", dg::fmt(sh.diameter), dg::fmt((sh.length() * 10.0).round() / 10.0));
             ui_kit::row(ui, &name, |ui| ui.label(egui::RichText::new(what).size(t.font_small).color(dg::block_color(sh.block))))
-                .backing_on_hover_text("Made from the block's Shaft Ø: one body with the gears on this axis, each bored to it.");
+                .backing_on_hover_text("A shaft from the block's Make shaft: a solid rod along this axis, the gears on it fused to it (one body), so they have no bore.");
         }
         for i in &drawn {
             let d = k.items[*i].shaft_d.trim();
-            let what = format!("Ø{} · drawn as Shaft gear {}", if d.is_empty() { "auto" } else { d }, item_id(*i));
+            let what = format!("Ø{} · a drawn shaft line", if d.is_empty() { "auto" } else { d });
             ui_kit::value_row(ui, &format!("Shaft {}", item_id(*i)), &what);
         }
         if n == 0 && k.block_shafts.is_empty() {
-            let said = "No shafts yet. Easiest: on the Gears tab put the gears in a block and give it a Shaft Ø: each axis gets its shaft, joined to its gears. Or draw a shaft line and add a Shaft gear on it.";
+            let said = "No shafts yet. Easiest: on the Gears tab put the gears in a block, choose Make shaft and give its Ø: each axis gets a shaft, its gears fused to it. Or draw a shaft line and add a Shaft on it.";
             ui.add(egui::Label::new(egui::RichText::new(said).size(t.font_small).color(t.form_dim)).wrap());
+        }
+    });
+}
+
+/// **Gear bores**: the bore (the hole through the gear) of each gear, one row each: its Ø (or
+/// none) and where it comes from.
+fn gear_bores(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear) {
+    let t = Tokens::get();
+    let gears = k.all_gears();
+    ui_kit::section(ui, "gear_bores", &format!("Gear bores · {}", gears.len()), true, |ui| {
+        for (i, g) in gears {
+            if k.items.get(i).is_some_and(|it| it.kind == ItemKind::Shaft) {
+                continue;
+            }
+            let (d, from) = dg::bore_of(app, k, &k.block_shafts, i, g);
+            let d = d.map_or_else(|| "—".to_string(), |d| format!("Ø{}", dg::fmt(d)));
+            ui_kit::row(ui, &format!("Gear {}", k.gear_name((i, g))), |ui| ui.label(egui::RichText::new(format!("{d} · {from}")).size(t.font_small).color(t.form_ink)))
+                .backing_on_hover_text(TIP_BORE);
         }
     });
 }
@@ -1221,7 +1259,7 @@ fn housing_tab(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [Se
             enter |= field(ui, "Bearing bore", &mut k.cutout.bore, "optional", "Custom bearing bore; used to check it against the shaft (empty skips the check).");
         }
         let said = match points {
-            0 => "No bearing points yet: pick points on the gears' shaft lines (or a Shaft gear's) for the seats.".to_string(),
+            0 => "No bearing points yet: pick points on the gears' shaft lines (or a Shaft's) for the seats.".to_string(),
             1 => "1 bearing point: a seat there.".to_string(),
             n => format!("{n} bearing points: a seat at each."),
         };

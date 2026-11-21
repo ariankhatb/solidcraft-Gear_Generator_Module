@@ -23,7 +23,7 @@ It is a plain body: no component and no joint, so it doesn't take part in the mo
    **Bearing bore**.
 
 The line under the bearing says how many seats you will get: "No bearing points yet: pick points on
-the gears' shaft lines (or a Shaft gear's) for the seats.", "1 bearing point: a seat there." or
+the gears' shaft lines (or a Shaft's) for the seats.", "1 bearing point: a seat there." or
 "n bearing points: a seat at each."
 
 While the dialog is open the view previews the envelopes as translucent grey rings and each seat as

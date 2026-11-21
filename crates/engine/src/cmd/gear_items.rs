@@ -438,7 +438,15 @@ fn read_items(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemParams])
                 Some(x) if !(x.is_finite() && (0.0..10.0).contains(&x)) => return Err(bad(cmd, format!("`{what}.backlash` must be 0 or more (mm)"))),
                 v => v,
             },
-            shaft_diameter: positive(cmd, &format!("{what}.shaft_diameter"), b.shaft_diameter)?,
+            shaft_diameter: match b.shaft.as_deref().map(str::trim) {
+                Some("none") => None,
+                _ => positive(cmd, &format!("{what}.shaft_diameter"), b.shaft_diameter)?,
+            },
+            shaft: match b.shaft.as_deref().map(str::trim) {
+                None | Some("make" | "none") => gi::ShaftMode::Make,
+                Some("bore") => gi::ShaftMode::BoreOnly,
+                Some(t) => return Err(bad(cmd, format!("`{what}.shaft` must be make, bore or none, not `{t}`"))),
+            },
         };
         blocks.push(gi::ModuleBlock { id, module: positive(cmd, &format!("{what}.module"), b.module)?, members, settings });
     }

@@ -11,7 +11,7 @@ follows when you change the sketch.
 |---|---|---|
 | **Circle** (or arc) | A **pitch circle**. Centre = gear centre, diameter = pitch diameter, the sketch plane's normal = the gear's axis. | The drawn diameter is kept. Must be normal (not construction) geometry. |
 | **Line** | A **shaft line**: the gear's axis. Also a rack's pitch line, a worm's axis, a hypoid pinion's axis, or a bevel's shaft in a side view. | A construction line is a helper. Spur, helical, herringbone, compound and shaft gears refuse it as a shaft: "a construction line is a helper, not a shaft". |
-| **Point on a shaft line** | A **bearing point**: a bearing seat in the [housing cutout](housing-cutout.md). | Taken by spur, helical, herringbone, compound and Shaft gears, after their shaft line. |
+| **Point on a shaft line** | A **bearing point**: a bearing seat in the [housing cutout](housing-cutout.md). | Taken by spur, helical, herringbone, compound and Shafts, after their shaft line. |
 | **Point** where two shaft lines meet | A bevel pair's **apex** (side-view bevel). | Optional: two shaft lines that start at one common end are read as meeting there. |
 | **Smaller circle on a gear's centre**, inside its pitch circle, in the same plane | The gear's **bore** (the smaller) or **hub** (the larger). | Spur, helical, herringbone and compound gears only. At most one bore and one hub per gear. |
 

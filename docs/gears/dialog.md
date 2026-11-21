@@ -14,7 +14,7 @@ same layout on every tab:
 |---|---|---|
 | [Gears](#gears) | gear generator | Type and **New gear**, a card per gear, and the selected gear's size and face |
 | [Teeth](#teeth) | helical gear | The selected gear's helix (or bevel style) and profile shift; the tooth form and chamfer of every gear |
-| [Shafts & Bearings](#shafts--bearings) | bearing seat | The shaft made on each axis and from which block, the selected gear's bore and hub, a shaft's Ø, the bearing points |
+| [Shafts & Bores](#shafts--bores) | bearing seat | The shafts made (solid rods along an axis) and their bearing points; each gear's bore (the hole through it) and where it comes from; the selected gear's bore and hub |
 | [Links & Motion](#links--motion) | motion link | Meshes and shared shafts, suggested links, the drive, the ratio between two gears, the graph |
 | [Housing & Output](#housing--output) | housing cutout | The housing cutout and its bearing seats; operation, Targets, keep-out, assembly |
 | [Differential](#differential) | differential | Only while a ring gear carries a differential: its style, pinions, module, half-shafts and facts |
@@ -29,8 +29,8 @@ with a **checkbox** in place of the arrow (Tooth chamfer, Hub, Housing cutout, C
 Differential in the ring gear) is switched on by its checkbox, and its rows show,
 indented under a rule, only while it is on.
 
-**The selected gear.** The per-gear groups (Gears below the cards, Teeth, Shafts & Bearings) show
-the selected gear: the one whose card you clicked last. Teeth and Shafts & Bearings have a
+**The selected gear.** The per-gear groups (Gears below the cards, Teeth, Shafts & Bores) show
+the selected gear: the one whose card you clicked last. Teeth and Shafts & Bores have a
 **Gear** row at the top to choose another; choosing one there selects it, as clicking its card
 does, so your next picks in the view go to it. With **—** chosen, only the set's own groups show.
 An item that makes several gears (compound, pair, planetary, ring with pinion, rack with pinion)
@@ -92,7 +92,7 @@ One card per gear item, named **Gear A**, **Gear B**, … (after Z: A2, B2, …)
 - **×** to remove it (its links go too).
 
 **Click a card** to select the gear: your picks go to it and its settings show below the cards
-(and on Teeth and Shafts & Bearings). **Hover** a card to light its geometry in the view.
+(and on Teeth and Shafts & Bores). **Hover** a card to light its geometry in the view.
 
 While a card is selected (or incomplete) it shows a **checklist**:
 
@@ -131,7 +131,7 @@ one button, **Put all gears in one block**. Each block then shows its name in it
 | **Gears** | | A tick per gear: the gears in the block. A gear is in one block at most. |
 | **Name** | Block 1 | Its name, in the view and the lists. |
 | **Module** | auto | One module for every gear in the block, so they can mesh. |
-| **Shaft Ø** | none | Every gear in the block gets a bore of this Ø, and each axis the block's gears are on gets a shaft of this Ø, joined to the gears on it as **one body per axis**. The shaft runs over the gears' faces and a little past them (the Ø, at least 3 mm), or out to the bearing points on that axis. A line under the row says what is made ("2 shafts, bored into their gears: A + C (34 mm), B (22 mm)"). |
+| **Shaft** | Make shaft | What the block's Ø makes. **Make shaft**: a **shaft** (a solid rod) of the **Shaft Ø** along each axis the block's gears are on, the gears on it fused to it as **one body per axis**, so no bore is cut. The shaft runs over the gears' faces and a little past them (the Ø, at least 3 mm), or out to the bearing points on that axis. **Bore only**: every gear gets a **bore** (the hole through it) of the **Bore Ø**, and no shaft is made, for a rod of your own. **None**: the gears keep their own bores. A line under the row says what is made ("2 shafts, S1: A + C (34 mm), S2: B (22 mm). The gears on each are fused to it (one body): no bore."). A block saved with only a shaft Ø reads as Make shaft. |
 | **Face width** | each gear's | The whole face width of every gear in the block, half each side of the sketch plane. |
 | **More** (folded) | | **Helix angle**, **Pressure angle**, **Backlash**, **Tooth chamfer**: each for every gear in the block (the tooth chamfer in place of the set's). |
 
@@ -209,7 +209,7 @@ group's **Differential tab →** button opens it. Unticked, the differential goe
 | **V teeth (herringbone)** | off (on for Herringbone) | Two opposite helices meeting in the middle. Meshing gears both have V teeth, or neither. Needs a helix angle. |
 | **Profile shift** | worked out | Read only: the shift the planner chose to hold the drawn centre distance and clear undercut. |
 
-A Shaft gear says "A shaft has no teeth."
+A Shaft says "A shaft has no teeth."
 
 ### Tooth form · every gear
 
@@ -236,35 +236,46 @@ Unticking the group clears the size: no chamfer is made. The preview draws the c
 chamfered end: the tip circle stepped in by the size, a second circle the size back from the face,
 and short slanted lines between them.
 
-## Shafts & Bearings
+## Shafts & Bores
 
-![The Shafts & Bearings tab: bore, hub and the bearing points](img/tab-shafts.png)
+![The Shafts & Bores tab: bore, hub and the bearing points](img/tab-shafts.png)
+
+The tab keeps two things apart. A **shaft** is a solid rod made along an axis (its Ø, its length,
+its ends or bearing points). A **bore** is the hole through a gear (its Ø, where it comes from).
 
 ### Shafts · n
 
-One row per shaft the set makes: each block's shaft ("Shaft M1·1 — Ø8 × 34 mm · gears A + C ·
-from Block 1", in the block's colour), and each Shaft gear drawn by hand. With none, it says how to
-get them: put the gears in a block and give it a Shaft Ø.
+One row per shaft the set makes: each block shaft ("Shaft S1 — Ø8 × 34 mm · gears A + C · Block 1 ·
+fused", in the block's colour; a gear the engine leaves turning free on it is named there), a
+shaft line already on a block's axis that takes its Ø, and each Shaft drawn by hand. With none, it
+says how to get them: put the gears in a block and choose **Make shaft**. In the view each shaft is
+a bar in its block's colour labelled "Shaft S1 Ø8".
 
-**Gear** row: the gear these rows are for. A gear in a block with a Shaft Ø shows "Auto: 8 mm, the
-shaft Ø of Block 1" under its Bore row.
+### Bearing points · n
 
-### Gear X · Type
+The bearing points picked on the shaft lines ("Gear D · 2 points"), and what becomes of them: a
+bearing seat at each in the housing cutout when it is on (Housing & Output), or a hint to turn it
+on.
+
+### Gear bores · n
+
+One row per gear: its bore's Ø (or —) and where it comes from: **its own** (Bore Ø), **none:
+solid**, **Block 1 (Bore only)**, **auto** (its bore circle or shaft line), **fused to shaft S1:
+one body, no bore**, or **free on shaft S1** with the bore the engine cuts for it to turn. In the
+view each bore cut is a dashed white ring labelled "Bore Ø8".
+
+**Gear** row: the gear the group below is for.
+
+### Gear X · Type · bore and hub
 
 | Row | Default | Meaning |
 |---|---|---|
-| **Shaft Ø** (Shaft gears) | auto | Shaft diameter (the same row as on the Gears tab). |
-| **Bore** | Auto | Auto or Ø. **Auto** fits the shaft when a shaft line is picked; otherwise no hole, unless a bore circle is drawn. **Ø** shows **Bore Ø** (mm) and cuts that hole. A drawn bore circle wins over this setting. A bore (Ø or drawn) means the gear goes on a shaft of its own, so no shaft stub is built from its shaft line; a compound keeps a sleeve between its layers, bored through. |
+| **Shaft Ø** (a Shaft) | auto | The shaft's diameter (the same row as on the Gears tab). |
+| **Bore** | Auto | Auto or Ø. **Auto**: a drawn bore circle, else a bore that fits the shaft line when one is picked, else the block's Bore only Ø, else no hole; on a made shaft none (fused). The caption says which. **Ø** shows **Bore Ø** (mm) and cuts that hole. A drawn bore circle wins over this setting. A bore (Ø or drawn) means the gear goes on a shaft of its own, so no shaft stub is built from its shaft line; a compound keeps a sleeve between its layers, bored through. |
 | **Hub** (checkbox group) | off | A boss on the gear's face. **Hub Ø** (mm; auto: 1.6 × the bore, or about half the root Ø with no bore), **Length A** and **Length B** (mm past the face on each side; both 0: half the face width on side A). A drawn hub circle gives the Ø. |
 
 A bore at or past the tooth roots is left out with a warning; a hub wider than the roots gets a
 warning.
-
-### Bearing points · n
-
-The bearing points picked on each gear's shaft line ("Gear D · 2 points"), and what becomes of
-them: a bearing seat at each in the housing cutout when it is on (Housing & Output), or a hint to
-turn it on.
 
 ## Links & Motion
 
@@ -326,8 +337,8 @@ and only in a build whose engine takes a differential (the item's `differential`
 | **Style** | Open | **Open** (bevel side gears and spider pinions), **Biased** (uneven side gears: it biases torque), **Torsen B** (helical elements, a planetary), **Torsen A** (worm elements). The caption gives the full name. |
 | **Pinions** (Open, Biased) / **Element pairs** (Torsen) | auto: 2 (Torsen B: 3) | Spider pinions on the case, 1 to 6; element gear pairs, 1 to 8. |
 | **Module** | auto | The side gears' and pinions' module (mm). Auto: the largest whose case is at most 0.6 × the ring's pitch Ø. |
-| Half-shafts › **Length** | auto: 1.5 × ring Ø | Each half-shaft's reach from the differential's middle along the ring's axis (or to the ends of a Shaft gear drawn on that axis). |
-| Half-shafts › **Ø** | auto | The half-shafts' diameter: that Shaft gear's, else 0.4 × the side gears' pitch Ø. |
+| Half-shafts › **Length** | auto: 1.5 × ring Ø | Each half-shaft's reach from the differential's middle along the ring's axis (or to the ends of a Shaft drawn on that axis). |
+| Half-shafts › **Ø** | auto | The half-shafts' diameter: that Shaft's, else 0.4 × the side gears' pitch Ø. |
 
 **Facts · n** lists what the planner worked out for it (module, side gear and pinion teeth, case
 size, bearings, pins, half-shaft lengths, ring bolts), and any message about it, such as a ring

@@ -2199,17 +2199,12 @@ struct Preview {
 fn items_preview(app: &SolveApp, k: &Gear) -> Preview {
     let at = |c: [f64; 3], d: [f64; 3], s: f64| [0, 1, 2].map(|i| c[i] + d[i] * s);
     let replies = k.links.replies();
-    let geoms: Vec<(gi::GearItem, Vec<gi::GearGeom>)> = k
-        .items
-        .iter()
-        .enumerate()
-        .map(|(i, it)| {
-            let ci = it.crate_item(app, &crate::dialogs_gear_links::item_id(i));
-            let g = gi::gear_geoms(&ci);
-            (ci, g)
-        })
-        .collect();
     let blocks = k.links.crate_blocks(app);
+    let crate_items: Vec<gi::GearItem> = k.items.iter().enumerate().map(|(i, it)| it.crate_item(app, &crate::dialogs_gear_links::item_id(i))).collect();
+    // Each gear where it will be built: sized with its block's settings, as the engine sizes it
+    // (a side view's bevel pair at its block's module).
+    let sized = solidcraft_gear::blocks::with_blocks(&crate_items, &blocks);
+    let geoms: Vec<(gi::GearItem, Vec<gi::GearGeom>)> = crate_items.into_iter().zip(&sized).map(|(ci, s)| (ci, gi::gear_geoms(s))).collect();
     let (mut lines, mut contacts, mut arrows) = (Vec::new(), Vec::new(), Vec::new());
     let mut faces = BTreeMap::new();
     let mut tip_ends: Vec<TipEnd> = Vec::new();

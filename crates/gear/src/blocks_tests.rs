@@ -192,3 +192,21 @@ fn a_gear_the_links_turn_at_another_speed_turns_free_on_its_blocks_shaft() {
     let e = expand_blocks(&items, &[mesh(g(0, 0), g(1, 0))], &blocks);
     assert_eq!(e.shafts[0].gears, vec![g(0, 0), g(2, 0)]);
 }
+
+/// A bevel pair drawn as a side view (two shaft lines meeting, no circle) in a block takes the
+/// block's module for its size: 15 and 30 teeth at the block's module 1.25 are Ø18.75 and Ø37.5,
+/// not Ø30 and Ø60 at the stand-in module 2 (which then couldn't be met: "15 teeth at module
+/// 1.25 make Ø18.75, not the Ø30").
+#[test]
+fn a_side_view_bevel_pair_in_a_block_is_sized_at_the_blocks_module() {
+    let mut e = GearItem::new("E", ItemKind::Bevel).with(vec![Thing::line([0.0; 3], [0.0, 0.0, 60.0]), Thing::line([0.0; 3], [60.0, 0.0, 0.0])]);
+    e.gears = vec![GearSettings { teeth: Some(15), size_by: crate::items::SizeBy::Teeth, ..GearSettings::default() }, GearSettings { teeth: Some(30), size_by: crate::items::SizeBy::Teeth, ..GearSettings::default() }];
+    let blocks = [ModuleBlock { id: "M1".into(), module: Some(1.25), members: vec![0], ..ModuleBlock::default() }];
+    let sized = with_blocks(std::slice::from_ref(&e), &blocks);
+    let geoms = gear_geoms(&sized[0]);
+    assert!(close(2.0 * geoms[0].radius.unwrap(), 18.75, 1e-9) && close(2.0 * geoms[1].radius.unwrap(), 37.5, 1e-9), "{geoms:?}");
+    let (sp, _) = planned(&[e], &[], &blocks);
+    let got: Vec<(u32, f64, f64)> = sp.gears.iter().map(|r| (r.teeth, r.module, r.pitch_d)).collect();
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert!(got.iter().zip([(15, 18.75), (30, 37.5)]).all(|(g, (z, d))| g.0 == z && close(g.1, 1.25, 1e-9) && close(g.2, d, 1e-6)), "{got:?}");
+}

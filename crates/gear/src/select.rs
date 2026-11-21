@@ -60,7 +60,20 @@ fn sized(who: &str, d: f64, helix_deg: f64, module: Option<f64>, teeth: Option<u
         (Some(m), Some(z)) => {
             let got = m * f64::from(z) / cb;
             if (got - d).abs() > 1e-6 * d.max(1.0) {
-                return Err(format!("{who}: {z} teeth at module {} make Ø{}, not the Ø{} asked: give two of pitch diameter, teeth and module", num(m), num(got), num(d)));
+                // The pitch circle is the one drawn: say so, and what fits it.
+                let fit = d * cb / m;
+                let teeth_fit = if (fit - fit.round()).abs() < 1e-6 && fit.round() >= 3.0 {
+                    format!("set {} teeth ({} × module {} = Ø{})", fit.round(), fit.round(), num(m), num(d))
+                } else {
+                    format!("set module {} for {z} teeth", num(d * cb / f64::from(z.max(1))))
+                };
+                return Err(format!(
+                    "{who}: its pitch circle is Ø{} as drawn, but {z} teeth at module {} make Ø{} (gears that mesh share one module): {teeth_fit}, or redraw the circle Ø{}",
+                    num(d),
+                    num(m),
+                    num(got),
+                    num(got)
+                ));
             }
             Ok((m, z))
         }

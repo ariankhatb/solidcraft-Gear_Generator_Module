@@ -84,6 +84,16 @@ pub fn with_blocks(items: &[GearItem], blocks: &[ModuleBlock]) -> Vec<GearItem> 
             let mut out = it.clone();
             let n = it.gear_count().max(it.gears.len()).max(1);
             out.gears = (0..n).map(|g| block_settings(b, it.kind, &it.settings(g))).collect();
+            // A bevel pair drawn as a side view is sized from its gears' teeth and module (no
+            // circle gives its size): the block's module is theirs, or it is sized at the
+            // stand-in module and its teeth can't be met at the block's.
+            if crate::items::sized_by_settings(it.kind, &it.things)
+                && let Some(m) = blocks[k].module.filter(|m| *m > 0.0 && m.is_finite())
+            {
+                for g in &mut out.gears {
+                    g.module = Some(m);
+                }
+            }
             if out.shaft_diameter.is_none() && b.shaft == ShaftMode::Make {
                 out.shaft_diameter = positive(b.shaft_diameter);
             }

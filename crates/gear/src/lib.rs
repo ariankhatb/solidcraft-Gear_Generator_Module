@@ -42,6 +42,7 @@
 
 pub mod analysis;
 pub mod axes;
+pub mod blocks;
 pub mod body;
 pub mod clearance;
 pub mod coupon;
@@ -87,6 +88,8 @@ mod analysis_tests;
 mod diff_tests;
 #[cfg(test)]
 mod axes_tests;
+#[cfg(test)]
+mod blocks_tests;
 #[cfg(test)]
 mod accuracy_tests;
 #[cfg(test)]

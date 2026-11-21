@@ -28,6 +28,7 @@ use std::f64::consts::{PI, TAU};
 
 use crate::analysis::{Efficiencies, MeshKind, StepKind, classify, drive_table, plan_mesh_checks};
 use crate::axes::{Axis, add, cross, dot, len, mul, num, square_to, sub, unit};
+use crate::blocks::block_spec;
 use crate::drivetrain::{self as dt, Outcome};
 use crate::geom::{Outline, Region, V2};
 use crate::items::{
@@ -458,7 +459,7 @@ fn plan_units(items: &[GearItem], st: &[Stage], mapped: &crate::items::Mapped, b
     };
     for r in roots {
         let gears: Vec<GearRef> = (0..in_train.len()).filter(|x| find(&group, *x) == r).map(|x| in_train[x]).collect();
-        match train_unit(items, &gears, mapped, base) {
+        match train_unit(items, &gears, mapped, &block_spec(blocks, &gears, base)) {
             Ok(u) => units.push(u),
             Err(e) => fail(err, &gears, None, e),
         }
@@ -479,8 +480,8 @@ fn plan_units(items: &[GearItem], st: &[Stage], mapped: &crate::items::Mapped, b
     }
     for (k, s) in st.iter().enumerate() {
         let made = match s.kind {
-            StageKind::Planetary => planetary_unit(items, s, blocks, base),
-            StageKind::Rack => rack_unit(items, s, blocks, base),
+            StageKind::Planetary => planetary_unit(items, s, blocks, &block_spec(blocks, &s.gears, base)),
+            StageKind::Rack => rack_unit(items, s, blocks, &block_spec(blocks, &s.gears, base)),
             _ => continue,
         };
         match made {
@@ -489,7 +490,7 @@ fn plan_units(items: &[GearItem], st: &[Stage], mapped: &crate::items::Mapped, b
         }
     }
     for (k, s) in st.iter().enumerate().filter(|(_, s)| is_pair(s.kind)) {
-        match pair_unit(items, s, mapped, base, &planned) {
+        match pair_unit(items, s, mapped, &block_spec(blocks, &s.gears, base), &planned) {
             Ok(u) => {
                 note(&mut planned, &u);
                 units.push(u);

@@ -1131,19 +1131,38 @@ pub struct GearLinkParams {
     pub kind: Option<String>,
 }
 
-/// Items sharing one module (a value, or null: Auto, one for all): the items naming it in their
-/// `module_block`, and those in `members`.
+/// A block: items sharing one module (a value, or null: Auto, one for all): the items naming it
+/// in their `module_block`, and those in `members`. Its other settings (each optional) go on
+/// every member gear that gives none of its own: `tooth_chamfer` (mm, over the set's),
+/// `pressure_angle`, `helix_angle` (deg), `face_width`, `backlash` (mm) and `shaft_diameter`
+/// (mm: every member's bore, and a shaft of that Ø along each axis its gears are on, one body
+/// with them).
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct GearModuleBlockParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// Its name for people (the dialog's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default)]
     pub module: Option<f64>,
     /// Items by id or index.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub members: Option<Vec<Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tooth_chamfer: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pressure_angle: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub helix_angle: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backlash: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shaft_diameter: Option<f64>,
 }
 
 /// The gear that is turned (the assembly is driven from it) and, optionally, its speed (rpm)

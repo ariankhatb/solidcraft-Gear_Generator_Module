@@ -1002,6 +1002,65 @@ pub fn loft(sections: &[(Plane, Loop2)]) -> Result<Body> {
     loft_with_rails(sections, &[], RailFit::Scale)
 }
 
+/// [`loft`] through sections whose segments already correspond one to one: each section has as
+/// many segments as the first, wound the same way about the normal they share, and segment `i` of
+/// each runs to segment `i` of the next, which is the start the matching would choose (no other
+/// start lines the sections' vertices up better: the largest sum of dot products of their
+/// directions from the centroids, as [`resplit_numbered_loops`] starts a section). Such sections
+/// are lofted as given, without solidcore's pairing of their vertices
+/// ([`solidcore_ops::sweep::match_loft_sections`]), whose search over every start of every pair
+/// of sections takes most of a loft through sections of hundreds of segments (a hypoid's teeth,
+/// a minute and more). Any other sections go to [`loft`].
+pub fn loft_corresponding(sections: &[(Plane, Loop2)]) -> Result<Body> {
+    let _span = solidcraft_profile::span("kernel", "loft_corresponding");
+    let reversed = loft_reversed(sections)?;
+    for (_, l) in sections {
+        region_ok(&Region2 { outer: l.clone(), holes: Vec::new() })?;
+    }
+    if !corresponding(sections) {
+        return loft(sections);
+    }
+    let mut numbered = sections.iter().map(|(p, _)| *p).zip(numbered::number_loops(sections.iter().map(|(_, l)| l))).collect::<Vec<_>>();
+    if reversed {
+        numbered.reverse();
+    }
+    let pieces: Vec<(Plane, Vec<crate::smlib_sweeps::Piece>)> = numbered.iter().map(|(p, l)| (*p, crate::smlib_sweeps::pieces([l]))).collect();
+    if pieces.iter().map(|(_, p)| p.len()).sum::<usize>() > solidcraft_smlib::sweeps::MAX_CURVES {
+        return loft(sections);
+    }
+    let first = if reversed { pieces.len().saturating_sub(1) } else { 0 };
+    crate::smlib_sweeps::loft(&pieces, first)
+}
+
+/// Whether [`loft_corresponding`] may loft `sections` as given: the same number of segments in
+/// each (none of no length), the same winding about the first plane's normal, and each section
+/// started where its vertices line up best with the section before it's.
+fn corresponding(sections: &[(Plane, Loop2)]) -> bool {
+    let Some((p0, l0)) = sections.first() else { return false };
+    let m = l0.segs.len();
+    let normal = p0.normal();
+    let winding = |p: &Plane, l: &Loop2| l.is_ccw() == (p.normal().dot(normal) > 0.0);
+    let first = winding(p0, l0);
+    if m < 2 || sections.iter().any(|(p, l)| l.segs.len() != m || winding(p, l) != first || l.segs.iter().any(|s| !(s.length() > 0.0))) {
+        return false;
+    }
+    let dirs = |p: &Plane, l: &Loop2| -> Vec<Vec3> {
+        let c = p.to_world(l.centroid());
+        l.segs.iter().map(|s| p.to_world(s.start()) - c).collect()
+    };
+    let mut before = dirs(p0, l0);
+    for (p, l) in &sections[1..] {
+        let here = dirs(p, l);
+        let fit = |k: usize| -> f64 { before.iter().enumerate().map(|(i, d)| d.dot(here[(i + k) % m])).sum() };
+        let own = fit(0);
+        if (1..m).any(|k| fit(k) > own + 1e-9 * own.abs()) {
+            return false;
+        }
+        before = here;
+    }
+    true
+}
+
 /// [`loft`] following one or two guide rails (polylines from the first section to the last,
 /// through every section's curve; see [`crate::loft_rails`]), `fit` saying how they reshape the
 /// sections between. Without rails, the plain loft.

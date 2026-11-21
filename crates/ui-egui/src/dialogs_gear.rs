@@ -2339,7 +2339,15 @@ fn items_preview(app: &SolveApp, k: &Gear) -> Preview {
         links.push(LinkLine { link: l, points, at: label_at, label, block, suggested: only_suggested, error });
     }
     let items: Vec<gi::GearItem> = geoms.iter().map(|g| g.0.clone()).collect();
-    let shafts = solidcraft_gear::blocks::block_shafts(&items, &blocks);
+    // With the dialog's links, as the engine plans them: a gear they turn at another speed is
+    // free on its block's shaft.
+    let item_links: Vec<gi::ItemLink> = k
+        .links
+        .all()
+        .into_iter()
+        .filter_map(|(a, ag, b, bg, kind)| Some(gi::ItemLink { a: gi::GearRef::new(a, ag), b: gi::GearRef::new(b, bg), kind: gi::LinkKind::parse(kind)? }))
+        .collect();
+    let shafts = solidcraft_gear::blocks::block_shafts_linked(&items, &item_links, &blocks);
     // Each bore cut (a gear fused to its shaft has none).
     let mut bores = Vec::new();
     for (i, (_, gs)) in geoms.iter().enumerate() {

@@ -4272,6 +4272,9 @@ pub(crate) fn card_width(d: &Dialog) -> f32 {
         t.form_card_width + t.form_label_width + t.space_6
     } else if matches!(&d.kind, Kind::Motion(k) if k.wide()) {
         t.form_card_width * 3.0
+    } else if matches!(d.kind, Kind::Gear(_)) {
+        // The Gears dialog: room for its cards, its blocks' fields two to a row and its lists.
+        t.form_card_width * 2.0
     } else {
         t.form_card_width
     }

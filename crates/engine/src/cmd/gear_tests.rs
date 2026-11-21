@@ -1743,3 +1743,51 @@ fn a_compound_from_two_sketches_on_parallel_planes_and_a_shaft_in_a_third() {
     let st = run(&mut s, "gear.inspect", json!({"group": group}));
     assert_eq!(st["sets"][0]["sketch_changed"], false, "{st}");
 }
+
+/// A block with a shaft Ø: every gear in it bored to that Ø, and a shaft along each axis its
+/// gears are on, one body with the gears on it (A and C on one axis, B on its own).
+#[test]
+fn a_blocks_shaft_diameter_makes_one_body_per_axis() {
+    let mut s = Session::default();
+    let sk = |s: &mut Session, z: f64, draw: &[(&str, Value)]| {
+        let id = run(s, "sketch.create", json!({"plane": {"origin": [0.0, 0.0, z], "x_dir": [1.0, 0.0, 0.0], "y_dir": [0.0, 1.0, 0.0]}, "project_edges": false}))["sketch"].as_u64().unwrap();
+        for (c, p) in draw {
+            run(s, c, p.clone());
+        }
+        run(s, "sketch.finish", json!({}));
+        id
+    };
+    let s1 = sk(&mut s, 0.0, &[circle(0.0, 0.0, 20.0, "a"), circle(50.0, 0.0, 30.0, "b")]);
+    let s2 = sk(&mut s, 25.0, &[circle(0.0, 0.0, 10.0, "c")]);
+    let item = |id: &str, sketch: u64, curve: &str| json!({"id": id, "type": "spur", "components": [{"sketch": sketch, "curve": curve, "slot": "pitch"}]});
+    let r = run(
+        &mut s,
+        "gear.create",
+        json!({"items": [item("A", s1, "a"), item("B", s1, "b"), item("C", s2, "c")],
+               "links": [{"a": {"item": "A"}, "b": {"item": "B"}, "kind": "mesh"}],
+               "module_blocks": [{"id": "M1", "name": "Main", "module": 2, "members": ["A", "B", "C"], "shaft_diameter": 8}]}),
+    );
+    no_errors(&s);
+    let bodies: Vec<String> = r["bodies"].as_array().unwrap().iter().map(|b| b.as_str().unwrap().to_string()).collect();
+    assert_eq!(bodies.len(), 2, "one body per axis: {bodies:?}");
+    // The replies are the request's gears only, each bored to the shaft Ø, A and C in one body.
+    let gears = r["gears"].as_array().unwrap();
+    assert_eq!(gears.len(), 3, "{r}");
+    assert!(gears.iter().all(|g| g["bore"].as_f64() == Some(8.0)), "{r}");
+    let body = |item: &str| gears.iter().find(|g| g["item"] == item).and_then(|g| g["body"].as_str()).unwrap().to_string();
+    assert_eq!(body("A"), body("C"));
+    assert_ne!(body("A"), body("B"));
+    // Each shaft runs over its gears' faces (module 2: 10 mm each side) and its Ø past them: at
+    // Ø8 A and C's from z −18 to 43 (21 mm of it outside the two gears), B's from −18 to 18 (16
+    // mm outside); at Ø6, 17 and 12 mm outside. A body is its gears bored to the shaft Ø plus
+    // the bar, so the two differ by π (4² × the Ø8 bar's outside length − 3² × the Ø6 one's).
+    let (a8, b8) = (volume(&mut s, &body("A")), volume(&mut s, &body("B")));
+    let group = r["group"].as_u64().unwrap();
+    run(&mut s, "gear.update", json!({"group": group, "module_blocks": [{"id": "M1", "name": "Main", "module": 2, "members": ["A", "B", "C"], "shaft_diameter": 6}]}));
+    no_errors(&s);
+    let (a6, b6) = (volume(&mut s, &body("A")), volume(&mut s, &body("B")));
+    let pi = std::f64::consts::PI;
+    for (what, d, want) in [("A and C", a8 - a6, pi * (16.0 * 21.0 - 9.0 * 17.0)), ("B", b8 - b6, pi * (16.0 * 16.0 - 9.0 * 12.0))] {
+        assert!((d - want).abs() < 0.03 * want, "{what}: {d} vs {want}");
+    }
+}

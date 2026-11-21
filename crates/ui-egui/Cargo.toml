@@ -9,7 +9,6 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-egui-snarl = { workspace = true }
 solidcraft-viewport-egui = { workspace = true }
 solidcraft-viewport-gpu = { workspace = true }
 solidcraft-viewport = { workspace = true }

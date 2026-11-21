@@ -33,9 +33,9 @@ const EVALUATION_FILES: [&str; 10] = [
 /// The committed trees whose every file computes models, hashed as one tree id each: the vendored
 /// kernel, so any change under `solidcore/` invalidates the models the old kernel computed.
 const EVALUATION_TREES: [&str; 1] = ["solidcore"];
-/// What under `vendor/` does not compute models: notes, the interface's renderer, and the Gears
-/// dialog's node graph. The kernel is not under `vendor/`; it is `solidcore/`, in [`EVALUATION_TREES`].
-const VENDOR_OUTSIDE: [&str; 4] = ["README.md", "egui-wgpu", "egui-snarl", "egui-scale"];
+/// What under `vendor/` does not compute models: notes and the interface's renderer. The kernel is
+/// not under `vendor/`; it is `solidcore/`, in [`EVALUATION_TREES`].
+const VENDOR_OUTSIDE: [&str; 2] = ["README.md", "egui-wgpu"];
 
 fn git(root: &Path, args: &[&str]) -> Option<String> {
     let out = Command::new("git").arg("-C").arg(root).args(args).output().ok()?;

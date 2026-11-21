@@ -289,8 +289,8 @@ fn incomplete_item_is_named() {
 fn module_block_wins_over_own_module() {
     let own = GearSettings { module: Some(1.5), ..GearSettings::default() };
     let blocks = vec![
-        ModuleBlock { id: "M1".into(), module: Some(2.0), members: vec![0, 2] },
-        ModuleBlock { id: "M2".into(), module: None, members: vec![3] },
+        ModuleBlock { id: "M1".into(), module: Some(2.0), members: vec![0, 2], ..Default::default() },
+        ModuleBlock { id: "M2".into(), module: None, members: vec![3], ..Default::default() },
     ];
     assert_eq!(resolve_module(&blocks, 0, &own), ModuleChoice { module: Some(2.0), from: ModuleFrom::Block(0) });
     assert_eq!(resolve_module(&blocks, 3, &own), ModuleChoice { module: None, from: ModuleFrom::Block(1) });
@@ -511,7 +511,7 @@ fn mapping_carries_modules_faces_and_meshes() {
     a.gears =
         vec![GearSettings { module: Some(1.0), face: FaceSides { preset: FacePreset::AOnly, a: Some(6.0), b: None }, ..GearSettings::default() }];
     let b = item("B", ItemKind::Spur, vec![circ([30.0, 0.0, 0.0], Z, 20.0)]);
-    let blocks = vec![ModuleBlock { id: "M1".into(), module: Some(2.0), members: vec![1] }];
+    let blocks = vec![ModuleBlock { id: "M1".into(), module: Some(2.0), members: vec![1], ..Default::default() }];
     let m = to_drivetrain(&[a, b], &[mesh((0, 0), (1, 0))], &blocks);
     assert!(!m.inferred);
     assert!(m.errors.is_empty(), "{:?}", m.errors);

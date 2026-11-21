@@ -423,7 +423,24 @@ fn read_items(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemParams])
         members.extend(list.iter().enumerate().filter(|(_, it)| it.module_block.as_deref() == Some(id.as_str())).map(|(i, _)| i));
         members.sort_unstable();
         members.dedup();
-        blocks.push(gi::ModuleBlock { id, module: positive(cmd, &format!("{what}.module"), b.module)?, members });
+        let angle = |name: &str, v: Option<f64>| -> Result<Option<f64>> {
+            match v {
+                Some(x) if !(x.is_finite() && x.abs() < 90.0) => Err(bad(cmd, format!("`{what}.{name}` must be an angle under 90 (degrees)"))),
+                _ => Ok(v),
+            }
+        };
+        let settings = gi::BlockSettings {
+            tooth_chamfer: positive(cmd, &format!("{what}.tooth_chamfer"), b.tooth_chamfer.filter(|c| *c != 0.0))?,
+            pressure_angle: angle("pressure_angle", b.pressure_angle)?.filter(|a| *a > 0.0),
+            helix: angle("helix_angle", b.helix_angle)?,
+            face_width: positive(cmd, &format!("{what}.face_width"), b.face_width)?,
+            backlash: match b.backlash {
+                Some(x) if !(x.is_finite() && (0.0..10.0).contains(&x)) => return Err(bad(cmd, format!("`{what}.backlash` must be 0 or more (mm)"))),
+                v => v,
+            },
+            shaft_diameter: positive(cmd, &format!("{what}.shaft_diameter"), b.shaft_diameter)?,
+        };
+        blocks.push(gi::ModuleBlock { id, module: positive(cmd, &format!("{what}.module"), b.module)?, members, settings });
     }
     for (i, it) in list.iter().enumerate() {
         if let Some(b) = &it.module_block
@@ -519,7 +536,12 @@ fn name_bodies(sp: &mut SystemPlan, ids: &[String], items: &[gi::GearItem]) {
 /// The set `items` asks for: the items read, planned whole. `Err` when the request can't be
 /// read; a drivetrain that can't be built comes back with [`SystemPlan::error`] set.
 pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemParams]) -> Result<(Items, Plan, Spec)> {
-    let ReadItems { ids, items, links, blocks, drive, details } = read_items(s, cmd, p, list)?;
+    let ReadItems { mut ids, items, links, blocks, drive, details } = read_items(s, cmd, p, list)?;
+    // The blocks' settings on their members, and each block shaft a Shaft item of its own (after
+    // the request's items, which keep their indices; left out of the replies).
+    let asked = items.len();
+    let solidcraft_gear::blocks::Expanded { items, links, added, .. } = solidcraft_gear::blocks::expand_blocks(&items, &links, &blocks);
+    ids.extend(added.iter().map(|i| items[*i].id.clone()));
     let mut base = spec_of(&GearParams { kind: Some(GearType::Spur), items: None, links: None, module_blocks: None, drive: None, ..p.clone() }).map_err(|e| bad(cmd, e))?;
     if let Some(gap) = p.keep_out_gap
         && !(gap.is_finite() && (0.0..1e3).contains(&gap))
@@ -545,13 +567,20 @@ pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemPar
     extra.suggested = suggest_details(s, &ids, &items, &details, &wanted);
     if system.error.is_none() {
         extra.built = apply_details(&items, &wanted, &mut system);
-        if let Some(tc) = &p.tooth_chamfer {
+        {
             use solidcraft_gear::plan::chamfer::{ChamferFaces, ToothChamfer, tooth_chamfer};
-            let faces = ChamferFaces::parse(tc.faces.as_deref().unwrap_or("both")).ok_or_else(|| bad(cmd, "`tooth_chamfer.faces` must be \"both\", \"a\" or \"b\""))?;
-            if !(tc.size.is_finite() && tc.size >= 0.0) {
+            let tc = p.tooth_chamfer.as_ref();
+            let faces = ChamferFaces::parse(tc.and_then(|t| t.faces.as_deref()).unwrap_or("both")).ok_or_else(|| bad(cmd, "`tooth_chamfer.faces` must be \"both\", \"a\" or \"b\""))?;
+            if let Some(tc) = tc
+                && !(tc.size.is_finite() && tc.size >= 0.0)
+            {
                 return Err(bad(cmd, "`tooth_chamfer.size` must be 0 or more (mm)"));
             }
-            tooth_chamfer(&items, &mut system, ToothChamfer { size: tc.size, faces }).map_err(|e| bad(cmd, e))?;
+            // The set's chamfer on the gears in no block with one of its own; each block's on its members.
+            for (size, on) in solidcraft_gear::blocks::chamfer_groups(asked, &blocks, tc.map(|t| t.size)) {
+                let only = solidcraft_gear::blocks::only_items(&items, &on);
+                tooth_chamfer(&only, &mut system, ToothChamfer { size, faces }).map_err(|e| bad(cmd, e))?;
+            }
         }
         name_bodies(&mut system, &ids, &items);
         if keep_out {
@@ -567,6 +596,10 @@ pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemPar
             }
         }
     }
+    // The block shafts are the blocks': the replies are the request's items'.
+    system.gears.retain(|g| g.item < asked);
+    system.links.retain(|l| l.a.item < asked && l.b.item < asked);
+    system.suggestions.retain(|x| x.a.item < asked && x.b.item < asked);
     let plan = std::mem::take(&mut system.plan);
     Ok((Items { ids, system, extra }, plan, base))
 }

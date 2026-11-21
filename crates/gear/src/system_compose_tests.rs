@@ -378,7 +378,7 @@ fn a_ring_whose_pinion_is_in_a_cluster_keeps_its_space_for_the_pinion() {
     let mut r = item("R", ItemKind::Internal, vec![circ(at(153.0, -90.0), Z, 50.0), circ(at(123.0, -90.0), Z, 20.0)]);
     r.gears = vec![GearSettings { rim: Some(6.0), ..GearSettings::default() }];
     let links = vec![mesh(g(0, 0), g(1, 0)), shaft(g(1, 0), g(2, 1))];
-    let blocks = vec![ModuleBlock { id: "M".into(), module: Some(1.5), members: vec![0, 1] }, ModuleBlock { id: "M2".into(), module: Some(2.0), members: vec![2] }];
+    let blocks = vec![ModuleBlock { id: "M".into(), module: Some(1.5), members: vec![0, 1], ..Default::default() }, ModuleBlock { id: "M2".into(), module: Some(2.0), members: vec![2], ..Default::default() }];
     let sp = plan_items(&[e, f, r], &links, &blocks, None, &Spec::default()).unwrap();
     assert!(sp.error.is_none(), "{:?}", sp.error);
     let (ring, cluster) = (sp.body(g(2, 0)).unwrap(), sp.body(g(2, 1)).unwrap());

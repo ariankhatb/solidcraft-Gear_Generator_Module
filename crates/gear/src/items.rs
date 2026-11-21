@@ -3,8 +3,9 @@
 //!
 //! A drivetrain is a list of [`GearItem`]s. Each item has a type ([`ItemKind`]), the geometry
 //! picked into its slots ([`Thing`]s, in world coordinates) and one [`GearSettings`] per gear it
-//! makes. The node graph adds [`ItemLink`]s between gears (Mesh or Shaft) and [`ModuleBlock`]s
-//! (gears sharing one module); a [`Drive`] names the gear that is turned.
+//! makes. The dialog's links add [`ItemLink`]s between gears (Mesh or Shaft) and [`ModuleBlock`]s
+//! (gears sharing one module and, optionally, more settings: [`crate::blocks`]); a [`Drive`]
+//! names the gear that is turned.
 //!
 //! - [`slots`] / [`assign`] / [`validate_slot`]: which geometry an item type takes, and every
 //!   geometric check on a pick (refusals say what is wrong and what to do, §5).
@@ -479,13 +480,31 @@ impl ItemLink {
     }
 }
 
-/// Items whose gears share one module (`None`: Auto, one for all).
+/// Items whose gears share one module (`None`: Auto, one for all) and, optionally, the rest of
+/// [`BlockSettings`] ([`crate::blocks`]: a member's own value wins, else the block's).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ModuleBlock {
     pub id: String,
     pub module: Option<f64>,
     /// Indices into the items.
     pub members: Vec<usize>,
+    pub settings: BlockSettings,
+}
+
+/// What a block gives every gear in it besides its module (each `None`: the gear's own, or
+/// Auto). Lengths in mm, angles in degrees.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BlockSettings {
+    /// A 45° tooth chamfer on every member gear that takes one (over the set's).
+    pub tooth_chamfer: Option<f64>,
+    pub pressure_angle: Option<f64>,
+    pub helix: Option<f64>,
+    /// The whole face width, half each side of the sketch plane.
+    pub face_width: Option<f64>,
+    pub backlash: Option<f64>,
+    /// Every member gear's bore, and a shaft of this Ø along each axis the members are on
+    /// ([`crate::blocks::block_shafts`]).
+    pub shaft_diameter: Option<f64>,
 }
 
 /// The gear that is turned, and optionally how fast and how hard.

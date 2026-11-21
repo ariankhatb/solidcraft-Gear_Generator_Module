@@ -63,7 +63,7 @@ pub mod dialogs_part_size;
 pub mod dialogs_parts;
 pub mod dialogs_plastic;
 pub mod dialogs_gear;
-pub mod dialogs_gear_graph;
+pub mod dialogs_gear_links;
 pub mod dialogs_gear_items;
 pub mod dialogs_gear_view;
 pub mod dialogs_save_mesh;

@@ -202,18 +202,3 @@ SolidCraft changes:
   device events (`Motion` x, `Motion` y, `MouseMotion`) per report on the window thread. The
   summed motion is exact; motion is flushed before a button or wheel change in the same report
   stream, so the order of events is kept.
-
-## egui-snarl 0.12.0 and egui-scale 0.6.1 (MIT OR Apache-2.0, Zakarum and contributors)
-
-Original package sources from crates.io (https://github.com/zakarumych/egui-snarl,
-https://github.com/zakarumych/egui-scale), with the original licence texts (egui-scale's are
-egui-snarl's, the same author and terms). The Gears dialog's node graph (`dialogs_gear_graph.rs`)
-is drawn with egui-snarl. Neither has a release on egui 0.37 yet.
-
-SolidCraft changes:
-- `Cargo.toml` (both): egui 0.37 instead of 0.36; examples, dev-dependencies and the optional
-  `egui-probe` dependency (on egui 0.36) removed, its feature kept empty so the source's cfgs stay
-  known; egui-snarl takes egui-scale from `../egui-scale`.
-- egui-snarl `src/ui.rs`, `src/ui/state.rs`, `src/ui/wire.rs`: egui 0.37 deprecations. `Ui::id`
-  and `UiBuilder::id` become `scope_id`; `use core::f32;` removed so `f32::NAN` is the associated
-  constant; `Id::new`/`AsId` in `SnarlWidget::new` and `id_salt` kept under `allow(deprecated)`.

@@ -14,7 +14,7 @@ same layout on every tab:
 |---|---|---|
 | [Gears](#gears) | gear generator | Type and **New gear**, a card per gear, and the selected gear's size and face |
 | [Teeth](#teeth) | helical gear | The selected gear's helix (or bevel style) and profile shift; the tooth form and chamfer of every gear |
-| [Shafts & Bearings](#shafts--bearings) | bearing seat | The selected gear's bore and hub, a shaft's Ø, the bearing points |
+| [Shafts & Bearings](#shafts--bearings) | bearing seat | The shaft made on each axis and from which block, the selected gear's bore and hub, a shaft's Ø, the bearing points |
 | [Links & Motion](#links--motion) | motion link | Meshes and shared shafts, suggested links, the drive, the ratio between two gears, the graph |
 | [Housing & Output](#housing--output) | housing cutout | The housing cutout and its bearing seats; operation, Targets, keep-out, assembly |
 | [Differential](#differential) | differential | Only while a ring gear carries a differential: its style, pinions, module, half-shafts and facts |
@@ -26,7 +26,7 @@ scroll position.
 
 **Groups.** A titled group folds with the arrow in its heading, and stays as you left it. A group
 with a **checkbox** in place of the arrow (Tooth chamfer, Hub, Housing cutout, Cut keep-out,
-Show graph, Differential in the ring gear) is switched on by its checkbox, and its rows show,
+Differential in the ring gear) is switched on by its checkbox, and its rows show,
 indented under a rule, only while it is on.
 
 **The selected gear.** The per-gear groups (Gears below the cards, Teeth, Shafts & Bearings) show
@@ -120,6 +120,25 @@ any ("z20 m2 · bore 8 · hub 16"; a compound lists each gear).
 for each fix a refusal names ("Use module 1.5", "Use 11 teeth on B"). See
 [Troubleshooting](troubleshooting.md). Every message is also listed on [Results](#results).
 
+### Blocks
+
+Under the cards, the group **Blocks** puts gears under shared settings. With no block yet it holds
+one button, **Put all gears in one block**. Each block then shows its name in its colour with
+**×** (remove the block; its gears keep their own settings), and:
+
+| Row | Default | Meaning |
+|---|---|---|
+| **Gears** | | A tick per gear: the gears in the block. A gear is in one block at most. |
+| **Name** | Block 1 | Its name, in the view and the lists. |
+| **Module** | auto | One module for every gear in the block, so they can mesh. |
+| **Shaft Ø** | none | Every gear in the block gets a bore of this Ø, and each axis the block's gears are on gets a shaft of this Ø, joined to the gears on it as **one body per axis**. The shaft runs over the gears' faces and a little past them (the Ø, at least 3 mm), or out to the bearing points on that axis. A line under the row says what is made ("2 shafts, bored into their gears: A + C (34 mm), B (22 mm)"). |
+| **Face width** | each gear's | The whole face width of every gear in the block, half each side of the sketch plane. |
+| **More** (folded) | | **Helix angle**, **Pressure angle**, **Backlash**, **Tooth chamfer**: each for every gear in the block (the tooth chamfer in place of the set's). |
+
+A gear's own value (its own module when sized by teeth, its own face, helix or bore) wins over the
+block's; where it is left on Auto, the block's applies. **New block** makes another block with the
+gears in none yet. The fields sit two to a row.
+
 ### The selected gear's group
 
 Under the cards, the group **Gear X · Type** (open) holds the selected gear's own settings, then
@@ -146,8 +165,8 @@ are on [Teeth](#teeth).
 | **Teeth** | from the circle | The tooth count. The caption shows "Module: … (worked out)". |
 
 Meshing gears share one module: setting it on one gear sets it for its mates. If the gear is in a
-**Module Block** (from the graph), the Module row edits the block's module, and the caption says
-"Shared by gears A, B · teeth: …". Until the gear is complete, the caption reads "— until the gear
+**block**, the Module row edits the block's module, and the caption says
+"Block 1: gears A, B · teeth: …"; a face left on Auto shows the block's face width as its hint. Until the gear is complete, the caption reads "— until the gear
 is complete".
 
 **Face**
@@ -221,7 +240,14 @@ and short slanted lines between them.
 
 ![The Shafts & Bearings tab: bore, hub and the bearing points](img/tab-shafts.png)
 
-**Gear** row: the gear these rows are for.
+### Shafts · n
+
+One row per shaft the set makes: each block's shaft ("Shaft M1·1 — Ø8 × 34 mm · gears A + C ·
+from Block 1", in the block's colour), and each Shaft gear drawn by hand. With none, it says how to
+get them: put the gears in a block and give it a Shaft Ø.
+
+**Gear** row: the gear these rows are for. A gear in a block with a Shaft Ø shows "Auto: 8 mm, the
+shaft Ø of Block 1" under its Bore row.
 
 ### Gear X · Type
 
@@ -246,13 +272,17 @@ turn it on.
 
 With fewer than two gears (and no links) the tab says to make them on the Gears tab.
 
+Every link is drawn in the view while the dialog is open: a line from one gear's centre to the
+other's (a mesh through the point where the pitch circles touch) with its ratio, in its block's
+colour (grey between gears of different blocks, red when it can't be built), suggested links
+dashed. **Hover a link row** to light that link and its two gears in the view.
+
 | Group | What it holds |
 |---|---|
 | **Links · n** (open) | **Link rows**: "A ⟷ B mesh 0.67 : 1 opposite" or "B ═ C same shaft", each with **×**. The ratio is the second gear's speed over the first's, with its direction. A link that can't be built shows its error under it in red. **Suggested links** (italic, "· suggested") and one **Accept suggested (n)** button. Suggested = circles the drawing shows as touching, or gears on one axis. With no links and no suggestions: "No links yet: add one below." |
 | **Add a link by hand** (open only when there is nothing yet) | **Gear**, **Link** (Mesh or Same shaft), **With gear**, **Add link**. |
 | **Drive** (open) | **Driver**: the gear you turn. Every other gear's speed and direction follow from it; "—" means none (the assembly is then driven from the first gear). **Input rpm** and **Input torque** (N·m), both optional, shown once a driver is chosen; they fill speed and torque per gear in Results. |
 | **Ratio between two gears** (open) | **Ratio from** / **to**: pick two gears to read the ratio between them: **Ratio** (to's speed over from's, and the direction), **Path** (the chain of meshes and shared shafts), **Efficiency** and, for a rack, **Rack travel** per turn. See [Motion and ratios](motion-and-ratios.md). |
-| **Show graph** (checkbox group) | The same links as a node graph. Drag from a ● Mesh pin to another gear's to mesh them, from a ■ Shaft pin for a shared shaft; right-click for **Add Module Block**, **Make Driver**, **Remove link**, **Accept suggested**. Gears inside a Module Block share one module. |
 
 ## Housing & Output
 

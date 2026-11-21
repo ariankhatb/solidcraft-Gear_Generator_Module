@@ -1,7 +1,9 @@
 //! The clearance body (keep-out volume) of a gear set: one solid holding exactly the space the
 //! assembled set needs to turn, so a housing is any block with this body cut out of it.
 //!
-//! What it holds, all grown by a radial and an axial clearance:
+//! What it holds, all grown by a radial and an axial clearance (0 is 0: an envelope then ends at
+//! its member's material along the axis, and stands only the sampling allowance past it round
+//! the axis):
 //! - every member's turning envelope: a revolve about its axis of the most radius its material
 //!   reaches at each position along the axis, taken from the planned steps themselves (points on
 //!   every outline of every step, through the steps' and bodies' frames; see
@@ -18,7 +20,7 @@
 //!   is part of the housing ([`Clearance::ring_as_housing`]);
 //! - a chain or belt between two sprockets or pulleys: the region round both wheels and the two
 //!   runs, as a prism over the chain's or belt's width;
-//! - each member's shaft (its bore's size, else the bearing's bore), on through the housing walls
+//! - each member's shaft (its bore's size, else the bearing's bore when it has seats), on through the housing walls
 //!   by [`Clearance::shaft_extension`] beyond the gear on each side; integral shafts as built;
 //! - bearing seats: one bearing size (from [`crate::hub::BEARINGS`] or given), at points on the
 //!   shafts, each a cylinder of the bearing's outside diameter plus a fit allowance and its width.
@@ -65,7 +67,8 @@ pub struct Clearance {
     /// An internal ring gear (and a cycloidal drive's pin ring) is part of the housing: it is
     /// left out (true), or its outer rim is cleared like any other member (false).
     pub ring_as_housing: bool,
-    /// The bearing, by its name in [`crate::hub::BEARINGS`] ("608", "6001", "MR105"...).
+    /// The bearing, by its name in [`crate::hub::BEARINGS`] ("608", "6001", "MR105"...). Taken
+    /// only with `seats`: with none it makes nothing (and is warned of).
     pub bearing: Option<String>,
     /// A bearing of any size instead (used when `bearing` is not set).
     pub bearing_size: Option<BearingSize>,
@@ -214,12 +217,42 @@ pub(crate) fn spacing(m: f64, span: f64) -> (f64, f64) {
 /// radius) still to be grown by the clearances, and bands already sized (shafts, seats).
 struct Group {
     frame: Frame,
-    /// (z, r, margin): r is grown by `margin` radially and the point by `axial` along the axis.
-    pts: Vec<(f64, f64, f64)>,
+    /// Points of material: r grown by `margin`, each point's need taken `reach` either way along
+    /// the axis (the gap to the next row) but never out of its window.
+    pts: Vec<GroupPt>,
+    /// Each member's window along the axis (its material's ends, plus the axial clearance): the
+    /// envelope of its points stops there exactly, so an axial clearance of 0 ends the envelope
+    /// at the material's ends.
+    wins: Vec<(f64, f64)>,
     /// (z0, z1, r): a cylinder already sized.
     bands: Vec<(f64, f64, f64)>,
-    /// The row spacing of the points, for the axial reach between rows.
+    /// The largest row spacing of its members (where a vertex may follow a tip envelope).
     hz: f64,
+}
+
+#[derive(Clone, Copy)]
+struct GroupPt {
+    z: f64,
+    r: f64,
+    margin: f64,
+    reach: f64,
+    /// Its window, an index into `Group::wins`.
+    win: usize,
+}
+
+/// How far a sampled outline's farthest vertex can fall short of the outline itself, for vertex
+/// spacing `h`, on the radius: every vertex is on the outline, and on gear outlines the radius
+/// along each segment is monotonic or constant (tip arcs centred on the axis), so the farthest
+/// vertex is the farthest point; elsewhere (a pin's or lobe's arc of curvature radius ρ ≥ h)
+/// the chord's sagitta h²/8ρ ≤ h/8. Plus a hair for rounding.
+fn sampling_allowance(h: f64) -> f64 {
+    h / 8.0 + 0.002
+}
+
+/// The row spacing along the axis the keep-out reads a member at: the spacing for its span, at
+/// most 0.1 mm, so a radius step inside one body (a compound's layers) is not smeared far.
+fn row_spacing(hz: f64) -> f64 {
+    hz.min(0.1)
 }
 
 fn coaxial(a: &Frame, b: &Frame) -> bool {
@@ -233,7 +266,7 @@ fn group_of(groups: &mut Vec<Group>, f: &Frame) -> usize {
     if let Some(i) = groups.iter().position(|g| coaxial(&g.frame, f)) {
         return i;
     }
-    groups.push(Group { frame: *f, pts: Vec::new(), bands: Vec::new(), hz: 0.0 });
+    groups.push(Group { frame: *f, pts: Vec::new(), wins: Vec::new(), bands: Vec::new(), hz: 0.0 });
     groups.len() - 1
 }
 
@@ -438,7 +471,15 @@ fn build(
     if bodies.is_empty() {
         return Err("clearance: the set has no bodies".into());
     }
-    let bearing = c.chosen_bearing()?;
+    // A bearing is taken only where it has seats: with none it makes nothing (no seats, and
+    // its bore is no shaft); named with none, say what to do.
+    let bearing = match c.chosen_bearing()? {
+        Some((name, _)) if c.seats.is_empty() => {
+            warn.push(format!("clearance: bearing {name} has nowhere to sit: put bearing points on a shaft line (Shafts & Bores tab), or turn bearings off"));
+            None
+        }
+        b => b,
+    };
     let motions = motions(s.kind, bodies);
     let ext = if c.shaft_extension > 0.0 { c.shaft_extension } else { 2.0 * s.face_width };
     let (rad, ax) = (c.radial, c.axial);
@@ -451,7 +492,7 @@ fn build(
         let (h, hz) = spacing(s.module, span);
         // A bevel planetary set's carrier has no teeth: plain round parts, sampled four times
         // coarser (its margin grows with the spacing, so it is still cleared).
-        let (h, hz) = if b.name.contains(crate::plan::bevel_planet::CARRIER) { (4.0 * h, 4.0 * hz) } else { (h, hz) };
+        let (h, hz) = if b.name.contains(crate::plan::bevel_planet::CARRIER) { (4.0 * h, 4.0 * hz) } else { (h, row_spacing(hz)) };
         // A slide's box reads every point; anything else only each row's farthest from its axis
         // (the same envelope: a ring gear's rows hold millions of points).
         let solid = Solid::new(b, h);
@@ -485,7 +526,7 @@ fn build(
     let mut rules: Vec<GroupFollow> = Vec::new();
     for (mi, m) in members.iter_mut().enumerate() {
         let f = m.body.frame;
-        let margin = rad + m.h + 0.002;
+        let margin = rad + sampling_allowance(m.h);
         match m.motion {
             Motion::Ring if skip_ring => continue,
             Motion::Slides => {
@@ -502,7 +543,7 @@ fn build(
                 let (x0, x1) = (lo[0] - travel / 2.0 - margin, hi[0] + travel / 2.0 + margin);
                 let (y0, y1) = (lo[1] - margin, hi[1] + margin);
                 let rect = Outline { segs: vec![Seg::Line(V2::new(x0, y0), V2::new(x1, y0)), Seg::Line(V2::new(x1, y0), V2::new(x1, y1)), Seg::Line(V2::new(x1, y1), V2::new(x0, y1)), Seg::Line(V2::new(x0, y1), V2::new(x0, y0))] };
-                prisms.push((f, Region { outer: vec![rect], holes: vec![] }, lo[2] - ax - m.hz, hi[2] - lo[2] + 2.0 * (ax + m.hz)));
+                prisms.push((f, Region { outer: vec![rect], holes: vec![] }, lo[2] - ax, hi[2] - lo[2] + 2.0 * ax));
                 facts.push((format!("clearance: {} slot length", m.who), x1 - x0, Unit::Mm));
                 facts.push((format!("clearance: {} travel", m.who), travel, Unit::Mm));
                 continue;
@@ -525,10 +566,14 @@ fn build(
         // applied in its own frame: the radius grown by the radial one, the points also taken
         // the axial one along its own axis either way (and the group's margins on top).
         let tilted = orbit > 0.0 && len(cross(f.z, g.frame.z)) > 1e-9;
+        let win = g.wins.len();
+        // Each point's need is taken the axial clearance and a row either way, never out of
+        // the window (a tilted member's runs partly across the group's axis: a row further).
+        let reach = ax + m.hz;
         let mut push = |zg: f64, r: f64, margin: f64| {
             zr = (zr.0.min(zg), zr.1.max(zg));
             rmax = rmax.max(r);
-            g.pts.push((zg, r, margin));
+            g.pts.push(GroupPt { z: zg, r, margin, reach, win });
         };
         if tilted {
             // Swept round its own axis each row of points is a disc of its largest radius, and
@@ -551,7 +596,7 @@ fn build(
                     (r > 0.0).then_some(((k as f64 + 0.5) * wide, r))
                 })
                 .collect();
-            let fine = m.h + 0.5 * m.hz + 0.002;
+            let fine = sampling_allowance(m.h) + 0.5 * m.hz;
             // The samples' need in bands along the group's axis: each band's largest radius at
             // both its edges (every sample in it is within them, at that radius or less).
             const BAND: f64 = 0.05;
@@ -582,6 +627,10 @@ fn build(
                 push(zg, orbit + q[0].hypot(q[1]), margin);
             }
         }
+        if zr.1 >= zr.0 {
+            let grow = if tilted { ax + m.hz } else { ax };
+            g.wins.push((zr.0 - grow, zr.1 + grow));
+        }
         if rules.len() <= gi {
             rules.resize_with(gi + 1, GroupFollow::default);
         }
@@ -601,7 +650,7 @@ fn build(
         }
         let what = if orbit > 0.0 { "orbit" } else { "envelope" };
         facts.push((format!("clearance: {} {what} diameter", m.who), 2.0 * (rmax + margin), Unit::Mm));
-        facts.push((format!("clearance: {} {what} length", m.who), zr.1 - zr.0 + 2.0 * (ax + m.hz), Unit::Mm));
+        facts.push((format!("clearance: {} {what} length", m.who), zr.1 - zr.0 + 2.0 * ax, Unit::Mm));
         // The shaft: through the gear and on past it, unless it is integral (built with the
         // gear and in its points) or the member orbits on a carrier.
         let (bore, integral, integral_d) = bore_of(s, m.role);
@@ -711,9 +760,6 @@ fn build(
                 warn.push(format!("clearance: bearing {name} has a {} mm bore but {}'s shaft is Ø{}", num(b.bore), m.who, num(d)));
             }
         }
-        if c.seats.is_empty() {
-            warn.push(format!("clearance: bearing {name} chosen but no seats placed"));
-        }
     }
 
     // The body: one revolve per axis (each connected stretch of its profile), the prisms.
@@ -721,7 +767,7 @@ fn build(
     let mut follow = Vec::new();
     for (gi, g) in groups.iter().enumerate() {
         let reach = ax + g.hz;
-        for poly in profile(g, ax) {
+        for poly in profile(g) {
             let op = if steps.is_empty() { Op::New } else { Op::Join };
             let rule = rules.get(gi).filter(|r| !r.tips.is_empty());
             follow.push(rule.map(|r| poly.iter().map(|q| r.vertex(*q, reach)).collect()).unwrap_or_default());
@@ -807,68 +853,80 @@ fn chain_run(s: &Spec, c: &Clearance, members: &[Member], preview: &[PreviewGear
 
 /// The revolved profiles of an axis: closed polygons in its (radius, z) half plane, one for
 /// each stretch along the axis that needs clearing.
-fn profile(g: &Group, axial: f64) -> Vec<Vec<V2>> {
-    // The points' needs, cell by cell: a cell takes the largest radius (grown by the margin) of
-    // the points within the axial clearance and one row spacing of it.
-    let reach = axial + g.hz;
+fn profile(g: &Group) -> Vec<Vec<V2>> {
+    // The points' needs, cell by cell and window by window: a cell takes the largest radius
+    // (grown by the margin) of its window's points within a row of it, and only cells that
+    // overlap the window; between cells the need is linear, and it ends at the window's ends.
+    const CELL: f64 = 0.02;
     let (mut p0, mut p1) = (f64::MAX, f64::MIN);
-    for (z, ..) in &g.pts {
-        p0 = p0.min(z - reach);
-        p1 = p1.max(z + reach);
+    for (lo, hi) in &g.wins {
+        p0 = p0.min(*lo);
+        p1 = p1.max(*hi);
     }
     let have_pts = !g.pts.is_empty() && p1 > p0;
     let (n, dz) = if have_pts {
         let span = p1 - p0;
-        let n = ((span / 0.25).ceil() as usize).clamp(8, 2400);
+        let n = ((span / CELL).ceil() as usize).clamp(8, 20_000);
         (n, span / n as f64)
     } else {
         (0, 1.0)
     };
-    let mut cell = vec![0.0f64; n];
+    let nw = if have_pts { g.wins.len() } else { 0 };
+    let mut cells = vec![vec![0.0f64; n]; nw];
     if have_pts {
-        let mut own = vec![0.0f64; n];
-        for (z, r, margin) in &g.pts {
-            let k = (((z - p0) / dz).floor() as isize).clamp(0, n as isize - 1) as usize;
-            own[k] = own[k].max(r + margin);
+        let mut own = vec![vec![0.0f64; n]; nw];
+        let mut reach = vec![0.0f64; nw];
+        for q in &g.pts {
+            let k = (((q.z - p0) / dz).floor() as isize).clamp(0, n as isize - 1) as usize;
+            own[q.win][k] = own[q.win][k].max(q.r + q.margin);
+            reach[q.win] = reach[q.win].max(q.reach);
         }
-        let w = (reach / dz).ceil() as usize + 1;
-        for (k, v) in own.iter().enumerate() {
-            if *v <= 0.0 {
-                continue;
-            }
-            for c in cell.iter_mut().take((k + w + 1).min(n)).skip(k.saturating_sub(w)) {
-                *c = c.max(*v);
+        for (w, (lo, hi)) in g.wins.iter().enumerate() {
+            // (A point is somewhere in its cell: that many cells either way hold all within reach.)
+            let spread = (reach[w] / dz).ceil() as usize;
+            // The cells the window overlaps.
+            let k0 = (((lo - p0) / dz).floor().max(0.0) as usize).min(n - 1);
+            let k1 = (((hi - p0) / dz).ceil().max(1.0) as usize).min(n);
+            let cell = &mut cells[w];
+            for (k, v) in own[w].iter().enumerate() {
+                if *v <= 0.0 {
+                    continue;
+                }
+                for c in cell.iter_mut().take((k + spread + 1).min(k1)).skip(k.saturating_sub(spread).max(k0)) {
+                    *c = c.max(*v);
+                }
             }
         }
     }
-    // The points' need along the axis: linear between cell boundaries, each boundary the larger
-    // of the cells either side (so it is never under a cell's need), nothing outside.
-    let bval = |k: usize| -> f64 {
-        let l = if k > 0 { cell[k - 1] } else { 0.0 };
-        let r = if k < n { cell[k] } else { 0.0 };
+    // A window's need at a cell boundary: the larger of the cells either side.
+    let bval = |w: usize, k: usize| -> f64 {
+        let l = if k > 0 { cells[w][k - 1] } else { 0.0 };
+        let r = if k < n { cells[w][k] } else { 0.0 };
         l.max(r)
     };
-    let fp = |z: f64, right: bool| -> f64 {
-        if !have_pts || z < p0 - 1e-12 || z > p1 + 1e-12 {
+    // Its need at z, just left or right of it: nothing outside the window.
+    let fpw = |w: usize, z: f64, right: bool| -> f64 {
+        let (lo, hi) = g.wins[w];
+        let inside = if right { z >= lo - 1e-12 && z < hi - 1e-12 } else { z > lo + 1e-12 && z <= hi + 1e-12 };
+        if !inside {
             return 0.0;
         }
-        if (z - p0).abs() <= 1e-12 {
-            return if right { bval(0) } else { 0.0 };
-        }
-        if (z - p1).abs() <= 1e-12 {
-            return if right { 0.0 } else { bval(n) };
-        }
-        let t = (z - p0) / dz;
+        let t = ((z - p0) / dz).clamp(0.0, n as f64);
         let k = (t.floor() as usize).min(n - 1);
         let f = t - k as f64;
-        bval(k) * (1.0 - f) + bval(k + 1) * f
+        bval(w, k) * (1.0 - f) + bval(w, k + 1) * f
     };
+    let fp = |z: f64, right: bool| -> f64 { (0..nw).map(|w| fpw(w, z, right)).fold(0.0, f64::max) };
     let band = |z: f64, right: bool| -> f64 {
         g.bands.iter().filter(|(z0, z1, _)| if right { *z0 <= z && z < *z1 } else { *z0 < z && z <= *z1 }).fold(0.0, |a, b| a.max(b.2))
     };
     let mut at: Vec<f64> = if have_pts { (0..=n).map(|k| p0 + dz * k as f64).collect() } else { Vec::new() };
     if have_pts {
         at[n] = p1;
+        for (lo, hi) in &g.wins {
+            at.push(*lo);
+            at.push(*hi);
+        }
     }
     for (z0, z1, r) in &g.bands {
         if *r > 0.0 && z1 > z0 {
@@ -905,7 +963,7 @@ fn profile(g: &Group, axial: f64) -> Vec<Vec<V2>> {
 /// The tolerance a profile's simplified chords may fall under a vertex (the profile is then
 /// moved out by it), and how far they may stand over one.
 const UNDER: f64 = 0.005;
-const OVER: f64 = 0.1;
+const OVER: f64 = 0.02;
 
 /// Fewer vertices: on each stretch between vertical steps, a chord replaces the vertices it
 /// passes within (`-UNDER`, `+OVER`) of; then every radius is moved out by `UNDER`.

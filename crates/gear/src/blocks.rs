@@ -17,7 +17,7 @@
 
 use crate::axes::{Axis, add, cross, dot, len, mul, sub, unit};
 use crate::items::{
-    ANGLE_TOL, BlockSettings, Bore, ShaftMode, FacePreset, FaceSides, GearGeom, GearItem, GearRef, GearSettings, ItemKind, ItemLink, LinkKind, ModuleBlock,
+    ANGLE_TOL, BevelStyle, BlockSettings, Bore, ShaftMode, FacePreset, FaceSides, GearGeom, GearItem, GearRef, GearSettings, ItemKind, ItemLink, LinkKind, ModuleBlock,
     Thing, face_extent, gear_geoms, resolve_module, tol,
 };
 use crate::plan::Spec;
@@ -43,8 +43,12 @@ fn takes_helix(kind: ItemKind) -> bool {
 }
 
 /// Gear settings `s` (of an item of `kind`) with block `b`'s filled in where `s` gives none: its
-/// helix angle, its face width (half each side; an A only or B only face all on that side), and
-/// (Bore only) its Ø as the bore. A gear on a made shaft gets no bore: it is one body with it.
+/// helix angle and teeth (Helical or Herringbone: [`BlockSettings::herringbone`]), its face width
+/// (half each side; an A only or B only face all on that side), and (Bore only) its Ø as the
+/// bore. A gear on a made shaft gets no bore: it is one body with it.
+///
+/// A bevel pair takes the block's helix as its spiral ([`block_spiral`]); a hypoid keeps its own
+/// (its spiral goes with its offset), a worm its lead.
 pub fn block_settings(b: &BlockSettings, kind: ItemKind, s: &GearSettings) -> GearSettings {
     let mut out = *s;
     if let Some(h) = b.helix.filter(|h| h.is_finite())
@@ -52,6 +56,10 @@ pub fn block_settings(b: &BlockSettings, kind: ItemKind, s: &GearSettings) -> Ge
         && takes_helix(kind)
     {
         out.helix = Some(h);
+        out.v = s.v || b.herringbone;
+    }
+    if kind == ItemKind::Bevel {
+        (out.bevel_style, out.spiral_angle) = block_spiral(b, s.bevel_style, s.spiral_angle);
     }
     if let Some(w) = positive(b.face_width)
         && s.face.a.is_none()
@@ -70,6 +78,22 @@ pub fn block_settings(b: &BlockSettings, kind: ItemKind, s: &GearSettings) -> Ge
         out.bore = Bore::Diameter(d);
     }
     out
+}
+
+/// A bevel pair's style and spiral angle in block `b` (its own `style` and `spiral`): a straight
+/// pair with no spiral angle of its own (Auto) is spiral at the block's helix angle (chevron when
+/// the block's teeth are herringbone); a spiral or chevron pair with none takes the block's
+/// angle. A pair's own spiral angle (0: straight) stays, and a block helix of 0 changes nothing.
+pub fn block_spiral(b: &BlockSettings, style: BevelStyle, spiral: Option<f64>) -> (BevelStyle, Option<f64>) {
+    let Some(h) = b.helix.filter(|h| h.is_finite() && h.abs() > 1e-9) else { return (style, spiral) };
+    if spiral.is_some() {
+        return (style, spiral);
+    }
+    match style {
+        BevelStyle::Straight if b.herringbone => (BevelStyle::Chevron, Some(h)),
+        BevelStyle::Straight => (BevelStyle::Spiral, Some(h)),
+        own => (own, Some(h)),
+    }
 }
 
 /// The items with each member's gears given its block's settings ([`block_settings`]) and its
@@ -340,6 +364,19 @@ pub fn expand_blocks(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlo
                 if it.shaft_diameter.is_none() {
                     it.shaft_diameter = Some(s.diameter);
                 }
+                // A Shaft item's line runs over the block's gears on its axis (a line drawn
+                // short of a gear, a bevel's back face, would leave a gap), and carries them.
+                if it.kind == ItemKind::Shaft {
+                    reach_over(it, s.a, s.b);
+                }
+                if given {
+                    let from = GearRef::new(e, 0);
+                    for r in s.gears.iter().filter(|r| r.item != e) {
+                        if !out.links.iter().any(|l| l.kind == LinkKind::Shaft && ((l.a == from && l.b == *r) || (l.b == from && l.a == *r))) {
+                            out.links.push(ItemLink { a: from, b: *r, kind: LinkKind::Shaft });
+                        }
+                    }
+                }
             }
             None => {
                 let mut it = GearItem::new(&id.unwrap_or_default(), ItemKind::Shaft).with(vec![Thing::line(s.a, s.b)]);
@@ -357,18 +394,34 @@ pub fn expand_blocks(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlo
     out
 }
 
+/// Shaft item `it`'s line (its first) lengthened, along itself, to reach over `a`..`b` (points on
+/// its axis) too.
+fn reach_over(it: &mut GearItem, a: V, b: V) {
+    let Some(Thing::Line { a: la, b: lb, .. }) = it.things.iter_mut().find(|t| matches!(t, Thing::Line { .. })) else { return };
+    let Some(u) = unit(sub(*lb, *la)) else { return };
+    let o = *la;
+    let ts = [0.0, dot(sub(*lb, o), u), dot(sub(a, o), u), dot(sub(b, o), u)];
+    let lo = ts.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = ts.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    *la = add(o, mul(u, lo));
+    *lb = add(o, mul(u, hi));
+}
+
 /// Each gear's turning as far as the links tell it: the group of gears the links (and each
 /// item's own gears: a compound's on one shaft, a pair's meshing) tie together, and its speed
 /// about its own axis (`gear_geoms`' direction, signed) per unit of the group's first gear's. A
 /// gear tied to none is a group of its own; a tie whose speeds can't be worked out (a rack, a
-/// gear of no radius) ties nothing.
+/// gear of no radius) ties nothing. Gears tied rigidly (a compound's layers, a Shaft link) always
+/// get their speeds from each other, so a loop whose meshes don't quite agree (a power split
+/// drawn with circles a little off) can't part them.
 fn turnings(items: &[GearItem], links: &[ItemLink]) -> Vec<(GearRef, usize, f64)> {
     let geoms: Vec<Vec<GearGeom>> = items.iter().map(gear_geoms).collect();
     let refs: Vec<GearRef> = geoms.iter().enumerate().flat_map(|(i, g)| (0..g.len()).map(move |k| GearRef::new(i, k))).collect();
     let at = |r: GearRef| refs.iter().position(|x| *x == r);
     let geo = |r: GearRef| geoms.get(r.item).and_then(|g| g.get(r.gear));
-    // Every tie: the two gears and the second's speed per unit of the first's.
-    let mut ties: Vec<(usize, usize, f64)> = Vec::new();
+    // Every tie: the two gears, the second's speed per unit of the first's, and whether it is
+    // rigid (one shaft).
+    let mut ties: Vec<(usize, usize, f64, bool)> = Vec::new();
     let mut tie = |a: GearRef, b: GearRef, kind: LinkKind| {
         let (Some(x), Some(y), Some(ga), Some(gb)) = (at(a), at(b), geo(a), geo(b)) else { return };
         let ratio = match kind {
@@ -376,7 +429,7 @@ fn turnings(items: &[GearItem], links: &[ItemLink]) -> Vec<(GearRef, usize, f64)
             LinkKind::Mesh => mesh_ratio(ga, gb),
         };
         if let Some(k) = ratio.filter(|k| k.is_finite() && k.abs() > 1e-12) {
-            ties.push((x, y, k));
+            ties.push((x, y, k, kind == LinkKind::Shaft));
         }
     };
     for (i, it) in items.iter().enumerate() {
@@ -399,11 +452,11 @@ fn turnings(items: &[GearItem], links: &[ItemLink]) -> Vec<(GearRef, usize, f64)
         if speed[start].is_some() {
             continue;
         }
-        speed[start] = Some((start, 1.0));
-        let mut todo = vec![start];
+        let mut todo = Vec::new();
+        set_rigidly(&mut speed, &ties, start, (start, 1.0), &mut todo);
         while let Some(x) = todo.pop() {
             let Some((group, sx)) = speed[x] else { continue };
-            for &(a, b, k) in &ties {
+            for &(a, b, k, _) in &ties {
                 let (next, s) = if a == x {
                     (b, sx * k)
                 } else if b == x {
@@ -412,13 +465,37 @@ fn turnings(items: &[GearItem], links: &[ItemLink]) -> Vec<(GearRef, usize, f64)
                     continue;
                 };
                 if speed[next].is_none() {
-                    speed[next] = Some((group, s));
-                    todo.push(next);
+                    set_rigidly(&mut speed, &ties, next, (group, s), &mut todo);
                 }
             }
         }
     }
     refs.iter().zip(speed).filter_map(|(r, s)| s.map(|(g, v)| (*r, g, v))).collect()
+}
+
+/// Gear `x`'s speed (its group's) set, and at once every gear rigidly tied to it (on one shaft
+/// with it, through rigid ties only) from it; each is queued in `todo`.
+fn set_rigidly(speed: &mut [Option<(usize, f64)>], ties: &[(usize, usize, f64, bool)], x: usize, at: (usize, f64), todo: &mut Vec<usize>) {
+    speed[x] = Some(at);
+    todo.push(x);
+    let mut stack = vec![x];
+    while let Some(y) = stack.pop() {
+        let Some((group, sy)) = speed[y] else { continue };
+        for &(a, b, k, _) in ties.iter().filter(|t| t.3) {
+            let (next, s) = if a == y {
+                (b, sy * k)
+            } else if b == y {
+                (a, sy / k)
+            } else {
+                continue;
+            };
+            if speed[next].is_none() {
+                speed[next] = Some((group, s));
+                todo.push(next);
+                stack.push(next);
+            }
+        }
+    }
 }
 
 /// Gear `b`'s speed about its axis per unit of `a`'s about its own, the two meshing: their pitch
@@ -464,7 +541,8 @@ fn on_and_free(gears: &[GearRef], u: V, items: &[GearItem], turning: &[(GearRef,
         let w = unit(gear_geoms(items.get(r.item)?).get(r.gear)?.axis)?;
         Some((*group, s * dot(w, u)))
     };
-    let alike = |a: (usize, f64), b: (usize, f64)| a.0 == b.0 && (a.1 - b.1).abs() <= 1e-6 * a.1.abs().max(b.1.abs()).max(1e-12);
+    // (Within a part in a thousand: drawn circles in a loop can be a little off.)
+    let alike = |a: (usize, f64), b: (usize, f64)| a.0 == b.0 && (a.1 - b.1).abs() <= 1e-3 * a.1.abs().max(b.1.abs()).max(1e-12);
     let mut lots: Vec<((usize, f64), usize)> = Vec::new();
     for r in gears {
         let Some(t) = about(*r) else { continue };

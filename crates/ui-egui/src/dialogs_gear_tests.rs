@@ -1522,3 +1522,31 @@ fn helical_and_herringbone_are_a_spurs_teeth_not_types() {
     assert_eq!((back[1].gears[0].helix.as_str(), back[1].gears[0].v), ("20 deg", true));
     assert_eq!((back[2].gears[0].helix.as_str(), back[2].gears[0].v), ("", false));
 }
+
+/// A block's Teeth toggle (under More), as a gear's: Herringbone gives the helix angle 20° where
+/// none is typed and sends `herringbone`; Helical keeps the angle and drops it; Straight clears
+/// the angle (each gear's own teeth). Edit reads it back.
+#[test]
+fn a_blocks_teeth_toggle_sends_helical_or_herringbone() {
+    use crate::dialogs_gear_view::{set_teeth_style, teeth_style};
+    let mut app = app();
+    let (mut g, inputs) = meshing_pair(&mut app);
+    g.links.add_block(&[0, 1]);
+    let b = g.links.block_mut(0).unwrap();
+    assert_eq!(teeth_style(&b.helix, b.herringbone), 0);
+    set_teeth_style(&mut b.helix, &mut b.herringbone, 2);
+    assert_eq!((b.helix.as_str(), b.herringbone, b.has_more()), ("20 deg", true, true));
+    let p = request(&app, &g, &inputs).unwrap();
+    assert_eq!((p["module_blocks"][0]["helix_angle"].as_f64(), p["module_blocks"][0]["herringbone"].as_bool()), (Some(20.0), Some(true)), "{p}");
+    let back = crate::dialogs_gear_links::Block::of(&p["module_blocks"][0]);
+    assert_eq!((teeth_style(&back.helix, back.herringbone), back.helix.as_str()), (2, "20 deg"));
+    let b = g.links.block_mut(0).unwrap();
+    b.helix = "15 deg".into();
+    set_teeth_style(&mut b.helix, &mut b.herringbone, 1);
+    let p = request(&app, &g, &inputs).unwrap();
+    assert!(p["module_blocks"][0].get("herringbone").is_none() && p["module_blocks"][0]["helix_angle"].as_f64().is_some_and(|h| (h - 15.0).abs() < 1e-9), "{p}");
+    let b = g.links.block_mut(0).unwrap();
+    set_teeth_style(&mut b.helix, &mut b.herringbone, 0);
+    let p = request(&app, &g, &inputs).unwrap();
+    assert!(p["module_blocks"][0].get("helix_angle").is_none() && p["module_blocks"][0].get("herringbone").is_none(), "{p}");
+}

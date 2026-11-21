@@ -1842,3 +1842,124 @@ fn a_blocks_shaft_diameter_makes_one_body_per_axis() {
     assert!(c["gears"].as_array().unwrap().iter().all(|g| g["bore"].as_f64() == Some(6.0)), "{c}");
     assert!(!c.to_string().contains("Shaft S1"), "no shaft made: {c}");
 }
+
+/// Whether point `p` is in body `name`'s material.
+fn inside(s: &Session, name: &str, p: [f64; 3]) -> bool {
+    let st = s.model.state();
+    let b = st.bodies.iter().find(|b| b.name == name).unwrap_or_else(|| panic!("no body {name}"));
+    b.body.classify_point(solidcore_record::Vec3::new(p[0], p[1], p[2])).unwrap() == solidcraft_kernel::PointClass::Inside
+}
+
+/// The body each gear of `item` is in, by gear.
+fn gear_bodies(r: &Value, item: &str) -> Vec<String> {
+    r["gears"].as_array().unwrap().iter().filter(|g| g["item"] == item).map(|g| g["body"].as_str().unwrap_or_else(|| panic!("{r}")).to_string()).collect()
+}
+
+/// A compound K (Ø30 at z 0, Ø16 at z 12, its axis drawn) meshing A and B, all in a block with
+/// Make shaft Ø5: K and its shaft are one solid with no bore (the axis inside each layer, and
+/// just outside the shaft's Ø, is material; a free-turning bore would be Ø5.2), A and B each
+/// one body with a shaft of its own.
+#[test]
+fn a_compound_on_its_blocks_made_shaft_has_no_bore() {
+    let mut s = Session::default();
+    let sk = |s: &mut Session, z: f64, draw: &[(&str, Value)]| {
+        let id = run(s, "sketch.create", json!({"plane": {"origin": [0.0, 0.0, z], "x_dir": [1.0, 0.0, 0.0], "y_dir": [0.0, 1.0, 0.0]}, "project_edges": false}))["sketch"].as_u64().unwrap();
+        for (c, p) in draw {
+            run(s, c, p.clone());
+        }
+        run(s, "sketch.finish", json!({}));
+        id
+    };
+    let low = sk(&mut s, 0.0, &[circle(0.0, 0.0, 15.0, "k0"), circle(25.0, 0.0, 10.0, "a")]);
+    let high = sk(&mut s, 12.0, &[circle(0.0, 0.0, 8.0, "k1"), circle(24.0, 0.0, 16.0, "b")]);
+    // XZ: sketch y along world −Z, so the axis runs from z −6 to 20.
+    let side = run(&mut s, "sketch.create", json!({"plane": "XZ"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.line", json!({"points": [[0, 6], [0, -20]], "ids": ["axis"]}));
+    run(&mut s, "sketch.finish", json!({}));
+    let spur = |id: &str, sketch: u64, curve: &str| json!({"id": id, "type": "spur", "components": [{"sketch": sketch, "curve": curve, "slot": "pitch"}]});
+    let r = run(
+        &mut s,
+        "gear.create",
+        json!({"items": [
+                {"id": "K", "type": "compound", "components": [{"sketch": side, "curve": "axis", "slot": "axis"}, {"sketch": low, "curve": "k0", "slot": "pitch"}, {"sketch": high, "curve": "k1", "slot": "pitch2"}]},
+                spur("A", low, "a"), spur("B", high, "b")],
+               "links": [{"a": {"item": "K", "gear": 0}, "b": {"item": "A"}, "kind": "mesh"}, {"a": {"item": "K", "gear": 1}, "b": {"item": "B"}, "kind": "mesh"}],
+               "module_blocks": [{"id": "M1", "module": 1, "members": ["K", "A", "B"], "shaft_diameter": 5}]}),
+    );
+    no_errors(&s);
+    let bodies: Vec<String> = r["bodies"].as_array().unwrap().iter().map(|b| b.as_str().unwrap().to_string()).collect();
+    assert_eq!(bodies.len(), 3, "one body per axis: {bodies:?}");
+    assert!(r["gears"].as_array().unwrap().iter().all(|g| g["bore"].is_null()), "no bore: {r}");
+    let k = gear_bodies(&r, "K");
+    assert!(k.len() == 2 && k[0] == k[1], "{k:?}");
+    for z in [-4.0, 0.0, 4.0, 6.0, 8.0, 12.0, 16.0] {
+        assert!(inside(&s, &k[0], [0.0, 0.0, z]), "the axis at z {z} is in K's solid");
+    }
+    for z in [0.0, 12.0] {
+        assert!(inside(&s, &k[0], [2.55, 0.0, z]), "no bore round the shaft at z {z}");
+    }
+}
+
+/// A bevel pair drawn as a side view (two shaft lines meeting at the apex, 15 and 30 teeth at
+/// module 1.25) in a block with Make shaft Ø5: each gear and the shaft along its axis are one
+/// body, the shaft running into the gear and on past its back (no gap), the gear solid on its
+/// axis (no bore), and the body the gear and the shaft less what they share.
+#[test]
+fn a_side_view_bevel_pairs_block_shafts_run_into_its_gears() {
+    let make = |module_blocks: Value| {
+        let mut s = Session::default();
+        let sk = sketch_with(&mut s, &[line([0.0, 0.0], [0.0, 60.0], "s1"), line([0.0, 0.0], [60.0, 0.0], "s2")]);
+        let r = run(
+            &mut s,
+            "gear.create",
+            json!({"items": [{"id": "E", "type": "bevel", "components": [{"sketch": sk, "curve": "s1", "slot": "axis"}, {"sketch": sk, "curve": "s2", "slot": "axis2"}],
+                   "gears": [{"gear": 0, "size_by": "teeth", "teeth": 15, "module": 1.25}, {"gear": 1, "size_by": "teeth", "teeth": 30, "module": 1.25}]}],
+                   "module_blocks": module_blocks}),
+        );
+        no_errors(&s);
+        (s, r)
+    };
+    let (mut alone, ra) = make(json!([{"id": "M1", "module": 1.25, "members": ["E"]}]));
+    let (mut s, r) = make(json!([{"id": "M1", "module": 1.25, "members": ["E"], "shaft_diameter": 5}]));
+    let bodies: Vec<String> = r["bodies"].as_array().unwrap().iter().map(|b| b.as_str().unwrap().to_string()).collect();
+    assert_eq!(bodies.len(), 2, "each gear one body with its shaft: {bodies:?}\n{r}");
+    let (e, ea) = (gear_bodies(&r, "E"), gear_bodies(&ra, "E"));
+    assert!(e.len() == 2 && e[0] != e[1], "{e:?}");
+    // The pinion on +y (its back at y 18.75, its teeth toward the apex), the gear on +x (its back
+    // at x 9.375).
+    for (g, axis, back) in [(0, [0.0, 1.0, 0.0], 18.75), (1, [1.0, 0.0, 0.0], 9.375)] {
+        let at = |d: f64| axis.map(|a: f64| a * d);
+        for d in [back - 2.0, back - 0.5, back + 0.5, back + 3.0] {
+            assert!(inside(&s, &e[g], at(d)), "gear {g}: the axis {d} mm from the apex is in its body {}", e[g]);
+        }
+        // The body: the gear alone and the shaft, less the shaft inside the gear.
+        let gear = volume(&mut alone, &ea[g]);
+        let fused = volume(&mut s, &e[g]);
+        let bar = std::f64::consts::PI * 2.5 * 2.5;
+        assert!(fused > gear + 3.0 * bar && fused < gear + 40.0 * bar, "gear {g}: {fused} vs the gear's {gear} (+{} per mm of shaft)", bar);
+    }
+}
+
+/// The same pair with a Shaft drawn along the pinion's axis from 25 mm out, short of its back
+/// face (18.75): in the block it takes the Ø, runs on into the pinion and is one body with it.
+#[test]
+fn a_shaft_drawn_short_of_a_bevel_in_its_block_runs_into_it() {
+    let mut s = Session::default();
+    let sk = sketch_with(&mut s, &[line([0.0, 0.0], [0.0, 60.0], "s1"), line([0.0, 0.0], [60.0, 0.0], "s2"), line([0.0, 25.0], [0.0, 60.0], "s3")]);
+    let r = run(
+        &mut s,
+        "gear.create",
+        json!({"items": [{"id": "E", "type": "bevel", "components": [{"sketch": sk, "curve": "s1", "slot": "axis"}, {"sketch": sk, "curve": "s2", "slot": "axis2"}],
+                          "gears": [{"gear": 0, "size_by": "teeth", "teeth": 15, "module": 1.25}, {"gear": 1, "size_by": "teeth", "teeth": 30, "module": 1.25}]},
+                         {"id": "S", "type": "shaft", "components": [{"sketch": sk, "curve": "s3", "slot": "axis"}]}],
+               "links": [{"a": {"item": "E", "gear": 0}, "b": {"item": "E", "gear": 1}, "kind": "mesh"}],
+               "module_blocks": [{"id": "M1", "module": 1.25, "members": ["E", "S"], "shaft_diameter": 5}]}),
+    );
+    no_errors(&s);
+    let bodies: Vec<String> = r["bodies"].as_array().unwrap().iter().map(|b| b.as_str().unwrap().to_string()).collect();
+    assert_eq!(bodies.len(), 2, "{bodies:?}\n{r}");
+    let e = gear_bodies(&r, "E");
+    for y in [17.0, 18.5, 20.0, 22.0, 30.0] {
+        assert!(inside(&s, &e[0], [0.0, y, 0.0]), "the pinion's axis at y {y} is in its body {}", e[0]);
+    }
+}

@@ -91,7 +91,8 @@ const TIP_BLOCK_SHAFT_MODE: &str = "What the block's Ø makes. Make shaft: a sha
 const TIP_BLOCK_SHAFT: &str = "The shafts' diameter. Each runs over its gears' faces and a little past them, or out to the bearing points on its axis.";
 const TIP_BLOCK_BORE: &str = "The bore (the hole through each gear) of every gear in the block that leaves its own bore on Auto.";
 const TIP_BLOCK_FACE: &str = "The whole face width of every gear in the block, half each side of the sketch plane (A only / B only gears: all on that side). Empty: each gear's own, or Auto.";
-const TIP_BLOCK_HELIX: &str = "Helix angle for every spur, helical, herringbone, ring, rack and planetary gear in the block; meshing gears get opposite hands. Empty: each gear's own.";
+const TIP_BLOCK_HELIX: &str = "Helix angle for every spur, ring, rack, compound and planetary gear in the block whose teeth are on Auto, and the spiral angle of its straight bevel pairs; meshing gears get opposite hands. A gear's own helix wins (a bevel pair's own spiral angle; 0 keeps it straight). Hypoids keep their own spiral.";
+const TIP_BLOCK_TEETH: &str = "The teeth of every gear in the block that leaves its own on Auto: helical, or herringbone (two opposite helices: no axial thrust), at the block's helix angle. Its bevel pairs get spiral teeth at that angle (chevron for herringbone). Straight: each gear's own teeth.";
 const TIP_BLOCK_PA: &str = "Pressure angle of the block's gears (20° is standard). Empty: the set's (Teeth tab).";
 const TIP_BLOCK_BACKLASH: &str = "Backlash between the block's meshing gears. Empty: the set's (Teeth tab).";
 const TIP_BLOCK_CHAMFER: &str = "A 45° tooth chamfer on every gear in the block that takes one, in place of the set's (Teeth tab). Empty: the set's.";
@@ -756,9 +757,16 @@ fn block_rows(ui: &mut egui::Ui, k: &mut Gear, b: usize, remove: &mut Option<usi
     }
     let more = bl.has_more();
     ui_kit::section(ui, ("gear_block_more", b), "More", more, |ui| {
+        // The block's Teeth, as each gear's (Straight: each gear's own teeth).
+        let (style, changed) = teeth_toggle(ui, &mut bl.helix, &mut bl.herringbone, TIP_BLOCK_TEETH);
+        enter |= changed;
+        if style > 0 {
+            enter |= field(ui, "Helix angle", &mut bl.helix, "20 deg", TIP_BLOCK_HELIX);
+        } else {
+            ui_kit::caption(ui, "Teeth", "Each gear's own teeth (straight unless it sets them).");
+        }
         ui.columns(2, |c| {
-            enter |= field(&mut c[0], "Helix angle", &mut bl.helix, "each gear's", TIP_BLOCK_HELIX);
-            enter |= field(&mut c[1], "Pressure angle", &mut bl.pressure_angle, "the set's", TIP_BLOCK_PA);
+            enter |= field(&mut c[0], "Pressure angle", &mut bl.pressure_angle, "the set's", TIP_BLOCK_PA);
         });
         ui.columns(2, |c| {
             enter |= field(&mut c[0], "Backlash", &mut bl.backlash, "the set's", TIP_BLOCK_BACKLASH);
@@ -1020,19 +1028,7 @@ fn takes_tooth_style(kind: ItemKind) -> bool {
 /// A gear's Teeth toggle: Straight, Helical or Herringbone (two opposite helices), then its helix
 /// angle and hand when they are not straight.
 fn tooth_style_rows(ui: &mut egui::Ui, s: &mut GearSettings, kind: ItemKind) -> bool {
-    let helical = |h: &str| !matches!(h.trim(), "" | "0" | "0 deg" | "0deg" | "0°");
-    let was = if s.v { 2 } else { usize::from(helical(&s.helix)) };
-    let mut style = was;
-    segments(ui, "Teeth", &mut style, &["Straight", "Helical", "Herringbone"], TIP_TOOTH_STYLE);
-    let mut enter = style != was;
-    if style != was {
-        s.v = style == 2;
-        if style == 0 {
-            s.helix.clear();
-        } else if !helical(&s.helix) {
-            s.helix = "20 deg".into();
-        }
-    }
+    let (style, mut enter) = teeth_toggle(ui, &mut s.helix, &mut s.v, TIP_TOOTH_STYLE);
     if style > 0 {
         enter |= field(ui, "Helix angle", &mut s.helix, "20 deg", TIP_HELIX);
         if kind == ItemKind::Planetary {
@@ -1042,6 +1038,40 @@ fn tooth_style_rows(ui: &mut egui::Ui, s: &mut GearSettings, kind: ItemKind) -> 
         }
     }
     enter
+}
+
+/// Whether a typed helix angle is one (not empty or 0).
+fn helical(h: &str) -> bool {
+    !matches!(h.trim(), "" | "0" | "0 deg" | "0deg" | "0°")
+}
+
+/// The Teeth toggle (Straight / Helical / Herringbone) over a typed helix angle and V flag, as a
+/// gear and a block both have it: Straight clears the angle, Helical or Herringbone gives 20°
+/// where none is typed. Returns the style shown (0, 1, 2) and whether it changed.
+pub(crate) fn teeth_toggle(ui: &mut egui::Ui, helix: &mut String, v: &mut bool, tip: &str) -> (usize, bool) {
+    let was = teeth_style(helix, *v);
+    let mut style = was;
+    segments(ui, "Teeth", &mut style, &["Straight", "Helical", "Herringbone"], tip);
+    if style != was {
+        set_teeth_style(helix, v, style);
+    }
+    (style, style != was)
+}
+
+/// The Teeth toggle's style for a typed helix angle and V flag: 0 straight, 1 helical, 2
+/// herringbone.
+pub(crate) fn teeth_style(helix: &str, v: bool) -> usize {
+    if v { 2 } else { usize::from(helical(helix)) }
+}
+
+/// The typed helix angle and V flag for Teeth style `style` (see [`teeth_toggle`]).
+pub(crate) fn set_teeth_style(helix: &mut String, v: &mut bool, style: usize) {
+    *v = style == 2;
+    if style == 0 {
+        helix.clear();
+    } else if !helical(helix) {
+        *helix = "20 deg".into();
+    }
 }
 
 /// Shafts & Bores, kept apart: **Shafts** (solid rods along an axis: one row per shaft with its Ø ×

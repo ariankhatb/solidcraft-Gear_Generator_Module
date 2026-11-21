@@ -736,16 +736,18 @@ fn pair(a: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) -> Result<(), 
     if !(-0.6..=1.6).contains(&sum) {
         out.notes.push(format!("the profile shift sum {} is large: teeth nearer {} would suit this distance better", num(sum), num(2.0 * a * cb / m)));
     }
+    // An exact fit needs no working distance (and no rounding noise in the shift sum).
+    spec.center_distance = if (a - reference).abs() < 1e-9 { 0.0 } else { a };
+    let sum = if spec.center_distance == 0.0 { 0.0 } else { sum };
     if spec.shift == 0.0 {
-        spec.shift = sum / 2.0;
+        // The smaller gear clear of undercut where its mate can spare it.
+        spec.shift = crate::sketch_rules::split_shift(&g1, &g2, sum).0;
+        if spec.shift.abs() < 1e-12 {
+            spec.shift = 0.0;
+        }
         out.derived.shift = true;
     }
     spec.shift2 = sum - spec.shift;
-    // An exact fit needs no working distance (and no rounding noise in the shifts).
-    spec.center_distance = if (a - reference).abs() < 1e-9 { 0.0 } else { a };
-    if spec.center_distance == 0.0 && out.derived.shift {
-        (spec.shift, spec.shift2) = (0.0, 0.0);
-    }
     out.facts.push(fact("module (chosen)", m, Unit::None));
     out.facts.push(fact("reference centre distance", reference, Unit::Mm));
     out.facts.push(fact("profile shift sum", sum, Unit::None));

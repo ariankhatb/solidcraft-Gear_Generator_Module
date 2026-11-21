@@ -792,7 +792,28 @@ pub enum ShiftFail {
 /// chosen nearest every gear's preferred shift ([`shift_limits`]: clear of undercut, so the
 /// smaller gears take the positive share) in the least-squares sense, within every gear's limits
 /// (rings: none, preferring no shift).
+///
+/// First every gear is held clear of undercut (its preferred shift is its lowest), as the usual
+/// split of a pair's shift sum does (x1 ≥ (z_min − z1)/z_min for the smaller gear, its mate the
+/// rest): an even split would leave a small pinion undercut that its mate could have spared.
+/// Where no free shift keeps them all clear (and their tips whole), within the practical limits.
 fn choose_shifts(gears: &[Involute], ring: &[bool], lin: &[(f64, f64)]) -> Result<Vec<f64>, ShiftFail> {
+    choose_shifts_within(gears, ring, lin, true).or_else(|_| choose_shifts_within(gears, ring, lin, false))
+}
+
+/// A pair's shift sum split between external gears `g1` and `g2` (their own shifts ignored) as
+/// [`choose_shifts`] splits it: the smaller gear clear of undercut where its mate can spare it,
+/// else nearest both gears' preferred shifts; evenly when no split keeps both within limits.
+pub(crate) fn split_shift(g1: &Involute, g2: &Involute, sum: f64) -> (f64, f64) {
+    match choose_shifts(&[*g1, *g2], &[false, false], &[(0.0, 1.0), (sum, -1.0)]) {
+        Ok(x) => (x[0], x[1]),
+        Err(_) => (sum / 2.0, sum / 2.0),
+    }
+}
+
+/// [`choose_shifts`] with each gear's lowest shift its preferred one (`clear`: clear of
+/// undercut) or its practical limit.
+fn choose_shifts_within(gears: &[Involute], ring: &[bool], lin: &[(f64, f64)], clear: bool) -> Result<Vec<f64>, ShiftFail> {
     let (mut sum, mut den) = (0.0, 0.0);
     let mut lo: (f64, (usize, bool)) = (f64::NEG_INFINITY, (0, true));
     let mut hi: (f64, (usize, bool)) = (f64::INFINITY, (0, false));
@@ -803,6 +824,8 @@ fn choose_shifts(gears: &[Involute], ring: &[bool], lin: &[(f64, f64)]) -> Resul
             continue;
         }
         let (l, u, pref) = shift_limits(g);
+        // (Clear: a hair over the shift that just clears it, so no rounding leaves it undercut.)
+        let l = if clear && pref > 0.0 { (pref + 1e-6).min(u) } else { l };
         sum += s * (pref - a);
         den += s * s;
         if s == 0.0 {

@@ -17,7 +17,7 @@
 
 use crate::axes::{Axis, add, cross, dot, len, mul, sub, unit};
 use crate::items::{
-    ANGLE_TOL, BlockSettings, Bore, ShaftMode, FacePreset, FaceSides, GearGeom, GearItem, GearRef, GearSettings, ItemKind, ItemLink, LinkKind, ModuleBlock,
+    ANGLE_TOL, BevelStyle, BlockSettings, Bore, ShaftMode, FacePreset, FaceSides, GearGeom, GearItem, GearRef, GearSettings, ItemKind, ItemLink, LinkKind, ModuleBlock,
     Thing, face_extent, gear_geoms, resolve_module, tol,
 };
 use crate::plan::Spec;
@@ -43,8 +43,12 @@ fn takes_helix(kind: ItemKind) -> bool {
 }
 
 /// Gear settings `s` (of an item of `kind`) with block `b`'s filled in where `s` gives none: its
-/// helix angle, its face width (half each side; an A only or B only face all on that side), and
-/// (Bore only) its Ø as the bore. A gear on a made shaft gets no bore: it is one body with it.
+/// helix angle and teeth (Helical or Herringbone: [`BlockSettings::herringbone`]), its face width
+/// (half each side; an A only or B only face all on that side), and (Bore only) its Ø as the
+/// bore. A gear on a made shaft gets no bore: it is one body with it.
+///
+/// A bevel pair takes the block's helix as its spiral ([`block_spiral`]); a hypoid keeps its own
+/// (its spiral goes with its offset), a worm its lead.
 pub fn block_settings(b: &BlockSettings, kind: ItemKind, s: &GearSettings) -> GearSettings {
     let mut out = *s;
     if let Some(h) = b.helix.filter(|h| h.is_finite())
@@ -52,6 +56,10 @@ pub fn block_settings(b: &BlockSettings, kind: ItemKind, s: &GearSettings) -> Ge
         && takes_helix(kind)
     {
         out.helix = Some(h);
+        out.v = s.v || b.herringbone;
+    }
+    if kind == ItemKind::Bevel {
+        (out.bevel_style, out.spiral_angle) = block_spiral(b, s.bevel_style, s.spiral_angle);
     }
     if let Some(w) = positive(b.face_width)
         && s.face.a.is_none()
@@ -70,6 +78,22 @@ pub fn block_settings(b: &BlockSettings, kind: ItemKind, s: &GearSettings) -> Ge
         out.bore = Bore::Diameter(d);
     }
     out
+}
+
+/// A bevel pair's style and spiral angle in block `b` (its own `style` and `spiral`): a straight
+/// pair with no spiral angle of its own (Auto) is spiral at the block's helix angle (chevron when
+/// the block's teeth are herringbone); a spiral or chevron pair with none takes the block's
+/// angle. A pair's own spiral angle (0: straight) stays, and a block helix of 0 changes nothing.
+pub fn block_spiral(b: &BlockSettings, style: BevelStyle, spiral: Option<f64>) -> (BevelStyle, Option<f64>) {
+    let Some(h) = b.helix.filter(|h| h.is_finite() && h.abs() > 1e-9) else { return (style, spiral) };
+    if spiral.is_some() {
+        return (style, spiral);
+    }
+    match style {
+        BevelStyle::Straight if b.herringbone => (BevelStyle::Chevron, Some(h)),
+        BevelStyle::Straight => (BevelStyle::Spiral, Some(h)),
+        own => (own, Some(h)),
+    }
 }
 
 /// The items with each member's gears given its block's settings ([`block_settings`]) and its
@@ -340,16 +364,6 @@ pub fn expand_blocks(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlo
                 if it.shaft_diameter.is_none() {
                     it.shaft_diameter = Some(s.diameter);
                 }
-            }
-            None => {
-                let mut it = GearItem::new(&id.unwrap_or_default(), ItemKind::Shaft).with(vec![Thing::line(s.a, s.b)]);
-                it.shaft_diameter = Some(s.diameter);
-                let at = out.items.len();
-                out.items.push(it);
-                out.added.push(at);
-                if given {
-                    out.links.extend(s.gears.iter().map(|r| ItemLink { a: GearRef::new(at, 0), b: *r, kind: LinkKind::Shaft }));
-                }
                 // A Shaft item's line runs over the block's gears on its axis (a line drawn
                 // short of a gear, a bevel's back face, would leave a gap), and carries them.
                 if it.kind == ItemKind::Shaft {
@@ -362,6 +376,16 @@ pub fn expand_blocks(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlo
                             out.links.push(ItemLink { a: from, b: *r, kind: LinkKind::Shaft });
                         }
                     }
+                }
+            }
+            None => {
+                let mut it = GearItem::new(&id.unwrap_or_default(), ItemKind::Shaft).with(vec![Thing::line(s.a, s.b)]);
+                it.shaft_diameter = Some(s.diameter);
+                let at = out.items.len();
+                out.items.push(it);
+                out.added.push(at);
+                if given {
+                    out.links.extend(s.gears.iter().map(|r| ItemLink { a: GearRef::new(at, 0), b: *r, kind: LinkKind::Shaft }));
                 }
             }
         }

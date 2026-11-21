@@ -211,6 +211,62 @@ fn a_side_view_bevel_pair_in_a_block_is_sized_at_the_blocks_module() {
     assert!(got.iter().zip([(15, 18.75), (30, 37.5)]).all(|(g, (z, d))| g.0 == z && close(g.1, 1.25, 1e-9) && close(g.2, d, 1e-6)), "{got:?}");
 }
 
+/// A block's Teeth: Helical (its helix angle) or Herringbone (V teeth) on the members left on
+/// Auto; a member's own choice (its own helix, 0 for straight) stays.
+#[test]
+fn a_blocks_herringbone_teeth_go_on_its_members_on_auto() {
+    let b = BlockSettings { helix: Some(20.0), herringbone: true, ..BlockSettings::default() };
+    let s = block_settings(&b, ItemKind::Spur, &GearSettings::default());
+    assert_eq!((s.helix, s.v), (Some(20.0), true));
+    let straight = block_settings(&b, ItemKind::Spur, &GearSettings { helix: Some(0.0), ..GearSettings::default() });
+    assert_eq!((straight.helix, straight.v), (Some(0.0), false), "its own straight teeth stay");
+    let helical = block_settings(&b, ItemKind::Compound, &GearSettings { helix: Some(15.0), ..GearSettings::default() });
+    assert_eq!((helical.helix, helical.v), (Some(15.0), false), "its own helical teeth stay");
+    let h = BlockSettings { herringbone: false, ..b };
+    assert_eq!(block_settings(&h, ItemKind::Spur, &GearSettings::default()).v, false);
+    // In a block, every gear of a compound gets them.
+    let mut items = drawing();
+    items[0].kind = ItemKind::Compound;
+    items[0].things.push(Thing::circle([0.0, 0.0, 12.0], Z, 6.0));
+    let w = with_blocks(&items, &[block(vec![0], b)]);
+    assert!((0..2).all(|g| w[0].settings(g).helix == Some(20.0) && w[0].settings(g).v), "{:?}", w[0].gears);
+}
+
+/// A side view's bevel pair in a block with a helix: spiral at the block's helix angle
+/// (chevron when the block's teeth are herringbone), unless the pair sets its own spiral angle;
+/// a hypoid keeps its own spiral, a worm its lead.
+#[test]
+fn a_blocks_helix_is_its_bevel_pairs_spiral() {
+    use crate::items::{BevelStyle, SizeBy};
+    let b = BlockSettings { helix: Some(20.0), ..BlockSettings::default() };
+    let auto = GearSettings::default();
+    let s = block_settings(&b, ItemKind::Bevel, &auto);
+    assert_eq!((s.bevel_style, s.spiral_angle, s.helix), (BevelStyle::Spiral, Some(20.0), None));
+    let v = block_settings(&BlockSettings { herringbone: true, ..b }, ItemKind::Bevel, &auto);
+    assert_eq!((v.bevel_style, v.spiral_angle), (BevelStyle::Chevron, Some(20.0)));
+    // Its own: a spiral angle (0 keeps it straight), or a style with no angle (takes the block's).
+    let own = GearSettings { spiral_angle: Some(0.0), ..auto };
+    assert_eq!(block_settings(&b, ItemKind::Bevel, &own).bevel_style, BevelStyle::Straight);
+    let own = GearSettings { spiral_angle: Some(35.0), bevel_style: BevelStyle::Spiral, ..auto };
+    assert_eq!(block_settings(&b, ItemKind::Bevel, &own).spiral_angle, Some(35.0));
+    let chevron = GearSettings { bevel_style: BevelStyle::Chevron, ..auto };
+    assert_eq!(block_settings(&b, ItemKind::Bevel, &chevron), GearSettings { spiral_angle: Some(20.0), ..chevron });
+    assert_eq!(block_settings(&BlockSettings { helix: Some(0.0), ..b }, ItemKind::Bevel, &auto), auto, "a helix of 0: straight");
+    for kind in [ItemKind::Hypoid, ItemKind::Worm] {
+        assert_eq!(block_settings(&b, kind, &auto), auto, "{kind:?}");
+    }
+    // Planned: the side view's pair is a spiral bevel pair at 20°.
+    let mut e = GearItem::new("E", ItemKind::Bevel).with(vec![Thing::line([0.0; 3], [0.0, 0.0, 60.0]), Thing::line([0.0; 3], [60.0, 0.0, 0.0])]);
+    e.gears = vec![GearSettings { teeth: Some(15), size_by: SizeBy::Teeth, ..auto }, GearSettings { teeth: Some(30), size_by: SizeBy::Teeth, ..auto }];
+    let blocks = [ModuleBlock { id: "M1".into(), module: Some(1.25), members: vec![0], settings: b }];
+    let w = with_blocks(std::slice::from_ref(&e), &blocks);
+    let st = crate::items::stages(&w, &[]);
+    assert!(st.iter().any(|s| s.bevel_style == BevelStyle::Spiral), "{st:?}");
+    let (sp, _) = planned(&[e], &[], &blocks);
+    let spiral = sp.plan.facts.iter().find(|f| f.label.contains("spiral angle")).map(|f| f.value);
+    assert!(spiral.is_some_and(|a| close(a, 20.0, 1e-9)), "{:?}", sp.plan.facts);
+}
+
 /// A power split: I drives two compounds L and R whose second gears both drive M. Drawn with
 /// R's second circle a little off, the loop's speeds don't quite agree; the compounds' layers
 /// still turn as one: on the block's shaft, neither layer free (bored) on it.

@@ -433,6 +433,7 @@ fn read_items(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemParams])
             tooth_chamfer: positive(cmd, &format!("{what}.tooth_chamfer"), b.tooth_chamfer.filter(|c| *c != 0.0))?,
             pressure_angle: angle("pressure_angle", b.pressure_angle)?.filter(|a| *a > 0.0),
             helix: angle("helix_angle", b.helix_angle)?,
+            herringbone: b.herringbone.unwrap_or(false),
             face_width: positive(cmd, &format!("{what}.face_width"), b.face_width)?,
             backlash: match b.backlash {
                 Some(x) if !(x.is_finite() && (0.0..10.0).contains(&x)) => return Err(bad(cmd, format!("`{what}.backlash` must be 0 or more (mm)"))),

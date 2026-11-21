@@ -498,7 +498,12 @@ pub struct BlockSettings {
     /// A 45° tooth chamfer on every member gear that takes one (over the set's).
     pub tooth_chamfer: Option<f64>,
     pub pressure_angle: Option<f64>,
+    /// The helix angle its gears on Auto take: on spur-type gears their helix, on a straight
+    /// bevel pair its spiral ([`crate::blocks::block_settings`]).
     pub helix: Option<f64>,
+    /// With [`BlockSettings::helix`]: V (herringbone) teeth; a bevel pair's spiral changes hand
+    /// at mid-face (chevron).
+    pub herringbone: bool,
     /// The whole face width, half each side of the sketch plane.
     pub face_width: Option<f64>,
     pub backlash: Option<f64>,

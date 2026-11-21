@@ -1134,7 +1134,8 @@ pub struct GearLinkParams {
 /// A block: items sharing one module (a value, or null: Auto, one for all): the items naming it
 /// in their `module_block`, and those in `members`. Its other settings (each optional) go on
 /// every member gear that gives none of its own: `tooth_chamfer` (mm, over the set's),
-/// `pressure_angle`, `helix_angle` (deg), `face_width`, `backlash` (mm) and `shaft_diameter`
+/// `pressure_angle`, `helix_angle` (deg: helical teeth, `herringbone` V teeth; a straight bevel
+/// pair's spiral, chevron when herringbone), `face_width`, `backlash` (mm) and `shaft_diameter`
 /// (mm), used as `shaft` says: `make` (the default) a shaft (a solid rod) of that Ø along each
 /// axis its gears are on, one body with them (no bore); `bore` every member's bore (the hole
 /// through the gear) at that Ø and no shaft; `none` neither.
@@ -1158,6 +1159,10 @@ pub struct GearModuleBlockParams {
     pub pressure_angle: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helix_angle: Option<f64>,
+    /// With `helix_angle`: V (herringbone) teeth on its gears on Auto, a chevron spiral on its
+    /// bevel pairs (default false: helical, spiral).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub herringbone: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub face_width: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

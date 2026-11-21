@@ -431,13 +431,44 @@ fn plan_units(items: &[GearItem], st: &[Stage], mapped: &crate::items::Mapped, b
         }
         x
     };
-    for s in st.iter().filter(|s| matches!(s.kind, StageKind::Parallel | StageKind::Internal | StageKind::Shaft)) {
+    // Gears tied onto one shaft (Shaft stages: links, compounds), by gear in `in_train`.
+    let mut tied: Vec<usize> = (0..in_train.len()).collect();
+    for s in st.iter().filter(|s| s.kind == StageKind::Shaft) {
+        let idx: Vec<usize> = s.gears.iter().filter_map(|r| in_train.iter().position(|g| g == r)).collect();
+        for w in idx.windows(2) {
+            let (a, b) = (find(&tied, w[0]), find(&tied, w[1]));
+            if a != b {
+                tied[a.max(b)] = a.min(b);
+            }
+        }
+    }
+    let axis_of = |x: usize| {
+        let r = in_train[x];
+        let g = items.get(r.item).and_then(|it| gear_geoms(it).get(r.gear).copied())?;
+        g.radius?;
+        Axis::new(g.centre, g.axis)
+    };
+    let axes: Vec<Option<Axis>> = (0..in_train.len()).map(axis_of).collect();
+    // The meshes first, then the shared shafts; a shaft that would bring into one train two gears
+    // on one axis that no shaft ties (one turning free on it: the train's reader would take them
+    // as one compound) leaves the two trains apart, joined by the shaft across them as any
+    // cluster across units is.
+    let meshes = st.iter().filter(|s| matches!(s.kind, StageKind::Parallel | StageKind::Internal));
+    for s in meshes.chain(st.iter().filter(|s| s.kind == StageKind::Shaft)) {
         let idx: Vec<usize> = s.gears.iter().filter_map(|r| in_train.iter().position(|g| g == r)).collect();
         for w in idx.windows(2) {
             let (a, b) = (find(&group, w[0]), find(&group, w[1]));
-            if a != b {
-                group[a.max(b)] = a.min(b);
+            if a == b {
+                continue;
             }
+            if s.kind == StageKind::Shaft {
+                let (of_a, of_b): (Vec<usize>, Vec<usize>) = (0..in_train.len()).filter(|x| [a, b].contains(&find(&group, *x))).partition(|x| find(&group, *x) == a);
+                let loose = of_a.iter().any(|x| of_b.iter().any(|y| find(&tied, *x) != find(&tied, *y) && axes[*x].zip(axes[*y]).is_some_and(|(p, q)| p.coaxial(&q))));
+                if loose {
+                    continue;
+                }
+            }
+            group[a.max(b)] = a.min(b);
         }
     }
     let mut units = Vec::new();

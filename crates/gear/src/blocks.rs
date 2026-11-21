@@ -11,7 +11,9 @@
 //!   over the gears' faces and a margin past them (or out to the bearing points on that axis);
 //!   [`expand_blocks`] adds each as a Shaft item joined to the gears on its axis, so the shaft
 //!   and its gears are one body (the planners' own Shaft machinery,
-//!   [`crate::plan::system::plan_items`]).
+//!   [`crate::plan::system::plan_items`]). A gear on that axis that the request's links make
+//!   turn at another speed than the shaft's gears (an idler, a gear driven back at another
+//!   ratio) is not joined to it: it turns free on the shaft, bored [`FREE_FIT`] over its Ø.
 
 use crate::axes::{Axis, add, cross, dot, len, mul, sub, unit};
 use crate::items::{
@@ -144,6 +146,9 @@ pub struct BlockShaft {
     pub a: V,
     pub b: V,
     pub diameter: f64,
+    /// The block's gears on this axis that the links make turn at another speed than `gears`:
+    /// not joined to the shaft, each turning free on it in a bore [`FREE_FIT`] over its Ø.
+    pub free: Vec<GearRef>,
     /// The item whose own shaft line is on this axis already (a Shaft item, or a gear's drawn
     /// shaft line): that shaft takes the block's Ø and no other is made.
     pub existing: Option<usize>,
@@ -181,8 +186,21 @@ fn line_on(items: &[GearItem], o: V, u: V, t: f64) -> Option<usize> {
 /// The shafts the blocks with a shaft Ø make: one per distinct axis their gears are on (gears
 /// on one axis share it), over the gears' faces (at the block's module, or the Auto one its
 /// gears' sizes give) and a margin past them, or out to the bearing points picked on that axis.
+/// No links: every gear on an axis is on its shaft ([`block_shafts_linked`]).
 pub fn block_shafts(items: &[GearItem], blocks: &[ModuleBlock]) -> Vec<BlockShaft> {
+    block_shafts_linked(items, &[], blocks)
+}
+
+/// How much bigger than its shaft a free-turning gear's bore is (mm, on the diameter): a
+/// running clearance.
+pub const FREE_FIT: f64 = 0.2;
+
+/// [`block_shafts`] with the request's links: of the gears on one axis, those the links make
+/// turn at another speed (or the other way) than the most of them are `free` on the shaft, not
+/// on it. Gears the links don't relate to those stay on it.
+pub fn block_shafts_linked(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlock]) -> Vec<BlockShaft> {
     let items = with_blocks(items, blocks);
+    let turning = turnings(&items, links);
     let mut out = Vec::new();
     for (k, b) in blocks.iter().enumerate() {
         let Some(d) = positive(b.settings.shaft_diameter) else { continue };
@@ -237,9 +255,11 @@ pub fn block_shafts(items: &[GearItem], blocks: &[ModuleBlock]) -> Vec<BlockShaf
             } else {
                 (bearings.iter().copied().fold(lo, f64::min), bearings.iter().copied().fold(hi, f64::max))
             };
+            let (gears, free) = on_and_free(&gears, u, &items, &turning);
             out.push(BlockShaft {
                 block: k,
                 gears,
+                free,
                 a: add(o, mul(u, lo)),
                 b: add(o, mul(u, hi)),
                 diameter: d,
@@ -272,11 +292,23 @@ pub struct Expanded {
 /// See [`Expanded`]. A request with links of its own gets a Shaft link from each new shaft to
 /// each gear on its axis; one with none infers them as for any Shaft item (the gears on its line).
 pub fn expand_blocks(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlock]) -> Expanded {
-    let shafts = block_shafts(items, blocks);
+    let shafts = block_shafts_linked(items, links, blocks);
     let mut out = Expanded { items: with_blocks(items, blocks), links: links.to_vec(), shafts: Vec::new(), added: Vec::new() };
     let given = !links.is_empty();
     let mut made = vec![0usize; blocks.len()];
     for s in &shafts {
+        // A free-turning gear's bore (the block's Ø, where the gear left it on Auto) clears the
+        // shaft.
+        for r in &s.free {
+            if items.get(r.item).is_some_and(|it| it.settings(r.gear).bore == Bore::Auto) {
+                let it = &mut out.items[r.item];
+                while it.gears.len() <= r.gear {
+                    let next = it.settings(it.gears.len());
+                    it.gears.push(next);
+                }
+                it.gears[r.gear].bore = Bore::Diameter(s.diameter + FREE_FIT);
+            }
+        }
         match s.existing {
             Some(e) => {
                 let it = &mut out.items[e];
@@ -299,4 +331,131 @@ pub fn expand_blocks(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlo
     }
     out.shafts = shafts;
     out
+}
+
+/// Each gear's turning as far as the links tell it: the group of gears the links (and each
+/// item's own gears: a compound's on one shaft, a pair's meshing) tie together, and its speed
+/// about its own axis (`gear_geoms`' direction, signed) per unit of the group's first gear's. A
+/// gear tied to none is a group of its own; a tie whose speeds can't be worked out (a rack, a
+/// gear of no radius) ties nothing.
+fn turnings(items: &[GearItem], links: &[ItemLink]) -> Vec<(GearRef, usize, f64)> {
+    let geoms: Vec<Vec<GearGeom>> = items.iter().map(gear_geoms).collect();
+    let refs: Vec<GearRef> = geoms.iter().enumerate().flat_map(|(i, g)| (0..g.len()).map(move |k| GearRef::new(i, k))).collect();
+    let at = |r: GearRef| refs.iter().position(|x| *x == r);
+    let geo = |r: GearRef| geoms.get(r.item).and_then(|g| g.get(r.gear));
+    // Every tie: the two gears and the second's speed per unit of the first's.
+    let mut ties: Vec<(usize, usize, f64)> = Vec::new();
+    let mut tie = |a: GearRef, b: GearRef, kind: LinkKind| {
+        let (Some(x), Some(y), Some(ga), Some(gb)) = (at(a), at(b), geo(a), geo(b)) else { return };
+        let ratio = match kind {
+            LinkKind::Shaft => unit(ga.axis).zip(unit(gb.axis)).map(|(u, w)| dot(u, w)),
+            LinkKind::Mesh => mesh_ratio(ga, gb),
+        };
+        if let Some(k) = ratio.filter(|k| k.is_finite() && k.abs() > 1e-12) {
+            ties.push((x, y, k));
+        }
+    };
+    for (i, it) in items.iter().enumerate() {
+        let n = geoms[i].len();
+        if n < 2 || matches!(it.kind, ItemKind::Planetary | ItemKind::Shaft) {
+            continue;
+        }
+        let kind = if it.kind == ItemKind::Compound { LinkKind::Shaft } else { LinkKind::Mesh };
+        for g in 1..n {
+            tie(GearRef::new(i, 0), GearRef::new(i, g), kind);
+        }
+    }
+    for l in links {
+        tie(l.a, l.b, l.kind);
+    }
+    // Each group from its first gear, the speeds carried along the ties (a loop's last tie, which
+    // a set that can turn agrees with, changes nothing).
+    let mut speed: Vec<Option<(usize, f64)>> = vec![None; refs.len()];
+    for start in 0..refs.len() {
+        if speed[start].is_some() {
+            continue;
+        }
+        speed[start] = Some((start, 1.0));
+        let mut todo = vec![start];
+        while let Some(x) = todo.pop() {
+            let Some((group, sx)) = speed[x] else { continue };
+            for &(a, b, k) in &ties {
+                let (next, s) = if a == x {
+                    (b, sx * k)
+                } else if b == x {
+                    (a, sx / k)
+                } else {
+                    continue;
+                };
+                if speed[next].is_none() {
+                    speed[next] = Some((group, s));
+                    todo.push(next);
+                }
+            }
+        }
+    }
+    refs.iter().zip(speed).filter_map(|(r, s)| s.map(|(g, v)| (*r, g, v))).collect()
+}
+
+/// Gear `b`'s speed about its axis per unit of `a`'s about its own, the two meshing: their pitch
+/// circles' speeds agree where they meet (the point of `a`'s nearest `b`'s). `None` without
+/// both radii.
+fn mesh_ratio(a: &GearGeom, b: &GearGeom) -> Option<f64> {
+    let (ra, rb) = (a.radius?, b.radius?);
+    let (ua, ub) = (unit(a.axis)?, unit(b.axis)?);
+    // Two directions square to a's axis, in its pitch circle's plane.
+    let pick = if ua[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+    let e1 = unit(cross(ua, pick))?;
+    let e2 = cross(ua, e1);
+    let on_a = |t: f64| add(a.centre, add(mul(e1, ra * t.cos()), mul(e2, ra * t.sin())));
+    let off_b = |t: f64| {
+        let d = sub(on_a(t), b.centre);
+        let along = dot(d, ub);
+        let radial = len(sub(d, mul(ub, along)));
+        along * along + (radial - rb) * (radial - rb)
+    };
+    // The nearest point: the best of 720, narrowed down about it.
+    let n = 720u32;
+    let step = std::f64::consts::TAU / f64::from(n);
+    let mut t = (0..n).map(|k| f64::from(k) * step).min_by(|x, y| off_b(*x).total_cmp(&off_b(*y)))?;
+    let mut h = step;
+    for _ in 0..40 {
+        h /= 2.0;
+        t = [t - h, t, t + h].into_iter().min_by(|x, y| off_b(*x).total_cmp(&off_b(*y)))?;
+    }
+    let p = on_a(t);
+    let (va, vb) = (cross(ua, sub(p, a.centre)), cross(ub, sub(p, b.centre)));
+    let vv = dot(vb, vb);
+    (vv > 1e-18).then(|| dot(va, vb) / vv)
+}
+
+/// An axis's gears (`u` its direction) parted into those on its shaft and those free on it: the
+/// gears the links make turn alike about `u` are one lot; the biggest lot (the first of equal
+/// ones) is on the shaft, with every gear the links don't relate to it; the others of its group
+/// turn free.
+fn on_and_free(gears: &[GearRef], u: V, items: &[GearItem], turning: &[(GearRef, usize, f64)]) -> (Vec<GearRef>, Vec<GearRef>) {
+    // A gear's group and its speed about `u`.
+    let about = |r: GearRef| -> Option<(usize, f64)> {
+        let (_, group, s) = turning.iter().find(|(x, ..)| *x == r)?;
+        let w = unit(gear_geoms(items.get(r.item)?).get(r.gear)?.axis)?;
+        Some((*group, s * dot(w, u)))
+    };
+    let alike = |a: (usize, f64), b: (usize, f64)| a.0 == b.0 && (a.1 - b.1).abs() <= 1e-6 * a.1.abs().max(b.1.abs()).max(1e-12);
+    let mut lots: Vec<((usize, f64), usize)> = Vec::new();
+    for r in gears {
+        let Some(t) = about(*r) else { continue };
+        match lots.iter_mut().find(|(k, _)| alike(*k, t)) {
+            Some((_, count)) => *count += 1,
+            None => lots.push((t, 1)),
+        }
+    }
+    let mut kept: Option<((usize, f64), usize)> = None;
+    for lot in &lots {
+        if kept.is_none_or(|k| lot.1 > k.1) {
+            kept = Some(*lot);
+        }
+    }
+    let Some((kept, _)) = kept else { return (gears.to_vec(), Vec::new()) };
+    let free: Vec<GearRef> = gears.iter().copied().filter(|r| about(*r).is_some_and(|t| t.0 == kept.0 && !alike(t, kept))).collect();
+    (gears.iter().copied().filter(|r| !free.contains(r)).collect(), free)
 }

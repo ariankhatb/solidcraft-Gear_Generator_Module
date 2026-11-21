@@ -146,3 +146,39 @@ fn a_blocks_shaft_and_the_gears_on_it_are_one_body_per_axis() {
         assert!(sp.plan.bodies[sp.body(g(3, 0)).unwrap()].name.starts_with("Shaft"), "{}", sp.plan.bodies[sp.body(g(3, 0)).unwrap()].name);
     }
 }
+
+/// A (Ø20) meshes B (Ø30, x 25); D sits on B's shaft 12 mm up and meshes C, on A's axis: C is
+/// driven back round to A's axis at (10/15)·(rd/rc) of A's speed.
+fn back_round(rc: f64) -> (Vec<GearItem>, Vec<ItemLink>) {
+    let items = vec![spur("A", [0.0; 3], 10.0), spur("B", [25.0, 0.0, 0.0], 15.0), spur("C", [0.0, 0.0, 12.0], rc), spur("D", [25.0, 0.0, 12.0], 25.0 - rc)];
+    (items, vec![mesh(g(0, 0), g(1, 0)), crate::test_util::shaft(g(1, 0), g(3, 0)), mesh(g(3, 0), g(2, 0))])
+}
+
+#[test]
+fn a_gear_the_links_turn_at_another_speed_turns_free_on_its_blocks_shaft() {
+    let blocks = [block(vec![0, 2], BlockSettings { shaft_diameter: Some(6.0), ..BlockSettings::default() })];
+    // C at 4/9 of A's speed: A is on the shaft, C turns free on it in a clearance bore.
+    let (items, links) = back_round(15.0);
+    let e = expand_blocks(&items, &links, &blocks);
+    assert_eq!(e.shafts.len(), 1, "{:?}", e.shafts);
+    let s = &e.shafts[0];
+    assert_eq!((s.gears.clone(), s.free.clone()), (vec![g(0, 0)], vec![g(2, 0)]), "{s:?}");
+    assert!(close(s.length(), 34.0, 1e-9), "the shaft still runs under C: {s:?}");
+    assert_eq!(e.items[2].settings(0).bore, Bore::Diameter(6.0 + crate::blocks::FREE_FIT));
+    assert_eq!(e.items[0].settings(0).bore, Bore::Diameter(6.0));
+    assert!(!e.links.iter().any(|l| l.a.item == 4 && l.b == g(2, 0)), "no shaft link to C: {:?}", e.links);
+    let (sp, added) = planned(&items, &links, &blocks);
+    let shaft = sp.body(g(added[0], 0)).unwrap();
+    assert!(rigid_of(&sp, g(0, 0)).contains(&shaft), "A is on the shaft");
+    assert!(!rigid_of(&sp, g(2, 0)).contains(&shaft), "C is not locked onto it");
+    // C at A's speed (rd/rc = 15/10): one shaft for both, as before.
+    let (items, links) = back_round(10.0);
+    let e = expand_blocks(&items, &links, &blocks);
+    assert_eq!((e.shafts[0].gears.clone(), e.shafts[0].free.clone()), (vec![g(0, 0), g(2, 0)], vec![]));
+    assert_eq!(e.items[2].settings(0).bore, Bore::Diameter(6.0));
+    let (sp, _) = planned(&items, &links, &blocks);
+    assert!(rigid_of(&sp, g(0, 0)).contains(&sp.body(g(2, 0)).unwrap()), "A and C one body on the shaft");
+    // Gears the links don't relate stay on the shaft (A and C with no link between them).
+    let e = expand_blocks(&items, &[mesh(g(0, 0), g(1, 0))], &blocks);
+    assert_eq!(e.shafts[0].gears, vec![g(0, 0), g(2, 0)]);
+}

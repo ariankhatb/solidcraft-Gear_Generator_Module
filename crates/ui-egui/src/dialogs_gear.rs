@@ -503,8 +503,10 @@ impl Cutout {
         }
     }
 
-    /// The `clearance_body` parameters.
-    fn params(&self, app: &SolveApp) -> Result<Value, String> {
+    /// The `clearance_body` parameters: the bearing only when `points` (the bearing points
+    /// picked) is over 0, since a bearing with no seat makes nothing (the 608 a cutout starts
+    /// with is no choice of the user's).
+    fn params(&self, app: &SolveApp, points: usize) -> Result<Value, String> {
         let mut c = Map::new();
         for (key, text, what) in [("radial", &self.radial, "Radial gap"), ("axial", &self.axial, "Axial gap"), ("bearing_fit", &self.fit, "Seat fit"), ("shaft_extension", &self.run_on, "Shaft run-on")] {
             if let Some(v) = number(app, text, ValueKind::Length, what)? {
@@ -512,6 +514,7 @@ impl Cutout {
             }
         }
         match solidcraft_gear::hub::BEARINGS.get(self.bearing) {
+            _ if points == 0 => {}
             Some(b) => {
                 c.insert("bearing".into(), json!(b.0));
             }
@@ -1383,7 +1386,8 @@ fn output(app: &SolveApp, k: &Gear, inputs: &[SelInput], p: &mut Map<String, Val
     }
     p.insert("assembly".into(), json!(k.assembly));
     if k.cutout.on {
-        p.insert("clearance_body".into(), k.cutout.params(app)?);
+        let points: usize = k.items.iter().map(|it| it.things(app).iter().filter(|x| matches!(x, solidcraft_gear::items::Thing::Point { .. })).count()).sum();
+        p.insert("clearance_body".into(), k.cutout.params(app, points)?);
     }
     if let Some(size) = number(app, &k.chamfer, ValueKind::Length, "Tooth chamfer")?.filter(|v| *v != 0.0) {
         let mut c = json!({"size": size});

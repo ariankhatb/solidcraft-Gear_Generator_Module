@@ -902,6 +902,14 @@ fn the_housing_cutout_and_bearing_points_on_shaft_lines() {
     d.inputs = inputs.clone();
     let p = apply_commands(&app, &d).unwrap()[0].1.clone();
     assert_eq!(p["clearance_body"]["bearing"], json!("608"), "{p}");
+    // With no bearing point the cutout takes no bearing (the 608 it starts with is no choice):
+    // no seat, and no warning that it has none.
+    let mut bare = g.clone();
+    bare.items[0].picks.truncate(2);
+    let mut db = d.clone();
+    db.kind = Kind::Gear(bare);
+    let pb = apply_commands(&app, &db).unwrap()[0].1.clone();
+    assert!(pb["clearance_body"].is_object() && pb["clearance_body"].get("bearing").is_none(), "{pb}");
     let slots: Vec<&str> = p["items"][0]["components"].as_array().unwrap().iter().map(|c| c["slot"].as_str().unwrap()).collect();
     assert_eq!(slots, ["pitch", "axis", "bearing"], "{p}");
     refresh(&mut app, &mut g, &inputs);

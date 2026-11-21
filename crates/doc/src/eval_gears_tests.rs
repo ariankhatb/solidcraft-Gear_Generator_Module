@@ -209,3 +209,53 @@ fn a_fused_build_is_the_planned_steps_solid() {
     let near = |a: Vec3, b: Vec3| (a.x - b.x).abs().max((a.y - b.y).abs()).max((a.z - b.z).abs()) < 1e-6;
     assert!(near(bf.min, bp.min) && near(bf.max, bp.max), "{bf:?} vs {bp:?}");
 }
+
+/// On a spline's own chord lengths, the natural spline's pieces are the sketch's fit's.
+#[test]
+fn a_spline_fit_on_its_own_chord_lengths_is_the_sketch_fit() {
+    use solidcraft_geom::Vec2Geom;
+    let p: Vec<Vec2> = [(0.0, 0.0), (1.0, 0.3), (2.5, 0.2), (2.9, 1.4), (3.0, 3.0), (4.2, 3.1)].iter().map(|&(x, y)| Vec2::new(x, y)).collect();
+    let mut t = vec![0.0];
+    for i in 1..p.len() {
+        t.push(t[i - 1] + p[i].dist(p[i - 1]));
+    }
+    let ours = super::natural_beziers(&p, &t);
+    let sketch = solidcraft_sketch::fit_beziers(&p);
+    assert_eq!(ours.len(), sketch.len());
+    for (a, b) in ours.iter().zip(&sketch) {
+        for (x, y) in a.iter().zip(b) {
+            assert!(x.dist(*y) < 1e-9, "{a:?} against {b:?}");
+        }
+    }
+}
+
+/// Each body of a set, made as the feature makes it, passes the kernel's check.
+fn bodies_pass_the_check(spec: &Spec) {
+    let plan = solidcraft_gear::plan(spec).unwrap();
+    assert!(!plan.bodies.is_empty());
+    for b in &plan.bodies {
+        let mut notes = Vec::new();
+        let (body, _) = solidcraft_kernel::validating(solidcraft_kernel::Validation::Off, || super::build_body(b, &mut notes));
+        let body = body.unwrap();
+        assert!(notes.is_empty(), "{}: {notes:?}", b.name);
+        let t = std::time::Instant::now();
+        let v = solidcraft_kernel::check_kept(&body);
+        assert!(v.is_ok(), "{}: {}", b.name, v.unwrap_err().to_string().lines().take(3).collect::<Vec<_>>().join("\n"));
+        eprintln!("{}: valid, checked in {:?}", b.name, t.elapsed());
+    }
+}
+
+/// A hypoid's teeth are lofted through sections of different shapes and trimmed by the blank's
+/// toe and heel cones; a flat bevel's (a pitch cone over 70°) are a taper trimmed by its back and
+/// front cones. The kernel's check takes them (it refused every tooth side's trim, a minute a
+/// body, where the sections' splines were the sketch's fit, whose speed jumps at each fit point).
+#[test]
+fn a_hypoids_trimmed_teeth_pass_the_kernels_check() {
+    bodies_pass_the_check(&Spec::defaults_for(Kind::Hypoid));
+}
+
+#[test]
+fn a_flat_bevels_trimmed_teeth_pass_the_kernels_check() {
+    // The RC drivetrain's bevels: 30 and 30 teeth of module 0.6 at 160°, cones of 80°.
+    bodies_pass_the_check(&Spec { module: 0.6, teeth: 30, teeth2: 30, shaft_angle: 160.0, ..Spec::defaults_for(Kind::Bevel) });
+}

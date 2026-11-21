@@ -2168,12 +2168,10 @@ pub(crate) struct ConeTeeth {
 
 /// Pitch cone angles above this (70°) end their teeth on the back and front cones; flatter
 /// cones' plane sections square to the axis run far past them (on a crown's the tips never
-/// meet that plane). Up to it the teeth end on planes square to the axis, as always: SMLib's
-/// check refuses every curved trim of a bevel's teeth (back and front cones, even cylinders;
-/// even of flat-sided teeth), finding near-cusps in the boolean's own 2D curves ("Bad
-/// CurveCusp", which it calls a warning but counts), so a trimmed member is built (validation
-/// is off while gears are made) but fails the kernel's check, `inspect.interference`
-/// included. Only where flat ends would make long thin blades is that taken.
+/// meet that plane). Up to it the teeth end on planes square to the axis, as always: no boolean
+/// on the teeth at all. (SMLib's check refused every curved trim of a bevel's teeth, "Bad
+/// CurveCusp", while the engine handed a taper's sections in as the sketch's fit splines, whose
+/// speed jumps at each fit point; it takes them on the even-speed sections the engine makes now.)
 pub const FLAT_CONE: f64 = 70.0 * PI / 180.0;
 
 /// How deep a bevel's body runs under its roots (× module, along the back cone at the heel and

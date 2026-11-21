@@ -2,19 +2,22 @@
 //! of icon tabs at the top, the tab's name and the **status line** (always what to do next, or
 //! why the last pick was refused) under it, and the tab's titled groups scrolling below; OK and
 //! Cancel stay at the foot. A group a checkbox switches on (the housing cutout, a hub, the tooth
-//! chamfer, the keep-out, the graph, a differential) shows its rows only while it is on.
+//! chamfer, the keep-out, a differential) shows its rows only while it is on.
 //!
 //! - **Gears**: the type and **New gear**, a **card** per gear (its colour, name and type; while
 //!   it is picked its checklist; once complete one line with its teeth and module; its messages
 //!   with what to do; click a card to make it the one picks go to, × to remove it), and under the
 //!   cards the selected gear's own settings and size (Size by, Module / Teeth, Face). A bevel or
-//!   hypoid pair has the switch for a differential in its ring gear here.
+//!   hypoid pair has the switch for a differential in its ring gear here. Under the cards, the
+//!   **blocks**: gears put in a block share its module, shaft Ø (bores and one shaft per axis),
+//!   face width and, under More, helix, pressure angle, backlash and tooth chamfer.
 //! - **Teeth**: the selected gear's helix (or bevel style and spiral) and profile shift; the
 //!   tooth form every gear takes (pressure angle, backlash, tip rounding, XY compensation); the
 //!   tooth chamfer.
-//! - **Shafts & Bearings**: the selected gear's bore and hub (a shaft's Ø) and the bearing points.
-//! - **Links & Motion**: the links, the suggested ones, a link by hand, the drive, the ratio
-//!   between two gears and the node graph.
+//! - **Shafts & Bearings**: the shaft each axis gets and from which block, the selected gear's
+//!   bore and hub (a shaft's Ø) and the bearing points.
+//! - **Links & Motion**: the links (each drawn in the view; hovering a row lights it), the
+//!   suggested ones, a link by hand, the drive and the ratio between two gears.
 //! - **Housing & Output**: the housing cutout, the operation, Targets, keep-out and assembly.
 //! - **Differential** (while a ring gear carries one): its style, pinions, module, half-shafts
 //!   and facts.
@@ -32,8 +35,8 @@ use solidcraft_theme::Tokens;
 use crate::SolveApp;
 use crate::dialogs::OP_LABELS;
 use crate::dialogs_gear::{self as dg, Gear, Msg, Tab};
-use crate::dialogs_gear_graph::{GearSettings, item_id};
 use crate::dialogs_gear_items::{DiffForm, FACE_PRESETS};
+use crate::dialogs_gear_links::{GearSettings, item_id};
 use crate::selection::SelInput;
 use crate::ui_kit::{self, BackingTooltipExt as _, choice_row, hint_row};
 
@@ -77,6 +80,15 @@ const TIP_MESH: &str = "Mesh: the two gears' teeth engage; their distance is che
 const TIP_SHAFT: &str = "Same shaft: the two gears turn together.";
 const TIP_PICKER: &str = "The gear these settings are for. Choosing one selects it, as clicking its card on the Gears tab does: your picks go to it.";
 const TIP_DIFF: &str = "Put a differential in this pair's ring gear (the hypoid's ring, the bevel pair's larger gear): a case rigid with the ring, two side gears with a half-shaft each on the ring's axis, and pinions on the case. Its settings are on the Differential tab.";
+const TIP_BLOCK: &str = "A block puts gears under shared settings: set the module, shaft Ø or face width once and every gear in it follows. A gear's own value (in its settings below) wins over the block's.";
+const TIP_BLOCK_GEARS: &str = "The gears in this block. A gear is in one block at most: ticking it here takes it out of any other.";
+const TIP_BLOCK_MODULE: &str = "One module for every gear in the block, so they can mesh. Auto: the largest standard module giving the smallest gear in the block 17 teeth or more.";
+const TIP_BLOCK_SHAFT: &str = "Every gear in the block gets a bore of this Ø, and each axis its gears are on gets a shaft of this Ø joined to the gears on it (one body per axis). The shaft runs over the gears' faces and a little past them, or out to the bearing points on that axis. Empty: no block shafts.";
+const TIP_BLOCK_FACE: &str = "The whole face width of every gear in the block, half each side of the sketch plane (A only / B only gears: all on that side). Empty: each gear's own, or Auto.";
+const TIP_BLOCK_HELIX: &str = "Helix angle for every spur, helical, herringbone, ring, rack and planetary gear in the block; meshing gears get opposite hands. Empty: each gear's own.";
+const TIP_BLOCK_PA: &str = "Pressure angle of the block's gears (20° is standard). Empty: the set's (Teeth tab).";
+const TIP_BLOCK_BACKLASH: &str = "Backlash between the block's meshing gears. Empty: the set's (Teeth tab).";
+const TIP_BLOCK_CHAMFER: &str = "A 45° tooth chamfer on every gear in the block that takes one, in place of the set's (Teeth tab). Empty: the set's.";
 const TIP_DIFF_STYLE: &str = "Open: bevel side gears and spider pinions. Biased: uneven side gears, so it biases torque. Torsen B: helical elements (a planetary). Torsen A: worm elements.";
 const TIP_DIFF_PINIONS: &str = "Spider pinions on the case, 1 to 6. Auto: 2.";
 const TIP_DIFF_ELEMENTS: &str = "Element gear pairs, 1 to 8. Auto: 3 (Torsen B) or 2 (Torsen A).";
@@ -225,7 +237,7 @@ fn summary(k: &Gear, i: usize) -> String {
     let n = k.gear_counts.get(i).copied().unwrap_or(0);
     let parts: Vec<String> = (0..n)
         .filter_map(|g| {
-            let r = k.graph.replies().iter().find(|r| (r.item, r.gear) == (i, g))?;
+            let r = k.links.replies().iter().find(|r| (r.item, r.gear) == (i, g))?;
             (r.teeth > 0).then(|| {
                 let name = if n > 1 { format!("{} ", k.gear_name((i, g))) } else { String::new() };
                 let b = k.built.iter().find(|b| (b.item, b.gear) == (i, g));
@@ -250,7 +262,7 @@ fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput
         let it = k.items[i].clone();
         let active = k.active == Some(i) && *input == 0;
         let complete = it.complete(app);
-        let lit = k.card_hovered == Some(i) || k.graph_hovered == Some(i);
+        let lit = k.card_hovered == Some(i) || k.link_hovered.is_some_and(|l| l.0 == i || l.2 == i);
         let stroke = if active {
             egui::Stroke::new(1.5, t.form_primary)
         } else if lit {
@@ -419,7 +431,7 @@ fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput
         }
     }
     k.card_hovered = hovered;
-    if let Some(i) = hovered.or(k.graph_hovered)
+    if let Some(i) = hovered
         && let Some(first) = k.items.get(i).and_then(|it| it.picks.first())
     {
         *hover = Some((0, first.clone()));
@@ -546,7 +558,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
     if *input == 0 {
         dg::sync_picks(app, k, inputs);
     }
-    dg::refresh(app, k, inputs);
+    dg::refresh_in(app, k, inputs, Some(ui.ctx()));
     dg::auto_details(app, k, inputs);
     let t = Tokens::get();
     ui.spacing_mut().item_spacing.y = t.space_4;
@@ -577,8 +589,8 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [S
     if tab != Tab::Gears {
         k.card_hovered = None;
     }
-    if tab != Tab::Motion || !k.show_graph {
-        k.graph_hovered = None;
+    if tab != Tab::Motion {
+        k.link_hovered = None;
     }
     enter
 }
@@ -611,9 +623,127 @@ fn gears_tab(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelI
         guide(ui);
     }
     cards(app, ui, k, inputs, input, hover);
+    enter |= blocks_group(ui, k);
     if let Some(a) = k.active.filter(|a| *a < k.items.len()) {
         enter |= size_group(ui, k, a);
     }
+    enter
+}
+
+/// The blocks: none yet, one button puts every gear in one; each block its name, its gears
+/// (ticked), its module and shaft Ø, its face width and, under More, its helix, pressure angle,
+/// backlash and tooth chamfer, laid out two to a row. Its handles are `gear:block:all`,
+/// `gear:block:new` and `gear:block:<n>:remove`.
+fn blocks_group(ui: &mut egui::Ui, k: &mut Gear) -> bool {
+    if k.items.is_empty() || k.legacy.is_some() {
+        return false;
+    }
+    let mut enter = false;
+    let n = k.links.blocks().len();
+    let title = if n == 0 { "Blocks".to_string() } else { format!("Blocks · {n}") };
+    ui_kit::section(ui, "gear_blocks", &title, true, |ui| {
+        if n == 0 {
+            ui_kit::text(ui, "Put the gears in a block to set their module, shaft Ø and face width once for all of them.", ui_kit::Text::Note("gear_blocks_none"));
+            let r = ui_kit::button(ui, "Put all gears in one block", ui_kit::Button::Normal).backing_on_hover_text(TIP_BLOCK);
+            solidcraft_ui_registry::publish_target("gear:block:all", r.rect);
+            if r.clicked() {
+                let all: Vec<usize> = (0..k.items.len()).collect();
+                k.links.add_block(&all);
+            }
+            return;
+        }
+        let mut remove = None;
+        for b in 0..n {
+            enter |= block_rows(ui, k, b, &mut remove);
+        }
+        if let Some(b) = remove {
+            k.links.remove_block(b);
+        }
+        let loose: Vec<usize> = (0..k.items.len()).filter(|i| k.links.block_of(*i).is_none()).collect();
+        let r = ui_kit::button(ui, "New block", ui_kit::Button::Enabled(!loose.is_empty())).backing_on_hover_text("Another block, holding the gears in no block yet.");
+        solidcraft_ui_registry::publish_target("gear:block:new", r.rect);
+        if r.clicked() {
+            k.links.add_block(&loose);
+        }
+    });
+    enter
+}
+
+/// Block `b`'s rows (see [`blocks_group`]); its × sets `remove`.
+fn block_rows(ui: &mut egui::Ui, k: &mut Gear, b: usize, remove: &mut Option<usize>) -> bool {
+    let t = Tokens::get();
+    let mut enter = false;
+    let color = dg::block_color(b);
+    let title = k.links.blocks()[b].title(b);
+    ui.add_space(t.space_2);
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(format!("●  {title}")).size(t.font_label).strong().color(color)).backing_on_hover_text(TIP_BLOCK);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let r = ui_kit::compact_button(ui, "×", "Remove this block: its gears keep their own settings", true, false);
+            solidcraft_ui_registry::publish_target(&format!("gear:block:{}:remove", b + 1), r.rect);
+            if r.clicked() {
+                *remove = Some(b);
+            }
+        });
+    });
+    // Its gears, ticked.
+    let count = k.items.len();
+    let mut toggled = None;
+    ui.scope(|ui| {
+        ui_kit::row(ui, "Gears", |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for i in 0..count {
+                    let was = k.links.blocks()[b].members.contains(&i);
+                    let mut on = was;
+                    ui_kit::checkbox(ui, &item_id(i), &mut on);
+                    if on != was {
+                        toggled = Some((i, on));
+                    }
+                }
+            });
+        })
+    })
+    .response
+    .backing_on_hover_text(TIP_BLOCK_GEARS);
+    match toggled {
+        Some((i, true)) => k.links.put_in_block(b, i),
+        Some((i, false)) => k.links.take_out(i),
+        None => {}
+    }
+    let shafts: Vec<String> = k
+        .block_shafts
+        .iter()
+        .filter(|s| s.block == b)
+        .map(|s| format!("{} ({} mm)", s.gears.iter().map(|g| k.gear_name((g.item, g.gear))).collect::<Vec<_>>().join(" + "), dg::fmt((s.length() * 10.0).round() / 10.0)))
+        .collect();
+    let Some(bl) = k.links.block_mut(b) else { return enter };
+    enter |= field(ui, "Name", &mut bl.name, &format!("Block {}", b + 1), "The block's name, in the view and the lists.");
+    ui.columns(2, |c| {
+        enter |= field(&mut c[0], "Module", &mut bl.module, "auto", TIP_BLOCK_MODULE);
+        enter |= field(&mut c[1], "Shaft Ø", &mut bl.shaft_d, "none", TIP_BLOCK_SHAFT);
+    });
+    ui.columns(2, |c| {
+        enter |= field(&mut c[0], "Face width", &mut bl.face, "each gear's", TIP_BLOCK_FACE);
+    });
+    if !bl.shaft_d.trim().is_empty() {
+        let said = match shafts.len() {
+            0 => "No shaft yet: the block's gears aren't complete.".to_string(),
+            1 => format!("1 shaft, bored into its gears: {}", shafts[0]),
+            n => format!("{n} shafts, bored into their gears: {}", shafts.join(", ")),
+        };
+        ui.add(egui::Label::new(egui::RichText::new(said).size(t.font_small).color(t.form_dim)).wrap());
+    }
+    let more = bl.has_more();
+    ui_kit::section(ui, ("gear_block_more", b), "More", more, |ui| {
+        ui.columns(2, |c| {
+            enter |= field(&mut c[0], "Helix angle", &mut bl.helix, "each gear's", TIP_BLOCK_HELIX);
+            enter |= field(&mut c[1], "Pressure angle", &mut bl.pressure_angle, "the set's", TIP_BLOCK_PA);
+        });
+        ui.columns(2, |c| {
+            enter |= field(&mut c[0], "Backlash", &mut bl.backlash, "the set's", TIP_BLOCK_BACKLASH);
+            enter |= field(&mut c[1], "Tooth chamfer", &mut bl.chamfer, "the set's", TIP_BLOCK_CHAMFER);
+        });
+    });
     enter
 }
 
@@ -642,9 +772,12 @@ fn size_group(ui: &mut egui::Ui, k: &mut Gear, a: usize) -> bool {
     let title = item_title(k, a);
     let kind = k.items[a].kind;
     let n = k.gear_counts.get(a).copied().unwrap_or(1);
-    let replies: Vec<_> = k.graph.replies().iter().filter(|r| r.item == a).cloned().collect();
-    // The module block this gear is in, if any: its module is the one the gears in it share.
-    let blocks = k.graph.blocks().into_iter().enumerate().find(|(_, (_, m))| m.contains(&a)).map(|(b, (_, m))| (b, m.iter().map(|i| item_id(*i)).collect::<Vec<_>>().join(", ")));
+    let replies: Vec<_> = k.links.replies().iter().filter(|r| r.item == a).cloned().collect();
+    // The block this gear is in, if any: its module is the one the gears in it share.
+    let in_block = k.links.block_of(a).map(|b| {
+        let bl = &k.links.blocks()[b];
+        (b, bl.title(b), bl.members.iter().map(|i| item_id(*i)).collect::<Vec<_>>().join(", "), bl.face.trim().to_string())
+    });
     ui_kit::section(ui, ("gear_settings", a), &title, true, |ui| {
         // A card just made active: its settings come into view.
         if k.scroll == dg::Scroll::Settings {
@@ -673,7 +806,9 @@ fn size_group(ui: &mut egui::Ui, k: &mut Gear, a: usize) -> bool {
         let g = gear_switch(ui, k, a);
         let reply = replies.iter().find(|r| r.gear == g);
         let s: &mut GearSettings = &mut k.items[a].settings_mut(n)[g];
-        let block = blocks.as_ref().and_then(|(b, names)| Some((k.graph.block_module_mut(*b)?, names.clone())));
+        let block = in_block.as_ref().and_then(|(b, title, members, face)| {
+            Some(BlockRows { module: &mut k.links.block_mut(*b)?.module, title: title.clone(), members: members.clone(), face: face.clone() })
+        });
         enter |= size_rows(ui, s, reply, block);
         if dg::takes_differential(kind) && dg::differential_supported() {
             diff_switch(ui, k, a);
@@ -682,8 +817,18 @@ fn size_group(ui: &mut egui::Ui, k: &mut Gear, a: usize) -> bool {
     enter
 }
 
-/// One gear's size rows: Size by, Module / Teeth (the other greyed as worked out), Face.
-fn size_rows(ui: &mut egui::Ui, s: &mut GearSettings, reply: Option<&solidcraft_gear::items::GearReply>, block: Option<(&mut String, String)>) -> bool {
+/// The block a gear is in, for its size rows: the block's module (edited in place), its name, its
+/// gears and its face width as typed.
+struct BlockRows<'a> {
+    module: &'a mut String,
+    title: String,
+    members: String,
+    face: String,
+}
+
+/// One gear's size rows: Size by, Module / Teeth (the other greyed as worked out), Face (its
+/// block's face width where it gives none).
+fn size_rows(ui: &mut egui::Ui, s: &mut GearSettings, reply: Option<&solidcraft_gear::items::GearReply>, mut block: Option<BlockRows<'_>>) -> bool {
     let mut enter = false;
     let mut size = usize::from(s.by_teeth);
     segments(ui, "Size by", &mut size, &["Module", "Teeth"], TIP_SIZE_BY);
@@ -692,23 +837,26 @@ fn size_rows(ui: &mut egui::Ui, s: &mut GearSettings, reply: Option<&solidcraft_
     if s.by_teeth {
         enter |= field(ui, "Teeth", &mut s.teeth, "from the circle", TIP_TEETH);
         ui_kit::caption(ui, "Teeth", &format!("Module: {}", worked(reply.filter(|r| r.module > 0.0).map(|r| dg::fmt(r.module)))));
-    } else if let Some((module, members)) = block {
-        // In a module block: the block's module is the one its gears share (decision 2).
-        enter |= field(ui, "Module", module, "auto", "This gear is in a Module Block: its gears share this one module, so they can mesh. Change it here or in the graph.");
-        ui_kit::caption(ui, "Module", &format!("Shared by gears {members} · teeth: {}", worked(reply.filter(|r| r.teeth > 0).map(|r| r.teeth.to_string()))));
+    } else if let Some(b) = block.as_mut() {
+        // In a block: the block's module is the one its gears share (decision 2).
+        enter |= field(ui, "Module", b.module, "auto", "This gear is in a block: its gears share this one module, so they can mesh. Change it here or on the block.");
+        ui_kit::caption(ui, "Module", &format!("{}: gears {} · teeth: {}", b.title, b.members, worked(reply.filter(|r| r.teeth > 0).map(|r| r.teeth.to_string()))));
     } else {
         enter |= field(ui, "Module", &mut s.module, "auto", TIP_MODULE);
         ui_kit::caption(ui, "Module", &format!("Teeth: {}", worked(reply.filter(|r| r.teeth > 0).map(|r| r.teeth.to_string()))));
     }
     let labels: Vec<&str> = FACE_PRESETS.iter().map(|p| p.2).collect();
     segments(ui, "Face", &mut s.face_preset, &labels, TIP_PRESET);
+    // Left empty in a block with a face width: the block's (half each side).
+    let from_block = block.as_ref().filter(|b| !b.face.is_empty()).map(|b| format!("{}: {} in all", b.title, b.face));
+    let auto = from_block.as_deref().unwrap_or("auto");
     match s.face_preset {
-        0 => enter |= field(ui, "Each side", &mut s.face_a, "auto", TIP_FACE),
-        1 => enter |= field(ui, "Side A", &mut s.face_a, "auto", TIP_FACE),
-        2 => enter |= field(ui, "Side B", &mut s.face_b, "auto", TIP_FACE),
+        0 => enter |= field(ui, "Each side", &mut s.face_a, auto, TIP_FACE),
+        1 => enter |= field(ui, "Side A", &mut s.face_a, auto, TIP_FACE),
+        2 => enter |= field(ui, "Side B", &mut s.face_b, auto, TIP_FACE),
         _ => {
-            enter |= field(ui, "Side A", &mut s.face_a, "auto", TIP_FACE);
-            enter |= field(ui, "Side B", &mut s.face_b, "auto", TIP_FACE);
+            enter |= field(ui, "Side A", &mut s.face_a, auto, TIP_FACE);
+            enter |= field(ui, "Side B", &mut s.face_b, auto, TIP_FACE);
         }
     }
     enter
@@ -772,7 +920,7 @@ fn teeth_tab(ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], input: &m
     if let Some(a) = item_picker(ui, k, inputs, input, "teeth") {
         let kind = k.items[a].kind;
         let title = item_title(k, a);
-        let replies: Vec<_> = k.graph.replies().iter().filter(|r| r.item == a).cloned().collect();
+        let replies: Vec<_> = k.links.replies().iter().filter(|r| r.item == a).cloned().collect();
         ui_kit::section(ui, ("gear_teeth", a), &title, true, |ui| {
             if kind == ItemKind::Shaft {
                 ui_kit::text(ui, "A shaft has no teeth.", ui_kit::Text::Note("gear_shaft_teeth"));
@@ -832,13 +980,16 @@ fn helix_rows(ui: &mut egui::Ui, s: &mut GearSettings, kind: ItemKind) -> bool {
     enter
 }
 
-/// Shafts & Bearings: the selected gear's bore and hub (a shaft's Ø), and the bearing points.
+/// Shafts & Bearings: the shaft each axis gets (a block's, a Shaft gear's) and from where; the
+/// selected gear's bore and hub (a shaft's Ø); the bearing points.
 fn shafts_tab(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], input: &mut usize) -> bool {
     let mut enter = false;
     let t = Tokens::get();
+    shafts_made(ui, k);
     if let Some(a) = item_picker(ui, k, inputs, input, "shafts") {
         let kind = k.items[a].kind;
         let title = item_title(k, a);
+        let block_shaft = k.links.block_of(a).map(|b| (k.links.blocks()[b].title(b), k.links.blocks()[b].shaft_d.trim().to_string())).filter(|x| !x.1.is_empty());
         ui_kit::section(ui, ("gear_shafts", a), &title, true, |ui| {
             if kind == ItemKind::Shaft {
                 enter |= field(ui, "Shaft Ø", &mut k.items[a].shaft_d, "auto", TIP_SHAFT_D);
@@ -852,6 +1003,10 @@ fn shafts_tab(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [Sel
             s.bore = if bore == 1 { 2 } else if s.bore == 2 { 0 } else { s.bore };
             if s.bore == 2 {
                 enter |= field(ui, "Bore Ø", &mut s.bore_d, "mm", TIP_BORE_D);
+            } else if let Some((block, d)) = &block_shaft
+                && s.bore == 0
+            {
+                ui_kit::caption(ui, "Bore", &format!("Auto: {d}, the shaft Ø of {block}"));
             }
             let mut hub = s.hub;
             check_group(ui, &format!("hub:{}:{g}", item_id(a)), "Hub", &mut hub, TIP_HUB, |ui| {
@@ -882,33 +1037,72 @@ fn shafts_tab(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [Sel
     enter
 }
 
+/// The shafts the set makes, one row per axis: each block shaft (its gears, Ø × length, and its
+/// block), then each Shaft gear drawn by hand. With none, how to get them.
+fn shafts_made(ui: &mut egui::Ui, k: &mut Gear) {
+    let t = Tokens::get();
+    let drawn: Vec<usize> = (0..k.items.len()).filter(|i| k.items[*i].kind == ItemKind::Shaft).collect();
+    let n = k.block_shafts.iter().filter(|s| s.existing.is_none()).count() + drawn.len();
+    ui_kit::section(ui, "gear_shafts_made", &format!("Shafts · {n}"), true, |ui| {
+        let mut made = vec![0usize; k.links.blocks().len()];
+        for sh in &k.block_shafts {
+            let gears = sh.gears.iter().map(|g| k.gear_name((g.item, g.gear))).collect::<Vec<_>>().join(" + ");
+            let block = k.links.blocks().get(sh.block).map(|b| b.title(sh.block)).unwrap_or_default();
+            let name = match sh.existing {
+                Some(i) => format!("Gear {}'s line", item_id(i)),
+                None => {
+                    if let Some(m) = made.get_mut(sh.block) {
+                        *m += 1;
+                    }
+                    format!("Shaft {}", solidcraft_gear::blocks::shaft_id(&crate::dialogs_gear_links::block_id(sh.block), made.get(sh.block).copied().unwrap_or(1)))
+                }
+            };
+            let what = format!("Ø{} × {} mm · gears {gears} · from {block}", dg::fmt(sh.diameter), dg::fmt((sh.length() * 10.0).round() / 10.0));
+            ui_kit::row(ui, &name, |ui| ui.label(egui::RichText::new(what).size(t.font_small).color(dg::block_color(sh.block))))
+                .backing_on_hover_text("Made from the block's Shaft Ø: one body with the gears on this axis, each bored to it.");
+        }
+        for i in &drawn {
+            let d = k.items[*i].shaft_d.trim();
+            let what = format!("Ø{} · drawn as Shaft gear {}", if d.is_empty() { "auto" } else { d }, item_id(*i));
+            ui_kit::value_row(ui, &format!("Shaft {}", item_id(*i)), &what);
+        }
+        if n == 0 && k.block_shafts.is_empty() {
+            let said = "No shafts yet. Easiest: on the Gears tab put the gears in a block and give it a Shaft Ø: each axis gets its shaft, joined to its gears. Or draw a shaft line and add a Shaft gear on it.";
+            ui.add(egui::Label::new(egui::RichText::new(said).size(t.font_small).color(t.form_dim)).wrap());
+        }
+    });
+}
+
 // ---------------------------------------------------------------------------------------------
 // Links & Motion
 // ---------------------------------------------------------------------------------------------
 
-/// Links & Motion: the links as rows ("A ⟷ B  mesh  1.50 : 1", "B ═ C  same shaft"), the
-/// suggested ones (dim) with one Accept button, a link added by hand, the driver with its rpm and
-/// torque, the ratio between two gears, and the graph.
-fn motion_tab(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear) -> bool {
+/// Links & Motion: the links as rows ("A ⟷ B  mesh  1.50 : 1", "B ═ C  same shaft"; each drawn
+/// in the view, the hovered row lit there), the suggested ones (dim) with one Accept button, a
+/// link added by hand, the driver with its rpm and torque, and the ratio between two gears.
+fn motion_tab(_app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear) -> bool {
     let mut enter = false;
     let gears = k.all_gears();
-    if gears.len() < 2 && k.graph.links().is_empty() {
+    k.link_hovered = None;
+    if gears.len() < 2 && k.links.all().is_empty() {
         ui_kit::text(ui, "Links join two gears or more: make them on the Gears tab. Touching circles and circles on one shaft are suggested here.", ui_kit::Text::Note("gear_no_links"));
         return false;
     }
     let t = Tokens::get();
-    let links = k.graph.links();
-    let suggested = k.graph.suggested().to_vec();
+    let links = k.links.all();
+    let suggested = k.links.suggested().to_vec();
     let title = format!("Links · {}", links.len());
     ui_kit::section(ui, "gear_drivetrain", &title, true, |ui| {
         let mut drop = None;
         if links.is_empty() && suggested.is_empty() {
             ui_kit::text(ui, "No links yet: add one below. Touching circles and circles on one shaft are suggested here.", ui_kit::Text::Note("gear_no_links"));
         }
-        for (a, ag, b, bg, kind) in &links {
+        ui_kit::text(ui, "Each link is drawn in the view between its gears; hover a row to light it.", ui_kit::Text::Note("gear_links_in_view"));
+        for (n, l) in links.iter().enumerate() {
+            let (a, ag, b, bg, kind) = l;
             let (x, y) = ((*a, *ag), (*b, *bg));
-            let note = k.graph.notes().iter().find(|n| n.kind == *kind && (((n.a, n.a_gear) == x && (n.b, n.b_gear) == y) || ((n.a, n.a_gear) == y && (n.b, n.b_gear) == x))).cloned();
-            ui.horizontal(|ui| {
+            let note = k.links.note_of(l).cloned();
+            let row = ui.horizontal(|ui| {
                 let joint = if *kind == "shaft" { "═" } else { "⟷" };
                 ui.label(egui::RichText::new(format!("{}  {joint}  {}", k.gear_name(x), k.gear_name(y))).size(t.font_label).strong().color(t.form_ink));
                 let what = if *kind == "shaft" { "same shaft" } else { "mesh" };
@@ -918,18 +1112,25 @@ fn motion_tab(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear) -> bool {
                     ui.label(egui::RichText::new(format!("{} : 1", dg::fmt_ratio(r.abs()))).size(t.font_label).color(t.form_ink));
                     ui.label(egui::RichText::new(turn).size(t.font_small).color(t.form_dim));
                 }
+                if let Some(blk) = k.links.block_of(*a).filter(|blk| Some(*blk) == k.links.block_of(*b)) {
+                    ui.label(egui::RichText::new(format!("● {}", k.links.blocks()[blk].title(blk))).size(t.font_small).color(dg::block_color(blk)));
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui_kit::compact_button(ui, "×", "Remove this link", true, false).clicked() {
                         drop = Some((x, y, *kind));
                     }
                 });
             });
+            solidcraft_ui_registry::publish_target(&format!("gear:link:{}", n + 1), row.response.rect);
+            if ui.rect_contains_pointer(row.response.rect) {
+                k.link_hovered = Some(*l);
+            }
             if let Some(e) = note.and_then(|n| n.error.map(|e| (e, n.ratio))) {
                 message(ui, &Msg { text: dg::worded(&e.0), error: true });
             }
         }
         if let Some((x, y, kind)) = drop {
-            k.graph.remove_link(x, y, kind);
+            k.links.remove_link(x, y, kind);
         }
         if !suggested.is_empty() {
             for s in &suggested {
@@ -940,7 +1141,7 @@ fn motion_tab(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear) -> bool {
             let r = ui_kit::button(ui, format!("Accept suggested ({})", suggested.len()), ui_kit::Button::Normal).backing_on_hover_text(TIP_ACCEPT);
             solidcraft_ui_registry::publish_target("gear:accept", r.rect);
             if r.clicked() {
-                k.graph.accept_all();
+                k.links.accept_all();
             }
         }
     });
@@ -959,7 +1160,7 @@ fn motion_tab(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear) -> bool {
             solidcraft_ui_registry::publish_target("gear:add_link", add.rect);
             if add.clicked() && x != y {
                 let ((a, ag), (b, bg)) = (gears[x], gears[y]);
-                k.graph.accept(&crate::dialogs_gear_graph::Suggested { a, a_gear: ag, b, b_gear: bg, kind: if kind == 1 { "shaft".into() } else { "mesh".into() } });
+                k.links.accept(&crate::dialogs_gear_links::Suggested { a, a_gear: ag, b, b_gear: bg, kind: if kind == 1 { "shaft".into() } else { "mesh".into() } });
             }
         });
         k.link_add = (x, kind, y);
@@ -994,22 +1195,6 @@ fn motion_tab(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear) -> bool {
             None => {}
         }
     });
-    // The graph, on request.
-    let mut graph = k.show_graph;
-    check_group(ui, "graph", "Show graph", &mut graph, "The same links as a node graph: drag from a ● Mesh pin to another to mesh two gears; right-click for module blocks.", |ui| {
-        let len = dg::len_of(app);
-        let size = egui::vec2(ui.available_width().max(200.0), 260.0);
-        let marks = crate::dialogs_gear_graph::Marks { driver: k.drive_item, picked: k.ratio_pick, len: &len };
-        let out = crate::dialogs_gear_graph::graph_ui(ui, &k.items, &k.gear_counts, &mut k.graph, marks, size, "sc_gear_graph_docked");
-        if out.driver.is_some() {
-            k.drive_item = out.driver;
-        }
-        if let Some(c) = out.clicked {
-            dg::pick_for_ratio(k, c);
-        }
-        k.graph_hovered = out.hovered;
-    });
-    k.show_graph = graph;
     enter
 }
 
@@ -1152,7 +1337,7 @@ fn differential_tab(ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], in
 /// Results: one row per gear, every warning (by gear), the planner's notes and its facts.
 fn results_tab(app: &SolveApp, ui: &mut egui::Ui, k: &Gear) {
     let len = dg::len_of(app);
-    let replies = k.graph.replies();
+    let replies = k.links.replies();
     if replies.is_empty() && k.notes.is_empty() && k.set_msgs.is_empty() {
         ui_kit::text(ui, "Nothing worked out yet: complete a gear on the Gears tab.", ui_kit::Text::Note("gear_no_results"));
     }
@@ -1173,7 +1358,7 @@ fn results_tab(app: &SolveApp, ui: &mut egui::Ui, k: &Gear) {
                     parts.push(format!("contact {}", dg::fmt((c * 100.0).round() / 100.0)));
                 }
                 ui_kit::value_row(ui, &k.gear_name((r.item, r.gear)), &parts.join(" · "))
-                    .backing_on_hover_text(crate::dialogs_gear_graph::reply_tip(r));
+                    .backing_on_hover_text(crate::dialogs_gear_links::reply_tip(r));
             }
         });
     }

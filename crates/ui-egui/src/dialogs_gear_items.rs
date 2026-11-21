@@ -22,7 +22,7 @@ use solidcraft_engine::doc::expr::Kind as ValueKind;
 use solidcraft_gear::items::{self, Bore, BevelStyle, FacePreset, FaceSides, Hand, Hub, ItemKind, SizeBy, Thing};
 
 use crate::SolveApp;
-use crate::dialogs_gear_graph::Graph;
+use crate::dialogs_gear_links::Links;
 
 /// An item's id as the engine names it (A, B, … Z, then A2 …).
 pub use solidcraft_gear::items::item_id;
@@ -189,7 +189,7 @@ pub struct GearSettings {
     pub hub_b: String,
 }
 
-fn eval(app: &SolveApp, text: &str, kind: ValueKind, what: &str) -> Result<Option<f64>, String> {
+pub(crate) fn eval(app: &SolveApp, text: &str, kind: ValueKind, what: &str) -> Result<Option<f64>, String> {
     let t = text.trim();
     if t.is_empty() || t.eq_ignore_ascii_case("auto") {
         return Ok(None);
@@ -199,7 +199,7 @@ fn eval(app: &SolveApp, text: &str, kind: ValueKind, what: &str) -> Result<Optio
 }
 
 /// A value as a field shows it again (Edit): "2 mm", "20 deg", "0.3".
-fn shown(v: Option<f64>, kind: ValueKind) -> String {
+pub(crate) fn shown(v: Option<f64>, kind: ValueKind) -> String {
     let Some(v) = v else { return String::new() };
     let n = crate::dialogs_gear::fmt(v);
     match kind {
@@ -642,10 +642,11 @@ impl GearItem {
 /// What the dialog sends for its items (§6): each its `id`, `type`, `components` (`selection`
 /// locators, each with its `slot` from [`items::assign`]) and `gears` ([`gear_json`]); the type's
 /// own (`rim`, `starts`, `throated`, `bevel_style`, `spiral_angle`, `back_height`, `planets`,
-/// `carrier`, `diameter`, `keyway`) and its `module_block`; the `links` from the wires
-/// ({a: {item, port}, b: {item, port}, kind}); the `module_blocks` ({id, module?}). The picks
-/// themselves go in `ui.gear_items` so Edit gets them back exactly.
-pub fn items_request(app: &SolveApp, items: &[GearItem], graph: &Graph) -> Result<Map<String, Value>, String> {
+/// `carrier`, `diameter`, `keyway`) and its `module_block`; the `links`
+/// ({a: {item, port}, b: {item, port}, kind}); the `module_blocks` ({id, name?, module?, and the
+/// block's other settings}). The picks themselves go in `ui.gear_items` so Edit gets them back
+/// exactly.
+pub fn items_request(app: &SolveApp, items: &[GearItem], links: &Links) -> Result<Map<String, Value>, String> {
     let mut list = Vec::new();
     for (i, it) in items.iter().enumerate() {
         let who = format!("Gear {} · {}", item_id(i), it.label());
@@ -708,24 +709,21 @@ pub fn items_request(app: &SolveApp, items: &[GearItem], graph: &Graph) -> Resul
         }
         list.push(item);
     }
-    let links: Vec<Value> = graph
-        .links()
+    let blocks_of = links;
+    let links: Vec<Value> = links
+        .all()
         .into_iter()
         .map(|(a, ag, b, bg, kind)| json!({"a": {"item": item_id(a), "port": ag}, "b": {"item": item_id(b), "port": bg}, "kind": kind}))
         .collect();
     let mut blocks = Vec::new();
-    for (n, (module, members)) in graph.blocks().into_iter().enumerate() {
-        let id = format!("M{}", n + 1);
-        let mut b = json!({"id": id});
-        if let Some(m) = eval(app, &module, ValueKind::Length, "module block")? {
-            b["module"] = json!(m);
-        }
-        for i in members {
-            if let Some(item) = list.get_mut(i) {
-                item["module_block"] = json!(id);
+    for (n, b) in blocks_of.blocks().iter().enumerate() {
+        let v = b.json(app, n)?;
+        for i in &b.members {
+            if let Some(item) = list.get_mut(*i) {
+                item["module_block"] = v["id"].clone();
             }
         }
-        blocks.push(b);
+        blocks.push(v);
     }
     let picks: Vec<Value> = items.iter().map(|it| serde_json::to_value(&it.picks).unwrap_or(Value::Null)).collect();
     let mut p = Map::new();
@@ -737,10 +735,10 @@ pub fn items_request(app: &SolveApp, items: &[GearItem], graph: &Graph) -> Resul
     Ok(p)
 }
 
-/// The items, graph and drive a set was made with (its request, as [`items_request`] and the
+/// The items, links and blocks a set was made with (its request, as [`items_request`] and the
 /// dialog's `drive` sent them): Edit reopens the dialog on them. The picks come from
 /// `ui` (its `gear_items`); a request without them names each component by its locator.
-pub fn items_of(r: &Map<String, Value>, ui: Option<&Value>, graph: &mut Graph) -> Vec<GearItem> {
+pub fn items_of(r: &Map<String, Value>, ui: Option<&Value>, graph: &mut Links) -> Vec<GearItem> {
     let picks_ui = ui.and_then(|u| u.get("gear_items")).and_then(Value::as_array);
     let mut out = Vec::new();
     for (i, v) in r.get("items").and_then(Value::as_array).into_iter().flatten().enumerate() {
@@ -780,7 +778,6 @@ pub fn items_of(r: &Map<String, Value>, ui: Option<&Value>, graph: &mut Graph) -
             it.auto_details = true;
             it.dropped = d;
         }
-        graph.node_of(i);
         out.push(it);
     }
     for l in r.get("links").and_then(Value::as_array).into_iter().flatten() {
@@ -790,15 +787,20 @@ pub fn items_of(r: &Map<String, Value>, ui: Option<&Value>, graph: &mut Graph) -
         };
         if let (Some((a, a_gear)), Some((b, b_gear))) = (end("a"), end("b")) {
             let kind = l.get("kind").and_then(Value::as_str).unwrap_or("mesh").to_string();
-            graph.accept(&crate::dialogs_gear_graph::Suggested { a, a_gear, b, b_gear, kind });
+            graph.accept(&crate::dialogs_gear_links::Suggested { a, a_gear, b, b_gear, kind });
         }
     }
     let ids: Vec<Option<&str>> = r.get("items").and_then(Value::as_array).into_iter().flatten().map(|v| v.get("module_block").and_then(Value::as_str)).collect();
+    // (A set saved before blocks had more than a module reads back with only its module.)
     for b in r.get("module_blocks").and_then(Value::as_array).into_iter().flatten() {
-        let module = shown(b.get("module").and_then(Value::as_f64), ValueKind::Length);
-        let k = graph.add_block(&module);
+        let k = graph.add_block(&[]);
+        if let Some(block) = graph.block_mut(k) {
+            *block = crate::dialogs_gear_links::Block::of(b);
+        }
         let id = b.get("id").and_then(Value::as_str);
-        for (i, _) in ids.iter().enumerate().filter(|(_, m)| id.is_some() && **m == id) {
+        let mut members: Vec<usize> = ids.iter().enumerate().filter(|(_, m)| id.is_some() && **m == id).map(|(i, _)| i).collect();
+        members.extend(b.get("members").and_then(Value::as_array).into_iter().flatten().filter_map(item_index));
+        for i in members {
             graph.put_in_block(k, i);
         }
     }

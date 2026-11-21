@@ -11,9 +11,12 @@
 //!    the gear count are the gear crate's: `solidcraft_gear::items`);
 //! 3. a complete gear's card folds to one line with its teeth and module; clicking a card makes it
 //!    the one picks go to and shows its own settings below the cards;
-//! 4. the Drivetrain section lists the links (meshes and shared shafts), the links the drawing
-//!    suggests (dashed, accepted with one button), the driver and the ratio between any two gears;
-//!    the node graph is an optional view of the same links.
+//! 4. the Links & Motion tab lists the links (meshes and shared shafts), the links the drawing
+//!    suggests (accepted with one button), the driver and the ratio between any two gears; every
+//!    link is drawn in the view between its gears (a hovered row lit), coloured by block;
+//! 5. a block on the Gears tab puts gears under shared settings (module, shaft Ø, face width,
+//!    helix, pressure angle, backlash, tooth chamfer): a block's shaft Ø bores its gears and
+//!    makes a shaft along each of their axes, one body with its gears.
 //!
 //! OK makes the set with `gear.create {items, links, module_blocks, drive}` (one Gears feature);
 //! editing the set (its timeline row or folder, Edit Gears, a gear body or component selected
@@ -31,11 +34,12 @@ use std::collections::BTreeMap;
 use serde_json::{Map, Value, json};
 use solidcraft_engine::Sel;
 use solidcraft_engine::doc::expr::Kind as ValueKind;
+use solidcraft_gear::blocks::BlockShaft;
 use solidcraft_gear::items::{self as gi, ItemKind};
 
 use crate::SolveApp;
 use crate::dialogs::{Kind, OPS};
-use crate::dialogs_gear_graph::{GearItem, Graph};
+use crate::dialogs_gear_links::{GearItem, Link, Links};
 use crate::selection::{AXES, BODIES, CURVES, EDGES, EXTERNAL_POINTS, FACES, POINTS, SKETCH_POINTS, SelInput};
 
 /// Each gear item's colour: its dot on the card, its picked geometry and its outline in the view
@@ -135,11 +139,11 @@ pub struct Gear {
     pub active: Option<usize>,
     pub new_kind: usize,
     pub gear_tab: usize,
-    /// The links between the items (and its module blocks), drawn as rows or as a graph.
-    pub graph: Graph,
-    pub show_graph: bool,
-    /// The item whose card or graph node is under the pointer (its geometry lights up).
-    pub graph_hovered: Option<usize>,
+    /// The links between the items and the blocks.
+    pub links: Links,
+    /// The link row under the pointer (lit in the view with its two gears).
+    pub link_hovered: Option<Link>,
+    /// The item whose card is under the pointer (its geometry lights up).
     pub card_hovered: Option<usize>,
     /// Each item's gear count (worked out once a frame).
     pub gear_counts: Vec<usize>,
@@ -209,6 +213,35 @@ pub struct Gear {
     pub chamfer_open: bool,
     /// The engine's facts on the set as last worked out: (label, value, unit).
     pub facts: Vec<(String, f64, String)>,
+    /// Each link and suggested link as drawn in the view, and each block's shafts.
+    pub link_lines: Vec<LinkLine>,
+    pub block_shafts: Vec<BlockShaft>,
+    /// What the dialog was last worked out from, and the `gear.calculate` running for it.
+    pub seen: Option<Box<Seen>>,
+    pub pending: Pending,
+}
+
+/// A link as drawn in the view: from one gear to the other (a mesh through its contact), its
+/// label (the ratio, "shaft") where it goes, the block both its gears are in, and whether it is
+/// only suggested or wrong.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkLine {
+    pub link: Link,
+    pub points: Vec<[f64; 3]>,
+    pub at: [f64; 3],
+    pub label: String,
+    pub block: Option<usize>,
+    pub suggested: bool,
+    pub error: bool,
+}
+
+/// Each block's colour: its links and shafts in the view, its dot on the Gears tab.
+pub(crate) const BLOCK_PALETTE: [egui::Color32; 4] =
+    [egui::Color32::from_rgb(40, 190, 200), egui::Color32::from_rgb(235, 90, 120), egui::Color32::from_rgb(150, 120, 230), egui::Color32::from_rgb(120, 200, 70)];
+
+/// Block `k`'s colour.
+pub(crate) fn block_color(k: usize) -> egui::Color32 {
+    BLOCK_PALETTE[k % BLOCK_PALETTE.len()]
 }
 
 /// The form's tabs, in the order of the tab row. Gears holds the cards and the selected gear's
@@ -271,10 +304,10 @@ impl Tab {
     /// What it holds (its hover text).
     pub fn tip(self) -> &'static str {
         match self {
-            Tab::Gears => "Gears: the type, New gear, a card per gear with its picks, and the selected gear's size and face.",
+            Tab::Gears => "Gears: the type, New gear, a card per gear with its picks, the blocks (gears sharing a module, shaft Ø and more), and the selected gear's size and face.",
             Tab::Teeth => "Teeth: the selected gear's helix or spiral and profile shift, and the tooth form and chamfer of every gear.",
-            Tab::Shafts => "Shafts & Bearings: the selected gear's bore and hub, a shaft's Ø, and the bearing points.",
-            Tab::Motion => "Links & Motion: meshes and shared shafts, the suggested links, the driver, rpm and torque, the ratio between two gears and the graph.",
+            Tab::Shafts => "Shafts & Bearings: the shaft made on each axis and from which block, the selected gear's bore and hub, and the bearing points.",
+            Tab::Motion => "Links & Motion: meshes and shared shafts (drawn in the view; hover a row to light it), the suggested links, the driver, rpm and torque, and the ratio between two gears.",
             Tab::Housing => "Housing & Output: the housing cutout with its bearing seats, the operation, Targets, keep-out and assembly.",
             Tab::Differential => "Differential: the differential carried by a ring gear (its style, pinions, module and half-shafts) and its facts.",
             Tab::Results => "Results: each gear's teeth, module, speed and torque, the planner's facts and notes, and every warning.",
@@ -548,7 +581,7 @@ pub(crate) fn built_of(r: &Value) -> Vec<Built> {
         .flatten()
         .filter_map(|g| {
             Some(Built {
-                item: g.get("item").and_then(crate::dialogs_gear_graph::item_index)?,
+                item: g.get("item").and_then(crate::dialogs_gear_links::item_index)?,
                 gear: g.get("gear").and_then(Value::as_u64).unwrap_or(0) as usize,
                 side_a: p3(g.get("side_a")),
                 bore: g.get("bore").and_then(Value::as_f64),
@@ -566,7 +599,7 @@ pub(crate) fn details_suggested_of(r: &Value) -> Vec<DetailSuggested> {
         .flatten()
         .filter_map(|d| {
             Some(DetailSuggested {
-                item: d.get("item").and_then(crate::dialogs_gear_graph::item_index)?,
+                item: d.get("item").and_then(crate::dialogs_gear_links::item_index)?,
                 gear: d.get("gear").and_then(Value::as_u64).unwrap_or(0) as usize,
                 hub: d.get("slot").and_then(Value::as_str) == Some("hub"),
                 sel: Sel::SketchCurve { id: d.get("curve")?.as_str()?.to_string(), sketch: Some(d.get("sketch")?.as_u64()?) },
@@ -649,7 +682,7 @@ impl Gear {
     /// A gear's short name: "A" for an item of one gear, "B2" for a compound's second, "C sun"
     /// for a planetary set's sun.
     pub fn gear_name(&self, (item, gear): (usize, usize)) -> String {
-        let id = crate::dialogs_gear_graph::item_id(item);
+        let id = crate::dialogs_gear_links::item_id(item);
         let n = self.gear_counts.get(item).copied().unwrap_or(1);
         match self.items.get(item).map(|it| it.kind).and_then(|k| crate::dialogs_gear_items::gear_part(k, gear)) {
             Some(part) => format!("{id} {part}"),
@@ -669,9 +702,8 @@ fn new(sketch: Option<u64>) -> Gear {
         active: None,
         new_kind: 0,
         gear_tab: 0,
-        graph: Graph::default(),
-        show_graph: false,
-        graph_hovered: None,
+        links: Links::default(),
+        link_hovered: None,
         card_hovered: None,
         gear_counts: Vec::new(),
         link_add: (0, 0, 1),
@@ -709,6 +741,10 @@ fn new(sketch: Option<u64>) -> Gear {
         tab: Tab::Gears,
         chamfer_open: false,
         facts: Vec::new(),
+        link_lines: Vec::new(),
+        block_shafts: Vec::new(),
+        seen: None,
+        pending: Pending::default(),
     }
 }
 
@@ -896,9 +932,9 @@ pub fn for_set(set: &solidcraft_engine::schema::gear::GearSet) -> Gear {
     g.chamfer_open = !g.chamfer.is_empty();
     g.keep_out_gap = r.get("keep_out_gap").and_then(Value::as_f64).map(|v| shown(v, ValueKind::Length)).unwrap_or_default();
     if r.get("items").is_some_and(Value::is_array) {
-        g.items = crate::dialogs_gear_items::items_of(&r, ui.as_ref(), &mut g.graph);
+        g.items = crate::dialogs_gear_items::items_of(&r, ui.as_ref(), &mut g.links);
         if let Some(d) = r.get("drive") {
-            let item = d.get("item").and_then(crate::dialogs_gear_graph::item_index);
+            let item = d.get("item").and_then(crate::dialogs_gear_links::item_index);
             g.drive_item = item.map(|i| (i, d.get("gear").and_then(Value::as_u64).unwrap_or(0) as usize));
             g.rpm = d.get("rpm").and_then(Value::as_f64).map(fmt).unwrap_or_default();
             g.torque = d.get("torque").and_then(Value::as_f64).map(fmt).unwrap_or_default();
@@ -990,10 +1026,7 @@ pub fn convert_legacy(app: &SolveApp, k: &mut Gear) -> Result<usize, String> {
         }
     }
     let n = items.len();
-    k.graph = Graph::default();
-    for i in 0..n {
-        k.graph.node_of(i);
-    }
+    k.links = Links::default();
     k.items = items;
     k.legacy = None;
     k.active = None;
@@ -1120,7 +1153,6 @@ pub(crate) fn thing_of(app: &SolveApp, sel: &Sel) -> Option<gi::Thing> {
 pub(crate) fn new_gear(k: &mut Gear, inputs: &mut [SelInput]) {
     k.items.push(GearItem::new(k.new_type()));
     let i = k.items.len() - 1;
-    k.graph.node_of(i);
     k.active = Some(i);
     k.gear_tab = 0;
     k.refused = None;
@@ -1152,7 +1184,7 @@ pub(crate) fn remove_item(k: &mut Gear, i: usize, inputs: &mut [SelInput]) {
         return;
     }
     k.items.remove(i);
-    k.graph.remove_item(i);
+    k.links.remove_item(i);
     let shift = |a: usize| if a > i { a - 1 } else { a };
     k.active = k.active.filter(|a| *a != i).map(shift);
     k.drive_item = k.drive_item.filter(|(d, _)| *d != i).map(|(d, g)| (shift(d), g));
@@ -1220,7 +1252,6 @@ fn take_pick(app: &SolveApp, k: &mut Gear, sel: Sel) {
         None => {
             k.items.push(GearItem { picks: vec![sel], ..fresh });
             let i = k.items.len() - 1;
-            k.graph.node_of(i);
             k.active = Some(i);
             k.gear_tab = 0;
             k.refused = None;
@@ -1252,7 +1283,7 @@ pub(crate) fn next_step(app: &SolveApp, k: &Gear) -> (String, bool) {
         };
     };
     let it = &k.items[a];
-    let name = format!("Gear {} · {}", crate::dialogs_gear_graph::item_id(a), it.label());
+    let name = format!("Gear {} · {}", crate::dialogs_gear_links::item_id(a), it.label());
     if let Some(gone) = it.missing(app).first() {
         return (format!("{name} — its {gone} is missing: click its replacement in the view"), true);
     }
@@ -1261,7 +1292,7 @@ pub(crate) fn next_step(app: &SolveApp, k: &Gear) -> (String, bool) {
         None => match it.optional_slot(app) {
             // A bevel side view without its contact line: sized by its gears' settings.
             Some(more) if it.kind == ItemKind::Bevel && more == "contact line" => (
-                format!("{name} is complete — sized by its gears' teeth and module ({} teeth each at module {} until you set them under Gear {} on the Gears tab); or click its contact line to size it from the drawing", gi::SIDE_VIEW_TEETH, gi::SIDE_VIEW_MODULE, crate::dialogs_gear_graph::item_id(a)),
+                format!("{name} is complete — sized by its gears' teeth and module ({} teeth each at module {} until you set them under Gear {} on the Gears tab); or click its contact line to size it from the drawing", gi::SIDE_VIEW_TEETH, gi::SIDE_VIEW_MODULE, crate::dialogs_gear_links::item_id(a)),
                 false,
             ),
             Some(more) => (format!("{name} is complete — optional: {more}; or New gear for the next one"), false),
@@ -1398,7 +1429,7 @@ pub(crate) fn request(app: &SolveApp, k: &Gear, inputs: &[SelInput]) -> Result<V
     if k.items.is_empty() {
         return Err("Add a gear: pick a type, press New gear and click the sketch pieces it lists".into());
     }
-    p.extend(crate::dialogs_gear_graph::items_request(app, &k.items, &k.graph)?);
+    p.extend(crate::dialogs_gear_links::items_request(app, &k.items, &k.links)?);
     // The circles each gear keeps out: taken out by hand, and (a gear that doesn't take them by
     // itself) those offered and left. Edit takes any other circle the drawing gets later.
     let dropped: Vec<Value> = k
@@ -1421,7 +1452,7 @@ pub(crate) fn request(app: &SolveApp, k: &Gear, inputs: &[SelInput]) -> Result<V
         ui.insert("gear_dropped".into(), Value::Array(dropped));
     }
     if let Some((item, gear)) = k.drive_item.filter(|(i, _)| *i < k.items.len()) {
-        let mut drive = json!({"item": crate::dialogs_gear_graph::item_id(item), "gear": gear});
+        let mut drive = json!({"item": crate::dialogs_gear_links::item_id(item), "gear": gear});
         if let Some(rpm) = number(app, &k.rpm, ValueKind::Unitless, "Input rpm")? {
             drive["rpm"] = json!(rpm);
         }
@@ -1492,7 +1523,7 @@ pub(crate) fn pick_for_ratio(k: &mut Gear, gear: (usize, usize)) {
 
 /// A gear as `gear.ratio` names it: {item, gear}.
 pub(crate) fn gear_ref(g: (usize, usize)) -> Value {
-    json!({"item": crate::dialogs_gear_graph::item_id(g.0), "gear": g.1})
+    json!({"item": crate::dialogs_gear_links::item_id(g.0), "gear": g.1})
 }
 
 /// `gear.ratio`'s reply as the readout's lines: the ratio (b's speed over a's) and the
@@ -1518,8 +1549,8 @@ pub(crate) fn ratio_lines(r: &Value, len: &dyn Fn(f64) -> String) -> Vec<(String
     }
     // A gear {item, gear} as the dialog names it ("A", "B2"), else the body's name.
     let gear_or = |g: Option<&Value>, body: Option<&Value>| -> Option<String> {
-        match g.and_then(|g| Some((g.get("item").and_then(crate::dialogs_gear_graph::item_index)?, g.get("gear").and_then(Value::as_u64).unwrap_or(0)))) {
-            Some((item, gear)) => Some(crate::dialogs_gear_graph::short_name(item, gear as usize)),
+        match g.and_then(|g| Some((g.get("item").and_then(crate::dialogs_gear_links::item_index)?, g.get("gear").and_then(Value::as_u64).unwrap_or(0)))) {
+            Some((item, gear)) => Some(crate::dialogs_gear_links::short_name(item, gear as usize)),
             None => body.and_then(Value::as_str).map(str::to_string),
         }
     };
@@ -1550,7 +1581,7 @@ pub(crate) fn ratio_bodies(session: &solidcraft_engine::Session, selection: &[Se
 /// from the driver, rpm, torque, contact ratio, warnings.
 pub(crate) fn results_of(r: &Value, len: &dyn Fn(f64) -> String) -> Vec<[String; 9]> {
     let f = |v: Option<f64>| v.map(fmt).unwrap_or_default();
-    crate::dialogs_gear_graph::gear_replies(r)
+    crate::dialogs_gear_links::gear_replies(r)
         .into_iter()
         .map(|g| {
             [
@@ -1641,8 +1672,138 @@ pub(crate) fn about_item(text: &str) -> Option<(usize, String)> {
 /// engine's per-gear warnings, its refusal (on the gear it names), a setting that doesn't read;
 /// then the preview (outline, picked geometry, contacts, side-A arrows), the suggested links and
 /// the ratio readout.
+/// What the dialog's request, preview and messages are worked out from: while none of it
+/// changes (nor the design), [`refresh`] has nothing to do.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Seen {
+    revision: u64,
+    items: Vec<GearItem>,
+    links: Links,
+    values: BTreeMap<String, String>,
+    chamfer: (String, usize),
+    drive: (Option<(usize, usize)>, String, String),
+    ratio_pick: [Option<(usize, usize)>; 2],
+    cutout: Cutout,
+    output: (usize, bool, String, bool, bool),
+    legacy: bool,
+    details_suggested: Vec<DetailSuggested>,
+    inputs: Vec<SelInput>,
+}
+
+impl Seen {
+    fn of(app: &SolveApp, k: &Gear, inputs: &[SelInput]) -> Seen {
+        Seen {
+            revision: app.session.revision,
+            items: k.items.clone(),
+            links: k.links.clone(),
+            values: k.values.clone(),
+            chamfer: (k.chamfer.clone(), k.chamfer_faces),
+            drive: (k.drive_item, k.rpm.clone(), k.torque.clone()),
+            ratio_pick: k.ratio_pick,
+            cutout: k.cutout.clone(),
+            output: (k.operation, k.cut_keep_out, k.keep_out_gap.clone(), k.assembly, k.equations),
+            legacy: k.legacy.is_some(),
+            details_suggested: k.details_suggested.clone(),
+            inputs: inputs.to_vec(),
+        }
+    }
+}
+
+/// A `gear.calculate` run off the interface's thread: its request's key and, once it is done,
+/// its reply. The dialog keeps showing the last reply meanwhile.
+#[derive(Default)]
+struct Calculating {
+    key: String,
+    reply: Option<Result<Value, String>>,
+}
+
+/// The `gear.calculate` running for the dialog, if any (compared equal always: it is no part of
+/// what the dialog holds).
+#[derive(Clone, Default)]
+pub struct Pending(Option<std::sync::Arc<std::sync::Mutex<Calculating>>>);
+
+impl PartialEq for Pending {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for Pending {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() { "Pending(running)" } else { "Pending" })
+    }
+}
+
+impl Pending {
+    /// Whether a run is still going.
+    fn running(&self) -> bool {
+        self.0.as_ref().is_some_and(|c| c.lock().map(|c| c.reply.is_none()).unwrap_or(false))
+    }
+    /// `gear.calculate` of `p` started on a copy of the session (`key`: what it is for); `ctx`
+    /// repaints once it is done.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start(&mut self, mut session: solidcraft_engine::Session, p: Value, key: String, ctx: Option<egui::Context>) {
+        let calc = std::sync::Arc::new(std::sync::Mutex::new(Calculating { key, reply: None }));
+        let done = calc.clone();
+        let spawned = std::thread::Builder::new().name("gear calculate".into()).spawn(move || {
+            let r = session.execute("gear.calculate", &p).map_err(|e| e.to_string());
+            if let Ok(mut c) = done.lock() {
+                c.reply = Some(r);
+            }
+            if let Some(ctx) = ctx {
+                ctx.request_repaint();
+            }
+        });
+        self.0 = spawned.is_ok().then_some(calc);
+    }
+    /// The reply of the run once it is done (and the run forgotten): its key and reply.
+    fn take(&mut self) -> Option<(String, Result<Value, String>)> {
+        let done = {
+            let c = self.0.as_ref()?.lock().ok()?;
+            c.reply.clone().map(|r| (c.key.clone(), r))
+        };
+        if done.is_some() {
+            self.0 = None;
+        }
+        done
+    }
+}
+
+/// `gear.calculate`'s reply (for the request keyed `key`) taken in: the outlines, the links'
+/// notes, the facts, the results, the contacts and what each gear is built with.
+fn take_reply(k: &mut Gear, key: String, r: Result<Value, String>, len: &dyn Fn(f64) -> String) {
+    k.from_engine = r.as_ref().map_or((false, false), |r| (r.get("outlines").is_some_and(|o| o.as_array().is_some_and(|a| !a.is_empty())), r.get("suggestions").is_some()));
+    k.shape = r.as_ref().map(outlines_of).unwrap_or_default();
+    if let Ok(r) = r.as_ref() {
+        k.links.note(r);
+    }
+    k.notes = r.as_ref().map(notes_of).unwrap_or_default();
+    k.facts = r.as_ref().map(facts_of).unwrap_or_default();
+    k.results = r.as_ref().map(|r| results_of(r, len)).unwrap_or_default();
+    k.contacts = r.as_ref().map(contacts_of).unwrap_or_default();
+    k.built = r.as_ref().map(built_of).unwrap_or_default();
+    k.details_suggested = r.as_ref().map(details_suggested_of).unwrap_or_default();
+    k.calc = Some((key, status_of(r)));
+}
+
+/// The dialog worked out again where what it is worked out from changed ([`Seen`]) or a
+/// `gear.calculate` came back: the request, its reply, the messages and the preview.
 pub(crate) fn refresh(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput]) {
+    refresh_in(app, k, inputs, None);
+}
+
+/// [`refresh`], with `gear.calculate` run off the interface's thread where the app runs work so
+/// (`ctx` repaints when it is done); tests and the web build run it here.
+pub(crate) fn refresh_in(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput], ctx: Option<&egui::Context>) {
     let len = len_of(app);
+    let arrived = k.pending.take();
+    let seen = Seen::of(app, k, inputs);
+    if arrived.is_none() && k.seen.as_deref() == Some(&seen) {
+        return;
+    }
+    if let Some((key, r)) = arrived {
+        take_reply(k, key, r, &len);
+    }
     k.gear_counts = k.items.iter().map(|it| it.gear_count(app)).collect();
     let asked = request(app, k, inputs);
     if let (Some(_), None, Ok(p)) = (k.group, &k.original, &asked) {
@@ -1651,20 +1812,18 @@ pub(crate) fn refresh(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput]) {
     match &asked {
         Ok(p) => {
             let key = format!("{}@{}", p, app.session.revision);
-            if k.calc.as_ref().is_none_or(|(c, _)| *c != key) {
-                let r = app.session.execute("gear.calculate", p);
-                k.from_engine = r.as_ref().map_or((false, false), |r| (r.get("outlines").is_some_and(|o| o.as_array().is_some_and(|a| !a.is_empty())), r.get("suggestions").is_some()));
-                k.shape = r.as_ref().map(outlines_of).unwrap_or_default();
-                if let Ok(r) = r.as_ref() {
-                    k.graph.note(r);
+            if k.calc.as_ref().is_none_or(|(c, _)| *c != key) && !k.pending.running() {
+                #[cfg(not(target_arch = "wasm32"))]
+                let off = app.apply_off_thread.is_some();
+                #[cfg(target_arch = "wasm32")]
+                let off = false;
+                if off {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    k.pending.start(app.session.scratch(), p.clone(), key, ctx.cloned());
+                } else {
+                    let r = app.session.execute("gear.calculate", p).map_err(|e| e.to_string());
+                    take_reply(k, key, r, &len);
                 }
-                k.notes = r.as_ref().map(notes_of).unwrap_or_default();
-                k.facts = r.as_ref().map(facts_of).unwrap_or_default();
-                k.results = r.as_ref().map(|r| results_of(r, &len)).unwrap_or_default();
-                k.contacts = r.as_ref().map(contacts_of).unwrap_or_default();
-                k.built = r.as_ref().map(built_of).unwrap_or_default();
-                k.details_suggested = r.as_ref().map(details_suggested_of).unwrap_or_default();
-                k.calc = Some((key, status_of(r)));
             }
         }
         Err(_) => {
@@ -1672,6 +1831,9 @@ pub(crate) fn refresh(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput]) {
             k.from_engine = (false, false);
         }
     }
+    let _ = ctx;
+    // (Seen again: a reply taken in changes what the request is laid over.)
+    k.seen = Some(Box::new(Seen::of(app, k, inputs)));
     // What is said of each gear, and of the set.
     let mut per: Vec<Vec<Msg>> = vec![Vec::new(); k.items.len()];
     let mut set_msgs = Vec::new();
@@ -1710,7 +1872,7 @@ pub(crate) fn refresh(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput]) {
         }
         None => {}
     }
-    for r in k.graph.replies() {
+    for r in k.links.replies() {
         for w in &r.warnings {
             if r.item < per.len() && !per[r.item].iter().any(|m| m.text == *w) {
                 per[r.item].push(Msg { text: worded(w), error: false });
@@ -1732,7 +1894,7 @@ pub(crate) fn refresh(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput]) {
         for i in &gears {
             per[*i].retain(|m| m.text != text);
         }
-        let names: Vec<String> = gears.iter().map(|i| crate::dialogs_gear_graph::item_id(*i)).collect();
+        let names: Vec<String> = gears.iter().map(|i| crate::dialogs_gear_links::item_id(*i)).collect();
         set_msgs.push(Msg { text: format!("Gears {}: {text}", names.join(", ")), error });
     }
     k.item_msgs = per;
@@ -1741,21 +1903,23 @@ pub(crate) fn refresh(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput]) {
     // picked geometry, each gear's side-A arrow, the links the drawing suggests.
     // (Always the items' own outline, coloured by item: the engine's outlines are numbered by
     // body, which a compound shares, so their colours wouldn't match the cards.)
-    let (lines, contacts, arrows) = items_preview(app, k);
-    k.shape = lines;
-    if k.contacts.is_empty() || asked.is_err() {
-        k.contacts = contacts;
-    }
-    k.arrows = arrows;
-    k.picked = picked_geometry(app, k);
-    k.cutout_rings = if k.cutout.on { cutout_preview(app, k) } else { Vec::new() };
     if !k.from_engine.1 {
         let local = local_suggestions(app, k);
-        k.graph.suggest(local);
+        k.links.suggest(local);
     }
+    let preview = items_preview(app, k);
+    k.shape = preview.lines;
+    if k.contacts.is_empty() || asked.is_err() {
+        k.contacts = preview.contacts;
+    }
+    k.arrows = preview.arrows;
+    k.link_lines = preview.links;
+    k.block_shafts = preview.shafts;
+    k.picked = picked_geometry(app, k);
+    k.cutout_rings = if k.cutout.on { cutout_preview(app, k) } else { Vec::new() };
     // A collision between two gears the drawing suggests linking: the suggestion says what to do,
     // so the collision isn't said as well (until the suggestion is dismissed by a link).
-    let suggested: Vec<(usize, usize)> = k.graph.suggested().iter().map(|s| (s.a.min(s.b), s.a.max(s.b))).collect();
+    let suggested: Vec<(usize, usize)> = k.links.suggested().iter().map(|s| (s.a.min(s.b), s.a.max(s.b))).collect();
     let resolved = |text: &str| -> bool {
         if !text.contains("collide") {
             return false;
@@ -1771,8 +1935,8 @@ pub(crate) fn refresh(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput]) {
     for (i, j, gap) in near_misses(app, k) {
         let text = format!(
             "Gears {} and {} are {} mm apart, so they won't mesh. Make the circles Tangent in the sketch, or leave them unlinked.",
-            crate::dialogs_gear_graph::item_id(i),
-            crate::dialogs_gear_graph::item_id(j),
+            crate::dialogs_gear_links::item_id(i),
+            crate::dialogs_gear_links::item_id(j),
             fmt((gap * 10.0).round() / 10.0)
         );
         if let Some(m) = k.item_msgs.get_mut(j) {
@@ -1814,10 +1978,10 @@ fn gears_named(text: &str) -> Vec<usize> {
 /// Pairs of single gears whose pitch circles lie in one plane a little apart (within two modules
 /// of touching, or a fifth of their radii) and aren't linked: (first, second, the gap in mm).
 fn near_misses(app: &SolveApp, k: &Gear) -> Vec<(usize, usize, f64)> {
-    let geoms: Vec<Vec<gi::GearGeom>> = k.items.iter().enumerate().map(|(i, it)| gi::gear_geoms(&it.crate_item(app, &crate::dialogs_gear_graph::item_id(i)))).collect();
-    let links = k.graph.links();
-    let linked = |a: usize, b: usize| links.iter().any(|l| (l.0 == a && l.2 == b) || (l.0 == b && l.2 == a)) || k.graph.suggested().iter().any(|s| (s.a == a && s.b == b) || (s.a == b && s.b == a));
-    let module = |i: usize| k.graph.replies().iter().find(|r| r.item == i).map(|r| r.module).filter(|m| *m > 0.0).unwrap_or(2.0);
+    let geoms: Vec<Vec<gi::GearGeom>> = k.items.iter().enumerate().map(|(i, it)| gi::gear_geoms(&it.crate_item(app, &crate::dialogs_gear_links::item_id(i)))).collect();
+    let links = k.links.all();
+    let linked = |a: usize, b: usize| links.iter().any(|l| (l.0 == a && l.2 == b) || (l.0 == b && l.2 == a)) || k.links.suggested().iter().any(|s| (s.a == a && s.b == b) || (s.a == b && s.b == a));
+    let module = |i: usize| k.links.replies().iter().find(|r| r.item == i).map(|r| r.module).filter(|m| *m > 0.0).unwrap_or(2.0);
     let mut out = Vec::new();
     for i in 0..geoms.len() {
         for j in i + 1..geoms.len() {
@@ -1839,11 +2003,11 @@ fn near_misses(app: &SolveApp, k: &Gear) -> Vec<(usize, usize, f64)> {
 
 /// The links the drawing suggests between the items (the gear crate's `suggest_links`, decision
 /// 3), for a reply that names none.
-fn local_suggestions(app: &SolveApp, k: &Gear) -> Vec<crate::dialogs_gear_graph::Suggested> {
-    let items: Vec<gi::GearItem> = k.items.iter().enumerate().map(|(i, it)| it.crate_item(app, &crate::dialogs_gear_graph::item_id(i))).collect();
+fn local_suggestions(app: &SolveApp, k: &Gear) -> Vec<crate::dialogs_gear_links::Suggested> {
+    let items: Vec<gi::GearItem> = k.items.iter().enumerate().map(|(i, it)| it.crate_item(app, &crate::dialogs_gear_links::item_id(i))).collect();
     gi::suggest_links(&items)
         .into_iter()
-        .map(|s| crate::dialogs_gear_graph::Suggested { a: s.a.item, a_gear: s.a.gear, b: s.b.item, b_gear: s.b.gear, kind: s.kind.name().to_string() })
+        .map(|s| crate::dialogs_gear_links::Suggested { a: s.a.item, a_gear: s.a.gear, b: s.b.item, b_gear: s.b.gear, kind: s.kind.name().to_string() })
         .collect()
 }
 
@@ -1907,7 +2071,7 @@ fn picked_geometry(app: &SolveApp, k: &Gear) -> Vec<(usize, Vec<[f64; 3]>, Strin
         let layouts = gi::slots(it.kind);
         for (n, t) in things.into_iter().enumerate() {
             let what = slots.get(n).and_then(|s| layouts.get(s.layout)?.get(s.slot)).map_or("", |s| s.what);
-            let label = format!("{} · {what}", crate::dialogs_gear_graph::item_id(i));
+            let label = format!("{} · {what}", crate::dialogs_gear_links::item_id(i));
             match t {
                 gi::Thing::Circle { centre, normal, radius, .. } => out.push((i, ring_points(centre, normal, radius, 0.0), label)),
                 gi::Thing::Line { a, b, .. } => out.push((i, vec![a, b], label)),
@@ -1917,7 +2081,7 @@ fn picked_geometry(app: &SolveApp, k: &Gear) -> Vec<(usize, Vec<[f64; 3]>, Strin
         // Its bore and hub circles ("A · bore").
         for (_, hub, t, _) in it.detail_things(app) {
             if let gi::Thing::Circle { centre, normal, radius, .. } = t {
-                out.push((i, ring_points(centre, normal, radius, 0.0), format!("{} · {}", crate::dialogs_gear_graph::item_id(i), if hub { "hub" } else { "bore" })));
+                out.push((i, ring_points(centre, normal, radius, 0.0), format!("{} · {}", crate::dialogs_gear_links::item_id(i), if hub { "hub" } else { "bore" })));
             }
         }
     }
@@ -1931,10 +2095,10 @@ fn picked_geometry(app: &SolveApp, k: &Gear) -> Vec<(usize, Vec<[f64; 3]>, Strin
 fn cutout_preview(app: &SolveApp, k: &Gear) -> Vec<(Option<usize>, Vec<[f64; 3]>)> {
     let gap = |t: &str, d: f64| number(app, t, ValueKind::Length, "").ok().flatten().unwrap_or(d);
     let (radial, axial, fit) = (gap(&k.cutout.radial, 0.5), gap(&k.cutout.axial, 0.5), gap(&k.cutout.fit, 0.0));
-    let replies = k.graph.replies();
+    let replies = k.links.replies();
     let mut out = Vec::new();
     for (i, it) in k.items.iter().enumerate() {
-        let ci = it.crate_item(app, &crate::dialogs_gear_graph::item_id(i));
+        let ci = it.crate_item(app, &crate::dialogs_gear_links::item_id(i));
         for (g, geo) in gi::gear_geoms(&ci).iter().enumerate() {
             let (Some(r), Some(ax)) = (geo.radius, unit(geo.axis)) else { continue };
             let m = replies.iter().find(|x| (x.item, x.gear) == (i, g)).map(|x| x.module).filter(|m| *m > 0.0).unwrap_or(1.0);
@@ -1967,27 +2131,40 @@ fn cutout_preview(app: &SolveApp, k: &Gear) -> Vec<(Option<usize>, Vec<[f64; 3]>
 /// engine worked out (the plan gives no 2D preview): each gear's pitch circle at both faces
 /// (decision 4: side A along its axis, side B against it) with four lines between, its tip and
 /// root circles once its module is known; each mesh link's contact; each gear's side-A arrow.
-#[allow(clippy::type_complexity)]
-fn items_preview(app: &SolveApp, k: &Gear) -> (Vec<(usize, Vec<[f64; 3]>)>, Vec<[[f64; 3]; 2]>, Vec<(usize, [[f64; 3]; 2])>) {
+/// What [`items_preview`] draws: the outline by item, each mesh's contact, each gear's side-A
+/// arrow by item, each link's line and each block's shafts.
+struct Preview {
+    lines: Vec<(usize, Vec<[f64; 3]>)>,
+    contacts: Vec<[[f64; 3]; 2]>,
+    arrows: Vec<(usize, [[f64; 3]; 2])>,
+    links: Vec<LinkLine>,
+    shafts: Vec<BlockShaft>,
+}
+
+fn items_preview(app: &SolveApp, k: &Gear) -> Preview {
     let at = |c: [f64; 3], d: [f64; 3], s: f64| [0, 1, 2].map(|i| c[i] + d[i] * s);
-    let replies = k.graph.replies();
+    let replies = k.links.replies();
     let geoms: Vec<(gi::GearItem, Vec<gi::GearGeom>)> = k
         .items
         .iter()
         .enumerate()
         .map(|(i, it)| {
-            let ci = it.crate_item(app, &crate::dialogs_gear_graph::item_id(i));
+            let ci = it.crate_item(app, &crate::dialogs_gear_links::item_id(i));
             let g = gi::gear_geoms(&ci);
             (ci, g)
         })
         .collect();
-    let blocks: Vec<gi::ModuleBlock> = Vec::new();
+    let blocks = k.links.crate_blocks(app);
     let (mut lines, mut contacts, mut arrows) = (Vec::new(), Vec::new(), Vec::new());
     let mut faces = BTreeMap::new();
     let mut tip_ends: Vec<TipEnd> = Vec::new();
     for (i, (ci, gs)) in geoms.iter().enumerate() {
         for (g, geo) in gs.iter().enumerate() {
-            let s = ci.settings(g);
+            // (A member's settings with its block's filled in: its face, as it will be built.)
+            let s = match solidcraft_gear::blocks::block_of(&blocks, i) {
+                Some(b) => solidcraft_gear::blocks::block_settings(&blocks[b].settings, ci.kind, &ci.settings(g)),
+                None => ci.settings(g),
+            };
             let reply = replies.iter().find(|r| (r.item, r.gear) == (i, g));
             let m = reply.map(|r| r.module).filter(|m| *m > 0.0).or(gi::resolve_module(&blocks, i, &s).module).unwrap_or(1.0);
             let (fa, fb) = gi::face_extent(&s, m);
@@ -2030,12 +2207,14 @@ fn items_preview(app: &SolveApp, k: &Gear) -> (Vec<(usize, Vec<[f64; 3]>)>, Vec<
             }
         }
     }
-    // The set's tooth chamfer (All gears), as the build cuts it: on each chamfered end the tip
-    // circle steps in by the size, and a second circle the size back from the face, joined by
-    // short slanted lines.
+    // The tooth chamfer (the set's, a block's on its gears), as the build cuts it: on each
+    // chamfered end the tip circle steps in by the size, and a second circle the size back from
+    // the face, joined by short slanted lines.
     let size = number(app, &k.chamfer, ValueKind::Length, "Tooth chamfer").ok().flatten().filter(|c| *c > 0.0 && c.is_finite());
-    if let Some(c) = size {
+    let chamfers = solidcraft_gear::blocks::chamfer_groups(k.items.len(), &blocks, size);
+    {
         for (n, e) in tip_ends.iter().enumerate() {
+            let Some(c) = chamfers.iter().find(|(_, on)| on.contains(&e.item)).map(|x| x.0) else { continue };
             let side_ok = match k.chamfer_faces {
                 1 => e.out > 0.0,
                 2 => e.out < 0.0,
@@ -2074,21 +2253,43 @@ fn items_preview(app: &SolveApp, k: &Gear) -> (Vec<(usize, Vec<[f64; 3]>)>, Vec<
             }
         }
     }
-    // Each mesh link's contact: where the two pitch circles touch, across the faces.
-    for (a, ag, b, bg, kind) in k.graph.links() {
-        if kind != "mesh" {
-            continue;
-        }
+    // Each mesh link's contact: where the two pitch circles touch, across the faces. Each link
+    // (and suggested link) drawn from one gear to the other, through the contact of a mesh.
+    let block_of = |i: usize| k.links.block_of(i);
+    let suggested = k.links.suggested().iter().map(|s| ((s.a, s.a_gear, s.b, s.b_gear, if s.kind == "shaft" { "shaft" } else { "mesh" }), true));
+    let mut links = Vec::new();
+    for (l, only_suggested) in k.links.all().into_iter().map(|l| (l, false)).chain(suggested) {
+        let (a, ag, b, bg, kind) = l;
         let (Some(ga), Some(gb)) = (geoms.get(a).and_then(|g| g.1.get(ag)), geoms.get(b).and_then(|g| g.1.get(bg))) else { continue };
-        let Some(ax) = unit(ga.axis) else { continue };
-        let (base, other) = if gb.ring { (gb, ga) } else { (ga, gb) };
-        let (Some(r), Some(_)) = (base.radius, other.radius) else { continue };
-        let Some(dir) = unit([0, 1, 2].map(|j| other.centre[j] - base.centre[j])) else { continue };
-        let p = at(base.centre, dir, r);
-        let (fa, fb) = faces.get(&(a, ag)).copied().unwrap_or((0.0, 0.0));
-        contacts.push([at(p, ax, fa), at(p, ax, -fb)]);
+        let mid = [0, 1, 2].map(|j| 0.5 * (ga.centre[j] + gb.centre[j]));
+        let (mut points, mut label_at) = (vec![ga.centre, gb.centre], mid);
+        if kind == "mesh" {
+            let (base, other) = if gb.ring { (gb, ga) } else { (ga, gb) };
+            if let (Some(r), Some(_), Some(dir), Some(ax)) = (base.radius, other.radius, unit([0, 1, 2].map(|j| other.centre[j] - base.centre[j])), unit(ga.axis)) {
+                let p = at(base.centre, dir, r);
+                if !only_suggested {
+                    let (fa, fb) = faces.get(&(a, ag)).copied().unwrap_or((0.0, 0.0));
+                    contacts.push([at(p, ax, fa), at(p, ax, -fb)]);
+                }
+                points = vec![ga.centre, p, gb.centre];
+                label_at = p;
+            }
+        }
+        let note = k.links.note_of(&l);
+        let error = note.is_some_and(|n| n.error.is_some());
+        let label = match note.and_then(|n| n.ratio) {
+            _ if only_suggested => format!("{} · suggested", if kind == "shaft" { "same shaft" } else { "mesh" }),
+            _ if error => "⚠ see Links".to_string(),
+            Some(r) if kind == "mesh" => format!("{} : 1", fmt_ratio(r.abs())),
+            _ if kind == "shaft" => "same shaft".to_string(),
+            _ => "mesh".to_string(),
+        };
+        let block = block_of(a).filter(|x| Some(*x) == block_of(b));
+        links.push(LinkLine { link: l, points, at: label_at, label, block, suggested: only_suggested, error });
     }
-    (lines, contacts, arrows)
+    let items: Vec<gi::GearItem> = geoms.into_iter().map(|g| g.0).collect();
+    let shafts = solidcraft_gear::blocks::block_shafts(&items, &blocks);
+    Preview { lines, contacts, arrows, links, shafts }
 }
 
 /// Each gear's outline `gear.calculate` gives (`outlines`): pitch, tip and root circles at its
@@ -2103,7 +2304,7 @@ fn outlines_of(r: &Value) -> Vec<(usize, Vec<[f64; 3]>)> {
     for o in r.get("outlines").and_then(Value::as_array).into_iter().flatten() {
         let (Some(c), Some(ax)) = (p3(o.get("center")), p3(o.get("axis"))) else { continue };
         let num = |k: &str| o.get(k).and_then(Value::as_f64);
-        let member = o.get("item").and_then(crate::dialogs_gear_graph::item_index).or_else(|| o.get("index").and_then(Value::as_u64).map(|i| i as usize)).unwrap_or(0);
+        let member = o.get("item").and_then(crate::dialogs_gear_links::item_index).or_else(|| o.get("index").and_then(Value::as_u64).map(|i| i as usize)).unwrap_or(0);
         let Some(z) = unit(ax) else { continue };
         let x0 = if z[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
         let Some(x) = unit(cross(cross(z, x0), z)) else { continue };
@@ -2150,21 +2351,25 @@ fn contacts_of(r: &Value) -> Vec<[[f64; 3]; 2]> {
 }
 
 /// What is drawn over the viewport while the dialog is open: the outline in each gear's colour,
-/// each gear's picked geometry (thicker; the hovered card's thickest), each mesh's contact, and
-/// the active gear's side-A arrows.
+/// each gear's picked geometry (thicker; the hovered card's thickest), each mesh's contact, each
+/// link from gear to gear with its ratio (in its block's colour; a hovered Links row lit, the
+/// suggested ones dashed), each block's shafts, and the active gear's side-A arrows.
 pub fn overlay(painter: &egui::Painter, proj: &crate::viewport::Proj, k: &Gear) {
     let to = |p: &[f64; 3]| proj.to_screen(solidcore_record::Vec3::new(p[0], p[1], p[2]));
-    let lit = k.card_hovered.or(k.graph_hovered);
+    // The gears lit: the hovered card's, or both of a hovered link's.
+    let hovered = k.link_hovered;
+    let lit_item = |i: usize| k.card_hovered == Some(i) || hovered.is_some_and(|l| l.0 == i || l.2 == i);
+    let any_lit = k.card_hovered.is_some() || hovered.is_some();
     for (item, line) in &k.shape {
         let pts: Vec<egui::Pos2> = line.iter().filter_map(to).collect();
         if pts.len() == line.len() && pts.len() >= 2 {
-            let color = if lit.is_some_and(|l| l != *item) { item_color(*item).gamma_multiply(0.35) } else { item_color(*item) };
+            let color = if any_lit && !lit_item(*item) { item_color(*item).gamma_multiply(0.35) } else { item_color(*item) };
             painter.add(egui::Shape::line(pts, egui::Stroke::new(if line.len() == 2 { 1.0 } else { 1.4 }, color)));
         }
     }
     let mut placed: Vec<egui::Rect> = Vec::new();
     for (item, line, label) in &k.picked {
-        let width = if lit == Some(*item) { 5.0 } else if k.active == Some(*item) { 3.0 } else { 2.2 };
+        let width = if lit_item(*item) { 5.0 } else if k.active == Some(*item) { 3.0 } else { 2.2 };
         let color = item_color(*item);
         let pts: Vec<egui::Pos2> = line.iter().filter_map(to).collect();
         if pts.len() != line.len() || pts.is_empty() {
@@ -2181,7 +2386,7 @@ pub fn overlay(painter: &egui::Painter, proj: &crate::viewport::Proj, k: &Gear) 
         // Which gear and which of its slots this sketch piece is ("B · shaft line"), by its
         // highest point on screen (a line: its middle). With many gears, only the active or
         // hovered one's, so the labels don't pile up.
-        if k.items.len() > 4 && k.active != Some(*item) && lit != Some(*item) {
+        if k.items.len() > 4 && k.active != Some(*item) && !lit_item(*item) {
             continue;
         }
         let at =if pts.len() == 2 { pts[0] + (pts[1] - pts[0]) * 0.5 } else { pts.iter().copied().fold(pts[0], |a, p| if p.y < a.y { p } else { a }) };
@@ -2227,10 +2432,59 @@ pub fn overlay(painter: &egui::Painter, proj: &crate::viewport::Proj, k: &Gear) 
             }
         }
     }
+    // Each block's shafts: a bar along the axis in the block's colour, its Ø and block named.
+    let font = egui::FontId::proportional(11.0);
+    let tag = |at: egui::Pos2, text: String, color: egui::Color32| {
+        let g = painter.layout_no_wrap(text, font.clone(), color);
+        let r = egui::Align2::CENTER_CENTER.anchor_size(at, g.size()).expand2(egui::vec2(4.0, 1.0));
+        painter.rect_filled(r, 3.0, egui::Color32::from_black_alpha(170));
+        painter.galley(r.min + egui::vec2(4.0, 1.0), g, color);
+    };
+    for sh in &k.block_shafts {
+        let (Some(pa), Some(pb)) = (to(&sh.a), to(&sh.b)) else { continue };
+        let color = block_color(sh.block);
+        painter.line_segment([pa, pb], egui::Stroke::new(7.0, color.gamma_multiply(0.45)));
+        painter.line_segment([pa, pb], egui::Stroke::new(1.5, color));
+        let name = k.links.blocks().get(sh.block).map(|b| b.title(sh.block)).unwrap_or_default();
+        tag(pb, format!("Ø{} shaft · {name}", fmt(sh.diameter)), color);
+    }
+    // Each link from gear to gear: in its block's colour (grey across blocks), dashed while only
+    // suggested, red when wrong; the hovered row's thick and bright, with its label.
+    let plain = egui::Color32::from_rgb(200, 205, 215);
+    let labelled = k.link_lines.len() <= 8;
+    for l in &k.link_lines {
+        let pts: Vec<egui::Pos2> = l.points.iter().filter_map(to).collect();
+        if pts.len() != l.points.len() || pts.len() < 2 {
+            continue;
+        }
+        let on = hovered == Some(l.link) && !l.suggested;
+        let color = if on {
+            egui::Color32::from_rgb(255, 210, 40)
+        } else if l.error {
+            egui::Color32::from_rgb(230, 70, 60)
+        } else {
+            l.block.map_or(plain, block_color)
+        };
+        let color = if hovered.is_some() && !on { color.gamma_multiply(0.45) } else { color };
+        let stroke = egui::Stroke::new(if on { 4.0 } else if l.suggested { 1.2 } else { 2.0 }, color);
+        if l.suggested {
+            painter.extend(egui::Shape::dashed_line(&pts, stroke, 6.0, 4.0));
+        } else {
+            painter.add(egui::Shape::line(pts.clone(), stroke));
+        }
+        for p in [pts[0], pts[pts.len() - 1]] {
+            painter.circle_filled(p, if on { 4.0 } else { 2.5 }, color);
+        }
+        if (on || (labelled && !l.suggested))
+            && let Some(at) = to(&l.at)
+        {
+            tag(at + egui::vec2(0.0, -12.0), l.label.clone(), color);
+        }
+    }
     // The active gear's side A (decision 4): an arrow from its centre along its axis, marked "A".
     let side_a = egui::Color32::from_rgb(60, 200, 120);
     for (item, [a, b]) in &k.arrows {
-        if k.active != Some(*item) && lit != Some(*item) {
+        if k.active != Some(*item) && !lit_item(*item) {
             continue;
         }
         if let (Some(pa), Some(pb)) = (to(a), to(b))

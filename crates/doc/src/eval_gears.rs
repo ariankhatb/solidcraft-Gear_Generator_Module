@@ -12,8 +12,10 @@
 //!
 //! The steps inside run unchecked, as the generator's timeline features were built; each body
 //! the feature keeps is then checked once (unless the design's checks are off), and a body the
-//! kernel's check refuses is kept with a warning saying why: SMLib refuses the curved trims of
-//! flat bevels ("Bad CurveCusp", a warning SMLib itself calls one) and some hypoid edges.
+//! kernel's check refuses is kept with a warning saying why. Lofts' and tapers' sections go in
+//! with their splines' pieces meeting at one speed ([`section_loop`]): on the sketch's fit, the
+//! cones that trim flat bevels and hypoids crossed every tooth side with a kink SMLib refuses
+//! ("Bad CurveCusp").
 
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock, PoisonError};
@@ -549,6 +551,162 @@ fn outline_loop(o: &Outline) -> Loop2 {
     Loop2 { segs }
 }
 
+/// A section of a loft or taper as a kernel loop: [`outline_loop`]'s curves, but each run of
+/// fit-point splines that meet tangent to each other one natural cubic spline on equal parameter
+/// steps, one per piece of their fits ([`natural_beziers`]), through points spread along the fits
+/// ([`graded_points`]), so that its pieces meet at the same speed.
+///
+/// The kernel gives each piece of a loop a parameter span of its own. A sketch's fit spline is
+/// smooth on its chord lengths, so on the kernel's spans its speed jumps by the ratio of the two
+/// chords at every fit point (and from one spline to the next: a bevel tooth's fillet to its
+/// flank, whose two fits with free ends also meet half a degree apart), and so does a loft's
+/// wall across that point's line between the sections: the wall is tangent there, its parameters
+/// are not. A boolean's curve crossing such a line at a slant (a flat bevel's back and front
+/// cones, a hypoid's toe and heel cones, across every tooth side) turns sharply there in the
+/// wall's parameters, which SMLib's check refuses ("Bad CurveCusp", several per tooth) and takes
+/// a minute or two a body to look into. With the same speed on both sides of every join, the
+/// walls' parameters run on smoothly too. The curves stay within a few µm of the fits (an
+/// extruded wall is crossed only along its own lines by the cylinders and planes a spur's steps
+/// cut it with, so prisms keep the fit as it is).
+fn section_loop(o: &Outline) -> Loop2 {
+    let fits: Vec<Option<Vec<[Vec2; 4]>>> = o
+        .segs
+        .iter()
+        .map(|s| match s {
+            Seg::Spline(pts) if pts.len() >= 2 => Some(solidcraft_sketch::fit_beziers(&pts.iter().map(|q| v2(*q)).collect::<Vec<_>>())).filter(|f| !f.is_empty()),
+            _ => None,
+        })
+        .collect();
+    // Whether the fit `a` runs on into the fit `b`: from the same point in the same direction.
+    let tangent = |a: &[[Vec2; 4]], b: &[[Vec2; 4]]| -> bool {
+        let (Some(a), Some(b)) = (a.last(), b.first()) else { return false };
+        let (ta, tb) = (a[3] - a[2], b[1] - b[0]);
+        let (la, lb) = (length(ta), length(tb));
+        let scale = length(a[3] - a[0]).max(length(b[3] - b[0]));
+        length(a[3] - b[0]) <= 1e-9 * scale && la > 0.0 && lb > 0.0 && (ta.x * tb.y - ta.y * tb.x).abs() <= TANGENT * la * lb && ta.x * tb.x + ta.y * tb.y > 0.0
+    };
+    let mut segs = Vec::with_capacity(o.segs.len());
+    let mut i = 0;
+    while i < o.segs.len() {
+        let Some(Some(first)) = fits.get(i) else {
+            segs.extend(outline_loop(&Outline { segs: vec![o.segs[i].clone()] }).segs);
+            i += 1;
+            continue;
+        };
+        let mut chain = first.clone();
+        // (Not on round past the outline's last segment: its first piece starts where it did.)
+        while let Some(Some(next)) = fits.get(i + 1) {
+            if !tangent(&chain, next) {
+                break;
+            }
+            chain.extend_from_slice(next);
+            i += 1;
+        }
+        let points = graded_points(&chain);
+        let t: Vec<f64> = (0..points.len()).map(|k| k as f64).collect();
+        segs.extend(natural_beziers(&points, &t).into_iter().map(|[p0, p1, p2, p3]| Seg2::Cubic { p0, p1, p2, p3 }));
+        i += 1;
+    }
+    Loop2 { segs }
+}
+
+/// Points on a chain of cubic Bézier pieces (the fits of a run of splines), one at each end and
+/// one between each two pieces, spread along it as the pieces' own joins are but with the
+/// spacing graded: each step's length the pieces' own, smoothed on its logarithm with its
+/// neighbours' ([`GRADING`] passes). The fits of a fillet and a flank space their points
+/// differently (densely round the fillet), and the spline on equal steps through points whose
+/// spacing jumps from one to the other bends sharply there; graded, the fillet keeps its points
+/// close together and the steps grow smoothly into the flank's.
+fn graded_points(chain: &[[Vec2; 4]]) -> Vec<Vec2> {
+    const SAMPLES: usize = 64;
+    let at = |b: &[Vec2; 4], u: f64| {
+        let v = 1.0 - u;
+        b[0] * (v * v * v) + b[1] * (3.0 * v * v * u) + b[2] * (3.0 * v * u * u) + b[3] * (u * u * u)
+    };
+    // The length along the chain at each sample of each piece.
+    let mut along = vec![0.0];
+    let mut last = chain[0][0];
+    for b in chain {
+        for k in 1..=SAMPLES {
+            let q = at(b, k as f64 / SAMPLES as f64);
+            along.push(along[along.len() - 1] + length(q - last));
+            last = q;
+        }
+    }
+    let n = chain.len();
+    let total = along[n * SAMPLES];
+    let mut steps: Vec<f64> = (0..n).map(|k| (along[(k + 1) * SAMPLES] - along[k * SAMPLES]).max(1e-12 * total).ln()).collect();
+    for _ in 0..GRADING {
+        let was = steps.clone();
+        for k in 0..n {
+            let (l, r) = (was[k.saturating_sub(1)], was[(k + 1).min(n - 1)]);
+            steps[k] = 0.25 * l + 0.5 * was[k] + 0.25 * r;
+        }
+    }
+    let sum: f64 = steps.iter().map(|e| e.exp()).sum();
+    let mut points = Vec::with_capacity(n + 1);
+    points.push(chain[0][0]);
+    let (mut j, mut want) = (0, 0.0);
+    for e in &steps[..n - 1] {
+        want += total * e.exp() / sum;
+        while j + 1 < n * SAMPLES && along[j + 1] < want {
+            j += 1;
+        }
+        let f = if along[j + 1] > along[j] { (want - along[j]) / (along[j + 1] - along[j]) } else { 0.0 };
+        points.push(at(&chain[j / SAMPLES], ((j % SAMPLES) as f64 + f) / SAMPLES as f64));
+    }
+    points.push(chain[n - 1][3]);
+    points
+}
+
+/// How many times [`graded_points`] smooths the steps' lengths with their neighbours'.
+const GRADING: usize = 2;
+
+/// How far apart (the sine of the angle) the directions of two splines may be where they meet for
+/// [`section_loop`] to take them as one: the fits of a bevel tooth's fillet and of its flank,
+/// each on its own with free ends, meet half a degree apart where the tooth's sides are tangent.
+const TANGENT: f64 = 0.02;
+
+/// A vector's length.
+fn length(v: Vec2) -> f64 {
+    v.x.hypot(v.y)
+}
+
+/// The cubic Bézier pieces of the natural cubic spline through `p` at the parameters `t` (one
+/// per point, increasing; the second derivative zero at both ends), each piece on its own span.
+/// On the points' own chord lengths, the pieces of [`solidcraft_sketch::fit_beziers`].
+fn natural_beziers(p: &[Vec2], t: &[f64]) -> Vec<[Vec2; 4]> {
+    let n = p.len() - 1;
+    let h: Vec<f64> = (0..n).map(|i| t[i + 1] - t[i]).collect();
+    // The second derivatives at the fit points (Thomas' algorithm on the tridiagonal system).
+    let mut m = vec![Vec2::ZERO; n + 1];
+    if n >= 2 {
+        let mut diag = vec![0.0; n + 1];
+        let mut rhs = vec![Vec2::ZERO; n + 1];
+        for i in 1..n {
+            diag[i] = 2.0 * (h[i - 1] + h[i]);
+            rhs[i] = ((p[i + 1] - p[i]) * (1.0 / h[i]) - (p[i] - p[i - 1]) * (1.0 / h[i - 1])) * 6.0;
+        }
+        for i in 2..n {
+            let w = h[i - 1] / diag[i - 1];
+            diag[i] -= w * h[i - 1];
+            rhs[i] = rhs[i] - rhs[i - 1] * w;
+        }
+        m[n - 1] = rhs[n - 1] * (1.0 / diag[n - 1]);
+        for i in (1..n - 1).rev() {
+            m[i] = (rhs[i] - m[i + 1] * h[i]) * (1.0 / diag[i]);
+        }
+    }
+    (0..n)
+        .map(|i| {
+            let chord = (p[i + 1] - p[i]) * (1.0 / h[i]);
+            let start = chord - (m[i] * 2.0 + m[i + 1]) * (h[i] / 6.0);
+            let end = chord + (m[i] + m[i + 1] * 2.0) * (h[i] / 6.0);
+            [p[i], p[i] + start * (h[i] / 3.0), p[i + 1] - end * (h[i] / 3.0), p[i + 1]]
+        })
+        .collect()
+}
+
 /// A region as kernel regions: each outer outline with the holes inside it.
 fn regions_of(r: &Region) -> Vec<Region2> {
     solid::region_parts(r).into_iter().map(|(o, holes)| Region2 { outer: outline_loop(&r.outer[o]), holes: holes.iter().map(|h| outline_loop(&r.holes[*h])).collect() }).collect()
@@ -570,7 +728,7 @@ fn tool(f: &Frame, step: &Step, nudge: f64) -> Result<Body> {
         let sections: Vec<(Plane, Region2)> = (0..n)
             .map(|i| {
                 let (section, t) = solidcraft_gear::plan::taper_section(o, twist, scale, i, n);
-                let section = outline_loop(&section);
+                let section = section_loop(&section);
                 let region = match rim {
                     Some(r) => Region2 { outer: Loop2::circle(Vec2::ZERO, r), holes: vec![section] },
                     None => Region2 { outer: section, holes: Vec::new() },
@@ -595,7 +753,7 @@ fn tool(f: &Frame, step: &Step, nudge: f64) -> Result<Body> {
         Step::Taper { outline, z0, height, twist, scale, .. } => taper(outline, *z0, *height, *twist, *scale, None),
         Step::RingTaper { outline, rim, z0, height, twist, scale, .. } => taper(outline, *z0, *height, *twist, *scale, Some(*rim)),
         Step::Loft { sections, .. } => {
-            let s: Vec<(Plane, Region2)> = sections.iter().map(|(o, h)| (plane_at(f, *h), Region2 { outer: outline_loop(o), holes: Vec::new() })).collect();
+            let s: Vec<(Plane, Region2)> = sections.iter().map(|(o, h)| (plane_at(f, *h), Region2 { outer: section_loop(o), holes: Vec::new() })).collect();
             Ok(kernel::loft_regions(&s)?)
         }
         Step::Revolve { profile, .. } => {

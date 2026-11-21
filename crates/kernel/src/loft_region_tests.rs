@@ -198,3 +198,35 @@ fn a_loft_of_lines_and_an_arc_has_planar_walls_on_the_lines() {
         assert!(history.faces.iter().any(|f| f.origins.contains(&crate::history::FaceOrigin::Profile { segment })), "{segment}");
     }
 }
+
+/// Sections that correspond one to one loft as `loft` lofts them, without the matching: the
+/// same solid. A section started elsewhere, or with another number of segments, goes to `loft`.
+#[test]
+fn corresponding_sections_loft_as_the_matched_ones_and_others_fall_back() {
+    use crate::{loft, loft_corresponding};
+    // A wavy outline of 24 cubic pieces, scaled and turned a little from section to section.
+    let wavy = |scale: f64, turn: f64| {
+        let at = |i: usize| {
+            let a = i as f64 * PI / 12.0 + turn;
+            let r = scale * (10.0 + if i % 2 == 0 { 1.5 } else { 0.0 });
+            Vec2::new(r * a.cos(), r * a.sin())
+        };
+        let segs = (0..24)
+            .map(|i| {
+                let (p0, p3) = (at(i), at((i + 1) % 24));
+                let d = p3 - p0;
+                let n = Vec2::new(-d.y, d.x) * 0.15;
+                solidcore_record::Seg2::Cubic { p0, p1: p0 + d * (1.0 / 3.0) + n, p2: p0 + d * (2.0 / 3.0) + n, p3 }
+            })
+            .collect();
+        Loop2 { segs }
+    };
+    let secs: Vec<(Plane, Loop2)> = (0..5).map(|k| (Plane::XY.offset(6.0 * k as f64), wavy(1.0 - 0.05 * k as f64, 0.02 * k as f64))).collect();
+    let (matched, given) = (loft(&secs).unwrap(), loft_corresponding(&secs).unwrap());
+    let v = measure(&matched).unwrap().volume;
+    check(&given, v, 1e-9);
+    // Started three pieces on, the second section no longer lines up as given: matched instead.
+    let mut shifted = secs.clone();
+    shifted[1].1.segs.rotate_left(3);
+    check(&loft_corresponding(&shifted).unwrap(), v, 1e-9);
+}

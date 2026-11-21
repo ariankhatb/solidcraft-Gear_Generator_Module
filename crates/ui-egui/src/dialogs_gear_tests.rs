@@ -317,6 +317,9 @@ fn picks_are_checked_by_the_gear_crates_slots() {
     // Compound (decision 6): two circles in parallel sketches and the shaft line through them.
     assert_eq!(compound.next_slot(&app).as_deref(), Some("shaft line"));
     assert_eq!(compound.refusal(&app, &at(s3, "s"), &[]), None);
+    // A shaft line another gear holds can be picked again: gears share a shaft.
+    let on_line = GearItem { picks: vec![at(s3, "s")], ..GearItem::new(ItemKind::Shaft) };
+    assert_eq!(compound.refusal(&app, &at(s3, "s"), &[(0, &on_line)]), None);
     let mut compound = compound;
     compound.picks.push(at(s3, "s"));
     assert_eq!(compound.refusal(&app, &at(s2, "c3"), &[]), None);

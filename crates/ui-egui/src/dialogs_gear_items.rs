@@ -600,16 +600,18 @@ impl GearItem {
         items::gear_count(self.kind, &self.things(app))
     }
 
-    /// Why `sel` can't be picked into this item (None: it fills a slot): used by another item,
-    /// not geometry an item takes, or the gear crate's check on the slot it would fill
-    /// ([`items::validate_slot`]: what is wrong and what to do).
+    /// Why `sel` can't be picked into this item (None: it fills a slot): a circle or point
+    /// another item holds (a line is a shaft several gears can share), not geometry an item
+    /// takes, or the gear crate's check on the slot it would fill ([`items::validate_slot`]:
+    /// what is wrong and what to do).
     pub fn refusal(&self, app: &SolveApp, sel: &Sel, others: &[(usize, &GearItem)]) -> Option<String> {
-        if let Some((i, _)) = others.iter().find(|(_, it)| it.all_picks().contains(sel)) {
-            return Some(format!("already used by Gear {}: click its card to change it", item_id(*i)));
-        }
         let Some(thing) = crate::dialogs_gear::thing_of(app, sel) else {
             return Some("pick a sketch circle, line or point, a model edge, a round face or an axis".into());
         };
+        let shared = matches!(thing, items::Thing::Line { .. });
+        if let Some((i, _)) = others.iter().find(|(_, it)| it.all_picks().contains(sel)).filter(|_| !shared) {
+            return Some(format!("already used by Gear {}: click its card to change it", item_id(*i)));
+        }
         items::validate_slot(self.kind, &self.things(app), &thing).err()
     }
 

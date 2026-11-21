@@ -58,11 +58,11 @@ pub(crate) fn item_color(i: usize) -> egui::Color32 {
     PALETTE[i % PALETTE.len()]
 }
 
-/// The types in the list, in its order, with their icons.
-pub(crate) const TYPES: [(ItemKind, &str); 12] = [
+/// The types in the list, in its order, with their icons. Helical and herringbone teeth are not
+/// types of their own: any gear takes them from its Teeth toggle (Straight / Helical /
+/// Herringbone).
+pub(crate) const TYPES: [(ItemKind, &str); 10] = [
     (ItemKind::Spur, "gear_spur"),
-    (ItemKind::Helical, "gear_helical"),
-    (ItemKind::Herringbone, "gear_herringbone"),
     (ItemKind::Internal, "gear_internal"),
     (ItemKind::Rack, "gear_rack"),
     (ItemKind::Compound, "gear_pair"),
@@ -76,7 +76,11 @@ pub(crate) const TYPES: [(ItemKind, &str); 12] = [
 
 /// A type's icon.
 pub(crate) fn icon_of(kind: ItemKind) -> &'static str {
-    TYPES.iter().find(|t| t.0 == kind).map_or("gear_generator", |t| t.1)
+    match kind {
+        ItemKind::Helical => "gear_helical",
+        ItemKind::Herringbone => "gear_herringbone",
+        _ => TYPES.iter().find(|t| t.0 == kind).map_or("gear_generator", |t| t.1),
+    }
 }
 
 /// A set made before gear items (one type read from a sketch, or picked rows with roles): it

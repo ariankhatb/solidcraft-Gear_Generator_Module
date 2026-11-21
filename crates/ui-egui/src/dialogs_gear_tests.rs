@@ -1491,3 +1491,26 @@ fn refresh_works_out_only_what_changed_and_calculates_off_the_thread() {
     }
     assert!(g.calc.as_ref().is_some_and(|(key, r)| key.contains("0.3") && r.is_ok()), "{:?}", g.calc);
 }
+
+/// Helical and herringbone are not types in the list: any gear's Teeth toggle makes them. An
+/// older set's Helical or Herringbone gear reopens as a Spur with its teeth so (20° where it gave
+/// no helix), and a new one made of those kinds is a Spur the same way.
+#[test]
+fn helical_and_herringbone_are_a_spurs_teeth_not_types() {
+    use crate::dialogs_gear_items::{GearItem, items_of};
+    use solidcraft_gear::items::ItemKind;
+    assert!(!TYPES.iter().any(|t| matches!(t.0, ItemKind::Helical | ItemKind::Herringbone)));
+    let new = GearItem::new(ItemKind::Herringbone);
+    assert_eq!((new.kind, new.gears[0].helix.as_str(), new.gears[0].v), (ItemKind::Spur, "20 deg", true));
+    let r = json!({"items": [
+        {"id": "A", "type": "helical", "components": [], "gears": [{"gear": 0, "size_by": "module", "helix_angle": 15.0}]},
+        {"id": "B", "type": "herringbone", "components": [], "gears": [{"gear": 0, "size_by": "module"}]},
+        {"id": "C", "type": "spur", "components": [], "gears": [{"gear": 0, "size_by": "module"}]}
+    ]});
+    let mut graph = crate::dialogs_gear_links::Links::default();
+    let back = items_of(r.as_object().unwrap(), None, &mut graph);
+    assert!(back.iter().all(|it| it.kind == ItemKind::Spur), "{:?}", back.iter().map(|it| it.kind).collect::<Vec<_>>());
+    assert_eq!((back[0].gears[0].helix.as_str(), back[0].gears[0].v), ("15 deg", false));
+    assert_eq!((back[1].gears[0].helix.as_str(), back[1].gears[0].v), ("20 deg", true));
+    assert_eq!((back[2].gears[0].helix.as_str(), back[2].gears[0].v), ("", false));
+}

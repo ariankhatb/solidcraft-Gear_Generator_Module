@@ -13,7 +13,7 @@ same layout on every tab:
 | Tab | Icon | What it holds |
 |---|---|---|
 | [Gears](#gears) | gear generator | Type and **New gear**, a card per gear, and the selected gear's size and face |
-| [Teeth](#teeth) | helical gear | The selected gear's helix (or bevel style) and profile shift; the tooth form and chamfer of every gear |
+| [Teeth](#teeth) | helical gear | The selected bevel's style, each gear's profile shift; the tooth form and chamfer of every gear |
 | [Shafts & Bores](#shafts--bores) | bearing seat | The shafts made (solid rods along an axis) and their bearing points; each gear's bore (the hole through it) and where it comes from; the selected gear's bore and hub |
 | [Links & Motion](#links--motion) | motion link | Meshes and shared shafts, suggested links, the drive, the ratio between two gears, the graph |
 | [Housing & Output](#housing--output) | housing cutout | The housing cutout and its bearing seats; operation, Targets, keep-out, assembly |
@@ -66,7 +66,7 @@ to go back to picking gears."
 
 | Control | What it does |
 |---|---|
-| **Type** | The type the next gear is made as. 12 types: Spur, Helical, Herringbone, Ring Gear, Rack, Compound, Planetary, Bevel Pair, Hypoid Pair, Worm and Wheel, Crossed Helical, Shaft. When the dialog opens on an existing set, it starts on the first gear's type. |
+| **Type** | The type the next gear is made as. 10 types: Spur, Ring Gear, Rack, Compound, Planetary, Bevel Pair, Hypoid Pair, Worm and Wheel, Crossed Helical, Shaft. When the dialog opens on an existing set, it starts on the first gear's type. |
 | *(picture and "Needs:" line)* | What the type needs you to pick, e.g. "Needs: a pitch circle. Optional: its shaft line." |
 | **+ New gear** | Starts a new, empty gear of the chosen type and selects it. Your next picks go to it. |
 
@@ -204,9 +204,9 @@ group's **Differential tab →** button opens it. Unticked, the differential goe
 |---|---|---|
 | **Style** (Bevel Pair, Hypoid Pair) | Straight | Straight, Spiral or Chevron (V teeth: the spiral changes hand at mid-face). Hypoid has a spiral regardless. |
 | **Spiral angle** | 35 deg | Tooth angle at mid-face (shown for Spiral, Chevron and Hypoid). |
-| **Helix angle** (not bevel, hypoid, worm) | 0 = straight (Helical and Herringbone start at 20 deg) | Tooth angle to the axis. Meshing gears share one helix angle. |
+| **Teeth** (on the Gears tab; not bevel, hypoid, worm, shaft) | Straight | **Straight**, **Helical** or **Herringbone** (two opposite helices meeting in the middle: no axial thrust). Meshing gears both have V teeth, or neither. Helical and Herringbone are not types of their own: any gear takes them here, and a set made with those types reopens as Spur with this set. |
+| **Helix angle** (Helical, Herringbone) | 20 deg | Tooth angle to the axis. Meshing gears share one helix angle. |
 | **Hand** | Auto | Shown when the helix isn't 0 (a choice on a planetary set; elsewhere a caption: "Hand: worked out, opposite across each mesh"). Auto: opposite its mate across an outside mesh, the same inside a ring and on one shaft. |
-| **V teeth (herringbone)** | off (on for Herringbone) | Two opposite helices meeting in the middle. Meshing gears both have V teeth, or neither. Needs a helix angle. |
 | **Profile shift** | worked out | Read only: the shift the planner chose to hold the drawn centre distance and clear undercut. |
 
 A Shaft says "A shaft has no teeth."

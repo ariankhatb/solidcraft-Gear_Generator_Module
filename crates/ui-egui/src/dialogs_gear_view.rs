@@ -7,11 +7,12 @@
 //! - **Gears**: the type and **New gear**, a **card** per gear (its colour, name and type; while
 //!   it is picked its checklist; once complete one line with its teeth and module; its messages
 //!   with what to do; click a card to make it the one picks go to, × to remove it), and under the
-//!   cards the selected gear's own settings and size (Size by, Module / Teeth, Face). A bevel or
+//!   cards the selected gear's own settings and size (Size by, Module / Teeth, Face, and its Teeth:
+//!   Straight / Helical / Herringbone with the helix angle). A bevel or
 //!   hypoid pair has the switch for a differential in its ring gear here. Under the cards, the
 //!   **blocks**: gears put in a block share its module, its shaft (Make shaft: one per axis, fused to its gears) or bore (Bore only),
 //!   face width and, under More, helix, pressure angle, backlash and tooth chamfer.
-//! - **Teeth**: the selected gear's helix (or bevel style and spiral) and profile shift; the
+//! - **Teeth**: the selected bevel's style and spiral, each gear's profile shift; the
 //!   tooth form every gear takes (pressure angle, backlash, tip rounding, XY compensation); the
 //!   tooth chamfer.
 //! - **Shafts & Bores**: the shafts (solid rods along an axis: each block shaft, fused to its
@@ -53,7 +54,7 @@ const TIP_FACE: &str = "How far the teeth reach from the sketch plane along the 
 const TIP_PRESET: &str = "Symmetric: equal both sides. A only / B only: the gear grows out of one face of the sketch (side A is the green arrow in the view).";
 const TIP_HELIX: &str = "Tooth angle to the axis. 0 = straight. Meshing gears get equal angles of opposite hand.";
 const TIP_HAND: &str = "Left or right helix. The mating gear is set to the other hand for you.";
-const TIP_V: &str = "Herringbone: two opposite helices meeting in the middle — no axial thrust.";
+const TIP_TOOTH_STYLE: &str = "Straight teeth, helical (slanted: quieter, with axial thrust), or herringbone (two opposite helices meeting in the middle: no axial thrust). Meshing gears take opposite hands, worked out.";
 const TIP_V_BEVEL: &str = "Straight: straight teeth. Spiral: curved teeth, smoother and quieter. Chevron: the spiral changes hand at mid-face, so the axial thrust cancels.";
 const TIP_SHIFT: &str = "Worked out for you: it holds the drawn centre distance and clears undercut on small gears.";
 const TIP_BORE: &str = "The bore: the hole through this gear. Auto: a bore circle drawn on the gear, else one that fits its shaft line when one is picked, else its block's Bore only Ø; none on a made shaft (the gear and the shaft are one body). Ø: this diameter. A drawn bore circle wins.";
@@ -845,6 +846,10 @@ fn size_group(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, a: usize) -> bool
             Some(BlockRows { module: &mut k.links.block_mut(*b)?.module, title: title.clone(), members: members.clone(), face: face.clone() })
         });
         enter |= size_rows(ui, s, reply, block, pair_module);
+        if takes_tooth_style(kind) {
+            let s: &mut GearSettings = &mut k.items[a].settings_mut(n)[g];
+            enter |= tooth_style_rows(ui, s, kind);
+        }
         if dg::takes_differential(kind) && dg::differential_supported() {
             diff_switch(ui, k, a);
         }
@@ -978,13 +983,8 @@ fn teeth_tab(ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], input: &m
                     enter |= field(ui, "Spiral angle", &mut it.spiral, "35 deg", TIP_SPIRAL);
                 }
             }
-            let n = k.gear_counts.get(a).copied().unwrap_or(1);
             let g = gear_switch(ui, k, a);
             let reply = replies.iter().find(|r| r.gear == g);
-            let s: &mut GearSettings = &mut k.items[a].settings_mut(n)[g];
-            if !matches!(kind, ItemKind::Bevel | ItemKind::Hypoid | ItemKind::Worm) {
-                enter |= helix_rows(ui, s, kind);
-            }
             // The shift is the planner's: it holds the drawn centre distance (read-only).
             let shift = reply.and_then(|r| r.profile_shift).map_or_else(|| "worked out".to_string(), |x| format!("{} (worked out)", dg::fmt((x * 1000.0).round() / 1000.0)));
             ui_kit::value_row(ui, "Profile shift", &shift).backing_on_hover_text(TIP_SHIFT);
@@ -1011,16 +1011,35 @@ fn teeth_tab(ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], input: &m
     enter
 }
 
-/// A gear's helix rows: Helix angle, then Hand and V teeth once it has one.
-fn helix_rows(ui: &mut egui::Ui, s: &mut GearSettings, kind: ItemKind) -> bool {
-    let enter = field(ui, "Helix angle", &mut s.helix, "0 = straight", TIP_HELIX);
-    if !s.helix.trim().is_empty() && s.helix.trim() != "0" && s.helix.trim() != "0 deg" {
+/// Whether a gear of `kind` takes the Teeth toggle (a bevel, hypoid or worm has teeth of its own
+/// kind; a shaft none).
+fn takes_tooth_style(kind: ItemKind) -> bool {
+    !matches!(kind, ItemKind::Bevel | ItemKind::Hypoid | ItemKind::Worm | ItemKind::Shaft)
+}
+
+/// A gear's Teeth toggle: Straight, Helical or Herringbone (two opposite helices), then its helix
+/// angle and hand when they are not straight.
+fn tooth_style_rows(ui: &mut egui::Ui, s: &mut GearSettings, kind: ItemKind) -> bool {
+    let helical = |h: &str| !matches!(h.trim(), "" | "0" | "0 deg" | "0deg" | "0°");
+    let was = if s.v { 2 } else { usize::from(helical(&s.helix)) };
+    let mut style = was;
+    segments(ui, "Teeth", &mut style, &["Straight", "Helical", "Herringbone"], TIP_TOOTH_STYLE);
+    let mut enter = style != was;
+    if style != was {
+        s.v = style == 2;
+        if style == 0 {
+            s.helix.clear();
+        } else if !helical(&s.helix) {
+            s.helix = "20 deg".into();
+        }
+    }
+    if style > 0 {
+        enter |= field(ui, "Helix angle", &mut s.helix, "20 deg", TIP_HELIX);
         if kind == ItemKind::Planetary {
             segments(ui, "Hand", &mut s.hand, &["Auto", "Left", "Right"], TIP_HAND);
         } else {
             ui_kit::caption(ui, "Helix angle", "Hand: worked out, opposite across each mesh.");
         }
-        ui_kit::checkbox(ui, "V teeth (herringbone)", &mut s.v).backing_on_hover_text(TIP_V);
     }
     enter
 }

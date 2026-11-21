@@ -439,9 +439,11 @@ impl Default for GearItem {
 }
 
 impl GearItem {
+    /// A new gear of `kind`. Helical and Herringbone (types of older sets) are a Spur whose
+    /// teeth are helical or V'd: its gears' Teeth toggle says which.
     pub fn new(kind: ItemKind) -> GearItem {
         let mut it = GearItem {
-            kind,
+            kind: if matches!(kind, ItemKind::Helical | ItemKind::Herringbone) { ItemKind::Spur } else { kind },
             picks: Vec::new(),
             details: Vec::new(),
             auto_details: true,
@@ -778,6 +780,18 @@ pub fn items_of(r: &Map<String, Value>, ui: Option<&Value>, graph: &mut Links) -
                 .collect()
         });
         it.gears = v.get("gears").and_then(Value::as_array).into_iter().flatten().map(GearSettings::from_json).collect();
+        // An older set's Helical or Herringbone gear: a Spur with its teeth so (20° where none given).
+        if matches!(kind, ItemKind::Helical | ItemKind::Herringbone) {
+            if it.gears.is_empty() {
+                it.gears.push(GearSettings::default());
+            }
+            for g in &mut it.gears {
+                if g.helix.trim().is_empty() {
+                    g.helix = "20 deg".into();
+                }
+                g.v |= kind == ItemKind::Herringbone;
+            }
+        }
         let s = |k: &str, kind: ValueKind| shown(v.get(k).and_then(Value::as_f64), kind);
         it.rim = s("rim", ValueKind::Length);
         it.starts = s("starts", ValueKind::Unitless);

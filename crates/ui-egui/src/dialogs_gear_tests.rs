@@ -419,6 +419,13 @@ fn per_gear_settings_are_the_gear_crates_and_round_trip() {
     assert_eq!((j["size_by"].as_str(), j["teeth"].as_u64(), j.get("module")), (Some("teeth"), Some(24), None), "{j}");
     assert_eq!(j["face"], json!({"preset": "a_only", "a": null, "b": 0.0}));
     assert_eq!((j["profile_shift"].as_str(), j["bore"].as_str(), j["hand"].is_null()), (Some("auto"), Some("auto"), true));
+    // No circle sizes the gear (a side view's bevel pair): its teeth and its module are both sent,
+    // and Edit reads both back.
+    let both = GearSettings { both: true, teeth: "30".into(), module: "0.6 mm".into(), ..Default::default() };
+    let j = gear_json(0, &both.read(&app, &|f: &str| f.to_string()).unwrap());
+    assert_eq!((j["size_by"].as_str(), j["teeth"].as_u64(), j["module"].as_f64()), (Some("teeth"), Some(30), Some(0.6)), "{j}");
+    let back = GearSettings::from_json(&j);
+    assert!(back.both && back.teeth == "30" && back.module == "0.6 mm", "{back:?}");
     // A value that doesn't read says which gear and what.
     let bad = GearSettings { module: "two".into(), ..Default::default() };
     assert!(bad.read(&app, &|f: &str| format!("Item 1 gear 2: {f}")).unwrap_err().starts_with("Item 1 gear 2: module"));

@@ -169,6 +169,9 @@ pub fn thing_label(app: &SolveApp, t: &Thing, len: &dyn Fn(f64) -> String) -> St
 pub struct GearSettings {
     /// Sized by its teeth (the module follows from the circle), else by its module.
     pub by_teeth: bool,
+    /// No circle gives its size (a bevel pair drawn as a side view): its module and its teeth are
+    /// both typed, neither follows from the other.
+    pub both: bool,
     pub module: String,
     pub teeth: String,
     /// An index into [`FACE_PRESETS`].
@@ -232,10 +235,11 @@ impl GearSettings {
         } else {
             None
         };
+        let (by_teeth, by_module) = (self.by_teeth || self.both, !self.by_teeth || self.both);
         Ok(items::GearSettings {
-            size_by: if self.by_teeth { SizeBy::Teeth } else { SizeBy::Module },
-            module: if self.by_teeth { None } else { len(&self.module, "module")? },
-            teeth: if self.by_teeth { eval(app, &self.teeth, ValueKind::Unitless, &what("teeth"))?.map(|z| z.round().max(1.0) as u32) } else { None },
+            size_by: if by_teeth { SizeBy::Teeth } else { SizeBy::Module },
+            module: if by_module { len(&self.module, "module")? } else { None },
+            teeth: if by_teeth { eval(app, &self.teeth, ValueKind::Unitless, &what("teeth"))?.map(|z| z.round().max(1.0) as u32) } else { None },
             face,
             helix: eval(app, &self.helix, ValueKind::Angle, &what("helix angle"))?,
             hand: match self.hand {
@@ -266,6 +270,7 @@ impl GearSettings {
         };
         GearSettings {
             by_teeth: g.get("size_by").and_then(Value::as_str) == Some("teeth"),
+            both: num("module").is_some() && num("teeth").is_some(),
             module: shown(num("module"), ValueKind::Length),
             teeth: shown(num("teeth"), ValueKind::Unitless),
             face_preset: preset,
@@ -289,15 +294,23 @@ impl GearSettings {
     }
 }
 
+/// Per gear of an item made of `things`: whether no circle gives its size (a bevel pair drawn as a
+/// side view), so its module and teeth are both typed.
+pub fn unsized_gears(kind: ItemKind, things: &[Thing]) -> Vec<bool> {
+    vec![items::sized_by_settings(kind, things); items::gear_count(kind, things)]
+}
+
 /// One gear's entry in an item's `gears` (§6), named as the gear crate's
 /// [`items::GearSettings`] fields: `size_by` ("module" | "teeth"), `module` or `teeth` (the one it
-/// is sized by; absent: Auto), `face` {`preset`, `a`, `b`} (mm, null: Auto), `helix_angle`
+/// is sized by; both where no circle sizes it; absent: Auto), `face` {`preset`, `a`, `b`} (mm, null: Auto), `helix_angle`
 /// (degrees), `hand` ("left" | "right" | null: opposite its mate), `herringbone` (V), and
 /// `profile_shift` (a value | "auto"), `bore` ("auto" | null: none | Ø) and `hub` ({diameter,
 /// length_a, length_b} | absent).
 pub fn gear_json(gear: usize, s: &items::GearSettings) -> Value {
     let mut e = json!({"gear": gear, "size_by": match s.size_by { SizeBy::Module => "module", SizeBy::Teeth => "teeth" }});
-    if let Some(m) = s.module.filter(|_| s.size_by == SizeBy::Module) {
+    // Each as read ([`GearSettings::read`] keeps the one it is not sized by only where no circle
+    // sizes the gear, so both are its own then).
+    if let Some(m) = s.module {
         e["module"] = json!(m);
     }
     if let Some(z) = s.teeth.filter(|_| s.size_by == SizeBy::Teeth) {
@@ -677,8 +690,10 @@ pub fn items_request(app: &SolveApp, items: &[GearItem], links: &Links) -> Resul
             components.push(c);
         }
         let mut gears = Vec::new();
+        let free = unsized_gears(it.kind, &things);
         for g in 0..items::gear_count(it.kind, &things) {
-            let s = it.typed(g).read(app, &|f: &str| format!("{who} gear {}: {f}", g + 1))?;
+            let typed = GearSettings { both: free.get(g).copied().unwrap_or(false), ..it.typed(g) };
+            let s = typed.read(app, &|f: &str| format!("{who} gear {}: {f}", g + 1))?;
             gears.push(gear_json(g, &s));
         }
         let mut item = json!({"id": item_id(i), "type": it.type_name(), "components": components, "gears": gears});

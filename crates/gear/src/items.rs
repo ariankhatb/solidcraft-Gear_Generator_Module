@@ -1324,6 +1324,13 @@ fn line_ends(things: &[Thing], k: usize) -> Option<(V, V)> {
         .nth(k)
 }
 
+/// Whether no circle or line gives the gears of an item made of `things` their size: a bevel pair
+/// drawn as a side view without a contact line. Its gears then take a module and their teeth both
+/// (sized by their teeth, the module given as well); every other layout ties one to the other.
+pub fn sized_by_settings(kind: ItemKind, things: &[Thing]) -> bool {
+    kind == ItemKind::Bevel && circles(things).is_empty() && lines(things).len() == 2 && side_apex(things).is_some()
+}
+
 /// Each gear's place (one per [`gear_count`], fewer while the item is incomplete).
 pub fn gear_geoms(item: &GearItem) -> Vec<GearGeom> {
     let cs = circles(&item.things);

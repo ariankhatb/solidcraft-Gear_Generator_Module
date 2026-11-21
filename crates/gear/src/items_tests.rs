@@ -653,6 +653,8 @@ fn two_shaft_lines_meeting_are_a_bevel_side_view() {
     // then the ones given.
     let mut it = GearItem::new("A", ItemKind::Bevel).with(vec![s1.clone(), s2.clone()]);
     assert!(validate_item(&it).is_ok());
+    // No circle or contact line sizes it: its gears take a module and teeth both.
+    assert!(sized_by_settings(ItemKind::Bevel, &it.things));
     let g = gear_geoms(&it);
     assert_eq!(g.len(), 2);
     assert!(g.iter().all(|g| (g.radius.unwrap() - 20.0).abs() < 1e-9), "{g:?}");
@@ -664,6 +666,7 @@ fn two_shaft_lines_meeting_are_a_bevel_side_view() {
     // With a contact line: the ratio from its angle.
     let with_contact = [s1.clone(), s2.clone(), line([0.0; 3], [30.0, 0.0, 20.0])];
     assert_eq!(picked(ItemKind::Bevel, &with_contact)[2].name, "contact");
+    assert!(!sized_by_settings(ItemKind::Bevel, &with_contact), "the contact line sizes it");
     assert_eq!(gear_geoms(&GearItem::new("B", ItemKind::Bevel).with(with_contact.to_vec())).len(), 2);
     // Lines that don't meet stay the two-axis-lines-and-a-circle layout.
     let apart = [line([0.0; 3], [0.0, 0.0, 60.0]), line([5.0, 0.0, 0.0], [60.0, 0.0, 0.0])];

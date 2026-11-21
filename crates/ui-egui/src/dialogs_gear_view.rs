@@ -47,6 +47,8 @@ const TIP_CARD: &str = "Click to make this the gear your picks go to. Hover to l
 const TIP_SIZE_BY: &str = "Set the module (tooth size) or the tooth count; the other follows from the pitch circle.";
 const TIP_MODULE: &str = "Tooth size in mm (pitch Ø ÷ teeth). Meshing gears share one module: set it on one gear and its mates follow. Auto: the largest standard module giving the smallest meshing gear 17 teeth or more.";
 const TIP_TEETH: &str = "Number of teeth. The pitch circle stays as drawn, so the module follows; its mates take the same module.";
+const TIP_TEETH_FREE: &str = "Number of teeth of this gear. No circle gives its size, so the teeth and the module are both yours: the pitch diameter is module × teeth, and the two gears' teeth set the ratio.";
+const TIP_PAIR_MODULE: &str = "The module of both gears of the pair: gears mesh only at one module. Each gear's teeth are set below.";
 const TIP_FACE: &str = "How far the teeth reach from the sketch plane along the axis, on this side. Auto: 5 × module each side (10 × module in all); A only / B only: 10 × module on that side. The value is per side: 10 mm on each side gives a 20 mm face.";
 const TIP_PRESET: &str = "Symmetric: equal both sides. A only / B only: the gear grows out of one face of the sketch (side A is the green arrow in the view).";
 const TIP_HELIX: &str = "Tooth angle to the axis. 0 = straight. Meshing gears get equal angles of opposite hand.";
@@ -628,7 +630,7 @@ fn gears_tab(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelI
     cards(app, ui, k, inputs, input, hover);
     enter |= blocks_group(ui, k);
     if let Some(a) = k.active.filter(|a| *a < k.items.len()) {
-        enter |= size_group(ui, k, a);
+        enter |= size_group(app, ui, k, a);
     }
     enter
 }
@@ -785,7 +787,7 @@ fn item_title(k: &Gear, a: usize) -> String {
 
 /// The selected gear's group on the Gears tab: the type's own settings, then per gear Size by,
 /// Module / Teeth and Face; a bevel or hypoid pair's differential switch.
-fn size_group(ui: &mut egui::Ui, k: &mut Gear, a: usize) -> bool {
+fn size_group(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, a: usize) -> bool {
     let mut enter = false;
     let title = item_title(k, a);
     let kind = k.items[a].kind;
@@ -821,13 +823,28 @@ fn size_group(ui: &mut egui::Ui, k: &mut Gear, a: usize) -> bool {
             }
             _ => {}
         }
+        // No circle sizes the gears (a bevel pair drawn as a side view): the pair's one module here
+        // (they must share it to mesh), each gear's teeth below.
+        let free = crate::dialogs_gear_items::unsized_gears(kind, &k.items[a].things(app));
+        let pair_module = !free.is_empty() && free.iter().all(|f| *f) && in_block.is_none();
+        for (s, f) in k.items[a].settings_mut(n).iter_mut().zip(&free) {
+            s.both = *f;
+        }
+        if pair_module {
+            let gears = k.items[a].settings_mut(n);
+            let mut m = gears[0].module.clone();
+            enter |= field(ui, "Module", &mut m, "auto", TIP_PAIR_MODULE);
+            for s in gears.iter_mut() {
+                s.module.clone_from(&m);
+            }
+        }
         let g = gear_switch(ui, k, a);
         let reply = replies.iter().find(|r| r.gear == g);
         let s: &mut GearSettings = &mut k.items[a].settings_mut(n)[g];
         let block = in_block.as_ref().and_then(|(b, title, members, face)| {
             Some(BlockRows { module: &mut k.links.block_mut(*b)?.module, title: title.clone(), members: members.clone(), face: face.clone() })
         });
-        enter |= size_rows(ui, s, reply, block);
+        enter |= size_rows(ui, s, reply, block, pair_module);
         if dg::takes_differential(kind) && dg::differential_supported() {
             diff_switch(ui, k, a);
         }
@@ -845,13 +862,22 @@ struct BlockRows<'a> {
 }
 
 /// One gear's size rows: Size by, Module / Teeth (the other greyed as worked out), Face (its
-/// block's face width where it gives none).
-fn size_rows(ui: &mut egui::Ui, s: &mut GearSettings, reply: Option<&solidcraft_gear::items::GearReply>, mut block: Option<BlockRows<'_>>) -> bool {
+/// block's face width where it gives none). A gear no circle sizes takes its teeth and a module
+/// both (`module_above`: the pair's module is typed above the gear switch).
+fn size_rows(ui: &mut egui::Ui, s: &mut GearSettings, reply: Option<&solidcraft_gear::items::GearReply>, mut block: Option<BlockRows<'_>>, module_above: bool) -> bool {
     let mut enter = false;
+    let worked = |v: Option<String>| v.map_or_else(|| "— until the gear is complete".to_string(), |v| format!("{v} (worked out)"));
+    if s.both {
+        if let Some(b) = block.as_mut() {
+            enter |= field(ui, "Module", b.module, "auto", "This gear is in a block: its gears share this one module, so they can mesh. Change it here or on the block.");
+        } else if !module_above {
+            enter |= field(ui, "Module", &mut s.module, "auto", TIP_MODULE);
+        }
+        enter |= field(ui, "Teeth", &mut s.teeth, "auto", TIP_TEETH_FREE);
+    } else {
     let mut size = usize::from(s.by_teeth);
     segments(ui, "Size by", &mut size, &["Module", "Teeth"], TIP_SIZE_BY);
     s.by_teeth = size == 1;
-    let worked = |v: Option<String>| v.map_or_else(|| "— until the gear is complete".to_string(), |v| format!("{v} (worked out)"));
     if s.by_teeth {
         enter |= field(ui, "Teeth", &mut s.teeth, "from the circle", TIP_TEETH);
         ui_kit::caption(ui, "Teeth", &format!("Module: {}", worked(reply.filter(|r| r.module > 0.0).map(|r| dg::fmt(r.module)))));
@@ -862,6 +888,7 @@ fn size_rows(ui: &mut egui::Ui, s: &mut GearSettings, reply: Option<&solidcraft_
     } else {
         enter |= field(ui, "Module", &mut s.module, "auto", TIP_MODULE);
         ui_kit::caption(ui, "Module", &format!("Teeth: {}", worked(reply.filter(|r| r.teeth > 0).map(|r| r.teeth.to_string()))));
+    }
     }
     let labels: Vec<&str> = FACE_PRESETS.iter().map(|p| p.2).collect();
     segments(ui, "Face", &mut s.face_preset, &labels, TIP_PRESET);

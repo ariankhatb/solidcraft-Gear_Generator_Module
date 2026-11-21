@@ -234,3 +234,28 @@ fn a_compounds_layers_are_never_free_on_their_blocks_shaft() {
     let s = e.shafts.iter().find(|s| s.gears.contains(&g(0, 0))).unwrap();
     assert_eq!(s.free, vec![g(3, 0)], "{s:?}");
 }
+
+/// A side view's bevel pair in a block with Make shaft, with a Shaft item already drawn along
+/// the pinion's axis but stopping short of it (from 25 mm out; the pinion's back is at 18.75):
+/// that shaft takes the block's Ø, reaches into the pinion and is one body with it, with the
+/// request's links and without.
+#[test]
+fn a_shaft_line_already_on_a_bevels_axis_reaches_it_and_is_one_body_with_it() {
+    use crate::items::SizeBy;
+    let mut e = GearItem::new("E", ItemKind::Bevel).with(vec![Thing::line([0.0; 3], [0.0, 0.0, 60.0]), Thing::line([0.0; 3], [60.0, 0.0, 0.0])]);
+    e.gears = vec![GearSettings { teeth: Some(15), size_by: SizeBy::Teeth, ..GearSettings::default() }, GearSettings { teeth: Some(30), size_by: SizeBy::Teeth, ..GearSettings::default() }];
+    let s = GearItem::new("S", ItemKind::Shaft).with(vec![Thing::line([0.0, 0.0, 25.0], [0.0, 0.0, 60.0])]);
+    let items = vec![e, s];
+    let blocks = [ModuleBlock { id: "M1".into(), module: Some(1.25), members: vec![0, 1], settings: BlockSettings { shaft_diameter: Some(5.0), ..BlockSettings::default() } }];
+    for links in [Vec::new(), vec![mesh(g(0, 0), g(0, 1))]] {
+        let (sp, added) = planned(&items, &links, &blocks);
+        assert_eq!(added.len(), 1, "only the gear's axis gets a new shaft: {added:?}");
+        let shaft = sp.body(g(1, 0)).unwrap();
+        assert!(rigid_of(&sp, g(0, 0)).contains(&shaft), "links {links:?}: S with the pinion {:?}", rigid_of(&sp, g(0, 0)));
+        let sh = sp.plan.shafts.iter().find(|x| x.body == shaft).unwrap();
+        assert!(close(sh.diameter, 5.0, 1e-9), "{sh:?}");
+        // Its bar reaches below the pinion's back face (z 18.75) into the gear.
+        let (lo, _) = crate::mesh3d::Solid::new(&sp.plan.bodies[shaft], 1.0).bounds();
+        assert!(lo[2] < 17.0, "links {links:?}: the shaft starts at z {}", lo[2]);
+    }
+}

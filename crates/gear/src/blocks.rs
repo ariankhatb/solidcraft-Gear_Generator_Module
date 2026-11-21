@@ -350,11 +350,37 @@ pub fn expand_blocks(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlo
                 if given {
                     out.links.extend(s.gears.iter().map(|r| ItemLink { a: GearRef::new(at, 0), b: *r, kind: LinkKind::Shaft }));
                 }
+                // A Shaft item's line runs over the block's gears on its axis (a line drawn
+                // short of a gear, a bevel's back face, would leave a gap), and carries them.
+                if it.kind == ItemKind::Shaft {
+                    reach_over(it, s.a, s.b);
+                }
+                if given {
+                    let from = GearRef::new(e, 0);
+                    for r in s.gears.iter().filter(|r| r.item != e) {
+                        if !out.links.iter().any(|l| l.kind == LinkKind::Shaft && ((l.a == from && l.b == *r) || (l.b == from && l.a == *r))) {
+                            out.links.push(ItemLink { a: from, b: *r, kind: LinkKind::Shaft });
+                        }
+                    }
+                }
             }
         }
     }
     out.shafts = shafts;
     out
+}
+
+/// Shaft item `it`'s line (its first) lengthened, along itself, to reach over `a`..`b` (points on
+/// its axis) too.
+fn reach_over(it: &mut GearItem, a: V, b: V) {
+    let Some(Thing::Line { a: la, b: lb, .. }) = it.things.iter_mut().find(|t| matches!(t, Thing::Line { .. })) else { return };
+    let Some(u) = unit(sub(*lb, *la)) else { return };
+    let o = *la;
+    let ts = [0.0, dot(sub(*lb, o), u), dot(sub(a, o), u), dot(sub(b, o), u)];
+    let lo = ts.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = ts.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    *la = add(o, mul(u, lo));
+    *lb = add(o, mul(u, hi));
 }
 
 /// Each gear's turning as far as the links tell it: the group of gears the links (and each

@@ -1,5 +1,30 @@
 # Gear Generator: working notes (resume here)
 
+## State on 2026-11-20 (read this first; older sections below are history)
+
+Integration branch `gear-v045` (worktree solidcraft-merge045) = gear-generator + upstream
+SolidCraft v0.45.0 + three branches:
+- `gear-cleanup`: the unused design sheet / DXF writer removed from the gear crate.
+- `gear-speed`: keep-out envelope 435 ms -> 75 ms for a ring (no 10M material points), each
+  body's bounds worked out once in planning, a drivetrain planned once for dialog + OK + feature
+  (plan cache), equal bodies built once and moved, OK runs on the apply worker (no frozen window,
+  Cancel works). Profile spans in the gear crate and the Gears feature.
+- `gear-blocks`: blocks carry module, shaft Ø, face width and (under More) helix, pressure
+  angle, backlash, tooth chamfer; a gear's own value wins over its block's. A block's shaft Ø
+  bores every member and makes one shaft per axis, one body with its gears. The node graph and
+  the vendored egui-snarl / egui-scale are gone: links are drawn in the 3D view, hover a row to
+  light it. Gears card 2x wide. Refresh only on change; gear.calculate off the UI thread.
+
+Timing, release builds, RC 4x4 drivetrain `gear.create` (%TEMP%/geartest/rc):
+old 216 s / new 209 s with the kept-body check; 83 s / 77 s with validation off.
+Where it goes: the SMLib check of the bevel and hypoid bodies (~130 s; every one of them FAILS
+the check, hundreds of faces) and the hypoid ring loft_with_rails (~70 s). Spur bodies check in
+2-5 s. Next: make bevel/hypoid bodies valid (bug hunt on `gear-speed`), then the hypoid loft.
+
+Known limits: a block shaft locks together two gears of the block on one axis that must turn
+separately; planetary sets, rings and racks get no block shaft.
+
+
 Last updated 2026-11-14, before a PC restart. Integration branch: `gear-generator` (local commits
 only, nothing pushed). Fork: github.com/ariankhatb/solidcraft, upstream tangency-labs/solidcraft.
 

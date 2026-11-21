@@ -216,6 +216,8 @@ pub struct Gear {
     /// Each link and suggested link as drawn in the view, and each block's shafts.
     pub link_lines: Vec<LinkLine>,
     pub block_shafts: Vec<BlockShaft>,
+    /// Each bore the set cuts, in the world: (item, centre, axis, Ø).
+    pub bores: Vec<(usize, [f64; 3], [f64; 3], f64)>,
     /// What the dialog was last worked out from, and the `gear.calculate` running for it.
     pub seen: Option<Box<Seen>>,
     pub pending: Pending,
@@ -268,7 +270,7 @@ impl Tab {
         match self {
             Tab::Gears => "Gears",
             Tab::Teeth => "Teeth",
-            Tab::Shafts => "Shafts & Bearings",
+            Tab::Shafts => "Shafts & Bores",
             Tab::Motion => "Links & Motion",
             Tab::Housing => "Housing & Output",
             Tab::Differential => "Differential",
@@ -306,7 +308,7 @@ impl Tab {
         match self {
             Tab::Gears => "Gears: the type, New gear, a card per gear with its picks, the blocks (gears sharing a module, shaft Ø and more), and the selected gear's size and face.",
             Tab::Teeth => "Teeth: the selected gear's helix or spiral and profile shift, and the tooth form and chamfer of every gear.",
-            Tab::Shafts => "Shafts & Bearings: the shaft made on each axis and from which block, the selected gear's bore and hub, and the bearing points.",
+            Tab::Shafts => "Shafts & Bores: the shafts (solid rods along an axis) the set makes and their bearing points; each gear's bore (the hole through it) and where it comes from; the selected gear's bore and hub.",
             Tab::Motion => "Links & Motion: meshes and shared shafts (drawn in the view; hover a row to light it), the suggested links, the driver, rpm and torque, and the ratio between two gears.",
             Tab::Housing => "Housing & Output: the housing cutout with its bearing seats, the operation, Targets, keep-out and assembly.",
             Tab::Differential => "Differential: the differential carried by a ring gear (its style, pinions, module and half-shafts) and its facts.",
@@ -749,6 +751,7 @@ fn new(sketch: Option<u64>) -> Gear {
         facts: Vec::new(),
         link_lines: Vec::new(),
         block_shafts: Vec::new(),
+        bores: Vec::new(),
         seen: None,
         pending: Pending::default(),
     }
@@ -1921,6 +1924,7 @@ pub(crate) fn refresh_in(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput], 
     k.arrows = preview.arrows;
     k.link_lines = preview.links;
     k.block_shafts = preview.shafts;
+    k.bores = preview.bores;
     k.picked = picked_geometry(app, k);
     k.cutout_rings = if k.cutout.on { cutout_preview(app, k) } else { Vec::new() };
     // A collision between two gears the drawing suggests linking: the suggestion says what to do,
@@ -2137,6 +2141,46 @@ fn cutout_preview(app: &SolveApp, k: &Gear) -> Vec<(Option<usize>, Vec<[f64; 3]>
 /// engine worked out (the plan gives no 2D preview): each gear's pitch circle at both faces
 /// (decision 4: side A along its axis, side B against it) with four lines between, its tip and
 /// root circles once its module is known; each mesh link's contact; each gear's side-A arrow.
+/// The block shaft gear (`item`, `gear`) is on, with its id ("S1"), where one is made (not a
+/// shaft line already there).
+pub(crate) fn shaft_of(shafts: &[BlockShaft], item: usize, gear: usize) -> Option<(String, &BlockShaft)> {
+    shafts
+        .iter()
+        .zip(solidcraft_gear::blocks::shaft_ids(shafts))
+        .find(|(s, id)| id.is_some() && s.gears.contains(&gi::GearRef::new(item, gear)))
+        .and_then(|(s, id)| Some((id?, s)))
+}
+
+/// Gear (`item`, `gear`)'s bore (the hole through it): its Ø where one is cut, and where it comes
+/// from in words: on a made shaft "fused to shaft S1" (no bore: one body) or, bored by the
+/// engine, "free on shaft S1"; else its own Ø, its block's Bore only Ø, or Auto (a drawn bore
+/// circle, a shaft line, else none).
+pub(crate) fn bore_of(app: &SolveApp, k: &Gear, shafts: &[BlockShaft], item: usize, gear: usize) -> (Option<f64>, String) {
+    let built = k.built.iter().find(|b| (b.item, b.gear) == (item, gear)).and_then(|b| b.bore);
+    if let Some((id, _)) = shaft_of(shafts, item, gear) {
+        return match built {
+            Some(d) => (Some(d), format!("free on shaft {id}")),
+            None => (None, format!("fused to shaft {id}: one body, no bore")),
+        };
+    }
+    let Some(it) = k.items.get(item) else { return (None, String::new()) };
+    if !gi::takes_details(it.kind) {
+        return (built, "its own type's".to_string());
+    }
+    let s = it.typed(gear);
+    match s.bore {
+        2 => (number(app, &s.bore_d, ValueKind::Length, "Bore").ok().flatten().or(built), "its own".to_string()),
+        1 => (None, "none: solid (its own)".to_string()),
+        _ => {
+            let block = k.links.block_of(item).map(|b| (b, &k.links.blocks()[b])).filter(|(_, b)| b.shaft_mode == 1);
+            match block.and_then(|(b, bl)| Some((bl.title(b), number(app, &bl.shaft_d, ValueKind::Length, "Bore").ok().flatten()?))) {
+                Some((title, d)) => (Some(built.unwrap_or(d)), format!("{title} (Bore only)")),
+                None => (built, if built.is_some() { "auto: its bore circle or shaft line".to_string() } else { "none (auto)".to_string() }),
+            }
+        }
+    }
+}
+
 /// What [`items_preview`] draws: the outline by item, each mesh's contact, each gear's side-A
 /// arrow by item, each link's line and each block's shafts.
 struct Preview {
@@ -2145,6 +2189,7 @@ struct Preview {
     arrows: Vec<(usize, [[f64; 3]; 2])>,
     links: Vec<LinkLine>,
     shafts: Vec<BlockShaft>,
+    bores: Vec<(usize, [f64; 3], [f64; 3], f64)>,
 }
 
 fn items_preview(app: &SolveApp, k: &Gear) -> Preview {
@@ -2293,9 +2338,18 @@ fn items_preview(app: &SolveApp, k: &Gear) -> Preview {
         let block = block_of(a).filter(|x| Some(*x) == block_of(b));
         links.push(LinkLine { link: l, points, at: label_at, label, block, suggested: only_suggested, error });
     }
-    let items: Vec<gi::GearItem> = geoms.into_iter().map(|g| g.0).collect();
+    let items: Vec<gi::GearItem> = geoms.iter().map(|g| g.0.clone()).collect();
     let shafts = solidcraft_gear::blocks::block_shafts(&items, &blocks);
-    Preview { lines, contacts, arrows, links, shafts }
+    // Each bore cut (a gear fused to its shaft has none).
+    let mut bores = Vec::new();
+    for (i, (_, gs)) in geoms.iter().enumerate() {
+        for (g, geo) in gs.iter().enumerate() {
+            if let (Some(d), Some(ax)) = (bore_of(app, k, &shafts, i, g).0, unit(geo.axis)) {
+                bores.push((i, geo.centre, ax, d));
+            }
+        }
+    }
+    Preview { lines, contacts, arrows, links, shafts, bores }
 }
 
 /// Each gear's outline `gear.calculate` gives (`outlines`): pitch, tip and root circles at its
@@ -2446,13 +2500,30 @@ pub fn overlay(painter: &egui::Painter, proj: &crate::viewport::Proj, k: &Gear) 
         painter.rect_filled(r, 3.0, egui::Color32::from_black_alpha(170));
         painter.galley(r.min + egui::vec2(4.0, 1.0), g, color);
     };
-    for sh in &k.block_shafts {
+    for (sh, id) in k.block_shafts.iter().zip(solidcraft_gear::blocks::shaft_ids(&k.block_shafts)) {
         let (Some(pa), Some(pb)) = (to(&sh.a), to(&sh.b)) else { continue };
         let color = block_color(sh.block);
         painter.line_segment([pa, pb], egui::Stroke::new(7.0, color.gamma_multiply(0.45)));
         painter.line_segment([pa, pb], egui::Stroke::new(1.5, color));
-        let name = k.links.blocks().get(sh.block).map(|b| b.title(sh.block)).unwrap_or_default();
-        tag(pb, format!("Ø{} shaft · {name}", fmt(sh.diameter)), color);
+        let name = match id {
+            Some(id) => format!("Shaft {id}"),
+            None => sh.existing.map(|i| format!("Shaft line of {}", crate::dialogs_gear_links::item_id(i))).unwrap_or_default(),
+        };
+        tag(pb, format!("{name} Ø{}", fmt(sh.diameter)), color);
+    }
+    // Each bore cut (only where one is): a dashed white ring at the gear's centre plane.
+    let bore_ink = egui::Color32::from_rgb(235, 235, 240);
+    let few = k.bores.len() <= 6;
+    for (item, centre, axis, d) in &k.bores {
+        let ring: Vec<egui::Pos2> = ring_points(*centre, *axis, d / 2.0, 0.0).iter().filter_map(to).collect();
+        if ring.len() < 3 {
+            continue;
+        }
+        painter.extend(egui::Shape::dashed_line(&ring, egui::Stroke::new(1.5, bore_ink), 3.0, 3.0));
+        if few || lit_item(*item) || k.active == Some(*item) {
+            let top = ring.iter().copied().fold(ring[0], |a, p| if p.y < a.y { p } else { a });
+            tag(top + egui::vec2(0.0, -10.0), format!("Bore Ø{}", fmt(*d)), bore_ink);
+        }
     }
     // Each link from gear to gear: in its block's colour (grey across blocks), dashed while only
     // suggested, red when wrong; the hovered row's thick and bright, with its label.

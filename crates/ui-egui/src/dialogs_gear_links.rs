@@ -68,7 +68,10 @@ impl Note {
 pub struct Block {
     pub name: String,
     pub module: String,
+    /// The block's Ø (as typed) and what it makes: 0 Make shaft (a shaft along each axis, its
+    /// gears fused to it, no bore), 1 Bore only (every gear bored to it, no shaft), 2 None.
     pub shaft_d: String,
+    pub shaft_mode: usize,
     pub face: String,
     pub helix: String,
     pub pressure_angle: String,
@@ -100,7 +103,12 @@ impl Block {
                 helix: num(&self.helix, ValueKind::Angle, "helix angle")?,
                 face_width: num(&self.face, ValueKind::Length, "face width")?,
                 backlash: num(&self.backlash, ValueKind::Length, "backlash")?,
-                shaft_diameter: num(&self.shaft_d, ValueKind::Length, "shaft Ø")?,
+                shaft_diameter: match self.shaft_mode {
+                0 => num(&self.shaft_d, ValueKind::Length, "shaft Ø")?,
+                1 => num(&self.shaft_d, ValueKind::Length, "bore Ø")?,
+                _ => None,
+            },
+            shaft: if self.shaft_mode == 1 { gi::ShaftMode::BoreOnly } else { gi::ShaftMode::Make },
             },
         })
     }
@@ -125,6 +133,11 @@ impl Block {
                 v[key] = json!(x);
             }
         }
+        match self.shaft_mode {
+            1 => v["shaft"] = json!("bore"),
+            2 => v["shaft"] = json!("none"),
+            _ => {}
+        }
         Ok(v)
     }
     /// Read back from a `module_blocks` entry (Edit); its members come from the items.
@@ -134,6 +147,12 @@ impl Block {
             name: v.get("name").and_then(Value::as_str).unwrap_or_default().to_string(),
             module: s("module", ValueKind::Length),
             shaft_d: s("shaft_diameter", ValueKind::Length),
+            // (A block saved before the choice with a shaft Ø made shafts.)
+            shaft_mode: match v.get("shaft").and_then(Value::as_str) {
+                Some("bore") => 1,
+                Some("none") => 2,
+                _ => 0,
+            },
             face: s("face_width", ValueKind::Length),
             helix: s("helix_angle", ValueKind::Angle),
             pressure_angle: s("pressure_angle", ValueKind::Angle),

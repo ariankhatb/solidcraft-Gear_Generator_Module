@@ -210,3 +210,27 @@ fn a_side_view_bevel_pair_in_a_block_is_sized_at_the_blocks_module() {
     assert_eq!(got.len(), 2, "{got:?}");
     assert!(got.iter().zip([(15, 18.75), (30, 37.5)]).all(|(g, (z, d))| g.0 == z && close(g.1, 1.25, 1e-9) && close(g.2, d, 1e-6)), "{got:?}");
 }
+
+/// A power split: I drives two compounds L and R whose second gears both drive M. Drawn with
+/// R's second circle a little off, the loop's speeds don't quite agree; the compounds' layers
+/// still turn as one: on the block's shaft, neither layer free (bored) on it.
+#[test]
+fn a_compounds_layers_are_never_free_on_their_blocks_shaft() {
+    let compound = |id: &str, x: f64, r2: f64| {
+        let mut it = GearItem::new(id, ItemKind::Compound).with(vec![Thing::line([x, 0.0, -6.0], [x, 0.0, 20.0]), Thing::circle([x, 0.0, 0.0], Z, 20.0), Thing::circle([x, 0.0, 12.0], Z, r2)]);
+        it.gears = vec![GearSettings::default(), GearSettings::default()];
+        it
+    };
+    let items = vec![spur("I", [0.0; 3], 10.0), compound("L", 30.0, 10.0), compound("R", -30.0, 10.02), spur("M", [0.0, 0.0, 12.0], 20.0)];
+    let links = vec![mesh(g(0, 0), g(1, 0)), mesh(g(0, 0), g(2, 0)), mesh(g(1, 1), g(3, 0)), mesh(g(2, 1), g(3, 0))];
+    let blocks = [block(vec![0, 1, 2, 3], BlockSettings { shaft_diameter: Some(5.0), ..BlockSettings::default() })];
+    let e = expand_blocks(&items, &links, &blocks);
+    for c in [1, 2] {
+        let s = e.shafts.iter().find(|s| s.gears.contains(&g(c, 0)) || s.free.contains(&g(c, 0))).unwrap();
+        assert_eq!((s.gears.clone(), s.free.clone()), (vec![g(c, 0), g(c, 1)], vec![]), "{s:?}");
+        assert!((0..2).all(|k| e.items[c].settings(k).bore == Bore::Auto), "{c}: {:?}", e.items[c].gears);
+    }
+    // (M, on I's axis at another speed, does turn free on I's shaft.)
+    let s = e.shafts.iter().find(|s| s.gears.contains(&g(0, 0))).unwrap();
+    assert_eq!(s.free, vec![g(3, 0)], "{s:?}");
+}

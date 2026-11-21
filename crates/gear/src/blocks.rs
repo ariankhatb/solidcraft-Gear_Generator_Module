@@ -361,14 +361,17 @@ pub fn expand_blocks(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlo
 /// item's own gears: a compound's on one shaft, a pair's meshing) tie together, and its speed
 /// about its own axis (`gear_geoms`' direction, signed) per unit of the group's first gear's. A
 /// gear tied to none is a group of its own; a tie whose speeds can't be worked out (a rack, a
-/// gear of no radius) ties nothing.
+/// gear of no radius) ties nothing. Gears tied rigidly (a compound's layers, a Shaft link) always
+/// get their speeds from each other, so a loop whose meshes don't quite agree (a power split
+/// drawn with circles a little off) can't part them.
 fn turnings(items: &[GearItem], links: &[ItemLink]) -> Vec<(GearRef, usize, f64)> {
     let geoms: Vec<Vec<GearGeom>> = items.iter().map(gear_geoms).collect();
     let refs: Vec<GearRef> = geoms.iter().enumerate().flat_map(|(i, g)| (0..g.len()).map(move |k| GearRef::new(i, k))).collect();
     let at = |r: GearRef| refs.iter().position(|x| *x == r);
     let geo = |r: GearRef| geoms.get(r.item).and_then(|g| g.get(r.gear));
-    // Every tie: the two gears and the second's speed per unit of the first's.
-    let mut ties: Vec<(usize, usize, f64)> = Vec::new();
+    // Every tie: the two gears, the second's speed per unit of the first's, and whether it is
+    // rigid (one shaft).
+    let mut ties: Vec<(usize, usize, f64, bool)> = Vec::new();
     let mut tie = |a: GearRef, b: GearRef, kind: LinkKind| {
         let (Some(x), Some(y), Some(ga), Some(gb)) = (at(a), at(b), geo(a), geo(b)) else { return };
         let ratio = match kind {
@@ -376,7 +379,7 @@ fn turnings(items: &[GearItem], links: &[ItemLink]) -> Vec<(GearRef, usize, f64)
             LinkKind::Mesh => mesh_ratio(ga, gb),
         };
         if let Some(k) = ratio.filter(|k| k.is_finite() && k.abs() > 1e-12) {
-            ties.push((x, y, k));
+            ties.push((x, y, k, kind == LinkKind::Shaft));
         }
     };
     for (i, it) in items.iter().enumerate() {
@@ -399,11 +402,11 @@ fn turnings(items: &[GearItem], links: &[ItemLink]) -> Vec<(GearRef, usize, f64)
         if speed[start].is_some() {
             continue;
         }
-        speed[start] = Some((start, 1.0));
-        let mut todo = vec![start];
+        let mut todo = Vec::new();
+        set_rigidly(&mut speed, &ties, start, (start, 1.0), &mut todo);
         while let Some(x) = todo.pop() {
             let Some((group, sx)) = speed[x] else { continue };
-            for &(a, b, k) in &ties {
+            for &(a, b, k, _) in &ties {
                 let (next, s) = if a == x {
                     (b, sx * k)
                 } else if b == x {
@@ -412,13 +415,37 @@ fn turnings(items: &[GearItem], links: &[ItemLink]) -> Vec<(GearRef, usize, f64)
                     continue;
                 };
                 if speed[next].is_none() {
-                    speed[next] = Some((group, s));
-                    todo.push(next);
+                    set_rigidly(&mut speed, &ties, next, (group, s), &mut todo);
                 }
             }
         }
     }
     refs.iter().zip(speed).filter_map(|(r, s)| s.map(|(g, v)| (*r, g, v))).collect()
+}
+
+/// Gear `x`'s speed (its group's) set, and at once every gear rigidly tied to it (on one shaft
+/// with it, through rigid ties only) from it; each is queued in `todo`.
+fn set_rigidly(speed: &mut [Option<(usize, f64)>], ties: &[(usize, usize, f64, bool)], x: usize, at: (usize, f64), todo: &mut Vec<usize>) {
+    speed[x] = Some(at);
+    todo.push(x);
+    let mut stack = vec![x];
+    while let Some(y) = stack.pop() {
+        let Some((group, sy)) = speed[y] else { continue };
+        for &(a, b, k, _) in ties.iter().filter(|t| t.3) {
+            let (next, s) = if a == y {
+                (b, sy * k)
+            } else if b == y {
+                (a, sy / k)
+            } else {
+                continue;
+            };
+            if speed[next].is_none() {
+                speed[next] = Some((group, s));
+                todo.push(next);
+                stack.push(next);
+            }
+        }
+    }
 }
 
 /// Gear `b`'s speed about its axis per unit of `a`'s about its own, the two meshing: their pitch
@@ -464,7 +491,8 @@ fn on_and_free(gears: &[GearRef], u: V, items: &[GearItem], turning: &[(GearRef,
         let w = unit(gear_geoms(items.get(r.item)?).get(r.gear)?.axis)?;
         Some((*group, s * dot(w, u)))
     };
-    let alike = |a: (usize, f64), b: (usize, f64)| a.0 == b.0 && (a.1 - b.1).abs() <= 1e-6 * a.1.abs().max(b.1.abs()).max(1e-12);
+    // (Within a part in a thousand: drawn circles in a loop can be a little off.)
+    let alike = |a: (usize, f64), b: (usize, f64)| a.0 == b.0 && (a.1 - b.1).abs() <= 1e-3 * a.1.abs().max(b.1.abs()).max(1e-12);
     let mut lots: Vec<((usize, f64), usize)> = Vec::new();
     for r in gears {
         let Some(t) = about(*r) else { continue };

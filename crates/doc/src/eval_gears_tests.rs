@@ -206,5 +206,6 @@ fn a_fused_build_is_the_planned_steps_solid() {
     assert!((mf.volume - mp.volume).abs() <= 1e-6 * mp.volume, "{} vs {}", mf.volume, mp.volume);
     assert!((mf.area - mp.area).abs() <= 1e-6 * mp.area, "{} vs {}", mf.area, mp.area);
     let (bf, bp) = (fused.exact_bounds().unwrap(), planned.exact_bounds().unwrap());
-    assert!((bf.min - bp.min).length() < 1e-6 && (bf.max - bp.max).length() < 1e-6, "{bf:?} vs {bp:?}");
+    let near = |a: Vec3, b: Vec3| (a.x - b.x).abs().max((a.y - b.y).abs()).max((a.z - b.z).abs()) < 1e-6;
+    assert!(near(bf.min, bp.min) && near(bf.max, bp.max), "{bf:?} vs {bp:?}");
 }

@@ -7,3 +7,7 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# Spans round the planning stages (nothing recorded unless the app's profiler is on).
+solidcraft-profile = { workspace = true }

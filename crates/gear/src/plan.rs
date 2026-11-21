@@ -1311,6 +1311,7 @@ pub fn check(s: &Spec) -> Result<(), String> {
 
 /// The plan for a spec.
 pub fn plan(s: &Spec) -> Result<Plan, String> {
+    let _span = solidcraft_profile::span("gear", "plan");
     check(s)?;
     if crate::coupon::applies(s) {
         let mut p = crate::coupon::plan(s)?;

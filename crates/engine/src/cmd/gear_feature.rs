@@ -266,6 +266,7 @@ pub(super) fn create(s: &mut Session, cmd: &str, asked: &Asked, plan: &Plan, nam
     if asked.items.is_some() {
         request["body_keys"] = json!(bases);
     }
+    super::prime_items(&*s, cmd, &request, asked, plan);
     let kind = FeatureKind::Gears { params: request.clone(), sketches, operation, targets, keep_out_cuts: cuts };
     let made = super::super::features::add_feature(s, &json!({"name": name, "body_names": names}), kind)?;
     let id = made.get("feature").and_then(Value::as_u64).ok_or_else(|| EngineError::Other("the Gears feature was not made".into()))?;
@@ -385,6 +386,7 @@ pub(super) fn update(s: &mut Session, cmd: &str, mut rec: Record, request: Value
         request["body_keys"] = json!(bases);
     }
     sketches_first(s, cmd, id, &sketches)?;
+    super::prime_items(&*s, cmd, &request, asked, plan);
     if let Some(f) = s.doc_mut().feature_mut(id) {
         f.kind = FeatureKind::Gears { params: request.clone(), sketches, operation, targets, keep_out_cuts: cuts };
         f.body_names = names.clone();

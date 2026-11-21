@@ -753,7 +753,9 @@ fn display_quality(app: &SolveApp) -> solidcraft_engine::doc::display_quality::D
 pub(crate) fn begin_applying(app: &SolveApp, d: &Dialog) -> Option<Applying> {
     let wait = app.apply_off_thread?;
     let multiple_threads = matches!(d.kind, Kind::Thread { .. }) && sels(d, 0).len() > 1;
-    if !d.previews() && !multiple_threads && d.editing.is_none() {
+    // A gear set has no live preview, and is still computed here: its teeth take seconds.
+    let gears = matches!(&d.kind, Kind::Gear(k) if k.computes_off_thread());
+    if !d.previews() && !multiple_threads && d.editing.is_none() && !gears {
         return None;
     }
     let computation = DialogComputation::new(app, d).ok()?;

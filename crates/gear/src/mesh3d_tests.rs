@@ -264,3 +264,28 @@ fn face_gear_window_check_meets_the_rack_as_drawn() {
         assert_eq!(r[0].verdict, Verdict::Interferes, "{label} half a pitch out: {}", r[0].message);
     }
 }
+
+/// Each row's farthest point found without making every row is the one of all the material
+/// points: bodies with prisms, tapers, a ring's taper and wall, trims and revolves.
+#[test]
+fn the_farthest_point_per_row_is_that_of_every_material_point() {
+    use crate::mesh3d::Solid;
+    let ring = Spec { bevel_planet_mode: crate::plan::BevelPlanetMode::Ring, shaft_angle: 45.0, teeth: 20, teeth2: 10, planets: 3, ..Spec::defaults_for(Kind::BevelPlanetary) };
+    for s in [d(Kind::Pair), d(Kind::Helical), d(Kind::Bevel), d(Kind::Planetary), ring] {
+        let p = plan(&s).unwrap();
+        for b in &p.bodies {
+            let solid = Solid::new(b, 0.3);
+            let mut all: std::collections::BTreeMap<u64, f64> = std::collections::BTreeMap::new();
+            for q in solid.material_points(0.2) {
+                let r = all.entry(q[2].to_bits()).or_insert(0.0);
+                *r = r.max(q[0].hypot(q[1]));
+            }
+            let rows = solid.farthest_per_row(0.2);
+            assert_eq!(rows.len(), all.len(), "{}: one point per z", b.name);
+            for q in rows {
+                let want = all[&q[2].to_bits()];
+                assert!((q[0].hypot(q[1]) - want).abs() <= 1e-12 * want.max(1.0), "{} at z {}: {} against {want}", b.name, q[2], q[0].hypot(q[1]));
+            }
+        }
+    }
+}

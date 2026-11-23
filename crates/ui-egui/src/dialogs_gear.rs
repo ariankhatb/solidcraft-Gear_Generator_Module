@@ -1670,19 +1670,66 @@ pub(crate) fn plain_message(text: &str) -> String {
 }
 
 pub(crate) fn about_item(text: &str) -> Option<(usize, String)> {
+    about_item_in(text, usize::MAX)
+}
+
+/// [`about_item`] among `count` items: "Gear F2" (item F's gear 2, where there is no item F2)
+/// is about item F.
+pub(crate) fn about_item_in(text: &str, count: usize) -> Option<(usize, String)> {
     let words: Vec<&str> = text.split_whitespace().collect();
     let at = words.iter().position(|w| matches!(*w, "Gear" | "Item" | "gear" | "item"))?;
     if at > 2 {
         return None;
     }
     let id = words.get(at + 1)?.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-    let i = gi::item_number(id)?;
+    let i = gi::item_number(id).filter(|i| *i < count).or_else(|| gi::item_number(id.trim_end_matches(|c: char| c.is_ascii_digit())))?;
     // The rest, after "Gear B:" or "Gear B · Compound:".
     let rest = match text.find(':') {
         Some(c) if c < 40 => text[c + 1..].trim().to_string(),
         _ => text.to_string(),
     };
     Some((i, worded(&rest)))
+}
+
+/// An engine message split into what it says of each gear: a refusal of several stages comes as
+/// one line ("Gear E1: …; Gear F1: …"), each part starting with the gear it names; a part that
+/// names none ("at this 160° shaft angle …") stays with the one before it.
+pub(crate) fn by_gear(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for part in text.split("; ") {
+        let named = part.split_whitespace().next().is_some_and(|w| matches!(w, "Gear" | "Item")) && about_item(part).is_some();
+        match out.last_mut() {
+            Some(last) if !named => {
+                last.push_str("; ");
+                last.push_str(part);
+            }
+            _ => out.push(part.to_string()),
+        }
+    }
+    out
+}
+
+/// Puts an engine message where it belongs: each gear's part ([`by_gear`]) on the card of the
+/// item it names (`per`, one list per item), the rest with the set's (`set_msgs`); each once.
+pub(crate) fn place(per: &mut [Vec<Msg>], set_msgs: &mut Vec<Msg>, text: &str, error: bool) {
+    // (The engine's "invalid parameters for `gear.calculate`: " is for scripts, not for people.)
+    let text = plain_message(text);
+    let msg = |t: String| Msg { text: t, error };
+    for text in by_gear(&text) {
+        match about_item_in(&text, per.len()) {
+            Some((i, rest)) if i < per.len() => {
+                if !per[i].iter().any(|m| m.text == rest) {
+                    per[i].push(msg(rest));
+                }
+            }
+            _ => {
+                let t = worded(&text);
+                if !set_msgs.iter().any(|m: &Msg| m.text == t) {
+                    set_msgs.push(msg(t));
+                }
+            }
+        }
+    }
 }
 
 /// Works out the set (`gear.calculate`, once per change) and what is said of each gear: the
@@ -1854,25 +1901,7 @@ pub(crate) fn refresh_in(app: &mut SolveApp, k: &mut Gear, inputs: &[SelInput], 
     // What is said of each gear, and of the set.
     let mut per: Vec<Vec<Msg>> = vec![Vec::new(); k.items.len()];
     let mut set_msgs = Vec::new();
-    let mut put = |text: &str, error: bool| {
-        // (The engine's "invalid parameters for `gear.calculate`: " is for scripts, not for people.)
-        let text = plain_message(text);
-        let text = text.as_str();
-        let msg = |t: String| Msg { text: t, error };
-        match about_item(text) {
-            Some((i, rest)) if i < per.len() => {
-                if !per[i].iter().any(|m| m.text == rest) {
-                    per[i].push(msg(rest));
-                }
-            }
-            _ => {
-                let t = worded(text);
-                if !set_msgs.iter().any(|m: &Msg| m.text == t) {
-                    set_msgs.push(msg(t));
-                }
-            }
-        }
-    };
+    let mut put = |text: &str, error: bool| place(&mut per, &mut set_msgs, text, error);
     if let Err(e) = &asked
         && !k.items.is_empty()
         && !e.contains("still needs")

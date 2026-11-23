@@ -165,6 +165,29 @@ fn slots_are_the_gear_crates() {
     assert_eq!(g.items[0].optional_slot(&app).as_deref(), Some("contact line"));
 }
 
+/// A refusal of several stages comes as one line: each gear's part goes on its own card (Gear
+/// F's on F's, not on Gear E's, whose name comes first), a part naming no gear stays with the
+/// one before it.
+#[test]
+fn each_gears_part_of_a_refusal_goes_on_its_card() {
+    let tall = "the teeth are too tall for a cone this flat or this slim (pitch cone angle 80°): use a smaller module, more teeth or a different shaft angle";
+    let range = "at this 160° shaft angle the tooth ratio must be about 0.97 to 1.03 (equal teeth always work)";
+    let shaft = "Gear B2 sits on Block 1's shaft S1 (Ø15), which is wider than its tooth roots (Ø12.1): use a shaft of at most Ø9 or a bigger gear";
+    let e = format!("Gear E1: {tall}; {range}; Gear F1: {tall}; Gear F2: {tall}; {shaft}");
+    let mut per = vec![Vec::new(); 8];
+    let mut set = Vec::new();
+    place(&mut per, &mut set, &e, true);
+    let texts = |i: usize| per[i].iter().map(|m: &Msg| m.text.clone()).collect::<Vec<_>>();
+    assert_eq!(texts(4), vec![format!("{tall}; {range}")], "E's own, with its tooth ratio");
+    assert_eq!(texts(5), vec![tall.to_string()], "F's on F's card (F1 and F2 alike, once)");
+    assert_eq!(texts(1), vec![shaft.to_string()], "B's on B's");
+    assert!(set.is_empty() && per[0].is_empty() && per[2].is_empty(), "{set:?}");
+    assert!(per.iter().flatten().all(|m| m.error));
+    // "Gear F2" is item F's gear 2 while there is no item F2.
+    assert_eq!(about_item_in("Gear F2: x", 8), Some((5, "x".to_string())));
+    assert_eq!(by_gear("Gear A: x; y; Gear B: z"), vec!["Gear A: x; y".to_string(), "Gear B: z".to_string()]);
+}
+
 /// A message from the engine lands on the card of the gear it names, worded as the dialog names
 /// gears; one about no gear goes above the cards.
 #[test]

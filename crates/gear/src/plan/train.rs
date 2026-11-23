@@ -446,7 +446,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
         let (mut sg, inv) = gear_of(s, g);
         // A gear on a built shaft: its bore fits the shaft.
         if let Some(sh) = t.shafts.iter().find(|sh| sh.gears.contains(&i)) {
-            let bore = crate::hub::Bore { kind: crate::hub::BoreKind::Round, diameter: sh.diameter, ..crate::hub::Bore::default() };
+            let bore = crate::hub::Bore { kind: crate::hub::BoreKind::Round, diameter: sh.diameter, on_shaft: true, ..crate::hub::Bore::default() };
             if i == 0 {
                 sg.bore = bore;
             } else {

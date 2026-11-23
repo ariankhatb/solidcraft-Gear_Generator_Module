@@ -137,7 +137,7 @@ fn drives(what: &str) -> &'static str {
 /// The type list and the New gear button, with what the type needs.
 fn header(ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], input: &mut usize) {
     let options: Vec<(&str, &str)> = dg::TYPES.iter().map(|(kind, icon)| (kind.label(), *icon)).collect();
-    ui_kit::row(ui, "Type", |ui| ui_kit::dropdown_icons(ui, "gear_type", &mut k.new_kind, &options)).backing_on_hover_text(TIP_TYPE);
+    ui_kit::row(ui, "Type", |ui| ui_kit::dropdown_pictures(ui, "gear_type", &mut k.new_kind, &options)).backing_on_hover_text(TIP_TYPE);
     // The type's picture beside what it needs.
     let t = Tokens::get();
     ui.horizontal_top(|ui| {
@@ -288,7 +288,8 @@ fn cards(app: &SolveApp, ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput
                 ui.horizontal(|ui| {
                     let (dot, _) = ui.allocate_exact_size(egui::vec2(t.space_10, t.space_16), egui::Sense::hover());
                     ui.painter().circle_filled(dot.center(), t.space_4 + 1.0, dg::item_color(i));
-                    let (icon, _) = ui.allocate_exact_size(egui::vec2(t.space_16, t.space_16), egui::Sense::hover());
+                    // A card's identity icon, at the kit's card size (as `status_header`).
+                    let (icon, _) = ui.allocate_exact_size(egui::vec2(t.form_icon_size, t.form_icon_size), egui::Sense::hover());
                     ui_kit::icons::paint_icon(ui.painter(), icon, dg::icon_of(it.kind), 1.0);
                     ui.label(egui::RichText::new(format!("Gear {}", item_id(i))).size(t.font_label).strong().color(t.form_ink));
                     ui.label(egui::RichText::new(it.label()).size(t.font_label).color(t.form_dim));

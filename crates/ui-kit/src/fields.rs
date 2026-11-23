@@ -1036,13 +1036,53 @@ fn dropdown_indexed(ui: &mut Ui, id: &str, selected: &mut usize, options: &[&str
 
 /// The standard dropdown with a leading application icon on the current value and each option.
 /// The text job reserves the icon's space; the native combo and selectable items own interaction.
+/// The icons are single-colour line art at the text size; for modelling pictures use
+/// [`dropdown_pictures`].
 pub fn dropdown_icons(ui: &mut Ui, id: &str, selected: &mut usize, options: &[(&str, &str)]) -> Response {
+    dropdown_with_icons(ui, id, selected, options, IconFinish::Ink)
+}
+
+/// [`dropdown_icons`] whose icons are full-colour modelling pictures (a type list: gear, joint or
+/// feature kinds), drawn at the icon-choice size of [`segmented_icons`](crate::segmented_icons)
+/// and [`tool_choices`](crate::tool_choices) (`space_24`) so their detail stays readable; each
+/// option is a control-height row. Tokens: dropdown tokens, `control_height, space_6/8/24`.
+pub fn dropdown_pictures(ui: &mut Ui, id: &str, selected: &mut usize, options: &[(&str, &str)]) -> Response {
+    dropdown_with_icons(ui, id, selected, options, IconFinish::Picture)
+}
+
+/// How a dropdown draws its option icons.
+#[derive(Clone, Copy, PartialEq)]
+enum IconFinish {
+    /// Single-colour line art at the text size.
+    Ink,
+    /// Full-colour artwork at the icon-choice size.
+    Picture,
+}
+
+impl IconFinish {
+    fn side(self) -> f32 {
+        let t = Tokens::get();
+        match self {
+            Self::Ink => t.space_16,
+            Self::Picture => t.space_24,
+        }
+    }
+}
+
+fn dropdown_with_icons(ui: &mut Ui, id: &str, selected: &mut usize, options: &[(&str, &str)], finish: IconFinish) -> Response {
     let (text, icon) = options.get(*selected).copied().unwrap_or(("", ""));
     let row = label(ui).to_owned();
-    dropdown_menu_width(ui, id, text, Some(icon), false, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+    dropdown_menu_width(ui, id, text, Some((icon, finish)), false, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+        let t = Tokens::get();
         for (index, (text, icon)) in options.iter().enumerate() {
-            let response = ui.selectable_label(*selected == index, dropdown_icon_text(text));
-            paint_dropdown_icon(ui, response.rect, icon);
+            let response = match finish {
+                IconFinish::Ink => ui.selectable_label(*selected == index, dropdown_icon_text(text, finish)),
+                IconFinish::Picture => ui.add(
+                    egui::Button::selectable(*selected == index, dropdown_icon_text(text, finish))
+                        .min_size(vec2(0.0, t.control_height)),
+                ),
+            };
+            paint_dropdown_icon(ui, response.rect, icon, finish);
             solidcraft_ui_registry::publish_target(&format!("dialog:{row}:{text}"), response.rect);
             if response.clicked() {
                 *selected = index;
@@ -1051,24 +1091,28 @@ pub fn dropdown_icons(ui: &mut Ui, id: &str, selected: &mut usize, options: &[(&
     })
 }
 
-fn dropdown_icon_text(text: &str) -> egui::text::LayoutJob {
+fn dropdown_icon_text(text: &str, finish: IconFinish) -> egui::text::LayoutJob {
     let t = Tokens::get();
     let mut job = egui::text::LayoutJob::default();
     job.append(
         text,
-        t.space_16 + t.space_6,
+        finish.side() + t.space_6,
         egui::TextFormat { font_id: egui::FontId::proportional(t.font_label), color: t.form_ink, ..Default::default() },
     );
     job
 }
 
-fn paint_dropdown_icon(ui: &Ui, rect: egui::Rect, icon: &str) {
+fn paint_dropdown_icon(ui: &Ui, rect: egui::Rect, icon: &str, finish: IconFinish) {
     let t = Tokens::get();
+    let side = finish.side();
     let rect = egui::Rect::from_center_size(
-        egui::pos2(rect.left() + ui.spacing().button_padding.x + t.space_8, rect.center().y),
-        vec2(t.space_16, t.space_16),
+        egui::pos2(rect.left() + ui.spacing().button_padding.x + side / 2.0, rect.center().y),
+        vec2(side, side),
     );
-    crate::icons::paint_ink(ui.painter(), rect, icon, t.form_ink);
+    match finish {
+        IconFinish::Ink => crate::icons::paint_ink(ui.painter(), rect, icon, t.form_ink),
+        IconFinish::Picture => crate::icons::paint_icon(ui.painter(), rect, icon, f32::from(t.icon.a()) / 255.0),
+    }
     solidcraft_ui_registry::publish_rect(&format!("dialog:dropdown_icon:{icon}"), rect);
 }
 
@@ -1179,7 +1223,7 @@ fn dropdown_menu_width(
     ui: &mut Ui,
     id: impl egui::AsIdSalt,
     current: &str,
-    leading_icon: Option<&str>,
+    leading_icon: Option<(&str, IconFinish)>,
     compact: bool,
     close_behavior: egui::PopupCloseBehavior,
     add: impl FnOnce(&mut Ui),
@@ -1198,7 +1242,10 @@ fn dropdown_menu_width(
     } else {
         dimension(ui.available_width())
     };
-    let selected_text = if leading_icon.is_some() { egui::WidgetText::from(dropdown_icon_text(current)) } else { current.into() };
+    let selected_text = match leading_icon {
+        Some((_, finish)) => egui::WidgetText::from(dropdown_icon_text(current, finish)),
+        None => current.into(),
+    };
     let widget = ui.make_persistent_id(egui::IdSalt::new(&id));
     let combo = egui::ComboBox::from_id_salt(id)
         .width(width)
@@ -1213,8 +1260,8 @@ fn dropdown_menu_width(
     if popup.inner.is_some() && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         response.request_focus();
     }
-    if let Some(icon) = leading_icon {
-        paint_dropdown_icon(ui, response.rect, icon);
+    if let Some((icon, finish)) = leading_icon {
+        paint_dropdown_icon(ui, response.rect, icon, finish);
     }
     publish(ui, &response, egui::Role::ComboBox);
     // Kit chrome publishes the row label after egui's selected-text metadata.

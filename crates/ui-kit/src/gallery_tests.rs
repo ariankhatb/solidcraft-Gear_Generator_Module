@@ -1912,6 +1912,11 @@ pub const ELEMENTS: &[Element] = &[
             dropdown_icons(ui, "gallery_icons", &mut s.selected, &[("One", "one"), ("Two", "two")]);
         });
     }),
+    element!("dropdown_pictures", "dialog:row:Gallery", Some("dialog:Gallery"), |ui, s| {
+        row(ui, "Gallery", |ui| {
+            dropdown_pictures(ui, "gallery_pictures", &mut s.selected, &[("One", "box"), ("Two", "extrude")]);
+        });
+    }),
     element!("dropdown_previews", "dialog:row:Gallery", Some("dialog:Gallery"), |ui, s| {
         row(ui, "Gallery", |ui| {
             dropdown_previews(ui, "gallery_previews", &mut s.selected, &["One", "Two"], |ui, index| {

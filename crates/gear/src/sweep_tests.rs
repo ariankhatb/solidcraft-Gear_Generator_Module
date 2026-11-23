@@ -52,6 +52,7 @@ pub(crate) fn random_bore(r: &mut Rng, d: f64) -> Bore {
         key_width: if r.chance(0.7) { 0.0 } else { diameter * r.range(0.1, 0.6) },
         key_depth: if r.chance(0.7) { 0.0 } else { diameter * r.range(0.05, 0.4) },
         flat: if r.chance(0.7) { 0.0 } else { diameter * r.range(0.3, 0.99) },
+        on_shaft: false,
     }
 }
 

@@ -142,6 +142,71 @@ fn gear_names(text: &str, names: &[String]) -> String {
     crate::sketch_rules::rename_gears(text, &|k| names.get(k).cloned().unwrap_or_else(|| format!("gear {}", k + 1)))
 }
 
+/// `text` (a set's plan, sizing or reader words) with the plan's "gear N" named `by_gear[N - 1]`
+/// ([`gear_names`]) and the reader's "member N" `names[N - 1]` ([`rename_members`]): every
+/// place a set's words leave its planner names its gears as the dialog does ("Gear F1").
+pub(crate) fn named(text: &str, by_gear: &[String], names: &[String]) -> String {
+    rename_members(&gear_names(text, by_gear), names)
+}
+
+/// A set's refusal [`named`]: said of the gear it names ("Gear F1: the teeth are too tall…"),
+/// or, when it starts with none of them, of the set ("Gear F1 and Gear F2: …").
+fn set_refusal(e: &str, by_gear: &[String], names: &[String]) -> String {
+    let t = named(e, by_gear, names);
+    if names.iter().chain(by_gear).any(|n| !n.is_empty() && t.starts_with(n.as_str())) || names.is_empty() {
+        t
+    } else {
+        format!("{}: {t}", names.join(" and "))
+    }
+}
+
+/// The plan's name for each of a reader's gears (its gear N: `order[N - 1]`, an index into
+/// `names`).
+fn by_order(order: &[usize], names: &[String]) -> Vec<String> {
+    order.iter().enumerate().map(|(k, i)| names.get(*i).cloned().unwrap_or_else(|| format!("gear {}", k + 1))).collect()
+}
+
+/// A block's name as the dialog shows it on its own: "M1" is "Block 1".
+fn block_name(b: &ModuleBlock) -> String {
+    match b.id.strip_prefix('M').filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())) {
+        Some(n) => format!("Block {n}"),
+        None => format!("Block {}", b.id),
+    }
+}
+
+/// `text` with "Gear B1 sits on a shaft (Ø15)" (a planner's words for a gear one body with its
+/// shaft, [`crate::hub::root_words`]) saying which shaft: "sits on Block 1's shaft S1 (Ø15)"
+/// (a block's Make shaft), "sits on shaft S1 (Ø15)" (a Shaft item's bar).
+fn shaft_named(text: &str, items: &[GearItem], blocks: &[ModuleBlock]) -> String {
+    if !text.contains(" sits on a shaft (Ø") {
+        return text.to_string();
+    }
+    let mut out = text.to_string();
+    for (i, it) in items.iter().enumerate() {
+        for k in 0..gear_geoms(it).len() {
+            let r = GearRef::new(i, k);
+            let pat = format!("{} sits on a shaft (Ø", who(items, r));
+            if !out.contains(&pat) {
+                continue;
+            }
+            let shaft = crate::items::link_geom(items, r).and_then(|g| {
+                items.iter().position(|s| s.kind == ItemKind::Shaft && crate::items::shaft_geom(s).is_some_and(|line| crate::items::on_shaft_line(&line, &g)))
+            });
+            let block = crate::blocks::block_of(blocks, i)
+                .map(|b| &blocks[b])
+                .filter(|b| b.settings.shaft == crate::items::ShaftMode::Make && b.settings.shaft_diameter.is_some_and(|d| d > 0.0));
+            let desc = match (block, shaft) {
+                (Some(b), Some(s)) => format!("{}'s shaft {}", block_name(b), items[s].id),
+                (None, Some(s)) => format!("shaft {}", items[s].id),
+                (Some(b), None) => format!("{}'s shaft", block_name(b)),
+                (None, None) => continue,
+            };
+            out = out.replace(&pat, &format!("{} sits on {desc} (Ø", who(items, r)));
+        }
+    }
+    out
+}
+
 /// The text after a refusal's last ": " (what to do), for a link's hint.
 fn hint_of(e: &str) -> Option<String> {
     e.rsplit_once(": ").map(|(_, h)| h.to_string()).filter(|h| !h.is_empty())
@@ -275,6 +340,8 @@ pub fn plan_items(items: &[GearItem], links: &[ItemLink], blocks: &[ModuleBlock]
     let mut loose: Vec<String> = Vec::new();
     let units = if err.iter().all(Option::is_none) { solidcraft_profile::scope("gear", "plan units", || plan_units(items, &st, &mapped, &blocks, base, &mut err, &mut loose)) } else { Vec::new() };
     if err.iter().any(Option::is_some) || !loose.is_empty() {
+        let err = err.into_iter().map(|e| e.map(|e| shaft_named(&e, items, &blocks))).collect();
+        let loose = loose.iter().map(|e| shaft_named(e, items, &blocks)).collect();
         return Ok(refused(items, &st, &used, err, loose, out));
     }
     let merged = merge(&st, units, drive, &mut out);
@@ -548,7 +615,10 @@ fn plan_units(items: &[GearItem], st: &[Stage], mapped: &crate::items::Mapped, b
             .filter(|r| r.item != i)
             .filter_map(|r| items.get(r.item).and_then(crate::items::shaft_geom))
             .collect();
-        units.push(shaft_unit(items, i, &line, &carried, &others, &planned, base));
+        match shaft_unit(items, i, &line, &carried, &others, &planned, base) {
+            Ok(u) => units.push(u),
+            Err(e) => fail(err, &[me], None, e),
+        }
     }
     units
 }
@@ -567,8 +637,9 @@ struct Planned {
 /// lines) holds (so a prop shaft reaches the pinion it drives); cut back later where another
 /// body is in its way ([`trim_shafts`]). `carried`: the gears its cluster holds (joined to it by
 /// the merge's clusters). Its diameter is the item's, else half the smallest root diameter of the
-/// gears it carries (as a train's shaft). What it can't do is said in its warnings.
-fn shaft_unit(items: &[GearItem], i: usize, line: &GearGeom, carried: &[GearRef], others: &[GearGeom], planned: &[Planned], base: &Spec) -> Unit {
+/// gears it carries (as a train's shaft). What it can't do is said in its warnings; `Err` when it
+/// is wider than the tooth roots of a gear on its line (one body with it).
+fn shaft_unit(items: &[GearItem], i: usize, line: &GearGeom, carried: &[GearRef], others: &[GearGeom], planned: &[Planned], base: &Spec) -> Result<Unit, String> {
     let it = &items[i];
     let me = GearRef::new(i, 0);
     let name = who(items, me);
@@ -584,6 +655,15 @@ fn shaft_unit(items: &[GearItem], i: usize, line: &GearGeom, carried: &[GearRef]
         Some(root) => (root.floor() / 2.0).max(1.0),
         None => (length / 16.0).clamp(2.0, 10.0),
     });
+    // A gear on its line is one body with it: the bar must stay inside the gear's tooth roots.
+    for r in &on_line {
+        let Some(x) = planned.iter().find(|x| x.gear == *r).filter(|x| x.module > 0.0) else { continue };
+        let root = x.pitch_d - 2.5 * x.module;
+        if d >= root - 0.05 * x.module {
+            let bar = crate::hub::Bore { kind: crate::hub::BoreKind::Round, diameter: d, on_shaft: true, ..crate::hub::Bore::default() };
+            return Err(format!("{}{}", who(items, *r), crate::hub::root_words(&bar, root, x.module)));
+        }
+    }
     // On past its ends to the gears it carries on its axis that no other shaft of its cluster holds.
     let (mut lo, mut hi) = (0.0f64, length);
     let mut reached: Vec<String> = Vec::new();
@@ -638,7 +718,7 @@ fn shaft_unit(items: &[GearItem], i: usize, line: &GearGeom, carried: &[GearRef]
         }
     }
     let notes = if reached.is_empty() { Vec::new() } else { vec![format!("{name} runs on past its line to {}, which it carries", reached.join(" and "))] };
-    Unit { label: name, plan: p, refs: vec![Some(me)], shifts: vec![None], carrier: None, tags: Vec::new(), contact: Vec::new(), notes }
+    Ok(Unit { label: name, plan: p, refs: vec![Some(me)], shifts: vec![None], carrier: None, tags: Vec::new(), contact: Vec::new(), notes })
 }
 
 /// The drivetrain reader's items for `gears` (each with its face sides), and the shaft lines and
@@ -702,11 +782,13 @@ fn train_unit(items: &[GearItem], gears: &[GearRef], mapped: &crate::items::Mapp
         None => base,
     };
     let o = dt::read_with(&its, None, &Simple::default(), base, has_lines);
+    // (The plan's "gear N" is the reader's gear `o.gears[N - 1]`.)
+    let plan_names = by_order(&o.gears, &names);
     if let Some(e) = &o.error {
-        return Err(rename_members(e, &names));
+        return Err(named(e, &plan_names, &names));
     }
     let solved = o.solved.as_ref().ok_or("the train could not be sized")?;
-    let p = plan(&solved.spec).map_err(|e| rename_members(&e, &names))?;
+    let p = plan(&solved.spec).map_err(|e| named(&e, &plan_names, &names))?;
     let shifts: Vec<Option<f64>> = (0..p.members.len()).map(|k| solved.spec.train.as_ref().and_then(|t| t.gears.get(k)).map(|g| g.shift)).collect();
     let refs: Vec<Option<GearRef>> = o.gears.iter().map(|i| refs.get(*i).copied()).collect();
     let label = {
@@ -717,7 +799,7 @@ fn train_unit(items: &[GearItem], gears: &[GearRef], mapped: &crate::items::Mapp
     let mut u = Unit { label, plan: p, refs, shifts, carrier: None, tags: Vec::new(), contact: Vec::new(), notes: Vec::new() };
     // (The plan's "gear N" is its member N, the train's gear N.)
     let by_gear: Vec<String> = u.refs.iter().enumerate().map(|(k, r)| r.map_or_else(|| format!("gear {}", k + 1), |r| who(items, r))).collect();
-    u.plan.warnings = u.plan.warnings.iter().map(|w| rename_members(&gear_names(w, &by_gear), &names)).collect();
+    u.plan.warnings = u.plan.warnings.iter().map(|w| named(w, &by_gear, &names)).collect();
     // A gear meshing nothing at a fixed module (decision 3): the closest tooth count at that
     // module, so its pitch circle is not the drawn one; say both.
     for &i in &o.gears {
@@ -787,8 +869,10 @@ fn pair_unit(items: &[GearItem], s: &Stage, mapped: &crate::items::Mapped, base:
     };
     let o = dt::read_with(&its, None, &Simple::default(), read_base, false);
     let e = o.error.clone().or_else(|| o.members.iter().find_map(|m| m.error.clone()));
+    // (The plan's gear 1 is the reader's gear `o.gears[0]`, gear 2 the other.)
+    let plan_names = if o.gears.len() == 2 { by_order(&o.gears, &names) } else { names.clone() };
     if let Some(e) = e {
-        return Err(rename_members(&e, &names));
+        return Err(set_refusal(&e, &plan_names, &names));
     }
     let mut solved = o.solved.clone().ok_or_else(|| format!("{}: no set fits these shafts", names.join(" and ")))?;
     if s.kind == StageKind::Worm
@@ -824,7 +908,7 @@ fn pair_unit(items: &[GearItem], s: &Stage, mapped: &crate::items::Mapped, base:
         }
     }
     let solved = &solved;
-    let mut p = plan(&solved.spec).map_err(|e| format!("{}: {e}", names.join(" and ")))?;
+    let mut p = plan(&solved.spec).map_err(|e| set_refusal(&e, &plan_names, &names))?;
     // Which body is which gear: the one on its axis.
     let geom = |k: usize| s.geom.get(k).copied();
     let mut body_of = [None, None];
@@ -939,6 +1023,8 @@ fn planetary_unit(items: &[GearItem], s: &Stage, blocks: &[ModuleBlock], base: &
     let item_index = s.gears.first().map(|r| r.item).ok_or("a planetary set needs its gears")?;
     let item = items.get(item_index).ok_or("no such item")?;
     let refs = s.gears.clone();
+    // (Its sizing's and plan's gear 1 is the sun, gear 2 the planet.)
+    let sun_planet: Vec<String> = [0, 2].iter().map(|k| refs.get(*k).map_or_else(|| item.who(), |r| who(items, *r))).collect();
     let (Some(gs), Some(gr), Some(gp)) = (s.geom.first().copied(), s.geom.get(1).copied(), s.geom.get(2).copied()) else {
         return Err(format!("{}: a planetary set needs its sun, ring and planet", item.who()));
     };
@@ -955,7 +1041,7 @@ fn planetary_unit(items: &[GearItem], s: &Stage, blocks: &[ModuleBlock], base: &
     });
     let teeth_of = |k: usize| (item.settings(k).size_by == crate::items::SizeBy::Teeth).then(|| item.settings(k).teeth).flatten();
     let pair = size_stage(Kind::Pair, &[StageGear { d: 2.0 * rs, factor, teeth: teeth_of(0) }, StageGear { d: 2.0 * rp, factor, teeth: teeth_of(2) }], module, base)
-        .map_err(|e| format!("{}: {}", item.who(), e.replace("gear 1", "the sun").replace("gear 2", "the planet")))?;
+        .map_err(|e| set_refusal(&e, &sun_planet, &[item.who()]))?;
     let m = pair.module;
     let (zs, zp) = (pair.teeth.first().copied().unwrap_or(3), pair.teeth.get(1).copied().unwrap_or(3));
     let (xs, xp) = (pair.shift.first().copied().unwrap_or(0.0), pair.shift.get(1).copied().unwrap_or(0.0));
@@ -996,7 +1082,7 @@ fn planetary_unit(items: &[GearItem], s: &Stage, blocks: &[ModuleBlock], base: &
         clearance_body: None,
         ..base.clone()
     };
-    let mut p = plan(&spec).map_err(|e| format!("{}: {e}", item.who()))?;
+    let mut p = plan(&spec).map_err(|e| set_refusal(&e, &sun_planet, &[item.who()]))?;
     let nb = p.bodies.len();
     if nb != n as usize + 2 {
         return Err(format!("{}: the planetary set came out with {nb} bodies", item.who()));
@@ -1080,7 +1166,7 @@ fn rack_unit(items: &[GearItem], s: &Stage, blocks: &[ModuleBlock], base: &Spec)
     let helix = settings.helix.unwrap_or(0.0).abs();
     let factor = 1.0 / helix.to_radians().cos();
     let sized = size_stage(Kind::Rack, &[StageGear { d: 2.0 * r, factor, teeth: if settings.size_by == crate::items::SizeBy::Teeth { settings.teeth } else { None } }], module, base)
-        .map_err(|e| format!("{} and {}: {}", names[1], names[0], e.replace("gear 1", &names[1])))?;
+        .map_err(|e| set_refusal(&e, std::slice::from_ref(&names[1]), &[names[1].clone(), names[0].clone()]))?;
     let (m, z) = (sized.module, sized.teeth.first().copied().unwrap_or(3));
     let x = sized.shift.first().copied().unwrap_or(0.0);
     let (fa, fb) = crate::items::face_extent(&settings, m);
@@ -1091,7 +1177,7 @@ fn rack_unit(items: &[GearItem], s: &Stage, blocks: &[ModuleBlock], base: &Spec)
     let pinion_frame = Frame { origin: sub(pg.centre, mul(axis, fb)), x: toward, z: axis };
     let style = if helix == 0.0 { Kind::Spur } else { Kind::Helical };
     let pinion = Spec { kind: style, module: m, teeth: z, shift: x, helix, face_width: face, train: None, origin: [0.0; 3], placement: Some(pinion_frame), only: 0, clearance_body: None, ..base.clone() };
-    let mut p = plan(&pinion).map_err(|e| format!("{}: {e}", names[1]))?;
+    let mut p = plan(&pinion).map_err(|e| set_refusal(&e, std::slice::from_ref(&names[1]), std::slice::from_ref(&names[1])))?;
     // The rack: teeth along its line, pointing at the pinion, a space where the pinion's tooth 0
     // points.
     let pitch = PI * m * factor;
@@ -1122,7 +1208,7 @@ fn rack_unit(items: &[GearItem], s: &Stage, blocks: &[ModuleBlock], base: &Spec)
     if helix != 0.0 {
         p.warn(format!("{}: a helical pinion's rack is built with straight teeth (not made yet): use a spur pinion on a rack", names[1]));
     }
-    let rp = plan(&rack).map_err(|e| format!("{}: {e}", names[0]))?;
+    let rp = plan(&rack).map_err(|e| set_refusal(&e, std::slice::from_ref(&names[0]), std::slice::from_ref(&names[0])))?;
     let rack_body = p.bodies.len();
     p.bodies.extend(rp.bodies);
     p.facts.extend(rp.facts);

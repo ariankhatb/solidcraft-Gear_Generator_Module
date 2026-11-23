@@ -46,6 +46,9 @@ pub struct Bore {
     pub key_depth: f64,
     /// D flat: distance across from the flat to the bore's far side (0: 0.9 × diameter).
     pub flat: f64,
+    /// The hole a shaft the gear is one body with fills (a train's built shaft): too big, it is
+    /// the shaft that is too wide for the gear, not a bore to make smaller ([`root_words`]).
+    pub on_shaft: bool,
 }
 
 /// DIN 6885 A: (bore over, bore up to, key width b, hub groove depth t2).
@@ -120,6 +123,32 @@ impl Bore {
             _ => self.outline().map(|o| o.max_radius()).unwrap_or(0.0),
         }
     }
+}
+
+/// What to say of `bore` reaching a gear's tooth roots (`root`: their Ø; `module`): a real bore
+/// "the bore (reaching Ø15) cuts into the tooth roots (Ø12.1); use a smaller bore", a shaft the
+/// gear sits on "sits on a shaft (Ø15), which is wider than its tooth roots (Ø12.1): use a shaft
+/// of at most Ø9 or a bigger gear". Starts after the gear's name: "{who}{words}".
+pub fn root_words(bore: &Bore, root: f64, module: f64) -> String {
+    let one = |v: f64| crate::axes::num((v * 10.0).round() / 10.0);
+    if bore.on_shaft {
+        format!(
+            " sits on a shaft (Ø{}), which is wider than its tooth roots (Ø{}): use a shaft of at most Ø{} or a bigger gear",
+            one(bore.diameter),
+            one(root),
+            crate::axes::num(largest_shaft(root, module))
+        )
+    } else {
+        format!(": the bore (reaching Ø{}) cuts into the tooth roots (Ø{}); use a smaller bore", one(2.0 * bore.reach()), one(root))
+    }
+}
+
+/// The widest shaft (Ø, mm) a gear with tooth roots of Ø`root` takes: a wall of a module (at
+/// least 1 mm) each side under the roots, rounded down to a whole mm (half a mm under Ø3).
+pub fn largest_shaft(root: f64, module: f64) -> f64 {
+    let d = root - 2.0 * module.max(1.0);
+    let step = if d < 3.0 { 0.5 } else { 1.0 };
+    ((d / step).floor() * step).max(0.5)
 }
 
 /// Round lightening holes on a circle between the hub and the rim.

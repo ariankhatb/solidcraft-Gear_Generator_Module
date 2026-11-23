@@ -1464,7 +1464,7 @@ fn hub_steps_tip(s: &Spec, bore: &Bore, root_radius: f64, tip: f64, face: f64, s
     let hub_r = s.hub_diameter / 2.0;
     let reach = bore.reach();
     if bore.outline().is_some() && reach >= root_radius - 0.05 * s.module {
-        p.refuse(format!("{who}: the bore (reaching Ø{}) cuts into the tooth roots (Ø{}); use a smaller bore", num(2.0 * reach), num(2.0 * root_radius)));
+        p.refuse(format!("{who}{}", crate::hub::root_words(bore, 2.0 * root_radius, s.module)));
         return;
     }
     if hub_r > 0.0 && s.hub_length > 0.0 {
@@ -2362,7 +2362,8 @@ fn bevel_hub(s: &Spec, bore: &Bore, max_r: f64, ends: &ConeEnds, steps: &mut Vec
     if let (Some(root), Some(_)) = (small_root, bore.outline())
         && bore.reach() >= root - 0.05 * s.module
     {
-        p.refuse(format!("{who}: the bore (reaching Ø{}) cuts into the tooth roots at the small end (Ø{}); use a smaller bore", num(2.0 * bore.reach()), num(2.0 * root)));
+        let words = crate::hub::root_words(bore, 2.0 * root, s.module);
+        p.refuse(format!("{who}{}", if bore.on_shaft { words.replace("its tooth roots", "its tooth roots at the small end") } else { words.replace("the tooth roots", "the tooth roots at the small end") }));
         return;
     }
     let hub_r = (s.hub_diameter / 2.0).min(max_r);

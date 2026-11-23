@@ -1755,7 +1755,7 @@ pub fn build(s: &Spec, p: &mut Plan) -> Result<(), String> {
             // Through the flat faces only (inside the front face under the toe).
             let most = form.blank(back)[1].x * 0.95;
             if s.bore2.reach() > most {
-                p.refuse(format!("gear: the bore (reaching Ø{}) cuts into the tooth roots; at most Ø{}", num(2.0 * s.bore2.reach()), num(2.0 * most)));
+                p.refuse(format!("gear 2: the bore (reaching Ø{}) cuts into the tooth roots; at most Ø{}", num(2.0 * s.bore2.reach()), num(2.0 * most)));
             }
             steps.push(Step::Prism { region: Region { outer: vec![b], holes: vec![] }, z0: -1.0, height: form.z_hi - back + 2.0, twist: 0.0, op: Op::Cut });
         }

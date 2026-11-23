@@ -284,6 +284,7 @@ fn bore_of(b: &Option<BoreParams>) -> Bore {
         key_width: b.key_width.unwrap_or(0.0),
         key_depth: b.key_depth.unwrap_or(0.0),
         flat: b.flat.unwrap_or(0.0),
+        on_shaft: false,
     }
 }
 

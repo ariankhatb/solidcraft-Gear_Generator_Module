@@ -549,7 +549,16 @@ pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemPar
     // The blocks' settings on their members, and each block shaft a Shaft item of its own (after
     // the request's items, which keep their indices; left out of the replies).
     let asked = items.len();
-    let solidcraft_gear::blocks::Expanded { items, links, added, .. } = solidcraft_gear::blocks::expand_blocks(&items, &links, &blocks);
+    let solidcraft_gear::blocks::Expanded { items, links, added, shafts } = solidcraft_gear::blocks::expand_blocks(&items, &links, &blocks);
+    // The gears turning free on a block's shaft: their bores are its clearance bores.
+    let clearance: Vec<(GearRef, String)> = shafts
+        .iter()
+        .zip(solidcraft_gear::blocks::shaft_ids(&shafts))
+        .flat_map(|(s, id)| {
+            let id = id.or_else(|| s.existing.and_then(|e| items.get(e)).map(|it| it.id.clone())).unwrap_or_default();
+            s.free.iter().map(move |r| (*r, id.clone()))
+        })
+        .collect();
     ids.extend(added.iter().map(|i| items[*i].id.clone()));
     let mut base = spec_of(&GearParams { kind: Some(GearType::Spur), items: None, links: None, module_blocks: None, drive: None, ..p.clone() }).map_err(|e| bad(cmd, e))?;
     if let Some(gap) = p.keep_out_gap
@@ -575,7 +584,7 @@ pub(super) fn plan(s: &dyn Reads, cmd: &str, p: &GearParams, list: &[GearItemPar
     let wanted = gear_details(cmd, &items, &details)?;
     extra.suggested = suggest_details(s, &ids, &items, &details, &wanted);
     if system.error.is_none() {
-        extra.built = apply_details(&items, &wanted, &mut system);
+        extra.built = apply_details(&items, &wanted, &clearance, &mut system);
         {
             use solidcraft_gear::plan::chamfer::{ChamferFaces, ToothChamfer, tooth_chamfer};
             let tc = p.tooth_chamfer.as_ref();
@@ -741,8 +750,9 @@ fn num(v: f64) -> String {
 
 /// Puts each gear's bore and hub on its body: a hub a ring prism on its face's ends (side A, and
 /// side B when asked), then the bore cut through; returns what each gear got. A bore at or past
-/// the teeth's root is left out with a warning on the gear.
-fn apply_details(items: &[gi::GearItem], wanted: &[Wanted], sp: &mut SystemPlan) -> Vec<(GearRef, Option<f64>, Option<f64>)> {
+/// the teeth's root is left out with a warning on the gear. `clearance`: the gears turning free
+/// on a block's shaft (its id), whose bore is its clearance bore.
+fn apply_details(items: &[gi::GearItem], wanted: &[Wanted], clearance: &[(GearRef, String)], sp: &mut SystemPlan) -> Vec<(GearRef, Option<f64>, Option<f64>)> {
     use solidcraft_gear::plan::{Frame, Op, Step};
     use solidcraft_gear::{Outline, Region, V2};
     let mut out = Vec::new();
@@ -766,7 +776,15 @@ fn apply_details(items: &[gi::GearItem], wanted: &[Wanted], sp: &mut SystemPlan)
         let who = gear_who(items, w.gear);
         let bore = match (w.bore, root) {
             (Some(d), Some(r)) if d >= r - 1e-9 => {
-                warn.push(format!("{who}: the bore (Ø{}) reaches the tooth roots (Ø{}), so no bore is cut. Draw a smaller bore circle.", num(d), num(r)));
+                let r1 = num((r * 10.0).round() / 10.0);
+                match clearance.iter().find(|(g, _)| *g == w.gear) {
+                    Some((_, shaft)) => warn.push(format!(
+                        "{who}: the clearance bore for shaft {shaft} (Ø{}) reaches the tooth roots (Ø{r1}), so no bore is cut: use a shaft of at most Ø{} or a bigger gear",
+                        num(d),
+                        num(solidcraft_gear::hub::largest_shaft(r, module))
+                    )),
+                    None => warn.push(format!("{who}: the bore (Ø{}) reaches the tooth roots (Ø{r1}), so no bore is cut. Draw a smaller bore circle.", num(d))),
+                }
                 None
             }
             (d, _) => d,

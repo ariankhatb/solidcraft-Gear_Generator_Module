@@ -2,7 +2,9 @@
 //! and a block's shaft Ø makes one shaft per axis, one body with the gears on it.
 
 use crate::blocks::{block_settings, block_shafts, block_spec, chamfer_groups, expand_blocks, only_items, with_blocks};
-use crate::items::{BlockSettings, Bore, ShaftMode, FacePreset, FaceSides, GearItem, GearRef, GearSettings, ItemKind, ItemLink, ModuleBlock, Thing, gear_geoms};
+use crate::items::{
+    BlockSettings, Bore, FacePreset, FaceSides, GearItem, GearRef, GearSettings, ItemKind, ItemLink, ModuleBlock, ShaftMode, Thing, gear_geoms,
+};
 use crate::plan::Spec;
 use crate::plan::system::{SystemPlan, plan_items};
 use crate::test_util::{close, g, mesh};
@@ -160,7 +162,8 @@ fn a_blocks_shaft_and_the_gears_on_it_are_one_body_per_axis() {
 /// A (Ø20) meshes B (Ø30, x 25); D sits on B's shaft 12 mm up and meshes C, on A's axis: C is
 /// driven back round to A's axis at (10/15)·(rd/rc) of A's speed.
 fn back_round(rc: f64) -> (Vec<GearItem>, Vec<ItemLink>) {
-    let items = vec![spur("A", [0.0; 3], 10.0), spur("B", [25.0, 0.0, 0.0], 15.0), spur("C", [0.0, 0.0, 12.0], rc), spur("D", [25.0, 0.0, 12.0], 25.0 - rc)];
+    let items =
+        vec![spur("A", [0.0; 3], 10.0), spur("B", [25.0, 0.0, 0.0], 15.0), spur("C", [0.0, 0.0, 12.0], rc), spur("D", [25.0, 0.0, 12.0], 25.0 - rc)];
     (items, vec![mesh(g(0, 0), g(1, 0)), crate::test_util::shaft(g(1, 0), g(3, 0)), mesh(g(3, 0), g(2, 0))])
 }
 
@@ -200,7 +203,10 @@ fn a_gear_the_links_turn_at_another_speed_turns_free_on_its_blocks_shaft() {
 #[test]
 fn a_side_view_bevel_pair_in_a_block_is_sized_at_the_blocks_module() {
     let mut e = GearItem::new("E", ItemKind::Bevel).with(vec![Thing::line([0.0; 3], [0.0, 0.0, 60.0]), Thing::line([0.0; 3], [60.0, 0.0, 0.0])]);
-    e.gears = vec![GearSettings { teeth: Some(15), size_by: crate::items::SizeBy::Teeth, ..GearSettings::default() }, GearSettings { teeth: Some(30), size_by: crate::items::SizeBy::Teeth, ..GearSettings::default() }];
+    e.gears = vec![
+        GearSettings { teeth: Some(15), size_by: crate::items::SizeBy::Teeth, ..GearSettings::default() },
+        GearSettings { teeth: Some(30), size_by: crate::items::SizeBy::Teeth, ..GearSettings::default() },
+    ];
     let blocks = [ModuleBlock { id: "M1".into(), module: Some(1.25), members: vec![0], ..ModuleBlock::default() }];
     let sized = with_blocks(std::slice::from_ref(&e), &blocks);
     let geoms = gear_geoms(&sized[0]);
@@ -223,7 +229,7 @@ fn a_blocks_herringbone_teeth_go_on_its_members_on_auto() {
     let helical = block_settings(&b, ItemKind::Compound, &GearSettings { helix: Some(15.0), ..GearSettings::default() });
     assert_eq!((helical.helix, helical.v), (Some(15.0), false), "its own helical teeth stay");
     let h = BlockSettings { herringbone: false, ..b };
-    assert_eq!(block_settings(&h, ItemKind::Spur, &GearSettings::default()).v, false);
+    assert!(!block_settings(&h, ItemKind::Spur, &GearSettings::default()).v);
     // In a block, every gear of a compound gets them.
     let mut items = drawing();
     items[0].kind = ItemKind::Compound;
@@ -257,7 +263,8 @@ fn a_blocks_helix_is_its_bevel_pairs_spiral() {
     }
     // Planned: the side view's pair is a spiral bevel pair at 20°.
     let mut e = GearItem::new("E", ItemKind::Bevel).with(vec![Thing::line([0.0; 3], [0.0, 0.0, 60.0]), Thing::line([0.0; 3], [60.0, 0.0, 0.0])]);
-    e.gears = vec![GearSettings { teeth: Some(15), size_by: SizeBy::Teeth, ..auto }, GearSettings { teeth: Some(30), size_by: SizeBy::Teeth, ..auto }];
+    e.gears =
+        vec![GearSettings { teeth: Some(15), size_by: SizeBy::Teeth, ..auto }, GearSettings { teeth: Some(30), size_by: SizeBy::Teeth, ..auto }];
     let blocks = [ModuleBlock { id: "M1".into(), module: Some(1.25), members: vec![0], settings: b }];
     let w = with_blocks(std::slice::from_ref(&e), &blocks);
     let st = crate::items::stages(&w, &[]);
@@ -273,7 +280,11 @@ fn a_blocks_helix_is_its_bevel_pairs_spiral() {
 #[test]
 fn a_compounds_layers_are_never_free_on_their_blocks_shaft() {
     let compound = |id: &str, x: f64, r2: f64| {
-        let mut it = GearItem::new(id, ItemKind::Compound).with(vec![Thing::line([x, 0.0, -6.0], [x, 0.0, 20.0]), Thing::circle([x, 0.0, 0.0], Z, 20.0), Thing::circle([x, 0.0, 12.0], Z, r2)]);
+        let mut it = GearItem::new(id, ItemKind::Compound).with(vec![
+            Thing::line([x, 0.0, -6.0], [x, 0.0, 20.0]),
+            Thing::circle([x, 0.0, 0.0], Z, 20.0),
+            Thing::circle([x, 0.0, 12.0], Z, r2),
+        ]);
         it.gears = vec![GearSettings::default(), GearSettings::default()];
         it
     };
@@ -299,10 +310,18 @@ fn a_compounds_layers_are_never_free_on_their_blocks_shaft() {
 fn a_shaft_line_already_on_a_bevels_axis_reaches_it_and_is_one_body_with_it() {
     use crate::items::SizeBy;
     let mut e = GearItem::new("E", ItemKind::Bevel).with(vec![Thing::line([0.0; 3], [0.0, 0.0, 60.0]), Thing::line([0.0; 3], [60.0, 0.0, 0.0])]);
-    e.gears = vec![GearSettings { teeth: Some(15), size_by: SizeBy::Teeth, ..GearSettings::default() }, GearSettings { teeth: Some(30), size_by: SizeBy::Teeth, ..GearSettings::default() }];
+    e.gears = vec![
+        GearSettings { teeth: Some(15), size_by: SizeBy::Teeth, ..GearSettings::default() },
+        GearSettings { teeth: Some(30), size_by: SizeBy::Teeth, ..GearSettings::default() },
+    ];
     let s = GearItem::new("S", ItemKind::Shaft).with(vec![Thing::line([0.0, 0.0, 25.0], [0.0, 0.0, 60.0])]);
     let items = vec![e, s];
-    let blocks = [ModuleBlock { id: "M1".into(), module: Some(1.25), members: vec![0, 1], settings: BlockSettings { shaft_diameter: Some(5.0), ..BlockSettings::default() } }];
+    let blocks = [ModuleBlock {
+        id: "M1".into(),
+        module: Some(1.25),
+        members: vec![0, 1],
+        settings: BlockSettings { shaft_diameter: Some(5.0), ..BlockSettings::default() },
+    }];
     for links in [Vec::new(), vec![mesh(g(0, 0), g(0, 1))]] {
         let (sp, added) = planned(&items, &links, &blocks);
         assert_eq!(added.len(), 1, "only the gear's axis gets a new shaft: {added:?}");

@@ -22,7 +22,13 @@ pub const FINE_MODULES: [f64; 10] = [0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0
 
 /// The standard modules from `min` to `max` (mm), ascending; series II too when `second_choice`.
 pub fn standard_modules(min: f64, max: f64, second_choice: bool) -> Vec<f64> {
-    let mut m: Vec<f64> = FINE_MODULES.iter().chain(&ISO54_SERIES_1).chain(if second_choice { ISO54_SERIES_2.iter() } else { [].iter() }).copied().filter(|v| *v >= min - 1e-9 && *v <= max + 1e-9).collect();
+    let mut m: Vec<f64> = FINE_MODULES
+        .iter()
+        .chain(&ISO54_SERIES_1)
+        .chain(if second_choice { ISO54_SERIES_2.iter() } else { [].iter() })
+        .copied()
+        .filter(|v| *v >= min - 1e-9 && *v <= max + 1e-9)
+        .collect();
     m.sort_by(f64::total_cmp);
     m
 }
@@ -186,7 +192,12 @@ pub fn check(g: &Goal) -> Result<(), String> {
     if !(g.ratio_tolerance.is_finite() && (0.0..=0.5).contains(&g.ratio_tolerance)) {
         return Err("ratio tolerance must be between 0 and 0.5".into());
     }
-    for (v, what) in [(g.max_outer_diameter, "largest outer diameter"), (g.center_distance, "centre distance"), (g.face_width, "face width"), (g.backlash, "backlash")] {
+    for (v, what) in [
+        (g.max_outer_diameter, "largest outer diameter"),
+        (g.center_distance, "centre distance"),
+        (g.face_width, "face width"),
+        (g.backlash, "backlash"),
+    ] {
         if !(v.is_finite() && v >= 0.0) {
             return Err(format!("{what} can't be negative"));
         }
@@ -220,7 +231,17 @@ struct Candidate {
 
 /// The pair as its plan makes it: shifted gears' tips shortened to keep the rack's clearance.
 fn candidate(goal: &Goal, m: f64, z1: u32, z2: u32, x1: f64, x2: f64) -> Option<Candidate> {
-    let gear = |z: u32, x: f64, helix: f64| Involute { teeth: z, module: m, pressure_angle: goal.pressure_angle.to_radians(), helix: helix.to_radians(), shift: x, rack: goal.rack, backlash: goal.backlash, tip_shortening: 0.0, virtual_teeth: 0.0 };
+    let gear = |z: u32, x: f64, helix: f64| Involute {
+        teeth: z,
+        module: m,
+        pressure_angle: goal.pressure_angle.to_radians(),
+        helix: helix.to_radians(),
+        shift: x,
+        rack: goal.rack,
+        backlash: goal.backlash,
+        tip_shortening: 0.0,
+        virtual_teeth: 0.0,
+    };
     let (mut g1, mut g2) = (gear(z1, x1, goal.helix), gear(z2, x2, -goal.helix));
     let face = if goal.face_width > 0.0 { goal.face_width } else { 10.0 * m };
     let shorten = (x1 + x2) * m - (mesh_external(&g1, &g2, face).center_distance - g1.r() - g2.r());
@@ -241,7 +262,15 @@ fn candidate(goal: &Goal, m: f64, z1: u32, z2: u32, x1: f64, x2: f64) -> Option<
 /// The profile shift that just clears undercut on `z` teeth (0 when there is none to clear),
 /// rounded up to a hundredth.
 fn shift_against_undercut(goal: &Goal, z: u32) -> f64 {
-    let probe = Involute { teeth: z, module: 1.0, pressure_angle: goal.pressure_angle.to_radians(), helix: goal.helix.to_radians(), shift: 0.0, rack: goal.rack, ..Involute::default() };
+    let probe = Involute {
+        teeth: z,
+        module: 1.0,
+        pressure_angle: goal.pressure_angle.to_radians(),
+        helix: goal.helix.to_radians(),
+        shift: 0.0,
+        rack: goal.rack,
+        ..Involute::default()
+    };
     let least = probe.min_teeth_no_undercut();
     let x = goal.rack.addendum * (least - f64::from(z)) / least;
     if x <= 0.0 { 0.0 } else { (x * 100.0).ceil() / 100.0 + 0.01 }
@@ -255,7 +284,8 @@ fn safeties(c: &Candidate, load: &Load) -> (f64, f64) {
     let c = &Candidate { g1: full(&c.g1), g2: full(&c.g2), face: c.face, mesh: mesh_external(&full(&c.g1), &full(&c.g2), c.face) };
     let cycles = |rpm: f64| if load.life_hours > 0.0 { 60.0 * rpm.abs() * load.life_hours } else { 0.0 };
     let n2 = n * c.g1.z() / c.g2.z();
-    let member = |name: &str, gear: Involute, material, cycles: f64| Member { name: name.into(), gear, internal: false, material, cycles, idler: false };
+    let member =
+        |name: &str, gear: Involute, material, cycles: f64| Member { name: name.into(), gear, internal: false, material, cycles, idler: false };
     let ml = MeshLoad {
         members: [member("gear 1", c.g1, load.material, cycles(n)), member("gear 2", c.g2, load.material2, cycles(n2))],
         mesh: c.mesh,
@@ -283,7 +313,10 @@ fn estimate(c: &Candidate, load: &Load) -> (f64, f64) {
     let u = c.g2.z() / c.g1.z();
     let small = c.g1.r().min(c.g2.r());
     let (a, b) = (load.material.data(), load.material2.data());
-    let z = zone_factor(&c.g1, c.mesh.working_pressure_angle) * elasticity_factor(load.material, load.material2) * contact_ratio_factor(c.mesh.contact_ratio, c.mesh.overlap_ratio) * helix_factor_contact(c.g1.helix);
+    let z = zone_factor(&c.g1, c.mesh.working_pressure_angle)
+        * elasticity_factor(load.material, load.material2)
+        * contact_ratio_factor(c.mesh.contact_ratio, c.mesh.overlap_ratio)
+        * helix_factor_contact(c.g1.helix);
     // On the smaller gear, whichever drives: the same force on its smaller radius of curvature.
     let sigma_h = z * (ft * c.g1.r() / small / (2.0 * small * c.face) * (u.max(1.0 / u) + 1.0) / u.max(1.0 / u)).sqrt();
     let sigma_f = ft / (c.face * c.g1.module) * 4.4;
@@ -307,7 +340,11 @@ pub fn suggest(goal: &Goal) -> Vec<Suggestion> {
         }
         let mt = m / beta.cos();
         // The fewest teeth: without undercut, unless a shift may clear it.
-        let no_undercut = Involute { module: m, pressure_angle: goal.pressure_angle.to_radians(), helix: beta, rack: goal.rack, ..Involute::default() }.min_teeth_no_undercut().ceil().max(3.0) as u32;
+        let no_undercut =
+            Involute { module: m, pressure_angle: goal.pressure_angle.to_radians(), helix: beta, rack: goal.rack, ..Involute::default() }
+                .min_teeth_no_undercut()
+                .ceil()
+                .max(3.0) as u32;
         let fewest = if goal.allow_shift { if goal.min_teeth > 0 { goal.min_teeth } else { 8 } } else { goal.min_teeth.max(no_undercut) }.max(3);
         // The most: the limit, and what the size allows.
         let mut most = goal.max_teeth;
@@ -328,7 +365,14 @@ pub fn suggest(goal: &Goal) -> Vec<Suggestion> {
                     if (goal.center_distance - a0).abs() > 1.3 * m {
                         continue;
                     }
-                    let probe = |z: u32, helix: f64| Involute { teeth: z, module: m, pressure_angle: goal.pressure_angle.to_radians(), helix, rack: goal.rack, ..Involute::default() };
+                    let probe = |z: u32, helix: f64| Involute {
+                        teeth: z,
+                        module: m,
+                        pressure_angle: goal.pressure_angle.to_radians(),
+                        helix,
+                        rack: goal.rack,
+                        ..Involute::default()
+                    };
                     let Some(sum) = shift_sum_for_center(&probe(z1, beta), &probe(z2, -beta), goal.center_distance) else { continue };
                     if sum.abs() < 1e-7 {
                         (x1, x2) = (0.0, 0.0);
@@ -429,7 +473,13 @@ pub fn suggest(goal: &Goal) -> Vec<Suggestion> {
             }
         })
         .collect();
-    out.sort_by(|a, b| a.score.total_cmp(&b.score).then(a.ratio_error.abs().total_cmp(&b.ratio_error.abs())).then(a.module.total_cmp(&b.module)).then(a.teeth.cmp(&b.teeth)));
+    out.sort_by(|a, b| {
+        a.score
+            .total_cmp(&b.score)
+            .then(a.ratio_error.abs().total_cmp(&b.ratio_error.abs()))
+            .then(a.module.total_cmp(&b.module))
+            .then(a.teeth.cmp(&b.teeth))
+    });
     out.truncate(goal.limit);
     out
 }
@@ -483,7 +533,8 @@ pub struct Split {
 /// hunting-toothed, then the most accurate. Empty when the limits can't reach the total.
 pub fn split_ratio(total: f64, stages: u32, limits: &StageLimits) -> Vec<Split> {
     let l = limits;
-    if !(total.is_finite() && total > 0.0) || stages == 0 || stages > 8 || l.min_teeth < 3 || l.max_teeth < l.min_teeth || !(l.max_stage_ratio >= 1.0) {
+    if !(total.is_finite() && total > 0.0) || stages == 0 || stages > 8 || l.min_teeth < 3 || l.max_teeth < l.min_teeth || !(l.max_stage_ratio >= 1.0)
+    {
         return Vec::new();
     }
     if total < 1.0 {
@@ -516,7 +567,10 @@ pub fn split_ratio(total: f64, stages: u32, limits: &StageLimits) -> Vec<Split> 
     let mut near: Vec<(u32, u32)> = Vec::new();
     let pinions = l.min_teeth..=l.max_teeth.min(l.min_teeth + 40);
     for z1 in pinions.clone() {
-        let (lo, hi) = ((even / 1.25 * f64::from(z1)).ceil().max(f64::from(z1)) as u32, (even.min(cap) * 1.25 * f64::from(z1)).floor().min(f64::from(l.max_teeth)) as u32);
+        let (lo, hi) = (
+            (even / 1.25 * f64::from(z1)).ceil().max(f64::from(z1)) as u32,
+            (even.min(cap) * 1.25 * f64::from(z1)).floor().min(f64::from(l.max_teeth)) as u32,
+        );
         for z2 in lo..=hi {
             if f64::from(z2) / f64::from(z1) <= cap + 1e-9 {
                 near.push((z1, z2));
@@ -560,7 +614,8 @@ pub fn split_ratio(total: f64, stages: u32, limits: &StageLimits) -> Vec<Split> 
                 all.push((z1, z2));
                 let ratio = prod * f64::from(z2) / f64::from(z1);
                 let error = ratio / total - 1.0;
-                let mut stages: Vec<Stage> = all.iter().map(|&(a, b)| Stage { teeth: a, teeth2: b, ratio: f64::from(b) / f64::from(a), hunting: gcd(a, b) == 1 }).collect();
+                let mut stages: Vec<Stage> =
+                    all.iter().map(|&(a, b)| Stage { teeth: a, teeth2: b, ratio: f64::from(b) / f64::from(a), hunting: gcd(a, b) == 1 }).collect();
                 stages.sort_by(|a, b| a.ratio.total_cmp(&b.ratio).then(a.teeth.cmp(&b.teeth)));
                 // Within the tolerance first; there, evenness and hunting teeth decide, with the
                 // error only to break ties. Outside it, the error decides.

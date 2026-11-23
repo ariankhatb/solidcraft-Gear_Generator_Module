@@ -53,7 +53,8 @@ pub(crate) fn fill(s: &Spec, p: &mut Plan) {
     }
     let bodies = &p.bodies;
     let n = bodies.len();
-    let mut members: Vec<AssemblyMember> = bodies.iter().enumerate().map(|(i, b)| AssemblyMember { body: i, axis: turning(&b.frame), grounded: false, carrier: None }).collect();
+    let mut members: Vec<AssemblyMember> =
+        bodies.iter().enumerate().map(|(i, b)| AssemblyMember { body: i, axis: turning(&b.frame), grounded: false, carrier: None }).collect();
     let mut links = Vec::new();
     let gear = |a: usize, b: usize, ra: f64, rb: f64, internal: bool| AssemblyLink::Gear { a, b, ra, rb, internal, reverse: false };
     // One member of a set built alone: it turns, linked to nothing.
@@ -197,7 +198,8 @@ pub(crate) fn from_members(p: &Plan) -> Option<(Assembly, Vec<AssemblyIssue>)> {
     if body.iter().any(|b| *b >= p.bodies.len()) {
         return None;
     }
-    let members: Vec<AssemblyMember> = p.bodies.iter().enumerate().map(|(i, b)| AssemblyMember { body: i, axis: turning(&b.frame), grounded: false, carrier: None }).collect();
+    let members: Vec<AssemblyMember> =
+        p.bodies.iter().enumerate().map(|(i, b)| AssemblyMember { body: i, axis: turning(&b.frame), grounded: false, carrier: None }).collect();
     let mut edges = Vec::new();
     for (i, m) in p.members.iter().enumerate() {
         for &j in m.meshes_with.iter().filter(|j| **j > i && **j < p.members.len()) {

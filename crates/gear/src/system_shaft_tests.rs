@@ -118,7 +118,8 @@ fn coaxial_gears_of_different_items_are_suggested_a_shaft_link_and_used_with_no_
     let sp = planned(&items, &[]);
     assert!(rigid_of(&sp, g(0, 0)).contains(&sp.body(g(2, 0)).unwrap()));
     // A worm's or hypoid pinion's axis line counts too: a spur on the worm's axis.
-    let mut w = GearItem::new("W", ItemKind::Worm).with(vec![Thing::circle([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 20.0), Thing::line([-30.0, 25.0, 0.0], [30.0, 25.0, 0.0])]);
+    let mut w = GearItem::new("W", ItemKind::Worm)
+        .with(vec![Thing::circle([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 20.0), Thing::line([-30.0, 25.0, 0.0], [30.0, 25.0, 0.0])]);
     w.gears = vec![GearSettings::default()];
     let p = spur("P", vec![Thing::circle([45.0, 25.0, 0.0], X, 8.0)]);
     let s = suggest_links(&[w, p]);

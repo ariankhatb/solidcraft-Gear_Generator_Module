@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use solidcraft_gear::{Kind, Spec, check_mesh, plan};
 
-const KINDS: [Kind; 19] = [
+const KINDS: &[Kind] = &[
     Kind::Spur,
     Kind::Helical,
     Kind::Herringbone,
@@ -44,8 +44,11 @@ fn time<T>(n: usize, mut f: impl FnMut() -> T) -> (f64, f64, f64) {
 
 fn main() {
     let only: Option<String> = std::env::args().nth(1);
-    println!("{:<16} {:>9} {:>9} {:>9} | {:>9} {:>9} {:>9}  verdicts", "kind", "plan min", "plan med", "plan 1st", "mesh min", "mesh med", "mesh 1st");
-    for kind in KINDS {
+    println!(
+        "{:<16} {:>9} {:>9} {:>9} | {:>9} {:>9} {:>9}  verdicts",
+        "kind", "plan min", "plan med", "plan 1st", "mesh min", "mesh med", "mesh 1st"
+    );
+    for kind in KINDS.iter().copied() {
         let name = format!("{kind:?}");
         if only.as_deref().is_some_and(|o| !name.eq_ignore_ascii_case(o)) {
             continue;
@@ -60,7 +63,8 @@ fn main() {
         };
         let (pmin, pmed, p1) = time(9, || plan(&s));
         let (mmin, mmed, m1) = time(5, || check_mesh(&p));
-        let verdicts: Vec<String> = check_mesh(&p).iter().map(|r| format!("{:?} {:.6}/{:.6}/{:.6}", r.verdict, r.penetration_mm, r.gap_min_mm, r.gap_max_mm)).collect();
+        let verdicts: Vec<String> =
+            check_mesh(&p).iter().map(|r| format!("{:?} {:.6}/{:.6}/{:.6}", r.verdict, r.penetration_mm, r.gap_min_mm, r.gap_max_mm)).collect();
         println!("{name:<16} {pmin:9.2} {pmed:9.2} {p1:9.2} | {mmin:9.2} {mmed:9.2} {m1:9.2}  {}", verdicts.join(","));
     }
     // Where a 3D check's time goes: the solids, the two surfaces, the steps.
@@ -77,7 +81,8 @@ fn main() {
                 .iter()
                 .map(|g| {
                     let surrounds = p.meshes.iter().any(|q| q.internal && q.b == p.preview.iter().position(|x| std::ptr::eq(x, g)).unwrap());
-                    let region = if surrounds { g.region.clone() } else { solidcraft_gear::Region { outer: g.region.outer.clone(), holes: Vec::new() } };
+                    let region =
+                        if surrounds { g.region.clone() } else { solidcraft_gear::Region { outer: g.region.outer.clone(), holes: Vec::new() } };
                     Member::build(&region, Motion::of(g), 0.25 * s.module, 1e-4 * s.module, 8)
                 })
                 .collect();
@@ -116,7 +121,12 @@ fn main() {
                 black_box(mesh_stat(&a, &sa, &b, &sb));
             }
             let t_run = t.elapsed().as_secs_f64() * 1e3;
-            println!("  3D {kind:?}: solids {t_solid:.1} ms, surface a {t_sa:.1} ms ({} samples), surface b {t_sb:.1} ms ({} samples), {} steps {t_run:.1} ms", sa.samples.len(), sb.samples.len(), solidcraft_gear::mesh3d::CHECK_STEPS);
+            println!(
+                "  3D {kind:?}: solids {t_solid:.1} ms, surface a {t_sa:.1} ms ({} samples), surface b {t_sb:.1} ms ({} samples), {} steps {t_run:.1} ms",
+                sa.samples.len(),
+                sb.samples.len(),
+                solidcraft_gear::mesh3d::CHECK_STEPS
+            );
         }
     }
     // Big counts: a z400 gear of each planar kind.
@@ -139,7 +149,8 @@ fn main() {
         };
         let (pmin, pmed, p1) = time(5, || plan(&s));
         let (mmin, mmed, m1) = time(3, || check_mesh(&p));
-        let verdicts: Vec<String> = check_mesh(&p).iter().map(|r| format!("{:?} {:.6}/{:.6}/{:.6}", r.verdict, r.penetration_mm, r.gap_min_mm, r.gap_max_mm)).collect();
+        let verdicts: Vec<String> =
+            check_mesh(&p).iter().map(|r| format!("{:?} {:.6}/{:.6}/{:.6}", r.verdict, r.penetration_mm, r.gap_min_mm, r.gap_max_mm)).collect();
         println!("{name:<16} {pmin:9.2} {pmed:9.2} {p1:9.2} | {mmin:9.2} {mmed:9.2} {m1:9.2}  {}", verdicts.join(","));
     }
 }

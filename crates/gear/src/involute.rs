@@ -157,7 +157,8 @@ impl Involute {
         let reach = (q * (1.0 / cb + 2.0 * f).powi(2) - 1.0).max(0.0).sqrt();
         let ideal = z / PI * ((1.0 + sb * sb / q) * reach - inv(at) - 2.0 * f * an.tan()) + 0.5;
         let k = if ideal.is_finite() { ideal.round().clamp(1.0, (z - 1.0).max(1.0)) } else { 1.0 };
-        let w = self.module * an.cos() * (PI * (k - 0.5) + z * inv(at)) + 2.0 * self.shift * self.module * an.sin() - self.backlash * an.cos() * self.helix.cos();
+        let w = self.module * an.cos() * (PI * (k - 0.5) + z * inv(at)) + 2.0 * self.shift * self.module * an.sin()
+            - self.backlash * an.cos() * self.helix.cos();
         (k as u32, w)
     }
     /// Measurement over two pins (balls for helical) of diameter `dp`; returns (M, pin diameter).
@@ -480,7 +481,11 @@ pub fn external_flank(g: &Involute) -> ToothFlank {
     };
     // Bunched towards the root, where the fillet runs nearly round the root circle.
     let span = handover - rf;
-    let mut fillet = if span > 0.0 { side_points(&fillet_half, &|s| if s >= 1.0 { handover } else { rf + span * s * s }, FILLET_TOLERANCE * m, min_gap) } else { Vec::new() };
+    let mut fillet = if span > 0.0 {
+        side_points(&fillet_half, &|s| if s >= 1.0 { handover } else { rf + span * s * s }, FILLET_TOLERANCE * m, min_gap)
+    } else {
+        Vec::new()
+    };
     // The involute by its roll angle (the points crowd towards the base circle, where it
     // bends most).
     let t_of = |rr: f64| ((rr / rb).powi(2) - 1.0).max(0.0).sqrt();
@@ -644,7 +649,13 @@ impl ToothFlank {
     /// angle at every radius): piece for piece the same outline, for lofting between the two.
     pub fn thinned(&self, d: f64) -> ToothFlank {
         let side = |pts: &[(f64, f64)]| -> Vec<(f64, f64)> { pts.iter().map(|(r, h)| (*r, h - d)).collect() };
-        ToothFlank { root_half: self.root_half - d, tip_half: self.tip_half - d, fillet: side(&self.fillet), flank: side(&self.flank), ..self.clone() }
+        ToothFlank {
+            root_half: self.root_half - d,
+            tip_half: self.tip_half - d,
+            fillet: side(&self.fillet),
+            flank: side(&self.flank),
+            ..self.clone()
+        }
     }
 }
 

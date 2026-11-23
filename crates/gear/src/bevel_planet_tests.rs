@@ -53,7 +53,16 @@ pub(crate) fn prove(label: &str, s: &Spec) -> Plan {
             pair.a.spin = r.at;
             pair.b.spin = ratio * r.at;
             let (la, lb) = (pair.a.local(r.place), pair.b.local(r.place));
-            eprintln!("    deepest at driver {:.4}: a r {:.3} z {:.3} (z {:?}), b r {:.3} z {:.3} (z {:?})", r.at, la[0].hypot(la[1]), la[2], pair.a.z, lb[0].hypot(lb[1]), lb[2], pair.b.z);
+            eprintln!(
+                "    deepest at driver {:.4}: a r {:.3} z {:.3} (z {:?}), b r {:.3} z {:.3} (z {:?})",
+                r.at,
+                la[0].hypot(la[1]),
+                la[2],
+                pair.a.z,
+                lb[0].hypot(lb[1]),
+                lb[2],
+                pair.b.z
+            );
         }
         assert!(r.penetration <= DEPTH * m, "{line}: flanks cross by {} mm at {}", r.penetration, r.at);
         assert!(r.gap_max <= gap.1 + GAP * m, "{line}: lose contact");
@@ -212,7 +221,13 @@ fn bad_sets_are_refused_or_warned() {
 #[test]
 fn facts_and_ratios() {
     let p = plan(&d()).unwrap();
-    let fact = |l: &str| p.facts.iter().find(|f| f.label == l).unwrap_or_else(|| panic!("no fact {l}: {:?}", p.facts.iter().map(|f| &f.label).collect::<Vec<_>>())).value;
+    let fact = |l: &str| {
+        p.facts
+            .iter()
+            .find(|f| f.label == l)
+            .unwrap_or_else(|| panic!("no fact {l}: {:?}", p.facts.iter().map(|f| &f.label).collect::<Vec<_>>()))
+            .value
+    };
     assert!((fact("ratio (carrier fixed, sun in, sun 2 out)") + 1.0).abs() < 1e-12);
     assert!((fact("ratio (sun 2 fixed, sun in, carrier out)") - 2.0).abs() < 1e-12);
     assert!((fact("cone angle (sun axis to planet axes)") - 90.0).abs() < 1e-9);
@@ -354,7 +369,9 @@ fn dump_ring_steps() {
 fn simple_mode_bevel_planetary_spec_is_stable() {
     use crate::geom::V2;
     use crate::sketch_rules::{self, Drawn, Line};
-    for (from, mode) in [(Kind::FaceGear, None), (Kind::Spur, None), (Kind::Bevel, Some(BevelPlanetMode::Ring)), (Kind::Bevel, Some(BevelPlanetMode::Single))] {
+    for (from, mode) in
+        [(Kind::FaceGear, None), (Kind::Spur, None), (Kind::Bevel, Some(BevelPlanetMode::Ring)), (Kind::Bevel, Some(BevelPlanetMode::Single))]
+    {
         let base = Spec::defaults_for(Kind::BevelPlanetary);
         // A ring needs a cone angle that can take one: drawn at 45°.
         let s = if mode == Some(BevelPlanetMode::Ring) { Spec { shaft_angle: 45.0, ..base.clone() } } else { base.clone() };
@@ -388,7 +405,8 @@ fn bevel_planetary_on_a_face_gears_shafts_plans_quickly() {
     use crate::sketch_rules::{self, Circle, Drawn, Line};
     let fg = Spec::defaults_for(Kind::FaceGear);
     let rf = fg.module * f64::from(fg.teeth2) / 2.0;
-    let d = Drawn { points: vec![V2::ZERO], circles: vec![Circle { c: V2::ZERO, r: rf }], lines: vec![Line { a: V2::ZERO, b: V2::new(1.4 * rf, 0.0) }] };
+    let d =
+        Drawn { points: vec![V2::ZERO], circles: vec![Circle { c: V2::ZERO, r: rf }], lines: vec![Line { a: V2::ZERO, b: V2::new(1.4 * rf, 0.0) }] };
     let picks = sketch_rules::auto_picks(Kind::FaceGear, &d);
     let m = sketch_rules::measure(Kind::FaceGear, &d, &picks).unwrap();
     let sol = crate::simple::solve(&sketch_rules::simple_of(&m, &crate::simple::Simple::default()), &fg);
@@ -397,11 +415,19 @@ fn bevel_planetary_on_a_face_gears_shafts_plans_quickly() {
     let bp = Spec { bore: fg.bore, bore2: fg.bore2, ..Spec::defaults_for(Kind::BevelPlanetary) };
     let t = std::time::Instant::now();
     let solved = axes::solve(&a1, a2.as_ref(), Some(Kind::BevelPlanetary), &bp, &Drive::default());
-    eprintln!("solve: {:?} in {:?}", solved.as_ref().map(|s| (s.spec.module, s.spec.teeth, s.spec.teeth2, s.spec.shaft_angle, s.spec.planets)).map_err(|e| e.clone()), t.elapsed());
+    eprintln!(
+        "solve: {:?} in {:?}",
+        solved.as_ref().map(|s| (s.spec.module, s.spec.teeth, s.spec.teeth2, s.spec.shaft_angle, s.spec.planets)).map_err(|e| e.clone()),
+        t.elapsed()
+    );
     if let Ok(s) = solved {
         let t = std::time::Instant::now();
         let p = plan(&s.spec);
-        eprintln!("plan: {} in {:?}", p.as_ref().map(|p| format!("{} bodies, {} mesh pairs", p.bodies.len(), p.meshes3d.len())).unwrap_or_else(|e| e.clone()), t.elapsed());
+        eprintln!(
+            "plan: {} in {:?}",
+            p.as_ref().map(|p| format!("{} bodies, {} mesh pairs", p.bodies.len(), p.meshes3d.len())).unwrap_or_else(|e| e.clone()),
+            t.elapsed()
+        );
         if let Ok(p) = p {
             let t = std::time::Instant::now();
             let r = check_mesh(&p);

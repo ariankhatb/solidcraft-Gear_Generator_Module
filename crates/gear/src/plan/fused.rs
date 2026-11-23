@@ -62,7 +62,11 @@ pub fn fused(body: &Body) -> Option<Fused> {
     let mut holed = 0;
     for s in steps {
         if s.op() != Op::Cut {
-            if plain(s) { blank.push(s.clone()) } else { teeth.push(s.clone()) }
+            if plain(s) {
+                blank.push(s.clone())
+            } else {
+                teeth.push(s.clone())
+            }
             continue;
         }
         if let Some(holes) = through_holes(s, &teeth, &blank) {
@@ -131,7 +135,10 @@ pub fn fused(body: &Body) -> Option<Fused> {
 fn plain(s: &Step) -> bool {
     match s {
         Step::Prism { region, twist, .. } => {
-            twist.abs() <= 1e-12 && region.holes.is_empty() && !region.outer.is_empty() && region.outer.iter().all(|o| matches!(&o.segs[..], [Seg::Circle(c, r)] if c.len() <= EPS && *r > 0.0))
+            twist.abs() <= 1e-12
+                && region.holes.is_empty()
+                && !region.outer.is_empty()
+                && region.outer.iter().all(|o| matches!(&o.segs[..], [Seg::Circle(c, r)] if c.len() <= EPS && *r > 0.0))
         }
         _ => false,
     }
@@ -183,7 +190,11 @@ fn bounds(s: &Step) -> Option<Bounds> {
         }
         Step::Placed { frame, step } => {
             let inner = bounds(step)?;
-            let axial = frame.origin[0].abs() <= EPS && frame.origin[1].abs() <= EPS && frame.z[0].abs() <= EPS && frame.z[1].abs() <= EPS && (frame.z[2].abs() - 1.0).abs() <= EPS;
+            let axial = frame.origin[0].abs() <= EPS
+                && frame.origin[1].abs() <= EPS
+                && frame.z[0].abs() <= EPS
+                && frame.z[1].abs() <= EPS
+                && (frame.z[2].abs() - 1.0).abs() <= EPS;
             if axial {
                 let (a, b) = (frame.origin[2] + frame.z[2] * inner.z.0, frame.origin[2] + frame.z[2] * inner.z.1);
                 return Some(Bounds { z: sorted(a, b), r: inner.r });
@@ -279,7 +290,11 @@ fn point_segment(q: V2, a: V2, b: V2) -> f64 {
 
 /// Whether two polylines come within `limit` of each other anywhere (crossing included).
 fn within(p: &[V2], q: &[V2], limit: f64) -> bool {
-    let bbox = |s: &[V2]| s.iter().fold((f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), |b, v| (b.0.min(v.x), b.1.min(v.y), b.2.max(v.x), b.3.max(v.y)));
+    let bbox = |s: &[V2]| {
+        s.iter().fold((f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY), |b, v| {
+            (b.0.min(v.x), b.1.min(v.y), b.2.max(v.x), b.3.max(v.y))
+        })
+    };
     let (bp, bq) = (bbox(p), bbox(q));
     if (bq.0 - bp.2).max(bp.0 - bq.2).max(bq.1 - bp.3).max(bp.1 - bq.3) >= limit {
         return false;

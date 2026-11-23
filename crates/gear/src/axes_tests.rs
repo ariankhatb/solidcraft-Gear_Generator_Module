@@ -27,7 +27,12 @@ fn on_axes(s: &Solved, a1: &Axis, a2: &Axis) -> crate::Plan {
         assert!(a.holds(b.frame.origin, b.frame.z, 1e-6), "body {i} {:?} is not on {a:?}", b.frame);
         assert!(a.holds(s.frames[i].origin, s.frames[i].z, 1e-6), "frame {i}");
         for k in 0..3 {
-            assert!(close(b.frame.origin[k], s.frames[i].origin[k], 1e-6) && close(b.frame.z[k], s.frames[i].z[k], 1e-9), "body {i}: {:?} vs {:?}", b.frame, s.frames[i]);
+            assert!(
+                close(b.frame.origin[k], s.frames[i].origin[k], 1e-6) && close(b.frame.z[k], s.frames[i].z[k], 1e-9),
+                "body {i}: {:?} vs {:?}",
+                b.frame,
+                s.frames[i]
+            );
         }
         // A frame is a frame: unit and square.
         let (x, z) = (b.frame.x, b.frame.z);
@@ -172,7 +177,14 @@ fn bevels_meet_at_the_apex() {
         let side2 = [r.sin() * 0.6, r.sin() * 0.8, -r.cos()];
         let a2 = axis([o2[0] + 30.0 * side2[0], o2[1] + 30.0 * side2[1], o2[2] + 30.0 * side2[2]], side2);
         for kind in [Kind::Bevel, Kind::SpiralBevel] {
-            let s = solve(&a1, Some(&a2), Some(kind), &Spec::defaults_for(kind), &Drive { ratio: Some(f64::from(ratio)), teeth_free: true, teeth2_free: true, ..Drive::default() }).unwrap();
+            let s = solve(
+                &a1,
+                Some(&a2),
+                Some(kind),
+                &Spec::defaults_for(kind),
+                &Drive { ratio: Some(f64::from(ratio)), teeth_free: true, teeth2_free: true, ..Drive::default() },
+            )
+            .unwrap();
             assert!(close(s.spec.shaft_angle, deg, 1e-6), "{deg}: {}", s.spec.shaft_angle);
             assert_eq!(s.spec.teeth2, ratio * s.spec.teeth);
             let p = on_axes(&s, &a1, &a2);
@@ -277,7 +289,7 @@ fn single_gears_and_coaxial_sets_go_on_axis_1() {
 
 #[test]
 fn no_placement_leaves_every_set_where_it_was() {
-    for k in Kind::ALL {
+    for k in Kind::ALL.iter().copied() {
         let s = Spec::defaults_for(k);
         assert!(s.placement.is_none());
         let at = Spec { placement: Some(crate::Frame::at([0.0; 3])), ..s.clone() };
@@ -290,7 +302,14 @@ fn no_placement_leaves_every_set_where_it_was() {
 fn extras_are_placed_on_their_axes() {
     let par = axis([60.0, 0.0, 5.0], [0.0, 0.0, 1.0]);
     for kind in [Kind::Sprocket, Kind::Pulley] {
-        let s = solve(&Axis::Z, Some(&par), Some(kind), &Spec { teeth: 16, ..Spec::default() }, &Drive { ratio: Some(2.0), teeth2_free: true, ..Drive::default() }).unwrap();
+        let s = solve(
+            &Axis::Z,
+            Some(&par),
+            Some(kind),
+            &Spec { teeth: 16, ..Spec::default() },
+            &Drive { ratio: Some(2.0), teeth2_free: true, ..Drive::default() },
+        )
+        .unwrap();
         assert_eq!((s.spec.teeth, s.spec.teeth2), (16, 32), "{kind:?}");
         assert!(close(s.spec.center_distance, 60.0, 1e-9));
         assert!(close(s.frames[1].origin[0], 60.0, 1e-9));
@@ -302,7 +321,8 @@ fn extras_are_placed_on_their_axes() {
     assert!(close(a, 60.0, 1e-6), "{a}");
     // A face gear: axis 1 its own, axis 2 the pinion's, meeting at 90°.
     let meet = axis([0.0, 0.0, 30.0], [1.0, 0.0, 0.0]);
-    let s = solve(&Axis::Z, Some(&meet), Some(Kind::FaceGear), &Spec { module: 1.0, teeth: 12, teeth2: 40, ..Spec::default() }, &Drive::default()).unwrap();
+    let s = solve(&Axis::Z, Some(&meet), Some(Kind::FaceGear), &Spec { module: 1.0, teeth: 12, teeth2: 40, ..Spec::default() }, &Drive::default())
+        .unwrap();
     let pl = s.spec.placement.unwrap();
     assert!(close(pl.origin[2], 30.0 - 6.0, 1e-9), "{pl:?}");
     assert!(close(s.frames[1].origin[2], 30.0, 1e-9) && close(s.frames[1].z[0].abs(), 1.0, 1e-9), "{:?}", s.frames[1]);
@@ -325,12 +345,19 @@ fn the_shift_goes_to_the_pinion_that_would_be_undercut() {
         assert!(!g1.undercut() && !g2.undercut(), "{a}: shifts {} and {}", s.spec.shift, s.spec.shift2);
         let p = on_axes(&s, &a1, &a2);
         assert!(close(plan_fact(&p, "centre distance"), a, 1e-6), "{a}: {}", plan_fact(&p, "centre distance"));
-        assert!(p.warnings.iter().all(|w| !w.contains("undercut") && !w.contains("thin tooth tips") && !w.contains("point")), "{a}: {:?}", p.warnings);
+        assert!(
+            p.warnings.iter().all(|w| !w.contains("undercut") && !w.contains("thin tooth tips") && !w.contains("point")),
+            "{a}: {:?}",
+            p.warnings
+        );
     }
     // A train's meshing group the same: the 11-tooth gear between two others.
     let g = |z: u32| Spec { module: 1.0, ..Spec::defaults_for(Kind::Pair) }.involute(z, 0.0, 0.0);
     let gears = [g(30), g(11), g(25)];
-    let meshes = [crate::sketch_rules::GroupMesh { a: 0, b: 1, internal: false, dist: 20.5 }, crate::sketch_rules::GroupMesh { a: 1, b: 2, internal: false, dist: 18.0 }];
+    let meshes = [
+        crate::sketch_rules::GroupMesh { a: 0, b: 1, internal: false, dist: 20.5 },
+        crate::sketch_rules::GroupMesh { a: 1, b: 2, internal: false, dist: 18.0 },
+    ];
     let xs = crate::sketch_rules::group_shifts(&gears, &[false; 3], &meshes).unwrap();
     for (k, x) in xs.iter().enumerate() {
         assert!(!crate::involute::Involute { shift: *x, ..gears[k] }.undercut(), "gear {k}: shifts {xs:?}");

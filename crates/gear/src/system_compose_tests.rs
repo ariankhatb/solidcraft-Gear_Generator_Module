@@ -146,7 +146,14 @@ fn a_hypoid_after_a_helical_pair() {
     let sp = planned(&items, &links, None);
     assert_eq!(sp.member_of.len(), 4);
     // Helical teeth of opposite hands on the pair.
-    assert!(sp.plan.bodies.iter().any(|b| b.name.to_lowercase().contains("hypoid") || b.name.to_lowercase().contains("ring") || b.name.to_lowercase().contains("pinion")), "{:?}", sp.plan.bodies.iter().map(|b| &b.name).collect::<Vec<_>>());
+    assert!(
+        sp.plan
+            .bodies
+            .iter()
+            .any(|b| b.name.to_lowercase().contains("hypoid") || b.name.to_lowercase().contains("ring") || b.name.to_lowercase().contains("pinion")),
+        "{:?}",
+        sp.plan.bodies.iter().map(|b| &b.name).collect::<Vec<_>>()
+    );
     let pinion = reply_ratio(&sp, g(2, 1));
     let by_hand = teeth(&sp, g(0, 0)) / teeth(&sp, g(1, 0)) * teeth(&sp, g(2, 0)) / teeth(&sp, g(2, 1));
     assert!(close(pinion.abs(), by_hand), "{pinion} vs {by_hand}: {:?}", sp.gears);
@@ -308,7 +315,8 @@ fn a_free_gear_at_a_fixed_module_keeps_the_module_with_a_note() {
     use crate::items::{GearSettings, SizeBy};
     let mut a = item("A", ItemKind::Spur, vec![circ([0.0; 3], Z, 21.0)]);
     a.gears = vec![GearSettings { size_by: SizeBy::Module, module: Some(4.0), ..GearSettings::default() }];
-    let pair = vec![item("B", ItemKind::Spur, vec![circ([100.0, 0.0, 0.0], Z, 20.0)]), item("C", ItemKind::Spur, vec![circ([140.0, 0.0, 0.0], Z, 20.0)])];
+    let pair =
+        vec![item("B", ItemKind::Spur, vec![circ([100.0, 0.0, 0.0], Z, 20.0)]), item("C", ItemKind::Spur, vec![circ([140.0, 0.0, 0.0], Z, 20.0)])];
     for (items, links) in [(vec![a.clone()], vec![]), ([vec![a.clone()], pair].concat(), vec![mesh(g(1, 0), g(2, 0))])] {
         let sp = planned(&items, &links, None);
         let r = &sp.gears[0];
@@ -334,7 +342,11 @@ fn a_bevel_pair_from_one_side_view() {
     // atan(2) from z, 50 mm long: pitch radii 50 sin δ.
     let d1 = (2.0f64).atan(); // from the z shaft
     let c = [50.0 * d1.sin(), 0.0, 50.0 * d1.cos()];
-    let side = item("S", ItemKind::Bevel, vec![Thing::point([0.0; 3]), line([0.0; 3], [0.0, 0.0, 60.0]), line([0.0; 3], [60.0, 0.0, 0.0]), line([0.0; 3], c)]);
+    let side = item(
+        "S",
+        ItemKind::Bevel,
+        vec![Thing::point([0.0; 3]), line([0.0; 3], [0.0, 0.0, 60.0]), line([0.0; 3], [60.0, 0.0, 0.0]), line([0.0; 3], c)],
+    );
     validate_item(&side).unwrap();
     let geo = crate::items::gear_geoms(&side);
     assert_eq!(geo.len(), 2);
@@ -357,7 +369,11 @@ fn a_bevel_pair_from_one_side_view() {
     let sp = planned(&[bare], &[], None);
     assert_eq!((teeth(&sp, g(0, 0)), teeth(&sp, g(0, 1))), (30.0, 15.0), "{:?}", sp.gears);
     // A shaft line that misses the apex is refused, naming it.
-    let off = item("U", ItemKind::Bevel, vec![Thing::point([0.0; 3]), line([5.0, 0.0, 0.0], [5.0, 0.0, 60.0]), line([0.0; 3], [60.0, 0.0, 0.0]), line([0.0; 3], c)]);
+    let off = item(
+        "U",
+        ItemKind::Bevel,
+        vec![Thing::point([0.0; 3]), line([5.0, 0.0, 0.0], [5.0, 0.0, 60.0]), line([0.0; 3], [60.0, 0.0, 0.0]), line([0.0; 3], c)],
+    );
     assert!(validate_item(&off).unwrap_err().contains("doesn't run through the apex"));
 }
 
@@ -378,7 +394,10 @@ fn a_ring_whose_pinion_is_in_a_cluster_keeps_its_space_for_the_pinion() {
     let mut r = item("R", ItemKind::Internal, vec![circ(at(153.0, -90.0), Z, 50.0), circ(at(123.0, -90.0), Z, 20.0)]);
     r.gears = vec![GearSettings { rim: Some(6.0), ..GearSettings::default() }];
     let links = vec![mesh(g(0, 0), g(1, 0)), shaft(g(1, 0), g(2, 1))];
-    let blocks = vec![ModuleBlock { id: "M".into(), module: Some(1.5), members: vec![0, 1], ..Default::default() }, ModuleBlock { id: "M2".into(), module: Some(2.0), members: vec![2], ..Default::default() }];
+    let blocks = vec![
+        ModuleBlock { id: "M".into(), module: Some(1.5), members: vec![0, 1], ..Default::default() },
+        ModuleBlock { id: "M2".into(), module: Some(2.0), members: vec![2], ..Default::default() },
+    ];
     let sp = plan_items(&[e, f, r], &links, &blocks, None, &Spec::default()).unwrap();
     assert!(sp.error.is_none(), "{:?}", sp.error);
     let (ring, cluster) = (sp.body(g(2, 0)).unwrap(), sp.body(g(2, 1)).unwrap());
@@ -441,7 +460,11 @@ fn a_bearing_point_on_a_gears_shaft_line_is_a_seat_of_the_housing_cutout() {
         let items = at(z);
         assert_eq!(bearing_points(&items).len(), 2);
         let base = Spec {
-            clearance_body: Some(Clearance { bearing: Some("608".into()), seats: bearing_points(&items).into_iter().map(Seat::Point).collect(), ..Clearance::default() }),
+            clearance_body: Some(Clearance {
+                bearing: Some("608".into()),
+                seats: bearing_points(&items).into_iter().map(Seat::Point).collect(),
+                ..Clearance::default()
+            }),
             ..Spec::default()
         };
         let mut sp = plan_items(&items, &links, &[], None, &Spec { clearance_body: None, ..base.clone() }).unwrap_or_else(|e| panic!("{e}"));
@@ -493,7 +516,10 @@ fn a_tooth_chamfer_goes_on_every_gear_of_the_set() {
     let body = plain.member_of.iter().find(|(r, _)| *r == g(0, 0)).and_then(|(_, m)| plain.plan.members[*m].body).unwrap();
     let ring = |sp: &SystemPlan, z: f64| {
         let s = Solid::new(&sp.plan.bodies[body], 0.002);
-        (0..720).map(|k| f64::from(k) * std::f64::consts::TAU / 720.0).filter(|a| s.contains([(tip - 0.25 * c) * a.cos(), (tip - 0.25 * c) * a.sin(), z])).count()
+        (0..720)
+            .map(|k| f64::from(k) * std::f64::consts::TAU / 720.0)
+            .filter(|a| s.contains([(tip - 0.25 * c) * a.cos(), (tip - 0.25 * c) * a.sin(), z]))
+            .count()
     };
     let (top, bottom) = (face / 2.0 - 0.25 * c, -face / 2.0 + 0.25 * c);
     assert!(ring(&plain, top) > 0 && ring(&plain, bottom) > 0, "the teeth reach the edge");
@@ -536,7 +562,11 @@ fn a_tooth_chamfer_leaves_a_note_where_it_does_not_go() {
     assert_eq!(sp.plan.bodies, before, "a worm pair is left plain");
     assert!(sp.notes.iter().any(|n| n == "tooth chamfer not applied to Gear A: worm"), "{:?}", sp.notes);
     // A compound of two layers, face to face: three of its four ends chamfered.
-    let compound = vec![item("E", ItemKind::Compound, vec![line([0.0, 0.0, -10.0], [0.0, 0.0, 30.0]), circ([0.0; 3], Z, 20.0), circ([0.0, 0.0, 20.0], Z, 12.0)])];
+    let compound = vec![item(
+        "E",
+        ItemKind::Compound,
+        vec![line([0.0, 0.0, -10.0], [0.0, 0.0, 30.0]), circ([0.0; 3], Z, 20.0), circ([0.0, 0.0, 20.0], Z, 12.0)],
+    )];
     let mut sp = plan_items(&compound, &[], &[], None, &Spec::default()).unwrap_or_else(|e| panic!("{e}"));
     assert!(sp.error.is_none(), "{:?}", sp.error);
     let count = |sp: &SystemPlan| sp.plan.bodies.iter().map(|b| b.steps.len()).sum::<usize>();
@@ -562,7 +592,10 @@ fn crossed_helical_and_chevron_bevel_are_what_they_say() {
         assert!(sp.error.is_none(), "{deg}°: {:?}", sp.error);
         let worm = sp.plan.assembly.links.iter().any(|l| matches!(l, AssemblyLink::Worm { .. }));
         assert!(!worm, "{deg}°: built as a worm: {:?}", sp.plan.assembly.links);
-        let helix: Vec<f64> = ["gear 1 helix angle", "gear 2 helix angle"].iter().filter_map(|l| sp.plan.facts.iter().find(|f| f.label.ends_with(l)).map(|f| f.value.abs())).collect();
+        let helix: Vec<f64> = ["gear 1 helix angle", "gear 2 helix angle"]
+            .iter()
+            .filter_map(|l| sp.plan.facts.iter().find(|f| f.label.ends_with(l)).map(|f| f.value.abs()))
+            .collect();
         assert_eq!(helix.len(), 2, "{deg}°: {:?}", sp.plan.facts.iter().map(|f| &f.label).collect::<Vec<_>>());
         eprintln!("{deg}°: helix {helix:?}, teeth {:?}", sp.gears.iter().map(|g| g.teeth).collect::<Vec<_>>());
         assert!((helix.iter().sum::<f64>() - deg).abs() < 0.5, "{deg}°: helix angles {helix:?} add up to the shaft angle");

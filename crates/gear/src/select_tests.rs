@@ -75,7 +75,11 @@ fn meeting_shafts_make_bevels_and_skew_ones_a_crossed_set() {
 #[test]
 fn three_parallel_shafts_make_a_train_on_them() {
     // Shafts along world Y: gear 1 Ø40 given, the others fill the chain.
-    let s = [shaft([0.0; 3], [0.0, 1.0, 0.0], Some(40.0)), shaft([50.0, 0.0, 0.0], [0.0, 1.0, 0.0], None), shaft([50.0, 3.0, 45.0], [0.0, 1.0, 0.0], Some(30.0))];
+    let s = [
+        shaft([0.0; 3], [0.0, 1.0, 0.0], Some(40.0)),
+        shaft([50.0, 0.0, 0.0], [0.0, 1.0, 0.0], None),
+        shaft([50.0, 3.0, 45.0], [0.0, 1.0, 0.0], Some(30.0)),
+    ];
     let out = set_on_shafts(&s, &Ask { along: 2.0, ..Ask::default() }, &Spec::default()).unwrap();
     let t = out.spec.train.as_ref().unwrap();
     // The automatic module: 1.5, the smallest gear (Ø30) 20 teeth.
@@ -99,7 +103,12 @@ fn three_parallel_shafts_make_a_train_on_them() {
 #[test]
 fn bearings_on_a_selected_shaft_are_seats_and_bodies() {
     let s = [shaft([0.0; 3], [0.0, 0.0, 1.0], Some(40.0)), shaft([50.0, 0.0, 0.0], [0.0, 0.0, 1.0], None)];
-    let mut out = set_on_shafts(&s, &Ask::default(), &Spec { bore: crate::hub::Bore { kind: crate::hub::BoreKind::Round, diameter: 8.0, ..Default::default() }, ..Spec::default() }).unwrap();
+    let mut out = set_on_shafts(
+        &s,
+        &Ask::default(),
+        &Spec { bore: crate::hub::Bore { kind: crate::hub::BoreKind::Round, diameter: 8.0, ..Default::default() }, ..Spec::default() },
+    )
+    .unwrap();
     // Two 608s on shaft 1, 20 mm either side of the gear's middle (5 mm up: face 10).
     let seats = vec![Seat::Point(bearing_point(&s[0].axis, -15.0)), Seat::Point(bearing_point(&s[0].axis, 25.0))];
     out.spec.clearance_body = Some(Clearance { bearing: Some("608".into()), seats, bearing_bodies: true, keep_out: false, ..Clearance::default() });

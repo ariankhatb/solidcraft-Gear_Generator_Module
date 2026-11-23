@@ -175,7 +175,15 @@ pub fn set_on_shafts(shafts: &[Shaft], ask: &Ask, base: &Spec) -> Result<Solved,
             if let Some(m) = ask.module {
                 spec.module = m;
             }
-            let mut drive = Drive { along: ask.along, ratio: ask.ratio, module_free: ask.module.is_none(), teeth_free: s1.teeth.is_none(), teeth2_free: s2.teeth.is_none(), starts_free: true, ..Drive::default() };
+            let mut drive = Drive {
+                along: ask.along,
+                ratio: ask.ratio,
+                module_free: ask.module.is_none(),
+                teeth_free: s1.teeth.is_none(),
+                teeth2_free: s2.teeth.is_none(),
+                starts_free: true,
+                ..Drive::default()
+            };
             if let Some(z) = s1.teeth {
                 spec.teeth = z;
             }
@@ -190,7 +198,13 @@ pub fn set_on_shafts(shafts: &[Shaft], ask: &Ask, base: &Spec) -> Result<Solved,
                     if let Relation::Parallel { distance, .. } = rel
                         && ((d1 + d2) / 2.0 - distance).abs() > 0.01 * distance
                     {
-                        notes.push(format!("Ø{} and Ø{} add up to {} mm between centres, but the shafts are {} mm apart: the gears are sized to the shafts", num(d1), num(d2), num((d1 + d2) / 2.0), num(distance)));
+                        notes.push(format!(
+                            "Ø{} and Ø{} add up to {} mm between centres, but the shafts are {} mm apart: the gears are sized to the shafts",
+                            num(d1),
+                            num(d2),
+                            num((d1 + d2) / 2.0),
+                            num(distance)
+                        ));
                     }
                 }
                 (d1, d2, _) => {
@@ -211,7 +225,12 @@ pub fn set_on_shafts(shafts: &[Shaft], ask: &Ask, base: &Spec) -> Result<Solved,
                         let other = |d: f64| 2.0 * distance - d;
                         match (d1, d2) {
                             (Some(d), None) | (None, Some(d)) if other(d) <= 0.0 => {
-                                return Err(format!("a Ø{} gear reaches past the other shaft ({} mm away): make it smaller than Ø{}", num(d), num(distance), num(2.0 * distance)));
+                                return Err(format!(
+                                    "a Ø{} gear reaches past the other shaft ({} mm away): make it smaller than Ø{}",
+                                    num(d),
+                                    num(distance),
+                                    num(2.0 * distance)
+                                ));
                             }
                             (Some(d), None) => drive.ratio = Some(other(d) / d),
                             (None, Some(d)) => drive.ratio = Some(d / other(d)),
@@ -236,13 +255,20 @@ fn fold(deg: f64) -> f64 {
 /// Three or more parallel shafts: a gear train (see the module docs).
 fn train_on(shafts: &[Shaft], ask: &Ask, style: Option<Kind>, helix: f64, base: &Spec, mut notes: Vec<String>) -> Result<Solved, String> {
     if let Some(k) = ask.kind.filter(|k| !is_style(*k)) {
-        return Err(format!("three or more shafts make a gear train, whose type is its teeth (spur, helical or herringbone), not a {}", k.label().to_lowercase()));
+        return Err(format!(
+            "three or more shafts make a gear train, whose type is its teeth (spur, helical or herringbone), not a {}",
+            k.label().to_lowercase()
+        ));
     }
     let a1 = shafts[0].axis;
     for (k, s) in shafts.iter().enumerate().skip(1) {
         let rel = axes::relate(&a1, &s.axis);
         if !matches!(rel, Relation::Parallel { .. } | Relation::Coincident) {
-            return Err(format!("shafts 1 and {} aren't parallel ({}): three or more shafts make a gear train, on parallel shafts", k + 1, rel.describe()));
+            return Err(format!(
+                "shafts 1 and {} aren't parallel ({}): three or more shafts make a gear train, on parallel shafts",
+                k + 1,
+                rel.describe()
+            ));
         }
     }
     // The train's plane: square to the shafts through shaft 1's origin, moved `along` it.
@@ -261,12 +287,12 @@ fn train_on(shafts: &[Shaft], ask: &Ask, style: Option<Kind>, helix: f64, base: 
     // Each gear's radius: as given (or teeth at the module), the rest filling the gap to the
     // gear before it, then (before the first given) to the gear after it.
     let cb = helix.to_radians().cos();
-    let mut r: Vec<Option<f64>> = shafts
-        .iter()
-        .map(|s| s.pitch_diameter.or_else(|| Some(ask.module? * f64::from(s.teeth?) / cb)).map(|d| d / 2.0))
-        .collect();
+    let mut r: Vec<Option<f64>> =
+        shafts.iter().map(|s| s.pitch_diameter.or_else(|| Some(ask.module? * f64::from(s.teeth?) / cb)).map(|d| d / 2.0)).collect();
     if r.iter().all(Option::is_none) {
-        return Err("give at least one shaft's pitch diameter (or its teeth with a module): the rest fill the spacing between the shafts in order".into());
+        return Err(
+            "give at least one shaft's pitch diameter (or its teeth with a module): the rest fill the spacing between the shafts in order".into()
+        );
     }
     let n = r.len();
     for i in 1..n {
@@ -287,7 +313,10 @@ fn train_on(shafts: &[Shaft], ask: &Ask, style: Option<Kind>, helix: f64, base: 
     for (i, (c, r)) in centres.iter().zip(&r).enumerate() {
         let r = r.unwrap_or(0.0);
         if !(r > 0.0) {
-            return Err(format!("gear {} has no room: the gear before it reaches past its shaft; give its pitch diameter, or move the shafts apart", i + 1));
+            return Err(format!(
+                "gear {} has no room: the gear before it reaches past its shaft; give its pitch diameter, or move the shafts apart",
+                i + 1
+            ));
         }
         if shafts[i].pitch_diameter.is_none() {
             notes.push(format!("gear {}: Ø{} fills the spacing to its neighbour", i + 1, num(2.0 * r)));
@@ -295,7 +324,13 @@ fn train_on(shafts: &[Shaft], ask: &Ask, style: Option<Kind>, helix: f64, base: 
         circles.push(Circle { c: *c, r });
     }
     let style = style.unwrap_or(Kind::Spur);
-    let settings = crate::simple::Simple { module: ask.module, face_width: ask.face_width, helix: (helix != 0.0).then_some(helix), left_hand: Some(ask.left_hand), ..Default::default() };
+    let settings = crate::simple::Simple {
+        module: ask.module,
+        face_width: ask.face_width,
+        helix: (helix != 0.0).then_some(helix),
+        left_hand: Some(ask.left_hand),
+        ..Default::default()
+    };
     let (mut spec, more) = train_spec(&circles, style, &settings, base)?;
     notes.extend(more);
     spec.origin = [0.0; 3];

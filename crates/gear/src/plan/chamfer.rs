@@ -51,7 +51,9 @@ pub struct ToothChamfer {
 /// Why a kind of item keeps its teeth plain ("worm"), or None when its gears take the chamfer.
 fn left_plain(kind: ItemKind) -> Option<&'static str> {
     match kind {
-        ItemKind::Spur | ItemKind::Helical | ItemKind::Herringbone | ItemKind::Compound | ItemKind::Internal | ItemKind::Rack | ItemKind::Shaft => None,
+        ItemKind::Spur | ItemKind::Helical | ItemKind::Herringbone | ItemKind::Compound | ItemKind::Internal | ItemKind::Rack | ItemKind::Shaft => {
+            None
+        }
         ItemKind::Planetary => Some("planetary set"),
         ItemKind::Bevel => Some("bevel"),
         ItemKind::Hypoid => Some("hypoid"),
@@ -204,7 +206,9 @@ pub fn tooth_chamfer(items: &[GearItem], sp: &mut SystemPlan, c: ToothChamfer) -
 /// axis isn't the body's, the body reaches past the tip, or the notches would overlap.
 pub fn chamfers_as_one(body: &crate::plan::Body, i: usize) -> Option<Step> {
     use crate::geom::V2;
-    let (Some(Step::Placed { frame, step: a }), Some(Step::Placed { frame: frame_b, step: b })) = (body.steps.get(i), body.steps.get(i + 1)) else { return None };
+    let (Some(Step::Placed { frame, step: a }), Some(Step::Placed { frame: frame_b, step: b })) = (body.steps.get(i), body.steps.get(i + 1)) else {
+        return None;
+    };
     let (Step::Revolve { profile: pa, op: Op::Cut }, Step::Revolve { profile: pb, op: Op::Cut }) = (&**a, &**b) else { return None };
     // corner_cut's triangles: [a2, corner, b2], b2 on the tip cylinder (past the tip, for an
     // outside gear), a2 out past the end face: side A's corner above its b2, side B's below.

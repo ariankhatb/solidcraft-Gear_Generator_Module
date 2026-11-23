@@ -201,7 +201,8 @@ impl FaceGear {
             .map(|j| {
                 let pts: Vec<(f64, f64)> = radii.iter().zip(&widths).map(|(r, w)| (*r, (w[j] / r).clamp(1e-4, max_half))).collect();
                 let (first, last) = (pts.first().map(|p| p.1).unwrap_or(0.0), pts.last().map(|p| p.1).unwrap_or(0.0));
-                let f = ToothFlank { rf: ri, ra: ro, root_half: first, tip_half: last, fillet: Vec::new(), flank: pts, undercut: false, pointed: false };
+                let f =
+                    ToothFlank { rf: ri, ra: ro, root_half: first, tip_half: last, fillet: Vec::new(), flank: pts, undercut: false, pointed: false };
                 teeth_outline(&f, self.teeth, 0.0)
             })
             .collect()

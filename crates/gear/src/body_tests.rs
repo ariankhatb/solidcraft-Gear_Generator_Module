@@ -100,7 +100,7 @@ fn nothing_is_added_by_default() {
     let p = planned(&Spec::default());
     assert_eq!(p.bodies[0].steps.len(), 1);
     assert!(matches!(&p.bodies[0].steps[0], Step::Prism { z0, twist, op: Op::New, .. } if *z0 == 0.0 && *twist == 0.0));
-    for k in Kind::ALL {
+    for k in Kind::ALL.iter().copied() {
         let p = planned(&Spec::defaults_for(k));
         for b in &p.bodies {
             // (A sprocket's own ISO 606 side chamfer is a revolve, and a hypoid's teeth are trimmed
@@ -117,7 +117,8 @@ fn nothing_is_added_by_default() {
                 continue;
             }
             assert!(
-                !b.steps.iter().any(|st| matches!(st, Step::Placed { .. }) || (!revolve_ok && matches!(st, Step::Revolve { .. }) && !(trim_ok && matches!(st, Step::Revolve { op: Op::Intersect, .. })))),
+                !b.steps.iter().any(|st| matches!(st, Step::Placed { .. })
+                    || (!revolve_ok && matches!(st, Step::Revolve { .. }) && !(trim_ok && matches!(st, Step::Revolve { op: Op::Intersect, .. })))),
                 "{k:?}"
             );
         }
@@ -126,10 +127,19 @@ fn nothing_is_added_by_default() {
 
 #[test]
 fn a_gear_carries_a_shaft_on_each_side() {
-    let mut s = Spec::default();
-    s.shaft_front =
-        Shaft { diameter: 8.0, length: 20.0, step_diameter: 6.0, step_length: 10.0, end: ShaftEnd::DFlat, chamfer: 0.5, ..Shaft::default() };
-    s.shaft_back = Shaft { diameter: 10.0, length: 15.0, end: ShaftEnd::Hex, end_size: 8.0, end_length: 6.0, chamfer: 1.0, ..Shaft::default() };
+    let s = Spec {
+        shaft_front: Shaft {
+            diameter: 8.0,
+            length: 20.0,
+            step_diameter: 6.0,
+            step_length: 10.0,
+            end: ShaftEnd::DFlat,
+            chamfer: 0.5,
+            ..Shaft::default()
+        },
+        shaft_back: Shaft { diameter: 10.0, length: 15.0, end: ShaftEnd::Hex, end_size: 8.0, end_length: 6.0, chamfer: 1.0, ..Shaft::default() },
+        ..Spec::default()
+    };
     let p = planned(&s);
     assert!(p.warnings.is_empty(), "{:?}", p.warnings);
     let b = &p.bodies[0];
@@ -184,11 +194,13 @@ fn every_shaft_end_is_cut_on_both_sides() {
 #[test]
 fn shafts_and_bores_are_told_apart() {
     // A bore through a shaft: a hollow shaft, the bore as long as the whole part.
-    let mut s = Spec::default();
-    s.bore = Bore { kind: BoreKind::Round, diameter: 4.0, ..Bore::default() };
-    s.shaft_front = Shaft { diameter: 10.0, length: 20.0, ..Shaft::default() };
-    s.shaft_back = Shaft { diameter: 10.0, length: 5.0, ..Shaft::default() };
-    s.bore_chamfer = 0.5;
+    let mut s = Spec {
+        bore: Bore { kind: BoreKind::Round, diameter: 4.0, ..Bore::default() },
+        shaft_front: Shaft { diameter: 10.0, length: 20.0, ..Shaft::default() },
+        shaft_back: Shaft { diameter: 10.0, length: 5.0, ..Shaft::default() },
+        bore_chamfer: 0.5,
+        ..Spec::default()
+    };
     let p = planned(&s);
     assert!(warned(&p, "hollow shaft"));
     let b = &p.bodies[0];
@@ -205,8 +217,7 @@ fn shafts_and_bores_are_told_apart() {
     assert!(warned(&p, "left out"), "{:?}", p.warnings);
     assert_eq!(extent(&p.bodies[0]), (0.0, s.face_width));
     // A shaft bigger than the root circle is built, and said.
-    let mut s = Spec::default();
-    s.shaft_back = Shaft { diameter: 40.0, length: 5.0, ..Shaft::default() };
+    let s = Spec { shaft_back: Shaft { diameter: 40.0, length: 5.0, ..Shaft::default() }, ..Spec::default() };
     let p = planned(&s);
     assert!(warned(&p, "bigger than the root circle"), "{:?}", p.warnings);
     assert_eq!(extent(&p.bodies[0]).0, -5.0);
@@ -321,8 +332,7 @@ fn teeth_are_chamfered_on_each_face() {
 
 #[test]
 fn bores_and_hubs_are_chamfered() {
-    let mut s = Spec::default();
-    s.bore = Bore { kind: BoreKind::Keyway, diameter: 8.0, ..Bore::default() };
+    let mut s = Spec { bore: Bore { kind: BoreKind::Keyway, diameter: 8.0, ..Bore::default() }, ..Spec::default() };
     (s.hub_diameter, s.hub_length) = (18.0, 6.0);
     (s.bore_chamfer, s.hub_chamfer) = (0.5, 1.0);
     let p = planned(&s);
@@ -826,7 +836,7 @@ fn bearing_pockets_come_from_the_standard_table() {
 
 #[test]
 fn print_defaults_plan_for_every_kind_and_size() {
-    for k in Kind::ALL {
+    for k in Kind::ALL.iter().copied() {
         for module in [0.5, 1.0, 2.0, 5.0] {
             let mut s = Spec::defaults_for(k);
             if k == Kind::Hypoid {
@@ -886,7 +896,7 @@ fn frames_compose() {
 fn everything_at_once_plans() {
     let sh =
         |d: f64, end: ShaftEnd| Shaft { diameter: d, length: 12.0, step_diameter: 0.7 * d, step_length: 8.0, end, chamfer: 0.4, ..Shaft::default() };
-    for k in Kind::ALL {
+    for k in Kind::ALL.iter().copied() {
         let mut s = Spec::defaults_for(k);
         s.apply_print_defaults(0.4, 0.2);
         s.tooth_chamfer_front = Chamfer { size: 0.8, angle: 45.0 };
@@ -963,9 +973,20 @@ fn extras_kinds_take_what_fits_and_say_what_they_leave_out() {
     assert!(p.bodies[1].steps.len() > plain.bodies[1].steps.len());
     assert!(warned(&p, "front shaft left out (the face gear itself"), "{:?}", p.warnings);
     // Elliptical pair: hub, shafts and hardware on both, no tooth chamfers.
-    let base = Spec { hub_diameter: 12.0, hub_length: 6.0, bore: Bore { kind: BoreKind::Round, diameter: 4.0, ..Bore::default() }, ..Spec::defaults_for(Kind::Elliptical) };
+    let base = Spec {
+        hub_diameter: 12.0,
+        hub_length: 6.0,
+        bore: Bore { kind: BoreKind::Round, diameter: 4.0, ..Bore::default() },
+        ..Spec::defaults_for(Kind::Elliptical)
+    };
     let plain = planned(&base);
-    let p = planned(&Spec { shaft_back: shaft, hardware: screw, tooth_chamfer_front: Chamfer { size: 0.5, angle: 45.0 }, bore_chamfer: 0.3, ..base.clone() });
+    let p = planned(&Spec {
+        shaft_back: shaft,
+        hardware: screw,
+        tooth_chamfer_front: Chamfer { size: 0.5, angle: 45.0 },
+        bore_chamfer: 0.3,
+        ..base.clone()
+    });
     assert!(p.bodies[0].steps.len() > plain.bodies[0].steps.len() + 2 && !placed(&p.bodies[0]).is_empty());
     assert!(warned(&p, "tooth chamfers left out (the tips are no circle)"), "{:?}", p.warnings);
     assert!(extent(&plain.bodies[0]).1 > Spec::defaults_for(Kind::Elliptical).face_width + 5.0, "the hub is built");
@@ -974,7 +995,11 @@ fn extras_kinds_take_what_fits_and_say_what_they_leave_out() {
     let plain = planned(&base);
     let p = planned(&Spec { shaft_front: shaft, hardware2: screw, bore_chamfer: 0.3, ..base.clone() });
     assert_eq!(p.bodies.iter().map(|b| b.steps.len()).collect::<Vec<_>>(), plain.bodies.iter().map(|b| b.steps.len()).collect::<Vec<_>>());
-    assert!(warned(&p, "front shaft, hub hardware and bearing pocket, bore chamfer left out (the shaft and the hub are the spline itself)"), "{:?}", p.warnings);
+    assert!(
+        warned(&p, "front shaft, hub hardware and bearing pocket, bore chamfer left out (the shaft and the hub are the spline itself)"),
+        "{:?}",
+        p.warnings
+    );
 }
 
 /// Every type, every option of `plan::left_out`: one said to be left out builds the same bodies
@@ -1023,8 +1048,8 @@ fn every_type_uses_or_names_every_option() {
         Opt::BoreChamfer => s.bore_chamfer = 0.3,
         Opt::HubChamfer => s.hub_chamfer = 0.3,
     };
-    for k in Kind::ALL {
-        for o in Opt::ALL {
+    for k in Kind::ALL.iter().copied() {
+        for o in Opt::ALL.iter().copied() {
             // What the option needs to show: a hub for the hub's fields and hardware, a bore for
             // its chamfer (where the type takes them).
             let mut base = clear(k);
@@ -1089,7 +1114,14 @@ fn a_rack_names_what_it_leaves_out() {
     let p = planned(&s);
     assert_eq!(format!("{:?}", p.bodies), format!("{:?}", plain.bodies));
     assert!(warned(&p, "rack: tip rounding, crowning don't apply to its teeth"), "{:?}", p.warnings);
-    assert!(warned(&p, "rack: bore, hub diameter, hub length, lightening holes, hub hardware and bearing pocket, tooth chamfers left out (a rack is a plain toothed bar)"), "{:?}", p.warnings);
+    assert!(
+        warned(
+            &p,
+            "rack: bore, hub diameter, hub length, lightening holes, hub hardware and bearing pocket, tooth chamfers left out (a rack is a plain toothed bar)"
+        ),
+        "{:?}",
+        p.warnings
+    );
     assert_eq!(p.warnings.len(), 2, "{:?}", p.warnings);
     // What a rack does take still reaches it.
     let p = planned(&Spec { xy_compensation: 0.05, ..Spec::defaults_for(Kind::Rack) });
@@ -1100,7 +1132,7 @@ fn a_rack_names_what_it_leaves_out() {
 /// The print preset sets only what each type uses: it never brings a "left out" warning.
 #[test]
 fn the_print_preset_sets_nothing_a_type_leaves_out() {
-    for k in Kind::ALL {
+    for k in Kind::ALL.iter().copied() {
         let mut s = Spec::defaults_for(k);
         s.apply_print_defaults(0.4, 0.2);
         let Ok(p) = plan(&s) else { continue };

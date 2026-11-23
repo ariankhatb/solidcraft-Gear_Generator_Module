@@ -3,8 +3,8 @@
 
 use std::f64::consts::{PI, TAU};
 
-use crate::axes::num;
 use super::{Body, Frame, Op, Plan, PreviewGear, Spec, Step, Unit, hub_steps, hub_steps_tip, name, tooth_warnings, wanted, with_bore};
+use crate::axes::num;
 use crate::face_gear::FaceGear;
 use crate::geom::{Outline, Region, V2};
 use crate::involute::external_outline;
@@ -415,7 +415,10 @@ pub(super) fn spline(s: &Spec, p: &mut Plan) {
     let (r_minor, hub_raised) = sp.hub_tip_radius(&f);
     let da2 = da2.max(2.0 * r_minor);
     if hub_raised {
-        p.warn(format!("hub: the minor diameter is raised to Ø{} to clear the shaft's root fillets (more teeth or a larger reference diameter avoid it)", num(da2)));
+        p.warn(format!(
+            "hub: the minor diameter is raised to Ø{} to clear the shaft's root fillets (more teeth or a larger reference diameter avoid it)",
+            num(da2)
+        ));
     }
     if hub_pointed {
         p.warn(format!("hub: the spaces come to a point; the major diameter is lowered to Ø{}", num(df2)));
@@ -464,14 +467,22 @@ pub(super) fn spline(s: &Spec, p: &mut Plan) {
     }
     let r_out = if s.hub_diameter > 0.0 { s.hub_diameter / 2.0 } else { df2 / 2.0 + if s.rim > 0.0 { s.rim } else { (3.0 * m).max(0.25 * db) } };
     if r_out < df2 / 2.0 + 0.1 * m {
-        p.refuse(format!("the hub's outside diameter must be over Ø{} (its major diameter and a wall); it is Ø{}", num(df2 + 0.2 * m), num(2.0 * r_out)));
+        p.refuse(format!(
+            "the hub's outside diameter must be over Ø{} (its major diameter and a wall); it is Ø{}",
+            num(df2 + 0.2 * m),
+            num(2.0 * r_out)
+        ));
         return;
     }
     if r_out <= df2 / 2.0 + 0.5 * m {
         p.warn("the hub's wall is thinner than half a module");
     }
     if s.bore.outline().is_some() && s.bore.reach() >= f.rf - 0.05 * m {
-        p.refuse(format!("shaft: the bore (reaching Ø{}) cuts into the tooth roots (Ø{}); use a smaller bore", num(2.0 * s.bore.reach()), num(2.0 * f.rf)));
+        p.refuse(format!(
+            "shaft: the bore (reaching Ø{}) cuts into the tooth roots (Ø{}); use a smaller bore",
+            num(2.0 * s.bore.reach()),
+            num(2.0 * f.rf)
+        ));
         return;
     }
     p.fact("hub outside diameter", 2.0 * r_out, Unit::Mm);
@@ -553,7 +564,11 @@ pub(super) fn face_gear(s: &Spec, p: &mut Plan) {
     let (o1, f1) = external_outline(&pinion, PI / fg.z1());
     tooth_warnings(p, "pinion", &pinion, &f1);
     if s.bore.outline().is_some() && s.bore.reach() >= ri - 0.05 * m {
-        p.refuse(format!("face gear: the bore (reaching Ø{}) cuts into the teeth (from Ø{}); use a smaller bore", num(2.0 * s.bore.reach()), num(2.0 * ri)));
+        p.refuse(format!(
+            "face gear: the bore (reaching Ø{}) cuts into the teeth (from Ø{}); use a smaller bore",
+            num(2.0 * s.bore.reach()),
+            num(2.0 * ri)
+        ));
         return;
     }
     let (top, bottom) = (fg.top(), fg.bottom());

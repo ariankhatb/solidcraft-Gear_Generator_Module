@@ -1,10 +1,10 @@
 //! Gear trains drawn as circles: reading, sizing, planning, meshing and the assembly.
 
+use crate::V2;
 use crate::mesh2d::{Verdict, check_mesh};
 use crate::plan::{AssemblyLink, Kind, LinkKind, Plan, Spec};
 use crate::simple::Simple;
 use crate::sketch_rules::{Circle, Drawn, Line, Reading, TrainCircle, read, size_train, train_spec};
-use crate::V2;
 
 fn circle(x: f64, y: f64, r: f64) -> Circle {
     Circle { c: V2::new(x, y), r }
@@ -34,7 +34,11 @@ fn meshes_clean(p: &Plan, count: usize) {
 }
 
 fn fact(p: &Plan, label: &str) -> f64 {
-    p.facts.iter().find(|f| f.label == label).unwrap_or_else(|| panic!("no fact {label}: {:?}", p.facts.iter().map(|f| &f.label).collect::<Vec<_>>())).value
+    p.facts
+        .iter()
+        .find(|f| f.label == label)
+        .unwrap_or_else(|| panic!("no fact {label}: {:?}", p.facts.iter().map(|f| &f.label).collect::<Vec<_>>()))
+        .value
 }
 
 /// The assembly's ratios from gear 1 are the preview's speeds.

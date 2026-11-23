@@ -17,8 +17,8 @@
 
 use crate::axes::{Axis, add, cross, dot, len, mul, sub, unit};
 use crate::items::{
-    ANGLE_TOL, BevelStyle, BlockSettings, Bore, ShaftMode, FacePreset, FaceSides, GearGeom, GearItem, GearRef, GearSettings, ItemKind, ItemLink, LinkKind, ModuleBlock,
-    Thing, face_extent, gear_geoms, resolve_module, tol,
+    ANGLE_TOL, BevelStyle, BlockSettings, Bore, FacePreset, FaceSides, GearGeom, GearItem, GearRef, GearSettings, ItemKind, ItemLink, LinkKind,
+    ModuleBlock, ShaftMode, Thing, face_extent, gear_geoms, resolve_module, tol,
 };
 use crate::plan::Spec;
 use crate::sketch_rules::auto_module;

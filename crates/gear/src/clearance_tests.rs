@@ -65,7 +65,9 @@ pub(crate) fn contains_every_member(s: &Spec, p: &Plan, tol: f64) -> usize {
                 match m {
                     Motion::Slides => {
                         let t = travel * (f64::from(k) / 5.0 - 0.5);
-                        for (dx, dy, dz) in [(0.0, 0.0, 0.0), (dr, 0.0, 0.0), (-dr, 0.0, 0.0), (0.0, dr, 0.0), (0.0, -dr, 0.0), (0.0, 0.0, da), (0.0, 0.0, -da)] {
+                        for (dx, dy, dz) in
+                            [(0.0, 0.0, 0.0), (dr, 0.0, 0.0), (-dr, 0.0, 0.0), (0.0, dr, 0.0), (0.0, -dr, 0.0), (0.0, 0.0, da), (0.0, 0.0, -da)]
+                        {
                             tests.push(b.frame.world([q[0] + t + dx, q[1] + dy, q[2] + dz]));
                         }
                     }
@@ -94,7 +96,7 @@ pub(crate) fn contains_every_member(s: &Spec, p: &Plan, tol: f64) -> usize {
 
 #[test]
 fn every_kind_plans_a_clearance_body_that_holds_its_members() {
-    for kind in Kind::ALL {
+    for kind in Kind::ALL.iter().copied() {
         let s = on(kind);
         let t = std::time::Instant::now();
         let p = planned(&s);
@@ -226,7 +228,11 @@ fn bearing_seats_sit_at_their_dots() {
 #[test]
 fn seat_warnings_say_what_is_wrong() {
     let bore = Bore { kind: BoreKind::Round, diameter: 10.0, ..Bore::default() };
-    let c = Clearance { bearing: Some("608".into()), seats: vec![Seat::Along { member: 1, along: 100.0 }, Seat::Along { member: 1, along: 0.0 }], ..Clearance::default() };
+    let c = Clearance {
+        bearing: Some("608".into()),
+        seats: vec![Seat::Along { member: 1, along: 100.0 }, Seat::Along { member: 1, along: 0.0 }],
+        ..Clearance::default()
+    };
     let s = Spec { bore, clearance_body: Some(c), ..Spec::defaults_for(Kind::Spur) };
     let p = planned(&s);
     let has = |t: &str| p.warnings.iter().any(|w| w.contains(t));
@@ -332,14 +338,28 @@ fn the_bearing_library_is_sound() {
     }
     assert_eq!(bearing("6902"), Some((15.0, 28.0, 7.0)));
     assert_eq!(bearing("mr148"), Some((8.0, 14.0, 4.0)));
-    for (name, series) in [("608", "6xx"), ("MR105", "MR"), ("683", "68xx"), ("6804", "68xx"), ("6901", "69xx"), ("695", "69xx"), ("6001", "60xx"), ("6204", "62xx"), ("6301", "63xx")] {
+    for (name, series) in [
+        ("608", "6xx"),
+        ("MR105", "MR"),
+        ("683", "68xx"),
+        ("6804", "68xx"),
+        ("6901", "69xx"),
+        ("695", "69xx"),
+        ("6001", "60xx"),
+        ("6204", "62xx"),
+        ("6301", "63xx"),
+    ] {
         assert_eq!(bearing_series(name), series, "{name}");
     }
 }
 
 #[test]
 fn a_custom_bearing_size_makes_seats() {
-    let c = Clearance { bearing_size: Some(crate::clearance::BearingSize { bore: 0.0, od: 30.0, width: 4.0 }), seats: vec![Seat::Along { member: 1, along: -30.0 }], ..Clearance::default() };
+    let c = Clearance {
+        bearing_size: Some(crate::clearance::BearingSize { bore: 0.0, od: 30.0, width: 4.0 }),
+        seats: vec![Seat::Along { member: 1, along: -30.0 }],
+        ..Clearance::default()
+    };
     let s = Spec { clearance_body: Some(c), ..Spec::defaults_for(Kind::Spur) };
     let p = planned(&s);
     let keep = Solid::new(p.clearance.as_ref().unwrap(), 0.005);
@@ -377,7 +397,8 @@ fn dump_clearance_scripts() {
             let w = s.face_width;
             let c = s.clearance_body.as_mut().unwrap();
             c.bearing = Some("608".into());
-            c.seats = (1..=n).flat_map(|m| [Seat::Along { member: m, along: -(w / 2.0 + 9.0) }, Seat::Along { member: m, along: w / 2.0 + 9.0 }]).collect();
+            c.seats =
+                (1..=n).flat_map(|m| [Seat::Along { member: m, along: -(w / 2.0 + 9.0) }, Seat::Along { member: m, along: w / 2.0 + 9.0 }]).collect();
             params.push_str(r#","bore":{"type":"round","diameter":8},"bore2":{"type":"round","diameter":8}"#);
         }
         let p = planned(&s);
@@ -390,11 +411,21 @@ fn dump_clearance_scripts() {
         for st in &keep.steps {
             let Step::Placed { frame, step } = st else { panic!() };
             let f = keep.frame.compose(frame);
-            let op_of = |op: Op| if op == Op::New { format!(r#""operation":"new","body_name":"{body}""#) } else { format!(r#""operation":"join","targets":["{body}"]"#) };
-            let (pts, origin, x, y, cmd): (Vec<[f64; 2]>, [f64; 3], [f64; 3], [f64; 3], String) = match step.as_ref() {
-                Step::Revolve { profile, op } => {
-                    (profile.iter().map(|q| [q.x, q.y]).collect(), f.origin, f.x, f.z, format!(r#"{{"command":"solid.revolve","params":{{"axis":"y",{}}}}}"#, op_of(*op)))
+            let op_of = |op: Op| {
+                if op == Op::New {
+                    format!(r#""operation":"new","body_name":"{body}""#)
+                } else {
+                    format!(r#""operation":"join","targets":["{body}"]"#)
                 }
+            };
+            let (pts, origin, x, y, cmd): (Vec<[f64; 2]>, [f64; 3], [f64; 3], [f64; 3], String) = match step.as_ref() {
+                Step::Revolve { profile, op } => (
+                    profile.iter().map(|q| [q.x, q.y]).collect(),
+                    f.origin,
+                    f.x,
+                    f.z,
+                    format!(r#"{{"command":"solid.revolve","params":{{"axis":"y",{}}}}}"#, op_of(*op)),
+                ),
                 Step::Prism { region, z0, height, op, .. } => (
                     {
                         let mut l = region.outer[0].polyline(0.05);
@@ -421,7 +452,12 @@ fn dump_clearance_scripts() {
                 }
             }
             let list: Vec<String> = pts.iter().map(|q| format!("[{},{}]", q[0], q[1])).collect();
-            cmds.push(format!(r#"{{"command":"sketch.create","params":{{"plane":{{"origin":{},"x_dir":{},"y_dir":{}}},"project_edges":false}}}}"#, v3(origin), v3(x), v3(y)));
+            cmds.push(format!(
+                r#"{{"command":"sketch.create","params":{{"plane":{{"origin":{},"x_dir":{},"y_dir":{}}},"project_edges":false}}}}"#,
+                v3(origin),
+                v3(x),
+                v3(y)
+            ));
             cmds.push(format!(r#"{{"command":"sketch.line","params":{{"points":[{}],"closed":true}}}}"#, list.join(",")));
             cmds.push(r#"{"command":"sketch.finish","params":{}}"#.to_string());
             cmds.push(cmd);
@@ -443,8 +479,16 @@ fn dump_clearance_scripts() {
         }
         let size = [0, 1, 2].map(|k| hi[k] - lo[k] - 4.0);
         let centre = [0, 1, 2].map(|k| (hi[k] + lo[k]) / 2.0);
-        cmds.push(format!(r#"{{"command":"solid.box","params":{{"length":{},"width":{},"height":{},"center":{},"body_name":"Housing"}}}}"#, size[0], size[1], size[2], v3(centre)));
-        cmds.push(format!(r#"{{"command":"solid.combine","params":{{"target":"Housing","tools":["{body}"],"operation":"cut","keep_tools":false}}}}"#));
+        cmds.push(format!(
+            r#"{{"command":"solid.box","params":{{"length":{},"width":{},"height":{},"center":{},"body_name":"Housing"}}}}"#,
+            size[0],
+            size[1],
+            size[2],
+            v3(centre)
+        ));
+        cmds.push(format!(
+            r#"{{"command":"solid.combine","params":{{"target":"Housing","tools":["{body}"],"operation":"cut","keep_tools":false}}}}"#
+        ));
         cmds.push(r#"{"command":"inspect.interference","params":{"budget_s":600}}"#.to_string());
         eprintln!("{name}: {} steps, {count} outline points, box {size:?}", keep.steps.len());
         std::fs::write(format!("{dir}/{name}.json"), format!("{{\"commands\":[\n{}\n]}}\n", cmds.join(",\n"))).unwrap();
@@ -456,7 +500,8 @@ fn bevel_planet_clearance_is_quick_enough() {
     // Diagnostic of the planets' sweep cost: the clearance adds well under a second to the plan.
     for mode in [crate::plan::BevelPlanetMode::Differential, crate::plan::BevelPlanetMode::Ring] {
         let base = Spec { bevel_planet_mode: mode, ..Spec::defaults_for(Kind::BevelPlanetary) };
-        let base = if mode == crate::plan::BevelPlanetMode::Ring { Spec { shaft_angle: 45.0, teeth: 20, teeth2: 10, planets: 3, ..base } } else { base };
+        let base =
+            if mode == crate::plan::BevelPlanetMode::Ring { Spec { shaft_angle: 45.0, teeth: 20, teeth2: 10, planets: 3, ..base } } else { base };
         let t = std::time::Instant::now();
         let bare = planned(&base);
         let t_bare = t.elapsed();
@@ -471,7 +516,6 @@ fn bevel_planet_clearance_is_quick_enough() {
         contains_every_member(&s, &p, 0.01);
     }
 }
-
 
 /// Members with hubs, bores and integral shafts on both sides, joined after the cone trims of
 /// bevels and hypoids: the keep-out holds every part of their material (each part joined after
@@ -493,7 +537,14 @@ fn keep_out_holds_hubs_and_shafts_joined_after_trims() {
         clearance_body: Some(Clearance::default()),
         ..Spec::defaults_for(kind)
     };
-    let hubbed = |kind: Kind| Spec { bore, bore2: bore, hub_diameter: 30.0, hub_length: 8.0, clearance_body: Some(Clearance::default()), ..Spec::defaults_for(kind) };
+    let hubbed = |kind: Kind| Spec {
+        bore,
+        bore2: bore,
+        hub_diameter: 30.0,
+        hub_length: 8.0,
+        clearance_body: Some(Clearance::default()),
+        ..Spec::defaults_for(kind)
+    };
     let mut checked = 0;
     for kind in [Kind::Bevel, Kind::SpiralBevel, Kind::BevelPlanetary, Kind::Hypoid, Kind::Pair, Kind::Spur, Kind::Helical] {
         for (what, s) in [("shafts", dressed(kind)), ("hub", hubbed(kind))] {
@@ -518,7 +569,11 @@ fn keep_out_holds_hubs_and_shafts_joined_after_trims() {
                     let alone = Body { name: String::new(), frame: b.frame, steps: vec![st.clone()] };
                     let pts = Solid::new(&alone, 0.2).material_points(0.3);
                     let (lo, hi) = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q[2]), a.1.max(q[2])));
-                    assert!(wlo <= lo + 0.31 && whi >= hi - 0.31, "{kind:?} {what}: {} step {i} reaches {lo}..{hi}, its material points only {wlo}..{whi}", b.name);
+                    assert!(
+                        wlo <= lo + 0.31 && whi >= hi - 0.31,
+                        "{kind:?} {what}: {} step {i} reaches {lo}..{hi}, its material points only {wlo}..{whi}",
+                        b.name
+                    );
                     let every = (pts.len() / 400).max(1);
                     for (j, q) in pts.iter().enumerate().step_by(every) {
                         let a = 0.7 * j as f64;
@@ -540,7 +595,6 @@ fn keep_out_holds_hubs_and_shafts_joined_after_trims() {
     }
     assert!(checked > 500, "only {checked} points of parts joined after a trim");
 }
-
 
 /// How far over the material an envelope may stand with zero gaps (mm): the sampling allowance
 /// (an eighth of the point spacing, 0.04 × module ≤ 0.25 mm, plus 0.002) and the 0.005 the
@@ -593,7 +647,11 @@ fn hugs(what: &str, keep: &Body, bodies: &[Body], gap: f64, inner: f64) {
         assert!(rk >= rm + gap - 1e-4 && rk <= rm + gap + ZERO_TOL, "{what}: {} envelope radius {rk}, material {rm}, gap {gap}", b.name);
         let (k0, k1) = verts.iter().fold((f64::MAX, f64::MIN), |a, v| (a.0.min(v.1), a.1.max(v.1)));
         let (m0, m1) = mat.iter().fold((f64::MAX, f64::MIN), |a, m| (a.0.min(m.0), a.1.max(m.0)));
-        assert!((k0 - (m0 - gap)).abs() <= 2e-3 && (k1 - (m1 + gap)).abs() <= 2e-3, "{what}: {} envelope runs {k0}..{k1} along its axis, material {m0}..{m1}, gap {gap}", b.name);
+        assert!(
+            (k0 - (m0 - gap)).abs() <= 2e-3 && (k1 - (m1 + gap)).abs() <= 2e-3,
+            "{what}: {} envelope runs {k0}..{k1} along its axis, material {m0}..{m1}, gap {gap}",
+            b.name
+        );
         // And it holds the material: every point (a hair inside its ends) is in it.
         let solid = Solid::new(keep, 0.002);
         let pts = Solid::new(b, 0.05).material_points(0.05);
@@ -608,7 +666,11 @@ fn hugs(what: &str, keep: &Body, bodies: &[Body], gap: f64, inner: f64) {
             let (i0, i1) = (mat.partition_point(|m| m.0 < z - w), mat.partition_point(|m| m.0 <= z + w));
             let near = mat[i0..i1].iter().map(|m| m.1).fold(0.0, f64::max);
             // (A sloped need's simplified chords may stand 0.02 over it.)
-            assert!(*r <= near + gap + ZERO_TOL + 0.02, "{what}: {} envelope radius {r} at {z}, the material within {inner} of it only {near}", b.name);
+            assert!(
+                *r <= near + gap + ZERO_TOL + 0.02,
+                "{what}: {} envelope radius {r} at {z}, the material within {inner} of it only {near}",
+                b.name
+            );
         }
     }
 }
@@ -663,7 +725,11 @@ fn a_zero_axial_gap_holds_on_long_and_shared_axes() {
         (body, sp.plan.bodies)
     };
     // A compound of two layers face to face.
-    let compound = vec![GearItem::new("E", ItemKind::Compound).with(vec![Thing::line([0.0, 0.0, -10.0], [0.0, 0.0, 30.0]), Thing::circle([0.0; 3], z, 20.0), Thing::circle([0.0, 0.0, 20.0], z, 12.0)])];
+    let compound = vec![GearItem::new("E", ItemKind::Compound).with(vec![
+        Thing::line([0.0, 0.0, -10.0], [0.0, 0.0, 30.0]),
+        Thing::circle([0.0; 3], z, 20.0),
+        Thing::circle([0.0, 0.0, 20.0], z, 12.0),
+    ])];
     let (keep, bodies) = items_plan(compound, vec![]);
     hugs("compound", &keep, &bodies, 0.0, 0.25);
     // Two gears on one shaft, apart along it.

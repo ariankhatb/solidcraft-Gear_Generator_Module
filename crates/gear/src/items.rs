@@ -182,7 +182,7 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-    pub const ALL: [ItemKind; 12] = [
+    pub const ALL: &[ItemKind] = &[
         ItemKind::Spur,
         ItemKind::Helical,
         ItemKind::Herringbone,
@@ -648,11 +648,8 @@ const BEVEL_SIDE: &[Slot] = &[
     slot(L, "contact", "contact line", false, false),
 ];
 /// A side view by its two shaft lines alone, meeting at a common end: that end is the apex.
-const BEVEL_MEET: &[Slot] = &[
-    slot(L, "axis", "shaft line 1", true, false),
-    slot(L, "axis2", "shaft line 2", true, false),
-    slot(L, "contact", "contact line", false, false),
-];
+const BEVEL_MEET: &[Slot] =
+    &[slot(L, "axis", "shaft line 1", true, false), slot(L, "axis2", "shaft line 2", true, false), slot(L, "contact", "contact line", false, false)];
 const HYPOID: &[Slot] = &[slot(C, "pitch", "ring's pitch circle", true, false), slot(L, "axis2", "pinion's axis line", true, false)];
 const WORM: &[Slot] = &[slot(C, "pitch", "wheel's pitch circle", true, false), slot(L, "axis2", "worm's axis line", true, false)];
 const CROSSED: &[Slot] = &[slot(C, "pitch", "pitch circle 1", true, false), slot(C, "pitch2", "pitch circle 2", true, false)];
@@ -770,8 +767,11 @@ fn no_room(kind: ItemKind, things: &[Thing]) -> String {
     // What the picks so far still need, in the first layout they fit.
     let layouts = slots(kind);
     let fitting = first_fit(kind, before).map(|(i, f)| (layouts[i], f));
-    let alt =
-        if layouts.len() > 1 { " (or remove a pick to use another layout: two pitch circles; two axis lines and one pitch circle; or a side view: the apex point, two shaft lines and an optional contact line)" } else { "" };
+    let alt = if layouts.len() > 1 {
+        " (or remove a pick to use another layout: two pitch circles; two axis lines and one pitch circle; or a side view: the apex point, two shaft lines and an optional contact line)"
+    } else {
+        ""
+    };
     if let Some((list, filled)) = fitting {
         let taken: Vec<usize> = filled.iter().map(|s| s.slot).collect();
         if let Some(want) = list.iter().enumerate().find(|(i, s)| s.required && !taken.contains(i)) {
@@ -1065,7 +1065,10 @@ fn bearings_on_shaft(ls: &[Ln], ps: &[V]) -> Result<(), String> {
     for p in ps {
         let d = dist_to_line(*p, l.a, l.u);
         if d > tol(1.0) {
-            return Err(format!("this point is {} mm off the shaft line: a bearing sits on the shaft; put the point on the line (Coincident)", num(d)));
+            return Err(format!(
+                "this point is {} mm off the shaft line: a bearing sits on the shaft; put the point on the line (Coincident)",
+                num(d)
+            ));
         }
     }
     Ok(())
@@ -1488,7 +1491,11 @@ fn bevel_side(things: &[Thing]) -> Result<SideView, String> {
     for (k, e) in ends.iter().take(2).enumerate() {
         let (u, _, off) = away(*e).ok_or("a shaft line has no length")?;
         if off > t {
-            return Err(format!("shaft line {} doesn't run through the apex point ({} mm off): draw both shaft lines from the apex", k + 1, num(off)));
+            return Err(format!(
+                "shaft line {} doesn't run through the apex point ({} mm off): draw both shaft lines from the apex",
+                k + 1,
+                num(off)
+            ));
         }
         shafts[k] = (u, *e);
     }
@@ -1541,7 +1548,14 @@ fn bevel_side_gears(item: &GearItem) -> Vec<GearGeom> {
             (d1, sigma - d1, r1 / d1.sin().max(1e-12))
         }
     };
-    let gear = |u: V, d: f64, ends: (V, V)| GearGeom { centre: add(v.apex, mul(u, cone * d.cos())), axis: u, radius: Some(cone * d.sin()), ring: false, rack: false, line: Some(ends) };
+    let gear = |u: V, d: f64, ends: (V, V)| GearGeom {
+        centre: add(v.apex, mul(u, cone * d.cos())),
+        axis: u,
+        radius: Some(cone * d.sin()),
+        ring: false,
+        rack: false,
+        line: Some(ends),
+    };
     vec![gear(u1, d1, e1), gear(u2, d2, e2)]
 }
 
@@ -1609,7 +1623,12 @@ pub fn suggest_links(items: &[GearItem]) -> Vec<Suggestion> {
                 }
                 joined.push(x);
                 let at = dot(sub(b.centre, sg.centre), sg.axis);
-                out.push(Suggestion { a: GearRef::new(s, 0), b: GearRef::new(j, gb), kind: LinkKind::Shaft, why: format!("on the shaft line, {} mm along it", num(at)) });
+                out.push(Suggestion {
+                    a: GearRef::new(s, 0),
+                    b: GearRef::new(j, gb),
+                    kind: LinkKind::Shaft,
+                    why: format!("on the shaft line, {} mm along it", num(at)),
+                });
             }
         }
     }
@@ -1623,7 +1642,9 @@ pub fn implicit_shaft_links(items: &[GearItem], links: &[ItemLink]) -> Vec<ItemL
     let named = |i: usize| links.iter().any(|l| l.a.item == i || l.b.item == i);
     suggest_links(items)
         .iter()
-        .filter(|s| s.kind == LinkKind::Shaft && [s.a, s.b].iter().any(|r| items.get(r.item).is_some_and(|it| it.kind == ItemKind::Shaft) && !named(r.item)))
+        .filter(|s| {
+            s.kind == LinkKind::Shaft && [s.a, s.b].iter().any(|r| items.get(r.item).is_some_and(|it| it.kind == ItemKind::Shaft) && !named(r.item))
+        })
         .map(Suggestion::link)
         .collect()
 }
@@ -1645,9 +1666,9 @@ pub fn detail_gear(item: &GearItem, t: &Thing) -> Option<usize> {
     if !takes_details(item.kind) {
         return None;
     }
-    gear_geoms(item).iter().position(|g| {
-        g.radius.is_some_and(|r| !g.ring && *radius < r - tol(r) && len(sub(g.centre, *centre)) <= tol(r) && parallel(g.axis, *normal))
-    })
+    gear_geoms(item)
+        .iter()
+        .position(|g| g.radius.is_some_and(|r| !g.ring && *radius < r - tol(r) && len(sub(g.centre, *centre)) <= tol(r) && parallel(g.axis, *normal)))
 }
 
 /// The set gear `x` is in, of the shaft sets in `root` (a union–find).
@@ -1873,7 +1894,8 @@ pub fn stages(items: &[GearItem], links: &[ItemLink]) -> Vec<Stage> {
     let geoms: Vec<Vec<GearGeom>> = items.iter().map(gear_geoms).collect();
     let shafts: Vec<Option<GearGeom>> = items.iter().map(shaft_geom).collect();
     // A gear's place, or a Shaft item's line (its gear 0).
-    let geom = |r: GearRef| geoms.get(r.item).and_then(|g| g.get(r.gear)).copied().or_else(|| shafts.get(r.item).copied().flatten().filter(|_| r.gear == 0));
+    let geom =
+        |r: GearRef| geoms.get(r.item).and_then(|g| g.get(r.gear)).copied().or_else(|| shafts.get(r.item).copied().flatten().filter(|_| r.gear == 0));
     let is_shaft = |r: GearRef| items.get(r.item).is_some_and(|it| it.kind == ItemKind::Shaft);
     let mut out = Vec::new();
     let base = |kind, gears: Vec<GearRef>, from| {
@@ -1959,14 +1981,23 @@ pub fn stages(items: &[GearItem], links: &[ItemLink]) -> Vec<Stage> {
             (Some(a), Some(b)) if a != b => {
                 join(&mut parent, a, b);
                 shaft_links.push((k, a));
-                let (ga, gb) = (geom(l.a).unwrap_or_else(|| unreachable!()), geom(l.b).unwrap_or_else(|| unreachable!()));
+                // Both gears are there (found above), so both have their geometry.
+                let (Some(ga), Some(gb)) = (geom(l.a), geom(l.b)) else { continue };
                 let t = tol([ga.radius, gb.radius].into_iter().flatten().reduce(f64::min).unwrap_or(1.0));
                 if !matches!(lie(ga.centre, ga.axis, gb.centre, gb.axis, t), Lie::Coaxial) {
                     let e = if is_shaft(l.a) || is_shaft(l.b) {
                         let (s, g) = if is_shaft(l.a) { (l.a, l.b) } else { (l.b, l.a) };
-                        format!("{} is not on the line of {}: a shaft carries only the gears on its line; draw the line along the gear's axis, or remove the link", who(items, g), who(items, s))
+                        format!(
+                            "{} is not on the line of {}: a shaft carries only the gears on its line; draw the line along the gear's axis, or remove the link",
+                            who(items, g),
+                            who(items, s)
+                        )
                     } else {
-                        format!("{} and {} share a shaft but are not on one axis: put their centres on one line, square to both circles, or remove the link", who(items, l.a), who(items, l.b))
+                        format!(
+                            "{} and {} share a shaft but are not on one axis: put their centres on one line, square to both circles, or remove the link",
+                            who(items, l.a),
+                            who(items, l.b)
+                        )
                     };
                     errors.push((a, e));
                 }
@@ -2044,7 +2075,10 @@ fn classify(items: &[GearItem], ra: GearRef, rb: GearRef, a: &GearGeom, b: &Gear
             // One circle picked for two gears.
             let (first, second) = if (ra.item, ra.gear) <= (rb.item, rb.gear) { (ra, rb) } else { (rb, ra) };
             let curve = pitch_thing(items, first).map_or(String::new(), |e| format!(" (curve {e})"));
-            (StageKind::Parallel, Some(format!("{} uses the same pitch circle as {}{curve}: pick another circle", who(items, second), who(items, first))))
+            (
+                StageKind::Parallel,
+                Some(format!("{} uses the same pitch circle as {}{curve}: pick another circle", who(items, second), who(items, first))),
+            )
         }
         Lie::Coaxial => (StageKind::Parallel, Some(format!("{} are on one axis, so they can't mesh: link them by Shaft instead", names()))),
         Lie::Parallel { distance } => {

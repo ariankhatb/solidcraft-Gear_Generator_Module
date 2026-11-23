@@ -504,13 +504,31 @@ fn sweep_elliptical_pairs() {
 #[test]
 fn sprocket_tables_iso_606() {
     // Pitch diameters p / sin(180°/z) from the standard's table of d for unit pitch.
-    for (z, unit) in [(9u32, 2.9238), (11, 3.5495), (13, 4.1786), (15, 4.8097), (17, 5.4422), (19, 6.0755), (21, 6.7095), (25, 7.9787), (38, 12.1096), (57, 18.1529)] {
+    for (z, unit) in [
+        (9u32, 2.9238),
+        (11, 3.5495),
+        (13, 4.1786),
+        (15, 4.8097),
+        (17, 5.4422),
+        (19, 6.0755),
+        (21, 6.7095),
+        (25, 7.9787),
+        (38, 12.1096),
+        (57, 18.1529),
+    ] {
         let s = Sprocket { teeth: z, pitch: 1.0, roller: 0.6 };
         assert!(close(s.pitch_diameter(), unit, 6e-5), "z{z}: {}", s.pitch_diameter());
     }
     // Catalogue sprockets: (chain, z, pitch Ø, root Ø).
-    for (id, z, d, df) in [("06b", 15u32, 45.81, 39.46), ("08b", 19, 77.16, 68.65), ("10b", 21, 106.51, 96.35), ("12b", 25, 152.00, 139.93), ("16b", 13, 106.14, 90.26), ("ansi40", 18, 73.14, 65.22), ("ansi60", 15, 91.62, 79.71)]
-    {
+    for (id, z, d, df) in [
+        ("06b", 15u32, 45.81, 39.46),
+        ("08b", 19, 77.16, 68.65),
+        ("10b", 21, 106.51, 96.35),
+        ("12b", 25, 152.00, 139.93),
+        ("16b", 13, 106.14, 90.26),
+        ("ansi40", 18, 73.14, 65.22),
+        ("ansi60", 15, 91.62, 79.71),
+    ] {
         let c = chain_by_id(id).unwrap();
         let s = Sprocket { teeth: z, pitch: c.pitch, roller: c.roller };
         assert!(close(s.pitch_diameter(), d, 0.01), "{id} z{z}: d {}", s.pitch_diameter());
@@ -560,7 +578,8 @@ fn multi_strand_sprockets_are_discs_on_a_core() {
             assert_eq!(prisms, 2 * strands as usize - 1, "{strands} strands");
             assert_eq!(steps.iter().filter(|st| matches!(st, Step::Revolve { .. })).count(), usize::from(chamfer));
             // The last disc ends at (strands − 1)·pt + bf1.
-            let top = steps.iter().filter_map(|st| if let Step::Prism { z0, height, .. } = st { Some(z0 + height) } else { None }).fold(0.0, f64::max);
+            let top =
+                steps.iter().filter_map(|st| if let Step::Prism { z0, height, .. } = st { Some(z0 + height) } else { None }).fold(0.0, f64::max);
             let width = p.facts.iter().find(|f| f.label == "width over the teeth").unwrap().value;
             assert!(close(top, width, 1e-9) && close(width, f64::from(strands - 1) * 13.92 + if strands == 1 { 0.93 } else { 0.91 } * 7.75, 1e-9));
         }
@@ -624,7 +643,8 @@ fn spline_fit(s: &Spec) -> (f64, f64, f64) {
 
 fn spline_spec(standard: SplineStandard, m: f64, z: u32, db: f64, pa: f64, fillet: bool, clearance: f64) -> Spec {
     let mut s = Spec::defaults_for(Kind::Spline);
-    (s.spline_standard, s.module, s.teeth, s.spline_diameter, s.pressure_angle, s.fillet_root, s.backlash) = (standard, m, z, db, pa, fillet, clearance);
+    (s.spline_standard, s.module, s.teeth, s.spline_diameter, s.pressure_angle, s.fillet_root, s.backlash) =
+        (standard, m, z, db, pa, fillet, clearance);
     s
 }
 
@@ -657,7 +677,10 @@ fn spline_shaft_and_hub_mate() {
                 let (d, area, gap) = spline_fit(&s);
                 // The clearance is the space's width less the tooth's: half of it a flank.
                 let want = 0.5 * c * pa.to_radians().cos();
-                eprintln!("spline {st:?} m{m:.3} z{z} dB{db} {pa}° fillet {fillet} clearance {c:.3}: depth {d:.5} m, area {area:.6} m²/tooth, gap {gap:.5} m (want {:.5})", want / m);
+                eprintln!(
+                    "spline {st:?} m{m:.3} z{z} dB{db} {pa}° fillet {fillet} clearance {c:.3}: depth {d:.5} m, area {area:.6} m²/tooth, gap {gap:.5} m (want {:.5})",
+                    want / m
+                );
                 assert!(d <= depth, "overlap {d} modules deep");
                 assert!(area <= 1e-3, "overlap {area} m² a tooth");
                 assert!((gap - want / m).abs() <= 1.5e-3 + 0.2 * want / m, "gap {gap} modules, {} wanted", want / m);
@@ -710,7 +733,15 @@ fn face_mesh(fg: &FaceGear, r: f64) -> crate::mesh2d::Stat {
 #[test]
 fn face_gear_teeth_mesh_with_the_pinion_along_their_length() {
     let depth = 2.0 * crate::involute::PROFILE_TOLERANCE + 3e-4;
-    for (z1, z2, m, pa, backlash) in [(18u32, 40u32, 2.0, 20.0, 0.0), (18, 60, 2.0, 20.0, 0.0), (12, 48, 1.0, 20.0, 0.0), (24, 72, 3.0, 20.0, 0.0), (20, 100, 1.5, 25.0, 0.0), (17, 51, 2.0, 20.0, 0.1), (30, 45, 2.0, 20.0, 0.0)] {
+    for (z1, z2, m, pa, backlash) in [
+        (18u32, 40u32, 2.0, 20.0, 0.0),
+        (18, 60, 2.0, 20.0, 0.0),
+        (12, 48, 1.0, 20.0, 0.0),
+        (24, 72, 3.0, 20.0, 0.0),
+        (20, 100, 1.5, 25.0, 0.0),
+        (17, 51, 2.0, 20.0, 0.1),
+        (30, 45, 2.0, 20.0, 0.0),
+    ] {
         let pinion = Involute { teeth: z1, module: m, pressure_angle: f64::to_radians(pa), ..Involute::default() };
         let fg = FaceGear::new(pinion, z2, backlash);
         let (ri, ro) = (fg.undercut_radius(), fg.pointed_radius());
@@ -757,7 +788,13 @@ fn face_gear_plan_limits_and_refusals() {
     let placed: Vec<V2> = rack.region.outer[0].polyline(0.01).iter().map(|q| rack.place(*q, 0.0)).collect();
     let top = placed.iter().map(|q| q.y).fold(f64::MIN, f64::max);
     assert!(placed.iter().any(|q| q.y > top - 1e-9 && q.x.abs() < 0.25 * rack.period), "no tooth under the pinion's space");
-    let low = pinion.region.outer[0].polyline(0.01).iter().map(|q| pinion.place(*q, 0.0)).filter(|q| q.x.abs() < 0.1 * rack.period).map(|q| q.y).fold(f64::MAX, f64::min);
+    let low = pinion.region.outer[0]
+        .polyline(0.01)
+        .iter()
+        .map(|q| pinion.place(*q, 0.0))
+        .filter(|q| q.x.abs() < 0.1 * rack.period)
+        .map(|q| q.y)
+        .fold(f64::MAX, f64::min);
     assert!(low > top, "the pinion's space is not over the tooth ({low} against {top})");
 
     let mut long = s.clone();

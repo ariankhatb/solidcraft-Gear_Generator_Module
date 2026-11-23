@@ -169,11 +169,14 @@ fn a_ring_gears_formulas_are_its_tooth_spaces() {
 
 #[test]
 fn a_racks_points_are_its_outline() {
-    for s in [spec(Kind::Rack, |_| {}), spec(Kind::Rack, |s| {
-        s.shift = 0.3;
-        s.backlash = 0.05;
-        s.rack_teeth = 7;
-    })] {
+    for s in [
+        spec(Kind::Rack, |_| {}),
+        spec(Kind::Rack, |s| {
+            s.shift = 0.3;
+            s.backlash = 0.05;
+            s.rack_teeth = 7;
+        }),
+    ] {
         let src = source(&s, "rack");
         let Form::Rack { g, count, below } = &src.form else { panic!("not a rack") };
         let o = rack_outline(g, *count, *below);
@@ -219,15 +222,9 @@ fn prism_outlines(s: &Spec) -> Vec<Outline> {
 
 #[test]
 fn every_tooth_outline_of_the_planar_sets_finds_its_formulas() {
-    for (kind, members) in [
-        (Kind::Spur, 1),
-        (Kind::Helical, 1),
-        (Kind::Herringbone, 2),
-        (Kind::Internal, 1),
-        (Kind::Pair, 2),
-        (Kind::Planetary, 5),
-        (Kind::Rack, 1),
-    ] {
+    for (kind, members) in
+        [(Kind::Spur, 1), (Kind::Helical, 1), (Kind::Herringbone, 2), (Kind::Internal, 1), (Kind::Pair, 2), (Kind::Planetary, 5), (Kind::Rack, 1)]
+    {
         let s = Spec::defaults_for(kind);
         let p = plan(&s).unwrap();
         let outlines = prism_outlines(&s);
@@ -285,10 +282,13 @@ fn rendered_formulas_fit_an_equation_curve_and_evaluate_alike() {
 
 #[test]
 fn a_flank_without_a_land_is_refused() {
-    let src = source(&spec(Kind::Spur, |s| {
-        s.teeth = 10;
-        s.shift = 1.2;
-    }), "gear");
+    let src = source(
+        &spec(Kind::Spur, |s| {
+            s.teeth = 10;
+            s.shift = 1.2;
+        }),
+        "gear",
+    );
     let Form::External { f, .. } = &src.form else { unreachable!() };
     let f: &ToothFlank = f;
     if f.pointed {
@@ -327,7 +327,16 @@ fn script_for_the_kernel() {
     // Curve ids are s1, s2… in order; points p<n> are unknown here, so points get ids by name.
     let mut cid = Vec::new();
     for (i, c) in cell.curves.iter().enumerate() {
-        cmds.push(cmd("sketch.equation_curve", &[("x", s_(&text(&c.x))), ("y", s_(&text(&c.y))), ("start", s_(&text(&c.start))), ("end", s_(&text(&c.end))), ("tolerance", n_(c.tolerance))]));
+        cmds.push(cmd(
+            "sketch.equation_curve",
+            &[
+                ("x", s_(&text(&c.x))),
+                ("y", s_(&text(&c.y))),
+                ("start", s_(&text(&c.start))),
+                ("end", s_(&text(&c.end))),
+                ("tolerance", n_(c.tolerance)),
+            ],
+        ));
         cid.push(format!("s{}", i + 1));
     }
     let mut made = std::collections::BTreeMap::new();
@@ -368,7 +377,10 @@ fn script_for_the_kernel() {
     }
     let seeds: Vec<String> = cid.iter().chain(&edges_ids).map(|x| s_(x)).collect();
     match &cell.repeat {
-        Repeat::Circular { count } => cmds.push(cmd("sketch.pattern.circular", &[("entities", format!("[{}]", seeds.join(","))), ("center", s_("origin")), ("count", s_(&text(count)))])),
+        Repeat::Circular { count } => cmds.push(cmd(
+            "sketch.pattern.circular",
+            &[("entities", format!("[{}]", seeds.join(","))), ("center", s_("origin")), ("count", s_(&text(count)))],
+        )),
         Repeat::Linear { count, spacing } => cmds.push(cmd(
             "sketch.pattern.rectangular",
             &[("entities", format!("[{}]", seeds.join(","))), ("count", s_(&text(count))), ("spacing", s_(&text(spacing))), ("dir", "[1,0]".into())],
@@ -382,7 +394,11 @@ fn script_for_the_kernel() {
     let mut ext = vec![("sketch", s_("S")), ("distance", s_(&face))];
     if matches!(kind, Kind::Internal) {
         // The ring: a disc round the teeth, its region picked by a point near its rim.
-        let rr = p.bodies[0].steps.iter().find_map(|st| if let Step::Prism { region, .. } = st { region.outer.first().map(|o| o.max_radius()) } else { None }).unwrap();
+        let rr = p.bodies[0]
+            .steps
+            .iter()
+            .find_map(|st| if let Step::Prism { region, .. } = st { region.outer.first().map(|o| o.max_radius()) } else { None })
+            .unwrap();
         cmds.insert(cmds.len() - 1, cmd("sketch.circle.center", &[("center", s_("origin")), ("radius", n_(rr))]));
         ext.push(("profiles", format!("[{{\"point\":[{},0]}}]", rr - 0.5)));
     }
@@ -582,6 +598,9 @@ fn a_clearance_profile_follows_the_tip_and_the_face() {
             .collect();
         let want = envelope(&profile_of(&plan(&base(z, face)).unwrap()));
         let got = envelope(&moved);
-        assert!((got.0 - want.0).abs() < 1e-3 && (got.1 - want.1).abs() < 0.05 && (got.2 - want.2).abs() < 0.05, "z{z} face {face}: {got:?} vs {want:?}");
+        assert!(
+            (got.0 - want.0).abs() < 1e-3 && (got.1 - want.1).abs() < 0.05 && (got.2 - want.2).abs() < 0.05,
+            "z{z} face {face}: {got:?} vs {want:?}"
+        );
     }
 }

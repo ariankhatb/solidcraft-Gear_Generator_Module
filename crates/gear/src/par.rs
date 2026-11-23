@@ -24,7 +24,6 @@ pub fn map<R: Send>(n: usize, f: impl Fn(usize) -> R + Sync) -> Vec<R> {
         return (0..n).map(f).collect();
     }
     let next = AtomicUsize::new(0);
-    let mut out: Vec<Option<R>> = (0..n).map(|_| None).collect();
     let done: Vec<Vec<(usize, R)>> = std::thread::scope(|sc| {
         let workers: Vec<_> = (0..threads)
             .map(|_| {
@@ -43,10 +42,10 @@ pub fn map<R: Send>(n: usize, f: impl Fn(usize) -> R + Sync) -> Vec<R> {
             .collect();
         workers.into_iter().map(|w| w.join().unwrap_or_else(|e| std::panic::resume_unwind(e))).collect()
     });
-    for (i, r) in done.into_iter().flatten() {
-        out[i] = Some(r);
-    }
-    out.into_iter().map(|r| r.expect("every job ran")).collect()
+    // Every job ran once: in job order, they are the results.
+    let mut done: Vec<(usize, R)> = done.into_iter().flatten().collect();
+    done.sort_unstable_by_key(|(i, _)| *i);
+    done.into_iter().map(|(_, r)| r).collect()
 }
 
 /// `a()` and `b()` at once.

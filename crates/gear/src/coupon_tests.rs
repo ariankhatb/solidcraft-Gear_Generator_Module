@@ -10,7 +10,11 @@ use crate::plan::{Kind, Op, Plan, Spec, Step, plan};
 use crate::sweep_tests::{Rng, check_outline, check_region, random_spec};
 
 fn fact(p: &Plan, label: &str) -> f64 {
-    p.facts.iter().find(|f| f.label == label).unwrap_or_else(|| panic!("no fact {label}: {:?}", p.facts.iter().map(|f| &f.label).collect::<Vec<_>>())).value
+    p.facts
+        .iter()
+        .find(|f| f.label == label)
+        .unwrap_or_else(|| panic!("no fact {label}: {:?}", p.facts.iter().map(|f| &f.label).collect::<Vec<_>>()))
+        .value
 }
 
 fn coupon(s: Spec) -> Spec {
@@ -102,13 +106,19 @@ fn a_pair_coupon_is_two_small_pieces_on_a_base() {
     // The base: a plate below z = 0 with two pegs up through the face width.
     let base = &p.bodies[2];
     assert!(matches!(&base.steps[0], Step::Prism { z0, height, op: Op::New, .. } if *z0 < 0.0 && (z0 + height).abs() < 1e-12));
-    assert!(matches!(&base.steps[1], Step::Prism { region, z0, height, op: Op::Join, .. } if region.outer.len() == 2 && *z0 == 0.0 && *height == s.face_width));
+    assert!(
+        matches!(&base.steps[1], Step::Prism { region, z0, height, op: Op::Join, .. } if region.outer.len() == 2 && *z0 == 0.0 && *height == s.face_width)
+    );
     assert_eq!(base.steps.len(), 2);
 }
 
 #[test]
 fn a_bore_becomes_the_coupons_centre_hole() {
-    let s = Spec { bore: Bore { kind: BoreKind::Keyway, diameter: 8.0, ..Bore::default() }, bore2: Bore { kind: BoreKind::Hex, diameter: 10.0, ..Bore::default() }, ..Spec::defaults_for(Kind::Pair) };
+    let s = Spec {
+        bore: Bore { kind: BoreKind::Keyway, diameter: 8.0, ..Bore::default() },
+        bore2: Bore { kind: BoreKind::Hex, diameter: 10.0, ..Bore::default() },
+        ..Spec::defaults_for(Kind::Pair)
+    };
     let p = plan(&coupon(s.clone())).unwrap();
     check_plan(&p).unwrap();
     assert_eq!(p.preview[0].region.holes[0], s.bore.outline().unwrap());
@@ -150,7 +160,9 @@ fn a_large_gear_gets_a_block_with_a_flat_reference_edge() {
     let p = plan(&coupon(Spec { teeth: 80, teeth2: 120, ..Spec::defaults_for(Kind::Pair) })).unwrap();
     check_plan(&p).unwrap();
     let across = fact(&p, "coupon: gear 1 flat to gear 2 flat");
-    let want = fact(&p, "centre distance") - fact(&p, "coupon gear 1: flat edge to the gear's centre") - fact(&p, "coupon gear 2: flat edge to the gear's centre");
+    let want = fact(&p, "centre distance")
+        - fact(&p, "coupon gear 1: flat edge to the gear's centre")
+        - fact(&p, "coupon gear 2: flat edge to the gear's centre");
     assert!((across - want).abs() < 1e-9);
     assert_eq!(worst(&check_mesh(&p)), Some(Verdict::Ok));
 }
@@ -161,7 +173,10 @@ fn a_planetary_coupon_has_sun_planet_and_ring_pieces() {
     let full = plan(&s).unwrap();
     let p = plan(&coupon(s.clone())).unwrap();
     check_plan(&p).unwrap();
-    assert_eq!(p.bodies.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), ["Coupon sun z18", "Coupon planet 1 z18", "Coupon ring z54", "Coupon base"]);
+    assert_eq!(
+        p.bodies.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(),
+        ["Coupon sun z18", "Coupon planet 1 z18", "Coupon ring z54", "Coupon base"]
+    );
     assert_eq!(p.preview.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["sun", "planet 1", "ring"]);
     assert_eq!(p.meshes.iter().map(|m| (m.a, m.b, m.internal)).collect::<Vec<_>>(), [(0, 1, false), (1, 2, true)]);
     // The planet shows teeth to the sun and to the ring.
@@ -185,7 +200,11 @@ fn a_planetary_coupon_has_sun_planet_and_ring_pieces() {
 
 #[test]
 fn helical_coupons_are_cut_from_the_twisted_gear() {
-    for s in [Spec { helix: 20.0, ..Spec::defaults_for(Kind::Pair) }, Spec { helix: 20.0, teeth2: 90, ..Spec::defaults_for(Kind::Pair) }, Spec { helix: 15.0, ..Spec::defaults_for(Kind::Planetary) }] {
+    for s in [
+        Spec { helix: 20.0, ..Spec::defaults_for(Kind::Pair) },
+        Spec { helix: 20.0, teeth2: 90, ..Spec::defaults_for(Kind::Pair) },
+        Spec { helix: 15.0, ..Spec::defaults_for(Kind::Planetary) },
+    ] {
         let p = plan(&coupon(s.clone())).unwrap();
         check_plan(&p).unwrap();
         for b in &p.bodies[..p.bodies.len() - 1] {

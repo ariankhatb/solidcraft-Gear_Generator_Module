@@ -187,7 +187,13 @@ pub fn fields(kind: Option<Kind>) -> Vec<FieldInfo> {
     let bore = fi(F::Bore, "Bore", Mm);
     match kind {
         Kind::Spur | Kind::Helical | Kind::Herringbone => {
-            let mut v = vec![fi(F::PitchDiameter, "Pitch diameter", Mm), fi(F::OuterDiameter, "Outer diameter", Mm), fi(F::Teeth, "Teeth", N), fi(F::Module, "Module", N), face];
+            let mut v = vec![
+                fi(F::PitchDiameter, "Pitch diameter", Mm),
+                fi(F::OuterDiameter, "Outer diameter", Mm),
+                fi(F::Teeth, "Teeth", N),
+                fi(F::Module, "Module", N),
+                face,
+            ];
             if kind != Kind::Spur {
                 v.push(fi(F::Helix, "Helix angle", Deg));
                 v.push(fi(F::LeftHand, "Left hand", N));
@@ -231,7 +237,14 @@ pub fn fields(kind: Option<Kind>) -> Vec<FieldInfo> {
             face,
             print,
         ],
-        Kind::Rack => vec![fi(F::Length, "Rack length", Mm), fi(F::PitchDiameter, "Pinion pitch diameter", Mm), fi(F::Teeth, "Pinion teeth", N), fi(F::Module, "Module", N), face, print],
+        Kind::Rack => vec![
+            fi(F::Length, "Rack length", Mm),
+            fi(F::PitchDiameter, "Pinion pitch diameter", Mm),
+            fi(F::Teeth, "Pinion teeth", N),
+            fi(F::Module, "Module", N),
+            face,
+            print,
+        ],
         Kind::Bevel | Kind::SpiralBevel => {
             let mut v = vec![
                 fi(F::ShaftAngle, "Shaft angle", Deg),
@@ -277,8 +290,20 @@ pub fn fields(kind: Option<Kind>) -> Vec<FieldInfo> {
             face,
             print,
         ],
-        Kind::Cycloidal => vec![fi(F::Ratio, "Ratio (wheel ÷ pinion)", N), fi(F::CenterDistance, "Centre distance", Mm), fi(F::PitchDiameter, "Wheel pitch diameter", Mm), fi(F::Teeth, "Wheel teeth", N), face],
-        Kind::CycloidalDrive => vec![fi(F::Ratio, "Reduction", N), fi(F::OuterDiameter, "Outer diameter (over the pins)", Mm), fi(F::PitchDiameter, "Pin circle diameter", Mm), face, bore],
+        Kind::Cycloidal => vec![
+            fi(F::Ratio, "Ratio (wheel ÷ pinion)", N),
+            fi(F::CenterDistance, "Centre distance", Mm),
+            fi(F::PitchDiameter, "Wheel pitch diameter", Mm),
+            fi(F::Teeth, "Wheel teeth", N),
+            face,
+        ],
+        Kind::CycloidalDrive => vec![
+            fi(F::Ratio, "Reduction", N),
+            fi(F::OuterDiameter, "Outer diameter (over the pins)", Mm),
+            fi(F::PitchDiameter, "Pin circle diameter", Mm),
+            face,
+            bore,
+        ],
         Kind::Sprocket => vec![
             fi(F::Chain, "Chain", N),
             fi(F::Teeth, "Teeth", N),
@@ -296,9 +321,19 @@ pub fn fields(kind: Option<Kind>) -> Vec<FieldInfo> {
             fi(F::CenterDistance, "Centre distance", Mm),
             bore,
         ],
-        Kind::Spline => vec![fi(F::PitchDiameter, "Reference diameter", Mm), fi(F::Teeth, "Teeth", N), fi(F::Module, "Module", N), fi(F::FaceWidth, "Length", Mm)],
-        Kind::FaceGear => vec![fi(F::Ratio, "Ratio", N), fi(F::PitchDiameter, "Pinion pitch diameter", Mm), fi(F::PitchDiameter2, "Face gear pitch diameter", Mm), fi(F::Teeth, "Pinion teeth", N), face],
-        Kind::Elliptical => vec![fi(F::CenterDistance, "Centre distance", Mm), fi(F::Teeth, "Teeth", N), fi(F::Eccentricity, "Eccentricity", N), face],
+        Kind::Spline => {
+            vec![fi(F::PitchDiameter, "Reference diameter", Mm), fi(F::Teeth, "Teeth", N), fi(F::Module, "Module", N), fi(F::FaceWidth, "Length", Mm)]
+        }
+        Kind::FaceGear => vec![
+            fi(F::Ratio, "Ratio", N),
+            fi(F::PitchDiameter, "Pinion pitch diameter", Mm),
+            fi(F::PitchDiameter2, "Face gear pitch diameter", Mm),
+            fi(F::Teeth, "Pinion teeth", N),
+            face,
+        ],
+        Kind::Elliptical => {
+            vec![fi(F::CenterDistance, "Centre distance", Mm), fi(F::Teeth, "Teeth", N), fi(F::Eccentricity, "Eccentricity", N), face]
+        }
         // Designed by its own goal (crate::diff::Goal): the window shows those fields.
         Kind::Differential => Vec::new(),
         Kind::BevelPlanetary => vec![
@@ -474,7 +509,11 @@ pub fn auto_kind(relation: &Relation, sizes: &Simple) -> Vec<(Kind, &'static str
             let ur = u.unwrap_or(1.0);
             let geared = if u.is_some() { smooth(ur, 2.1, 2.6) } else { 0.0 };
             v.push((single.0, single.1, 1.0 - 0.8 * geared));
-            v.push((Kind::Planetary, "input and output on one axis: sun in, carrier out, ring fixed", 0.5 + 0.6 * geared * (1.0 - smooth(ur, 10.0, 14.0))));
+            v.push((
+                Kind::Planetary,
+                "input and output on one axis: sun in, carrier out, ring fixed",
+                0.5 + 0.6 * geared * (1.0 - smooth(ur, 10.0, 14.0)),
+            ));
             v.push((Kind::CycloidalDrive, "a large reduction on one axis", 0.2 + 0.9 * smooth(ur, 8.0, 14.0)));
             v.push((Kind::Internal, "a ring gear on the axis", 0.3));
             v.push((Kind::Spline, "a shaft-to-hub coupling (1:1)", 0.25 * (1.0 - geared)));
@@ -515,7 +554,11 @@ pub fn auto_kind(relation: &Relation, sizes: &Simple) -> Vec<(Kind, &'static str
             v.push((Kind::FaceGear, "the shafts meet square: a face gear and spur pinion", 0.4 * square));
             // Planets asked for (or a bevel planetary mode): planets round a bevel sun.
             let planets = sizes.planets.is_some_and(|n| n >= 1) || sizes.bevel_planet_mode.is_some();
-            v.push((Kind::BevelPlanetary, "the shafts meet: bevel planets round a bevel sun (a differential, or a bevel epicyclic with a ring)", ok * if planets { 1.05 } else { 0.3 }));
+            v.push((
+                Kind::BevelPlanetary,
+                "the shafts meet: bevel planets round a bevel sun (a differential, or a bevel epicyclic with a ring)",
+                ok * if planets { 1.05 } else { 0.3 },
+            ));
         }
         Relation::Skew { angle, offset, .. } => {
             let af = angle.min(180.0 - angle);
@@ -535,13 +578,21 @@ pub fn auto_kind(relation: &Relation, sizes: &Simple) -> Vec<(Kind, &'static str
             // Hypoid: small offsets for the ring gear; ratios 1.5 to 10; shafts not too oblique.
             let h_size = 1.0 - smooth(q, HYPOID_OFFSET_FULL, HYPOID_OFFSET_NONE);
             let h_ratio = if u.is_some() { smooth(ur, 1.0, 1.6) * (1.0 - smooth(ur, 8.0, 12.0)) } else { 1.0 };
-            v.push((Kind::Hypoid, "the shafts miss by a small offset for the gear size: hypoid (offset 0 is a spiral bevel)", h_size * h_ratio * smooth(af, 20.0, 35.0)));
+            v.push((
+                Kind::Hypoid,
+                "the shafts miss by a small offset for the gear size: hypoid (offset 0 is a spiral bevel)",
+                h_size * h_ratio * smooth(af, 20.0, 35.0),
+            ));
             // Crossed helical: the pitch cylinders touch across the offset.
             let ec = dbig / 2.0 * (1.0 + 1.0 / ur);
             // (Within about ±15 % of touching in full, none past ±45 %; never where a hypoid is natural.)
             let c_size = if sized { 1.0 - smooth((e / ec).ln().abs(), 0.15, 0.6) } else { 1.0 } * smooth(q, 0.3, 0.45);
             let c_ratio = if u.is_some() { 1.0 - smooth(ur, CROSSED_RATIO_FULL, CROSSED_RATIO_HIGH) } else { 0.8 };
-            v.push((Kind::CrossedHelical, "the shafts miss with the gears side by side: crossed helical gears, pitch cylinders touching across the offset", 0.9 * c_size * c_ratio));
+            v.push((
+                Kind::CrossedHelical,
+                "the shafts miss with the gears side by side: crossed helical gears, pitch cylinders touching across the offset",
+                0.9 * c_size * c_ratio,
+            ));
             // Worm: square shafts, a high ratio or a small driver, E about half the wheel and more.
             let square = if (af - 90.0).abs() <= WORM_SQUARE { 1.0 } else { 0.0 };
             let w_ratio = if u.is_some() { smooth(ur, WORM_RATIO_LOW, WORM_RATIO_HIGH) } else { 0.5 };
@@ -617,7 +668,12 @@ impl Ctx<'_> {
             let err = got - d;
             if err.abs() > 1e-6 {
                 self.row(&format!("{what} asked"), d, Unit::Mm);
-                self.note(format!("{what}: {} asked, {} with the standard module ({:+.2} %); tick Exact for a non-standard module that hits it", num(d), num(got), 100.0 * err / d));
+                self.note(format!(
+                    "{what}: {} asked, {} with the standard module ({:+.2} %); tick Exact for a non-standard module that hits it",
+                    num(d),
+                    num(got),
+                    100.0 * err / d
+                ));
             }
         }
     }
@@ -652,13 +708,26 @@ fn gcd(a: u32, b: u32) -> u32 {
 
 /// The fewest teeth without undercut for the spec's tooth form at a helix angle.
 fn zmin(spec: &Spec, helix_deg: f64) -> u32 {
-    let g = Involute { module: 1.0, pressure_angle: spec.pressure_angle.to_radians(), helix: helix_deg.to_radians(), rack: spec.rack_eff(), shift: 0.0, ..Involute::default() };
+    let g = Involute {
+        module: 1.0,
+        pressure_angle: spec.pressure_angle.to_radians(),
+        helix: helix_deg.to_radians(),
+        rack: spec.rack_eff(),
+        shift: 0.0,
+        ..Involute::default()
+    };
     (g.min_teeth_no_undercut() - 1e-9).ceil().max(4.0) as u32
 }
 
 /// The profile shift that just clears undercut on `z` teeth (0 when none is needed).
 fn shift_against_undercut(spec: &Spec, z: u32, helix_deg: f64) -> f64 {
-    let g = Involute { module: 1.0, pressure_angle: spec.pressure_angle.to_radians(), helix: helix_deg.to_radians(), rack: spec.rack_eff(), ..Involute::default() };
+    let g = Involute {
+        module: 1.0,
+        pressure_angle: spec.pressure_angle.to_radians(),
+        helix: helix_deg.to_radians(),
+        rack: spec.rack_eff(),
+        ..Involute::default()
+    };
     let least = g.min_teeth_no_undercut();
     let x = g.rack.addendum * (least - f64::from(z)) / least;
     if x <= 0.0 { 0.0 } else { (x * 100.0).ceil() / 100.0 }
@@ -831,7 +900,14 @@ fn differential(c: &mut Ctx) -> Result<(), String> {
 // Single gears.
 
 /// The best (module, teeth) for a size `target` that `size(m, z)` gives, teeth in `zr`.
-fn fit_one(mods: &[(f64, bool)], zr: (u32, u32, u32), pin_z: Option<u32>, target: f64, size: &dyn Fn(f64, u32) -> f64, base: Option<(f64, u32)>) -> Option<(f64, u32)> {
+fn fit_one(
+    mods: &[(f64, bool)],
+    zr: (u32, u32, u32),
+    pin_z: Option<u32>,
+    target: f64,
+    size: &dyn Fn(f64, u32) -> f64,
+    base: Option<(f64, u32)>,
+) -> Option<(f64, u32)> {
     let mut best: Option<(f64, f64, u32)> = None;
     for &(m, second) in mods {
         let zs: Vec<u32> = match pin_z {
@@ -848,7 +924,8 @@ fn fit_one(mods: &[(f64, bool)], zr: (u32, u32, u32), pin_z: Option<u32>, target
             let pct = 100.0 * (got - target).abs() / target.max(1e-9);
             let stay = base.map_or(0.0, |(bm, bz)| if (bm - m).abs() < 1e-12 && bz == z { -0.01 } else { 0.0 });
             let ideal = f64::from(zr.2);
-            let score = pct + 0.03 * (f64::from(z) - ideal).max(0.0) + 0.1 * (0.75 * ideal - f64::from(z)).max(0.0) + if second { 0.3 } else { 0.0 } + stay;
+            let score =
+                pct + 0.03 * (f64::from(z) - ideal).max(0.0) + 0.1 * (0.75 * ideal - f64::from(z)).max(0.0) + if second { 0.3 } else { 0.0 } + stay;
             if best.is_none_or(|b| score < b.0 - 1e-12) {
                 best = Some((score, m, z));
             }
@@ -883,7 +960,8 @@ fn single(c: &mut Ctx, kind: Kind) -> Result<(), String> {
             let mods = if s.exact && pin_m.is_none() { vec![(guess, false)] } else { modules(pin_m, guess / 6.0, guess * 4.0, s.printable) };
             let mods = if s.exact && pin_m.is_none() {
                 // Exact: the standard module's teeth, then the module that hits the size.
-                let (m, z) = fit_one(&modules(None, guess / 6.0, guess * 4.0, s.printable), (zlo, 400, 24), pin_z, d, &*size, base).unwrap_or((guess, 24));
+                let (m, z) =
+                    fit_one(&modules(None, guess / 6.0, guess * 4.0, s.printable), (zlo, 400, 24), pin_z, d, &*size, base).unwrap_or((guess, 24));
                 let exact = m * d / size(m, z);
                 vec![(exact, false)]
             } else {
@@ -902,7 +980,13 @@ fn single(c: &mut Ctx, kind: Kind) -> Result<(), String> {
             }
         }
     }
-    c.spec.shift = if c.spec.teeth < zmin(&c.spec, helix) { shift_against_undercut(&c.spec, c.spec.teeth, helix) } else if c.same && c.module_unchanged() && c.spec.teeth == c.base.teeth { c.base.shift } else { 0.0 };
+    c.spec.shift = if c.spec.teeth < zmin(&c.spec, helix) {
+        shift_against_undercut(&c.spec, c.spec.teeth, helix)
+    } else if c.same && c.module_unchanged() && c.spec.teeth == c.base.teeth {
+        c.base.shift
+    } else {
+        0.0
+    };
     let m = c.spec.module;
     c.face(10.0 * m);
     let g = c.spec.involute(c.spec.teeth, c.spec.shift, helix);
@@ -987,7 +1071,12 @@ fn pair(c: &mut Ctx) -> Result<(), String> {
                 }
                 let got = mt * f64::from(if first { z1 } else { z2 });
                 let stay = base.map_or(0.0, |b| if (b.0 - m).abs() < 1e-12 && b.1 == z1 && b.2 == z2 { -0.01 } else { 0.0 });
-                let score = 100.0 * (got - d).abs() / d + 40.0 * (f64::from(z2) / f64::from(z1) / ratio).ln().abs() + 0.03 * (f64::from(z1.min(z2)) - 24.0).max(0.0) + if second { 0.3 } else { 0.0 } + if gcd(z1, z2) == 1 { 0.0 } else { 0.02 } + stay;
+                let score = 100.0 * (got - d).abs() / d
+                    + 40.0 * (f64::from(z2) / f64::from(z1) / ratio).ln().abs()
+                    + 0.03 * (f64::from(z1.min(z2)) - 24.0).max(0.0)
+                    + if second { 0.3 } else { 0.0 }
+                    + if gcd(z1, z2) == 1 { 0.0 } else { 0.02 }
+                    + stay;
                 if best.is_none_or(|b| score < b.0 - 1e-12) {
                     best = Some((score, m, z1, z2));
                 }
@@ -1011,16 +1100,23 @@ fn pair(c: &mut Ctx) -> Result<(), String> {
         let pick = found
             .iter()
             .min_by(|a, b| {
-                let sc = |g: &design::Suggestion| 100.0 * (od - g.outer_diameter.max(g.outer_diameter2)) / od + 40.0 * g.ratio_error.abs() + 0.03 * (f64::from(g.teeth.min(g.teeth2)) - 24.0).max(0.0) + if g.hunting { 0.0 } else { 0.02 };
+                let sc = |g: &design::Suggestion| {
+                    100.0 * (od - g.outer_diameter.max(g.outer_diameter2)) / od
+                        + 40.0 * g.ratio_error.abs()
+                        + 0.03 * (f64::from(g.teeth.min(g.teeth2)) - 24.0).max(0.0)
+                        + if g.hunting { 0.0 } else { 0.02 }
+                };
                 sc(a).total_cmp(&sc(b))
             })
             .ok_or("no pair at this ratio fits inside that outer diameter")?;
-        (c.spec.module, c.spec.teeth, c.spec.teeth2, c.spec.shift, c.spec.shift2, c.spec.center_distance) = (pick.module, pick.teeth, pick.teeth2, pick.shift, pick.shift2, 0.0);
+        (c.spec.module, c.spec.teeth, c.spec.teeth2, c.spec.shift, c.spec.shift2, c.spec.center_distance) =
+            (pick.module, pick.teeth, pick.teeth2, pick.shift, pick.shift2, 0.0);
     } else {
         if let Some(m) = s.module {
             c.spec.module = m;
         }
-        let keep = c.same && (f64::from(c.spec.teeth2) / f64::from(c.spec.teeth) / ratio - 1.0).abs() < 1e-9 && s.teeth.is_none_or(|z| z == c.spec.teeth);
+        let keep =
+            c.same && (f64::from(c.spec.teeth2) / f64::from(c.spec.teeth) / ratio - 1.0).abs() < 1e-9 && s.teeth.is_none_or(|z| z == c.spec.teeth);
         if !keep {
             let (z1, z2) = counts(ratio, c.spec.teeth.max(zlo), zlo, s.teeth);
             (c.spec.teeth, c.spec.teeth2, c.spec.shift, c.spec.shift2) = (z1, z2, 0.0, 0.0);
@@ -1103,7 +1199,10 @@ fn pair_at(c: &mut Ctx, ratio: f64, a: f64, helix: f64) -> Result<(), String> {
     {
         // Exact drawn circles: their teeth at the nearest standard module, then the module that
         // makes them exact (their centre distance with it, no shift).
-        let z1 = s.teeth.unwrap_or_else(|| fit_one(&modules(None, d1 / 150.0, d1 / 8.0, s.printable), (zlo.min(8), 400, 24), None, d1, &|m, z| m * f64::from(z) / cb, None).map_or(24, |f| f.1));
+        let z1 = s.teeth.unwrap_or_else(|| {
+            fit_one(&modules(None, d1 / 150.0, d1 / 8.0, s.printable), (zlo.min(8), 400, 24), None, d1, &|m, z| m * f64::from(z) / cb, None)
+                .map_or(24, |f| f.1)
+        });
         let z2 = ((f64::from(z1) * d2 / d1).round() as u32).max(3);
         let m = (d1 + d2) * cb / f64::from(z1 + z2);
         (c.spec.module, c.spec.teeth, c.spec.teeth2, c.spec.shift, c.spec.shift2) = (m, z1, z2, 0.0, 0.0);
@@ -1121,7 +1220,12 @@ fn pair_at(c: &mut Ctx, ratio: f64, a: f64, helix: f64) -> Result<(), String> {
         let score = |g: &design::Suggestion| {
             let small = f64::from(g.teeth.min(g.teeth2));
             let stay = base.map_or(0.0, |b| if (b.0 - g.module).abs() < 1e-12 && b.1 == g.teeth && b.2 == g.teeth2 { -0.02 } else { 0.0 });
-            40.0 * (g.ratio / ratio).ln().abs() + 0.05 * (small - 24.0).max(0.0) + 0.3 * (g.shift.abs() + g.shift2.abs()) + if ISO54_SERIES_2.contains(&g.module) { 0.15 } else { 0.0 } + if g.hunting { 0.0 } else { 0.02 } + stay
+            40.0 * (g.ratio / ratio).ln().abs()
+                + 0.05 * (small - 24.0).max(0.0)
+                + 0.3 * (g.shift.abs() + g.shift2.abs())
+                + if ISO54_SERIES_2.contains(&g.module) { 0.15 } else { 0.0 }
+                + if g.hunting { 0.0 } else { 0.02 }
+                + stay
         };
         pick = found.into_iter().filter(|g| s.teeth.is_none_or(|z| g.teeth == z)).min_by(|x, y| score(x).total_cmp(&score(y)));
         if pick.is_some() {
@@ -1183,7 +1287,15 @@ fn internal(c: &mut Ctx) -> Result<(), String> {
     };
     if let Some((d, f)) = target {
         let guess = d * cb / 60.0;
-        let (m, z) = fit_one(&modules(s.module, guess / 6.0, guess * 4.0, s.printable), (20, 1000, if c.same { c.base.teeth } else { 60 }), s.teeth, d, f, base).ok_or("no module and teeth give that ring diameter")?;
+        let (m, z) = fit_one(
+            &modules(s.module, guess / 6.0, guess * 4.0, s.printable),
+            (20, 1000, if c.same { c.base.teeth } else { 60 }),
+            s.teeth,
+            d,
+            f,
+            base,
+        )
+        .ok_or("no module and teeth give that ring diameter")?;
         c.spec.module = if s.exact { m * d / f(m, z) } else { m };
         c.spec.teeth = z;
     } else {
@@ -1320,7 +1432,8 @@ fn planetary(c: &mut Ctx) -> Result<(), String> {
             }
         }
     }
-    let (_, m, zs, zp) = best.ok_or("no sun, planet and ring teeth give this ratio with these planets (they would collide): use fewer planets or another ratio")?;
+    let (_, m, zs, zp) =
+        best.ok_or("no sun, planet and ring teeth give this ratio with these planets (they would collide): use fewer planets or another ratio")?;
     let zr = zs + 2 * zp;
     let m = if s.exact
         && let Some((have, want)) = size_of(m, zs, zp).first().copied()
@@ -1351,7 +1464,11 @@ fn planetary(c: &mut Ctx) -> Result<(), String> {
     if ds.is_some() && dp.is_some() && dr.is_some() {
         let (a, b, r) = (ds.unwrap_or(0.0), dp.unwrap_or(0.0), dr.unwrap_or(0.0));
         if (a + 2.0 * b - r).abs() > 1e-6 * r {
-            c.note(format!("the drawn circles don't close (sun + 2 × planet = Ø{} against the ring's Ø{}): snapped to a set that assembles", num(a + 2.0 * b), num(r)));
+            c.note(format!(
+                "the drawn circles don't close (sun + 2 × planet = Ø{} against the ring's Ø{}): snapped to a set that assembles",
+                num(a + 2.0 * b),
+                num(r)
+            ));
         }
     }
     c.row("face width", c.spec.face_width, Unit::Mm);
@@ -1367,7 +1484,9 @@ fn rack(c: &mut Ctx) -> Result<(), String> {
     if let Some(d) = s.pitch_diameter.filter(|d| *d > 0.0) {
         let guess = d * cb / 20.0;
         let pitch = move |m: f64, z: u32| m * f64::from(z) / cb;
-        let (m, z) = fit_one(&modules(s.module, guess / 6.0, guess * 4.0, s.printable), (zlo.min(s.teeth.unwrap_or(zlo)), 400, 20), s.teeth, d, &pitch, base).ok_or("no module and teeth give that pinion")?;
+        let (m, z) =
+            fit_one(&modules(s.module, guess / 6.0, guess * 4.0, s.printable), (zlo.min(s.teeth.unwrap_or(zlo)), 400, 20), s.teeth, d, &pitch, base)
+                .ok_or("no module and teeth give that pinion")?;
         c.spec.module = if s.exact { m * d / pitch(m, z) } else { m };
         c.spec.teeth = z;
     } else {
@@ -1441,7 +1560,8 @@ fn bevel(c: &mut Ctx, kind: Kind) -> Result<(), String> {
         sigma = 180.0 - sigma;
     }
     c.spec.shaft_angle = sigma;
-    let (dl1, _) = cones(sigma, 1.0, ratio).ok_or(format!("a {}° shaft angle at ratio {} needs a cone over 85°: these aren't built", num(sigma), num(ratio)))?;
+    let (dl1, _) =
+        cones(sigma, 1.0, ratio).ok_or(format!("a {}° shaft angle at ratio {} needs a cone over 85°: these aren't built", num(sigma), num(ratio)))?;
     // The size, as the pinion's outer pitch diameter it asks for.
     let target = d1.or(d2.map(|d| d / ratio)).or(s.cone_distance.filter(|r| *r > 0.0).map(|re| 2.0 * re * dl1.sin()));
     let zl = (14.0 * dl1.cos()).ceil().max(6.0) as u32;
@@ -1462,7 +1582,13 @@ fn bevel(c: &mut Ctx, kind: Kind) -> Result<(), String> {
                 }
                 let got = m * f64::from(z1);
                 let stay = base.is_some_and(|b| (b.0 - m).abs() < 1e-12 && b.1 == z1 && b.2 == z2);
-                let score = 100.0 * (got - d).abs() / d + 40.0 * (f64::from(z2) / f64::from(z1) / ratio).ln().abs() + 0.03 * (f64::from(z1) - 24.0).max(0.0) + 0.1 * (16.0 - f64::from(z1)).max(0.0) + if second { 0.3 } else { 0.0 } + if gcd(z1, z2) == 1 { 0.0 } else { 0.02 } - if stay { 0.01 } else { 0.0 };
+                let score = 100.0 * (got - d).abs() / d
+                    + 40.0 * (f64::from(z2) / f64::from(z1) / ratio).ln().abs()
+                    + 0.03 * (f64::from(z1) - 24.0).max(0.0)
+                    + 0.1 * (16.0 - f64::from(z1)).max(0.0)
+                    + if second { 0.3 } else { 0.0 }
+                    + if gcd(z1, z2) == 1 { 0.0 } else { 0.02 }
+                    - if stay { 0.01 } else { 0.0 };
                 if best.is_none_or(|b| score < b.0 - 1e-12) {
                     best = Some((score, m, z1, z2));
                 }
@@ -1475,7 +1601,8 @@ fn bevel(c: &mut Ctx, kind: Kind) -> Result<(), String> {
         if let Some(m) = s.module {
             c.spec.module = m;
         }
-        let keep = c.same && (f64::from(c.spec.teeth2) / f64::from(c.spec.teeth) / ratio - 1.0).abs() < 1e-9 && s.teeth.is_none_or(|z| z == c.spec.teeth);
+        let keep =
+            c.same && (f64::from(c.spec.teeth2) / f64::from(c.spec.teeth) / ratio - 1.0).abs() < 1e-9 && s.teeth.is_none_or(|z| z == c.spec.teeth);
         if !keep {
             let (z1, z2) = counts(ratio, c.spec.teeth.max(zl), zl, s.teeth);
             (c.spec.teeth, c.spec.teeth2) = (z1, z2);
@@ -1519,7 +1646,10 @@ fn bevel_planetary(c: &mut Ctx) -> Result<(), String> {
     let mut sigma = s.shaft_angle.unwrap_or(c.spec.shaft_angle);
     // A ring with no cone angle asked: where the base's angle can't take one (a differential's
     // 90° would need a ring flatter than 85°), a bevel epicyclic's usual 45°.
-    if mode == BevelPlanetMode::Ring && s.shaft_angle.is_none() && bevel_planet::geometry(&Spec { shaft_angle: sigma, teeth3: 0, ..c.spec.clone() }).is_err() {
+    if mode == BevelPlanetMode::Ring
+        && s.shaft_angle.is_none()
+        && bevel_planet::geometry(&Spec { shaft_angle: sigma, teeth3: 0, ..c.spec.clone() }).is_err()
+    {
         c.note(format!("a ring can't be made at the {}° cone angle: 45° taken (set the cone angle to choose another)", num(sigma)));
         sigma = 45.0;
     }
@@ -1548,7 +1678,11 @@ fn bevel_planetary(c: &mut Ctx) -> Result<(), String> {
     if !(ratio.is_finite() && ratio > 0.0) {
         return Err("the ratio (planet ÷ sun teeth) must be greater than 0".into());
     }
-    let (dl1, _) = cones(sigma, 1.0, ratio).ok_or(format!("a {}° cone angle at ratio {} needs a pitch cone over 85°: these aren't built", num(sigma), num(ratio)))?;
+    let (dl1, _) = cones(sigma, 1.0, ratio).ok_or(format!(
+        "a {}° cone angle at ratio {} needs a pitch cone over 85°: these aren't built",
+        num(sigma),
+        num(ratio)
+    ))?;
     let target = d1.or(d2.map(|d| d / ratio)).or(s.cone_distance.filter(|r| *r > 0.0).map(|re| 2.0 * re * dl1.sin()));
     let zl = (14.0 * dl1.cos()).ceil().max(6.0) as u32;
     let base = c.same.then_some((c.base.module, c.base.teeth, c.base.teeth2));
@@ -1571,7 +1705,9 @@ fn bevel_planetary(c: &mut Ctx) -> Result<(), String> {
             }
             let cand = Spec { module: m, teeth: z1, teeth2: z2, teeth3: 0, ..c.spec.clone() };
             let Ok(g) = bevel_planet::geometry(&cand) else { continue };
-            let mut score = 40.0 * (f64::from(z2) / f64::from(z1) / ratio).ln().abs() + 2.0 * (g.sigma.to_degrees() - sigma).abs() + if second { 0.3 } else { 0.0 };
+            let mut score = 40.0 * (f64::from(z2) / f64::from(z1) / ratio).ln().abs()
+                + 2.0 * (g.sigma.to_degrees() - sigma).abs()
+                + if second { 0.3 } else { 0.0 };
             if mode != BevelPlanetMode::Single && (z1 + g.z_far) % n != 0 {
                 score += 3.0;
             }
@@ -1672,7 +1808,12 @@ fn hypoid(c: &mut Ctx) -> Result<(), String> {
     }
     let (z1, z2) = (f64::from(c.spec.teeth), f64::from(c.spec.teeth2));
     // The ring gear's size: its outer pitch diameter (any module: a hypoid's is rarely standard).
-    let had = if c.same { c.base.module * f64::from(c.base.teeth2) } else { let d = Spec::defaults_for(Kind::Hypoid); d.module * f64::from(d.teeth2) };
+    let had = if c.same {
+        c.base.module * f64::from(c.base.teeth2)
+    } else {
+        let d = Spec::defaults_for(Kind::Hypoid);
+        d.module * f64::from(d.teeth2)
+    };
     let ring = s.pitch_diameter2.filter(|d| *d > 0.0).or(s.pitch_diameter.filter(|d| *d > 0.0).map(|d| d * z2 / z1)).unwrap_or(had);
     c.spec.module = ring / z2;
     // The ring gear's carrier hole goes with its size (the default's is 40 % of it).
@@ -1687,7 +1828,11 @@ fn hypoid(c: &mut Ctx) -> Result<(), String> {
     // (up to 60°) keeps it, as the refusal suggests.
     if s.spiral_angle.is_none() && c.spec.offset > 0.0 && !crate::hypoid::ring_spirals(&c.spec) {
         let was = c.spec.spiral_angle;
-        if let Some(a) = (1..=12).map(|k| was + 2.5 * f64::from(k)).take_while(|a| *a <= 60.0).find(|a| crate::hypoid::ring_spirals(&Spec { spiral_angle: *a, ..c.spec.clone() })) {
+        if let Some(a) = (1..=12)
+            .map(|k| was + 2.5 * f64::from(k))
+            .take_while(|a| *a <= 60.0)
+            .find(|a| crate::hypoid::ring_spirals(&Spec { spiral_angle: *a, ..c.spec.clone() }))
+        {
             c.spec.spiral_angle = a;
             c.note(format!("pinion spiral angle raised to {}° so the ring gear's teeth still spiral at this offset", num(a)));
         }
@@ -1705,7 +1850,11 @@ fn hypoid(c: &mut Ctx) -> Result<(), String> {
     // Its pitch cones must exist for this offset (the design is cached for the schematic).
     hypoid_parts(&c.spec)?;
     if c.spec.offset > HYPOID_OFFSET_FULL * ring {
-        c.note(format!("an offset over 25 % of the ring gear's diameter (Ø{}: {} mm) is beyond what ISO 23509 designs use", num(ring), num(HYPOID_OFFSET_FULL * ring)));
+        c.note(format!(
+            "an offset over 25 % of the ring gear's diameter (Ø{}: {} mm) is beyond what ISO 23509 designs use",
+            num(ring),
+            num(HYPOID_OFFSET_FULL * ring)
+        ));
     }
     Ok(())
 }
@@ -1762,7 +1911,11 @@ fn crossed(c: &mut Ctx) -> Result<(), String> {
                     continue;
                 }
                 let stay = base.is_some_and(|b| (b.0 - m).abs() < 1e-12 && b.1 == z1 && b.2 == z2);
-                let score = 40.0 * (f64::from(z2) / f64::from(z1) / ratio).ln().abs() + 0.5 * gap.abs() + 0.03 * (f64::from(z1.min(z2)) - 24.0).max(0.0) + if second { 0.15 } else { 0.0 } - if stay { 0.01 } else { 0.0 };
+                let score = 40.0 * (f64::from(z2) / f64::from(z1) / ratio).ln().abs()
+                    + 0.5 * gap.abs()
+                    + 0.03 * (f64::from(z1.min(z2)) - 24.0).max(0.0)
+                    + if second { 0.15 } else { 0.0 }
+                    - if stay { 0.01 } else { 0.0 };
                 if best.is_none_or(|b| score < b.0 - 1e-12) {
                     best = Some((score, m, z1, z2));
                 }
@@ -1781,7 +1934,8 @@ fn crossed(c: &mut Ctx) -> Result<(), String> {
         if let Some(m) = s.module {
             c.spec.module = m;
         }
-        let keep = c.same && (f64::from(c.spec.teeth2) / f64::from(c.spec.teeth) / ratio - 1.0).abs() < 1e-9 && s.teeth.is_none_or(|z| z == c.spec.teeth);
+        let keep =
+            c.same && (f64::from(c.spec.teeth2) / f64::from(c.spec.teeth) / ratio - 1.0).abs() < 1e-9 && s.teeth.is_none_or(|z| z == c.spec.teeth);
         if !keep {
             let (z1, z2) = counts(ratio, c.spec.teeth.max(zl), zl, s.teeth);
             (c.spec.teeth, c.spec.teeth2, c.spec.shift, c.spec.shift2) = (z1, z2, 0.0, 0.0);
@@ -1814,7 +1968,9 @@ fn worm(c: &mut Ctx) -> Result<(), String> {
     if !(ratio >= 1.0) {
         return Err("a worm drives its wheel down: the ratio must be 1 or more".into());
     }
-    let keep = c.same && (f64::from(c.spec.teeth) / f64::from(c.spec.starts.max(1)) / ratio - 1.0).abs() < 1e-9 && s.starts.is_none_or(|z| z == c.spec.starts);
+    let keep = c.same
+        && (f64::from(c.spec.teeth) / f64::from(c.spec.starts.max(1)) / ratio - 1.0).abs() < 1e-9
+        && s.starts.is_none_or(|z| z == c.spec.starts);
     if !keep {
         c.spec.starts = s.starts.unwrap_or_else(|| (1..=6u32).find(|k| ratio * f64::from(*k) >= 19.5).unwrap_or(6)).clamp(1, 12);
         c.spec.teeth = ((ratio * f64::from(c.spec.starts)).round() as u32).max(3);
@@ -1828,7 +1984,14 @@ fn worm(c: &mut Ctx) -> Result<(), String> {
     // The module: from the wheel's circle, or the one the axis-first solver picks across `a`
     // (the worm about 10 modules), or kept.
     if let Some(d) = d2 {
-        let m = if s.exact { d / zw } else { modules(s.module, d / zw / 1.3, d / zw * 1.3, s.printable).into_iter().min_by(|x, y| (x.0 * zw / d).ln().abs().total_cmp(&(y.0 * zw / d).ln().abs())).map_or(d / zw, |x| x.0) };
+        let m = if s.exact {
+            d / zw
+        } else {
+            modules(s.module, d / zw / 1.3, d / zw * 1.3, s.printable)
+                .into_iter()
+                .min_by(|x, y| (x.0 * zw / d).ln().abs().total_cmp(&(y.0 * zw / d).ln().abs()))
+                .map_or(d / zw, |x| x.0)
+        };
         c.spec.module = m;
     } else if let Some(m) = s.module {
         c.spec.module = m;
@@ -1838,7 +2001,10 @@ fn worm(c: &mut Ctx) -> Result<(), String> {
         let out = axes::solve(&Axis::Z, Some(&a2), Some(Kind::Worm), &probe, &Drive { module_free: true, ..Drive::default() })?;
         c.spec.module = out.spec.module;
     } else if let Some(d) = dw {
-        c.spec.module = modules(None, d / 14.0, d / 8.0, s.printable).into_iter().min_by(|x, y| (d / x.0 / 10.0).ln().abs().total_cmp(&(d / y.0 / 10.0).ln().abs())).map_or(d / 10.0, |x| x.0);
+        c.spec.module = modules(None, d / 14.0, d / 8.0, s.printable)
+            .into_iter()
+            .min_by(|x, y| (d / x.0 / 10.0).ln().abs().total_cmp(&(d / y.0 / 10.0).ln().abs()))
+            .map_or(d / 10.0, |x| x.0);
     }
     let m = c.spec.module;
     // The worm's diameter: what is left of the centre distance after the wheel, or drawn.
@@ -1851,7 +2017,11 @@ fn worm(c: &mut Ctx) -> Result<(), String> {
     };
     let d1 = if c.spec.worm_diameter > 0.0 { c.spec.worm_diameter } else { 10.0 * m };
     if d1 <= 2.0 * c.spec.rack.dedendum * m + 0.5 * m {
-        return Err(format!("the wheel (Ø{}) leaves no room for a worm across {} mm: use a smaller wheel or a larger distance", num(m * zw), num(a.unwrap_or(0.0))));
+        return Err(format!(
+            "the wheel (Ø{}) leaves no room for a worm across {} mm: use a smaller wheel or a larger distance",
+            num(m * zw),
+            num(a.unwrap_or(0.0))
+        ));
     }
     c.face(10.0 * m);
     c.row("axial module", m, Unit::None);
@@ -1918,7 +2088,13 @@ fn drive(c: &mut Ctx) -> Result<(), String> {
         c.spec.pin_diameter = round_to(0.382 * pitch, 0.1).max(0.5);
         let mut e = round_to(0.25 * c.spec.pin_diameter, 0.05).max(0.05);
         for _ in 0..40 {
-            let d = CycloidalDrive { pins, pin_circle_radius: c.spec.pin_circle / 2.0, pin_radius: c.spec.pin_diameter / 2.0, eccentricity: e, clearance: c.spec.backlash / 2.0 };
+            let d = CycloidalDrive {
+                pins,
+                pin_circle_radius: c.spec.pin_circle / 2.0,
+                pin_radius: c.spec.pin_diameter / 2.0,
+                eccentricity: e,
+                clearance: c.spec.backlash / 2.0,
+            };
             if e < 0.9 * d.max_eccentricity() && !d.undercut() && d.valley_radius() > 0.05 * c.spec.pin_circle {
                 break;
             }
@@ -1933,7 +2109,11 @@ fn drive(c: &mut Ctx) -> Result<(), String> {
     ratio_rows(c, s.ratio.unwrap_or(f64::from(pins - 1)), f64::from(pins - 1));
     c.versus("pin circle diameter", s.pitch_diameter, c.spec.pin_circle);
     c.row("pin diameter", c.spec.pin_diameter, Unit::Mm);
-    c.versus("outer diameter (over the pins)", if s.pitch_diameter.is_some() { None } else { s.outer_diameter }, c.spec.pin_circle + c.spec.pin_diameter);
+    c.versus(
+        "outer diameter (over the pins)",
+        if s.pitch_diameter.is_some() { None } else { s.outer_diameter },
+        c.spec.pin_circle + c.spec.pin_diameter,
+    );
     c.row("eccentricity", c.spec.eccentricity, Unit::Mm);
     c.row("face width", c.spec.face_width, Unit::Mm);
     Ok(())
@@ -1991,7 +2171,13 @@ fn wrapped(c: &mut Ctx, kind: Kind) -> Result<(), String> {
         if let Some(a) = wrap_center(&c.spec) {
             c.row("centre distance (whole links / belt teeth)", a, Unit::Mm);
             if (a - c.spec.center_distance).abs() > 1e-6 && c.spec.center_distance > 0.0 {
-                c.note(format!("centre distance {} asked: the {} takes the nearest whole number of {} and sits at {}", num(c.spec.center_distance), if chain { "chain" } else { "belt" }, if chain { "links" } else { "teeth" }, num(a)));
+                c.note(format!(
+                    "centre distance {} asked: the {} takes the nearest whole number of {} and sits at {}",
+                    num(c.spec.center_distance),
+                    if chain { "chain" } else { "belt" },
+                    if chain { "links" } else { "teeth" },
+                    num(a)
+                ));
             }
         }
     }
@@ -2094,7 +2280,8 @@ fn face_gear(c: &mut Ctx) -> Result<(), String> {
     let base = c.same.then_some((c.base.module, c.base.teeth));
     if let Some(d) = target {
         let pitch = |m: f64, z: u32| m * f64::from(z);
-        let (m, z) = fit_one(&modules(s.module, d / 80.0, d / 8.0, s.printable), (12, 60, 18), s.teeth, d, &pitch, base).ok_or("no module and teeth give that pinion")?;
+        let (m, z) = fit_one(&modules(s.module, d / 80.0, d / 8.0, s.printable), (12, 60, 18), s.teeth, d, &pitch, base)
+            .ok_or("no module and teeth give that pinion")?;
         c.spec.module = if s.exact { d / f64::from(z) } else { m };
         c.spec.teeth = z;
     } else {
@@ -2158,7 +2345,16 @@ fn elliptic_full(teeth: u32, ecc: f64) -> (f64, f64, f64, Vec<[f64; 2]>) {
     if let Some(v) = ELLIPSE.with(|c| c.borrow().iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone())) {
         return v;
     }
-    let p = crate::elliptic::EllipticPair { teeth, module: 1.0, eccentricity: ecc, pressure_angle: 20f64.to_radians(), addendum: 1.0, dedendum: 1.25, backlash: 0.0 }.pitch();
+    let p = crate::elliptic::EllipticPair {
+        teeth,
+        module: 1.0,
+        eccentricity: ecc,
+        pressure_angle: 20f64.to_radians(),
+        addendum: 1.0,
+        dedendum: 1.25,
+        backlash: 0.0,
+    }
+    .pitch();
     let step = (p.curve2.len() / 120).max(1);
     let curve2: Vec<[f64; 2]> = p.curve2.iter().step_by(step).map(|q| [q.x, q.y]).collect();
     let v = (p.center, p.a, p.b, curve2);
@@ -2408,7 +2604,8 @@ pub fn measures(spec: &Spec) -> Simple {
 /// is in [`measures`] and in [`Solved::chosen`].
 pub fn outputs_of(spec: &Spec) -> Simple {
     let all = measures(spec);
-    let mut o = Simple { kind: all.kind, face_width: all.face_width, printable: all.printable, bore: all.bore, bore2: all.bore2, ..Simple::default() };
+    let mut o =
+        Simple { kind: all.kind, face_width: all.face_width, printable: all.printable, bore: all.bore, bore2: all.bore2, ..Simple::default() };
     match spec.kind {
         Kind::Spur | Kind::Helical | Kind::Herringbone => {
             o.outer_diameter = all.outer_diameter;
@@ -2732,7 +2929,15 @@ impl Build<'_> {
         let e = v_sub(f2, f1);
         let e_len = v_dot(e, e).sqrt();
         let vertex = f1;
-        self.dim(DimKind::ShaftAngle, "shaft angle", angle, Unit::Deg, vec![i, j], vec![vertex, v_add(vertex, v_mul(t1, reach)), v_add(vertex, v_mul(t2, reach))], Some(Field::ShaftAngle));
+        self.dim(
+            DimKind::ShaftAngle,
+            "shaft angle",
+            angle,
+            Unit::Deg,
+            vec![i, j],
+            vec![vertex, v_add(vertex, v_mul(t1, reach)), v_add(vertex, v_mul(t2, reach))],
+            Some(Field::ShaftAngle),
+        );
         if e_len > 1e-6 {
             let label = if offset_kind == DimKind::Offset { "offset" } else { "centre distance" };
             self.dim(offset_kind, label, e_len, Unit::Mm, vec![i, j], vec![f1, f2], offset_field);
@@ -2856,7 +3061,13 @@ pub fn schematic(spec: &Spec) -> Schematic {
             let mut p2 = blank(&g2, -h, h);
             extras(s, true, -h, h, &mut p2);
             let i = b.add("gear 1", 1, at([0.0; 3]), 2.0 * g1.r(), p1);
-            let j = b.add("gear 2", 2, Frame { origin: [o[0] + e, o[1], o[2]], x: [-1.0, 0.0, 0.0], z: [0.0, sigma.sin(), sigma.cos()] }, 2.0 * g2.r(), p2);
+            let j = b.add(
+                "gear 2",
+                2,
+                Frame { origin: [o[0] + e, o[1], o[2]], x: [-1.0, 0.0, 0.0], z: [0.0, sigma.sin(), sigma.cos()] },
+                2.0 * g2.r(),
+                p2,
+            );
             b.shafts(i, j, s.shaft_angle, Some(Field::CenterDistance), DimKind::CenterDistance);
             b.diameter(i, "gear 1 pitch diameter", 2.0 * g1.r(), 0.0, Some(Field::PitchDiameter));
             b.diameter(j, "gear 2 pitch diameter", 2.0 * g2.r(), 0.0, Some(Field::PitchDiameter2));
@@ -2899,8 +3110,16 @@ pub fn schematic(spec: &Spec) -> Schematic {
             let (da1, df1) = sp.shaft_diameters();
             let (da2, df2) = sp.hub_diameters();
             let face = s.face_width;
-            let r_out = if s.hub_diameter > 0.0 { s.hub_diameter / 2.0 } else { df2 / 2.0 + if s.rim > 0.0 { s.rim } else { (3.0 * s.module).max(0.25 * sp.reference_diameter()) } };
-            let mut shaft = vec![cyl(Role::Pitch, sp.pitch_diameter() / 2.0, -face / 2.0, 1.5 * face), cyl(Role::Tip, da1 / 2.0, -face / 2.0, 1.5 * face), cyl(Role::Root, df1 / 2.0, -face / 2.0, 1.5 * face)];
+            let r_out = if s.hub_diameter > 0.0 {
+                s.hub_diameter / 2.0
+            } else {
+                df2 / 2.0 + if s.rim > 0.0 { s.rim } else { (3.0 * s.module).max(0.25 * sp.reference_diameter()) }
+            };
+            let mut shaft = vec![
+                cyl(Role::Pitch, sp.pitch_diameter() / 2.0, -face / 2.0, 1.5 * face),
+                cyl(Role::Tip, da1 / 2.0, -face / 2.0, 1.5 * face),
+                cyl(Role::Root, df1 / 2.0, -face / 2.0, 1.5 * face),
+            ];
             if s.bore.kind != BoreKind::None && s.bore.diameter > 0.0 {
                 shaft.push(cyl(Role::Bore, s.bore.diameter / 2.0, -face / 2.0, 1.5 * face));
             }
@@ -2912,8 +3131,22 @@ pub fn schematic(spec: &Spec) -> Schematic {
                 Some(p) => p.compose(&f),
                 None => f,
             };
-            b.out.members.push(Member { name: "hub".into(), color: 0, body: hub_body.then_some(usize::from(shaft_body)), frame: place(at([0.0; 3])), pitch_diameter: sp.pitch_diameter(), parts: hub });
-            b.out.members.push(Member { name: "shaft".into(), color: 1, body: shaft_body.then_some(0), frame: place(at([0.0; 3])), pitch_diameter: sp.pitch_diameter(), parts: shaft });
+            b.out.members.push(Member {
+                name: "hub".into(),
+                color: 0,
+                body: hub_body.then_some(usize::from(shaft_body)),
+                frame: place(at([0.0; 3])),
+                pitch_diameter: sp.pitch_diameter(),
+                parts: hub,
+            });
+            b.out.members.push(Member {
+                name: "shaft".into(),
+                color: 1,
+                body: shaft_body.then_some(0),
+                frame: place(at([0.0; 3])),
+                pitch_diameter: sp.pitch_diameter(),
+                parts: shaft,
+            });
             b.diameter(1, "reference diameter", sp.reference_diameter(), 1.5 * face, Some(Field::PitchDiameter));
             let m = &b.out.members[0];
             let pts = vec![m.world([r_out, 0.0, 0.0]), m.world([r_out, 0.0, face])];
@@ -2948,14 +3181,36 @@ pub fn schematic(spec: &Spec) -> Schematic {
                 Some(p) => p.compose(&f),
                 None => f,
             };
-            b.out.members.push(Member { name: "pinion".into(), color: 0, body: pin_body.then_some(usize::from(fg_body)), frame: place(pin_frame), pitch_diameter: 2.0 * r1, parts: pp });
-            b.out.members.push(Member { name: "face gear".into(), color: 1, body: fg_body.then_some(0), frame: place(at([0.0; 3])), pitch_diameter: m * f64::from(s.teeth2), parts: fg });
+            b.out.members.push(Member {
+                name: "pinion".into(),
+                color: 0,
+                body: pin_body.then_some(usize::from(fg_body)),
+                frame: place(pin_frame),
+                pitch_diameter: 2.0 * r1,
+                parts: pp,
+            });
+            b.out.members.push(Member {
+                name: "face gear".into(),
+                color: 1,
+                body: fg_body.then_some(0),
+                frame: place(at([0.0; 3])),
+                pitch_diameter: m * f64::from(s.teeth2),
+                parts: fg,
+            });
             b.diameter(0, "pinion pitch diameter", 2.0 * r1, len, Some(Field::PitchDiameter));
             b.shafts(0, 1, 90.0, None, DimKind::Offset);
             let c = b.out.members[1].world([0.0, 0.0, 0.0]);
             let p = b.out.members[1].world([m * f64::from(s.teeth2) / 2.0, 0.0, 0.0]);
             let ax = v_add(c, b.out.members[1].frame.z);
-            b.dim(DimKind::PitchDiameter, "face gear pitch diameter (m·z₂)", m * f64::from(s.teeth2), Unit::Mm, vec![1], vec![c, p, ax], Some(Field::PitchDiameter2));
+            b.dim(
+                DimKind::PitchDiameter,
+                "face gear pitch diameter (m·z₂)",
+                m * f64::from(s.teeth2),
+                Unit::Mm,
+                vec![1],
+                vec![c, p, ax],
+                Some(Field::PitchDiameter2),
+            );
         }
         Kind::Elliptical => {
             let (a, sa, sb, curve2) = elliptic_full(s.teeth, s.ellipse_eccentricity);
@@ -3042,7 +3297,15 @@ fn bevel_schematic(b: &mut Build) {
     let arm1 = v_sub(b.out.members[i].world([0.0; 3]), apex_w);
     let arm2 = v_sub(b.out.members[j].world([0.0; 3]), apex_w);
     let norm = |v: [f64; 3]| v_mul(v, reach / v_dot(v, v).sqrt().max(1e-12));
-    b.dim(DimKind::ShaftAngle, "shaft angle", s.shaft_angle, Unit::Deg, vec![i, j], vec![apex_w, v_add(apex_w, norm(arm1)), v_add(apex_w, norm(arm2))], Some(Field::ShaftAngle));
+    b.dim(
+        DimKind::ShaftAngle,
+        "shaft angle",
+        s.shaft_angle,
+        Unit::Deg,
+        vec![i, j],
+        vec![apex_w, v_add(apex_w, norm(arm1)), v_add(apex_w, norm(arm2))],
+        Some(Field::ShaftAngle),
+    );
     b.dim(DimKind::ConeDistance, "cone distance", re, Unit::Mm, vec![i, j], vec![apex_w, large1], Some(Field::ConeDistance));
     b.diameter(i, "pinion outer pitch diameter", 2.0 * r1, 0.0, Some(Field::PitchDiameter));
     b.diameter(j, "gear outer pitch diameter", 2.0 * r2, 0.0, Some(Field::PitchDiameter2));
@@ -3078,7 +3341,8 @@ fn bevel_planet_schematic(b: &mut Build) {
             let at = |z: f64| rr - z * delta.tan();
             Part { role, shape: Shape::Cone { r0: at(z0), z0, r1: at(z1), z1, apex_z: (rr / delta.tan()).min(1e9), half_angle: delta.to_degrees() } }
         };
-        let (tip, root) = if internal { (r - ha * delta.cos(), r + hf * delta.cos()) } else { (r + ha * delta.cos(), (r - hf * delta.cos()).max(0.0)) };
+        let (tip, root) =
+            if internal { (r - ha * delta.cos(), r + hf * delta.cos()) } else { (r + ha * delta.cos(), (r - hf * delta.cos()).max(0.0)) };
         vec![cone(r, Role::Pitch), cone(tip.max(0.0), Role::Tip), cone(root, Role::Root)]
     };
     let cones = |delta: f64, internal: bool| cones_on(delta, internal, faces[0]);
@@ -3112,15 +3376,30 @@ fn bevel_planet_schematic(b: &mut Build) {
             let d = PI - g.delta_far;
             let mut pf = cones(d, false);
             bored(&mut pf, &s.bore, d);
-            Some(b.add("sun 2", 3, Frame { origin: [o[0], o[1], o[2] + re * d.cos()], x: [1.0, 0.0, 0.0], z: [0.0, 0.0, -1.0] }, m * f64::from(g.z_far), pf))
+            Some(b.add(
+                "sun 2",
+                3,
+                Frame { origin: [o[0], o[1], o[2] + re * d.cos()], x: [1.0, 0.0, 0.0], z: [0.0, 0.0, -1.0] },
+                m * f64::from(g.z_far),
+                pf,
+            ))
         }
         BevelPlanetMode::Ring => {
             let d = g.delta_far;
             let mut pr = cones(d, true);
             let rim = if s.rim > 0.0 { s.rim } else { 3.0 * m };
             let outer = re * d.sin() + hf * d.cos() + rim;
-            pr.push(Part { role: Role::Body, shape: Shape::Tube { r_in: re * d.sin() * scale, r_out: outer, z0: 0.0, z1: re * d.cos() * (1.0 - scale) } });
-            Some(b.add("ring", 3, Frame { origin: [o[0], o[1], o[2] - re * d.cos()], x: [1.0, 0.0, 0.0], z: [0.0, 0.0, 1.0] }, m * f64::from(g.z_far), pr))
+            pr.push(Part {
+                role: Role::Body,
+                shape: Shape::Tube { r_in: re * d.sin() * scale, r_out: outer, z0: 0.0, z1: re * d.cos() * (1.0 - scale) },
+            });
+            Some(b.add(
+                "ring",
+                3,
+                Frame { origin: [o[0], o[1], o[2] - re * d.cos()], x: [1.0, 0.0, 0.0], z: [0.0, 0.0, 1.0] },
+                m * f64::from(g.z_far),
+                pr,
+            ))
         }
     };
     if let Some(f) = far {
@@ -3131,7 +3410,15 @@ fn bevel_planet_schematic(b: &mut Build) {
     if let Some(j) = first {
         let arm1 = v_sub(b.out.members[sun].world([0.0; 3]), apex_w);
         let arm2 = v_sub(b.out.members[j].world([0.0; 3]), apex_w);
-        b.dim(DimKind::ShaftAngle, "cone angle", sigma.to_degrees(), Unit::Deg, vec![sun, j], vec![apex_w, v_add(apex_w, norm(arm1)), v_add(apex_w, norm(arm2))], Some(Field::ShaftAngle));
+        b.dim(
+            DimKind::ShaftAngle,
+            "cone angle",
+            sigma.to_degrees(),
+            Unit::Deg,
+            vec![sun, j],
+            vec![apex_w, v_add(apex_w, norm(arm1)), v_add(apex_w, norm(arm2))],
+            Some(Field::ShaftAngle),
+        );
         b.diameter(j, "planet outer pitch diameter", m * f64::from(g.z_planet), 0.0, Some(Field::PitchDiameter2));
     }
     let large = b.out.members[sun].world([re * g.delta_sun.sin(), 0.0, 0.0]);
@@ -3176,7 +3463,10 @@ fn hypoid_parts(s: &Spec) -> Result<HypoidParts, String> {
         let (c_in, c_out) = (d.cone_m2 - d.b2 / 2.0, d.cone_m2 + d.b2 / 2.0);
         let (gi, go) = (gear_cone(c_in), gear_cone(c_out));
         let gear_parts = vec![
-            Part { role: Role::Pitch, shape: Shape::Cone { r0: go[0], z0: go[1], r1: gi[0], z1: gi[1], apex_z: apex2_z, half_angle: d.delta2.to_degrees() } },
+            Part {
+                role: Role::Pitch,
+                shape: Shape::Cone { r0: go[0], z0: go[1], r1: gi[0], z1: gi[1], apex_z: apex2_z, half_angle: d.delta2.to_degrees() },
+            },
             Part { role: Role::Tip, shape: Shape::Cylinder { r: l.r_out, z0: l.z_hi - l.back - (d.ha2 + d.hf2), z1: l.z_hi - l.back } },
             Part { role: Role::Body, shape: Shape::Cylinder { r: gi[0], z0: 0.0, z1: (l.z_hi - l.back - (d.ha2 + d.hf2)).max(0.0) } },
         ];
@@ -3188,10 +3478,18 @@ fn hypoid_parts(s: &Spec) -> Result<HypoidParts, String> {
         let t1 = d.delta1.tan();
         // (Between its heel and toe cones.)
         let (z_heel, z_toe) = (l.pinion_heel[1], l.pinion_toe[1]);
-        let profile: Vec<[f64; 2]> = (0..=8).map(|k| z_heel + (z_toe - z_heel) * f64::from(k) / 8.0).map(|z| [((apex1 - z).abs() * t1).max(0.0), z]).collect();
+        let profile: Vec<[f64; 2]> =
+            (0..=8).map(|k| z_heel + (z_toe - z_heel) * f64::from(k) / 8.0).map(|z| [((apex1 - z).abs() * t1).max(0.0), z]).collect();
         let pinion_parts = vec![
             Part { role: Role::Pitch, shape: Shape::Revolved { profile } },
-            Part { role: Role::Shaft, shape: Shape::Cylinder { r: 0.6 * ((apex1 - l.length).abs().min(apex1.abs()) * t1 - d.hf1).max(0.3 * d.rm1), z0: -0.8 * l.length, z1: 0.0 } },
+            Part {
+                role: Role::Shaft,
+                shape: Shape::Cylinder {
+                    r: 0.6 * ((apex1 - l.length).abs().min(apex1.abs()) * t1 - d.hf1).max(0.3 * d.rm1),
+                    z0: -0.8 * l.length,
+                    z1: 0.0,
+                },
+            },
         ];
         let mut pinion = Frame { origin: l.pinion_origin, x: l.pinion_x, z: l.pinion_z };
         let mut gear = Frame { origin: l.gear_origin, x: [1.0, 0.0, 0.0], z: [0.0, 0.0, 1.0] };
@@ -3232,7 +3530,15 @@ fn hypoid_schematic(b: &mut Build) {
             let (d1, d2) = (b.out.members[i].frame.z, b.out.members[j].frame.z);
             let toward = |f: [f64; 3], p: [f64; 3], d: [f64; 3]| if v_dot(v_sub(p, f), d) >= 0.0 { d } else { v_mul(d, -1.0) };
             let (t1, t2) = (toward(f1, b.out.members[i].frame.origin, d1), toward(f2, b.out.members[j].frame.origin, d2));
-            b.dim(DimKind::ShaftAngle, "shaft angle", s.shaft_angle, Unit::Deg, vec![i, j], vec![f1, v_add(f1, v_mul(t1, reach)), v_add(f1, v_mul(t2, reach))], Some(Field::ShaftAngle));
+            b.dim(
+                DimKind::ShaftAngle,
+                "shaft angle",
+                s.shaft_angle,
+                Unit::Deg,
+                vec![i, j],
+                vec![f1, v_add(f1, v_mul(t1, reach)), v_add(f1, v_mul(t2, reach))],
+                Some(Field::ShaftAngle),
+            );
             b.dim(DimKind::Offset, "offset", s.offset, Unit::Mm, vec![i, j], vec![f1, f2], Some(Field::Offset));
             let z = match h.gear_parts[0].shape {
                 Shape::Cone { z0, .. } => z0,
@@ -3247,7 +3553,13 @@ fn hypoid_schematic(b: &mut Build) {
             let o = s.origin;
             let ring = s.module * f64::from(s.teeth2);
             let side = if s.left_hand { -1.0 } else { 1.0 };
-            let i = b.add("pinion", 1, Frame { origin: [o[0], o[1] + side * s.offset, o[2] + 0.3 * ring], x: [0.0, 0.0, 1.0], z: [sigma.sin(), 0.0, sigma.cos()] }, s.module * f64::from(s.teeth), vec![]);
+            let i = b.add(
+                "pinion",
+                1,
+                Frame { origin: [o[0], o[1] + side * s.offset, o[2] + 0.3 * ring], x: [0.0, 0.0, 1.0], z: [sigma.sin(), 0.0, sigma.cos()] },
+                s.module * f64::from(s.teeth),
+                vec![],
+            );
             let j = b.add("gear", 2, Frame::at(o), ring, vec![cyl(Role::Pitch, ring / 2.0, 0.0, s.face_width)]);
             b.shafts(i, j, s.shaft_angle, Some(Field::Offset), DimKind::Offset);
             b.out.note = Some(e);
@@ -3283,7 +3595,8 @@ fn worm_schematic(b: &mut Build) {
         2.0 * r1 * lo.sin()
     };
     let face = s.face_width.min((1.8 * rf1).min(lean_limit));
-    let length = if s.worm_length > 0.0 { s.worm_length } else { (2.0 * (outside.powi(2) - (r2 - m).powi(2)).max(0.0).sqrt() + lead).max(4.0 * PI * m) };
+    let length =
+        if s.worm_length > 0.0 { s.worm_length } else { (2.0 * (outside.powi(2) - (r2 - m).powi(2)).max(0.0).sqrt() + lead).max(4.0 * PI * m) };
     // The wheel's throat: its tips follow the worm's root round.
     let throat_at = |w: f64| a - ((rf1 + clearance).powi(2) - w * w).max(0.0).sqrt();
     let profile: Vec<[f64; 2]> = (0..=10).map(|k| -face / 2.0 + face * f64::from(k) / 10.0).map(|w| [throat_at(w).min(outside), w]).collect();
@@ -3291,7 +3604,11 @@ fn worm_schematic(b: &mut Build) {
     extras(s, false, -face / 2.0, face / 2.0, &mut pw);
     let left = s.helix < 0.0;
     let hand = if left { -1.0 } else { 1.0 };
-    let mut pworm = vec![cyl(Role::Pitch, r1, -length / 2.0, length / 2.0), cyl(Role::Tip, ra1, -length / 2.0, length / 2.0), cyl(Role::Root, rf1, -length / 2.0, length / 2.0)];
+    let mut pworm = vec![
+        cyl(Role::Pitch, r1, -length / 2.0, length / 2.0),
+        cyl(Role::Tip, ra1, -length / 2.0, length / 2.0),
+        cyl(Role::Root, rf1, -length / 2.0, length / 2.0),
+    ];
     let turns = length / lead;
     let steps = ((turns * 24.0).ceil() as usize).clamp(8, 2000);
     for k in 0..z1 {
@@ -3321,12 +3638,22 @@ fn wrapped_schematic(b: &mut Build) {
         let strands = s.strands.clamp(1, 4);
         let bf1 = crate::sprocket::tooth_width(pitch, b1, strands);
         let width = f64::from(strands - 1) * pt + bf1;
-        (pitch, width, Box::new(move |z| crate::sprocket::Sprocket { teeth: z, pitch, roller }.tip_diameter()), Box::new(move |z| crate::sprocket::Sprocket { teeth: z, pitch, roller }.pitch_diameter()))
+        (
+            pitch,
+            width,
+            Box::new(move |z| crate::sprocket::Sprocket { teeth: z, pitch, roller }.tip_diameter()),
+            Box::new(move |z| crate::sprocket::Sprocket { teeth: z, pitch, roller }.pitch_diameter()),
+        )
     } else {
         let belt = crate::plan::extras::belt_of(s);
         let tooth_len = s.face_width + (0.1 * s.face_width).max(0.5);
         let tf = if s.flanges { (0.4 * belt.pitch).max(1.0) } else { 0.0 };
-        (belt.pitch, tooth_len + 2.0 * tf, Box::new(move |z| crate::pulley::Pulley { belt, teeth: z }.outside_diameter()), Box::new(move |z| crate::pulley::Pulley { belt, teeth: z }.pitch_diameter()))
+        (
+            belt.pitch,
+            tooth_len + 2.0 * tf,
+            Box::new(move |z| crate::pulley::Pulley { belt, teeth: z }.outside_diameter()),
+            Box::new(move |z| crate::pulley::Pulley { belt, teeth: z }.pitch_diameter()),
+        )
     };
     let _ = pitch;
     let who = if chain { "sprocket" } else { "pulley" };
@@ -3348,19 +3675,35 @@ fn wrapped_schematic(b: &mut Build) {
                 None => f,
             };
             let color = b.out.members.len();
-            b.out.members.push(Member { name: "chain".into(), color, body: None, frame: place(pl), pitch_diameter: 0.0, parts: vec![Part { role: Role::Wrap, shape: Shape::Path { points: pts, closed: false } }] });
+            b.out.members.push(Member {
+                name: "chain".into(),
+                color,
+                body: None,
+                frame: place(pl),
+                pitch_diameter: 0.0,
+                parts: vec![Part { role: Role::Wrap, shape: Shape::Path { points: pts, closed: false } }],
+            });
         }
         b.diameter(i, "pitch diameter", 2.0 * r1, width, Some(Field::PitchDiameter));
         return;
     }
     let a = wrap_center(s).unwrap_or(s.center_distance);
     let (r1, r2) = (dia(s.teeth) / 2.0, dia(s.teeth2) / 2.0);
-    let path: Vec<[f64; 3]> = crate::wrap::belt_path(r1, r2, a, 0.0).map(|ol| ol.polyline(0.02 * (r1 + r2)).into_iter().map(|q| [q.x, q.y, width / 2.0]).collect()).unwrap_or_default();
+    let path: Vec<[f64; 3]> = crate::wrap::belt_path(r1, r2, a, 0.0)
+        .map(|ol| ol.polyline(0.02 * (r1 + r2)).into_iter().map(|q| [q.x, q.y, width / 2.0]).collect())
+        .unwrap_or_default();
     let place = |f: Frame| match &s.placement {
         Some(p) => p.compose(&f),
         None => f,
     };
-    b.out.members.push(Member { name: wrap_name.into(), color: 0, body: None, frame: place(Frame::at(o)), pitch_diameter: 0.0, parts: vec![Part { role: Role::Wrap, shape: Shape::Path { points: path, closed: true } }] });
+    b.out.members.push(Member {
+        name: wrap_name.into(),
+        color: 0,
+        body: None,
+        frame: place(Frame::at(o)),
+        pitch_diameter: 0.0,
+        parts: vec![Part { role: Role::Wrap, shape: Shape::Path { points: path, closed: true } }],
+    });
     let i = b.add(&format!("{who} 1"), 1, Frame::at(o), 2.0 * r1, member(s.teeth, false));
     let j = b.add(&format!("{who} 2"), 2, Frame::at([o[0] + a, o[1], o[2]]), 2.0 * r2, member(s.teeth2, true));
     b.center(i, j, a, width / 2.0, Some(Field::CenterDistance));
@@ -3407,10 +3750,26 @@ pub fn shafts_only(simple: &Simple, note: Option<String>) -> Schematic {
     }
     let reach = e.max(50.0);
     if sg.sin().abs() > 1e-6 {
-        out.dims.push(Dim { kind: DimKind::ShaftAngle, label: "shaft angle".into(), value: angle, unit: Unit::Deg, members: vec![0, 1], points: vec![[0.0; 3], [0.0, 0.0, reach], [0.0, reach * sg.sin(), reach * sg.cos()]], field: Some(Field::ShaftAngle) });
+        out.dims.push(Dim {
+            kind: DimKind::ShaftAngle,
+            label: "shaft angle".into(),
+            value: angle,
+            unit: Unit::Deg,
+            members: vec![0, 1],
+            points: vec![[0.0; 3], [0.0, 0.0, reach], [0.0, reach * sg.sin(), reach * sg.cos()]],
+            field: Some(Field::ShaftAngle),
+        });
     }
     if e > 1e-6 {
-        out.dims.push(Dim { kind: DimKind::Offset, label: if sg.sin().abs() > 1e-6 { "offset".into() } else { "centre distance".into() }, value: e, unit: Unit::Mm, members: vec![0, 1], points: vec![[0.0; 3], [e, 0.0, 0.0]], field: Some(Field::Offset) });
+        out.dims.push(Dim {
+            kind: DimKind::Offset,
+            label: if sg.sin().abs() > 1e-6 { "offset".into() } else { "centre distance".into() },
+            value: e,
+            unit: Unit::Mm,
+            members: vec![0, 1],
+            points: vec![[0.0; 3], [e, 0.0, 0.0]],
+            field: Some(Field::Offset),
+        });
     }
     out
 }

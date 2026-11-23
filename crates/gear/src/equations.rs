@@ -633,7 +633,12 @@ pub fn mesh_vars(v: &mut Vars, g1: &Involute, g2: &Involute, keys2: (&str, &str)
     v.derived("mesh_aw0", "(3 * max({mesh_inv}, 0.0000001)) ^ (1 / 3) * 1 rad".into(), Quantity::Angle, "working pressure angle, first guess")?;
     for i in 1..=5 {
         let w = format!("{{mesh_aw{}}}", i - 1);
-        v.derived(&format!("mesh_aw{i}"), format!("{w} - (tan({w}) - {w} / (1 rad) - {{mesh_inv}}) / tan({w}) ^ 2 * 1 rad"), Quantity::Angle, "working pressure angle, a Newton step on")?;
+        v.derived(
+            &format!("mesh_aw{i}"),
+            format!("{w} - (tan({w}) - {w} / (1 rad) - {{mesh_inv}}) / tan({w}) ^ 2 * 1 rad"),
+            Quantity::Angle,
+            "working pressure angle, a Newton step on",
+        )?;
     }
     v.derived("mesh_cd", format!("{mt} * ({{teeth}} + {{{z2}}}) / 2 * cos({at}) / cos({{mesh_aw5}})"), Quantity::Length, "working centre distance")
 }
@@ -665,12 +670,20 @@ fn external(src: &TeethSource, g: &Involute, f: &ToothFlank, phase: f64) -> Resu
     )?;
     v.derived(
         &format!("{p}rho"),
-        format!("min({} * {{module}}, 0.999 * max(pi * {mt} / 4 - {hf} * {{module}} * tan({at}), 0 mm) / (1 / cos({at}) - tan({at})))", number(g.rack.root_radius)),
+        format!(
+            "min({} * {{module}}, 0.999 * max(pi * {mt} / 4 - {hf} * {{module}} * tan({at}), 0 mm) / (1 / cos({at}) - tan({at})))",
+            number(g.rack.root_radius)
+        ),
         Quantity::Length,
         "the cutter's tip fillet radius",
     )?;
     v.derived(&format!("{p}vc"), format!("{{{p}rho}} - {hf} * {{module}}"), Quantity::Length, "the cutter's fillet centre below its datum line")?;
-    v.derived(&format!("{p}uc"), format!("pi * {mt} / 4 + {{{p}vc}} * tan({at}) - {{{p}rho}} / cos({at})"), Quantity::Length, "the cutter's fillet centre from the space's middle")?;
+    v.derived(
+        &format!("{p}uc"),
+        format!("pi * {mt} / 4 + {{{p}vc}} * tan({at}) - {{{p}rho}} / cos({at})"),
+        Quantity::Length,
+        "the cutter's fillet centre from the space's middle",
+    )?;
     v.derived(&format!("{p}bc"), format!("{{{shift}}} * {{module}} + {{{p}vc}}"), Quantity::Length, "the fillet centre below the pitch line")?;
     v.derived(
         &format!("{p}th0"),
@@ -678,7 +691,12 @@ fn external(src: &TeethSource, g: &Involute, f: &ToothFlank, phase: f64) -> Resu
         Quantity::Angle,
         "half the tooth's angle at the root",
     )?;
-    let tf = v.derived(&format!("{p}tf"), format!("-{{{p}bc}} / tan({at}) / {{module}}"), Quantity::Number, "where the fillet ends (modules along the cutter)")?;
+    let tf = v.derived(
+        &format!("{p}tf"),
+        format!("-{{{p}bc}} / tan({at}) / {{module}}"),
+        Quantity::Number,
+        "where the fillet ends (modules along the cutter)",
+    )?;
     let u0 = v.derived(
         &format!("{p}u0"),
         format!("tan({at}) + ({{{p}bc}} - {{{p}rho}} * sin({at})) / ({{{p}rb}} * sin({at}))"),
@@ -717,11 +735,7 @@ fn external(src: &TeethSource, g: &Involute, f: &ToothFlank, phase: f64) -> Resu
     ];
     let half_pitch = format!("pi / {{{teeth}}} * 1 rad");
     let points = vec![polar_point(&format!("{{{p}rf}}"), &half_pitch, &ph, -1.0), polar_point(&format!("{{{p}rf}}"), &half_pitch, &ph, 1.0)];
-    let edges = vec![
-        Edge::Arc(End::Point(0), End::Start(0)),
-        Edge::Arc(End::End(1), End::End(2)),
-        Edge::Arc(End::Start(3), End::Point(1)),
-    ];
+    let edges = vec![Edge::Arc(End::Point(0), End::Start(0)), Edge::Arc(End::End(1), End::End(2)), Edge::Arc(End::Start(3), End::Point(1))];
     let joins = if exact { vec![(End::End(0), End::Start(1)), (End::End(3), End::Start(2))] } else { Vec::new() };
     // Undercut: the same curves over formula ranges, for teeth that follow parameter changes
     // (the fillet's end meets the flank's start by their formulas where the form circle is
@@ -928,11 +942,21 @@ fn rack(src: &TeethSource, g: &Involute, count: u32, below: f64) -> Result<Tooth
     let bl = if extra.abs() > 1e-12 { format!("({{backlash}} + {})", literal(extra, Quantity::Length)) } else { "{backlash}".to_string() };
     let ts = if g.tip_shortening.abs() > 1e-12 { format!(" - {}", literal(g.tip_shortening, Quantity::Length)) } else { String::new() };
     let pitch = v.derived(&format!("{p}p"), format!("pi * {mt}"), Quantity::Length, "pitch")?;
-    v.derived(&format!("{p}s"), format!("{{{p}p}} / 2 + 2 * {{shift}} * {{module}} * tan({at}) - {bl}"), Quantity::Length, "tooth thickness on the pitch line")?;
+    v.derived(
+        &format!("{p}s"),
+        format!("{{{p}p}} / 2 + 2 * {{shift}} * {{module}} * tan({at}) - {bl}"),
+        Quantity::Length,
+        "tooth thickness on the pitch line",
+    )?;
     v.derived(&format!("{p}ha"), format!("({} + {{shift}}) * {{module}}{ts}", number(g.rack.addendum)), Quantity::Length, "addendum")?;
     v.derived(&format!("{p}hf"), format!("({} - {{shift}}) * {{module}}", number(g.rack.dedendum)), Quantity::Length, "dedendum")?;
     let ht = v.derived(&format!("{p}ht"), format!("max({{{p}s}} / 2 - {{{p}ha}} * tan({at}), 0 mm)"), Quantity::Length, "half the tip land")?;
-    let hr = v.derived(&format!("{p}hr"), format!("min({{{p}s}} / 2 + {{{p}hf}} * tan({at}), {{{p}p}} / 2)"), Quantity::Length, "half the tooth at the root")?;
+    let hr = v.derived(
+        &format!("{p}hr"),
+        format!("min({{{p}s}} / 2 + {{{p}hf}} * tan({at}), {{{p}p}} / 2)"),
+        Quantity::Length,
+        "half the tooth at the root",
+    )?;
     let c = "{rack_p} / 2";
     let mut points = vec![
         ["0 mm".to_string(), "-{rack_hf}".to_string()],
@@ -965,7 +989,11 @@ fn rack(src: &TeethSource, g: &Involute, count: u32, below: f64) -> Result<Tooth
     points.push(["0 mm".into(), "-{rack_height}".into()]);
     let n = points.len();
     // (Without a flat root the first tooth starts at x = 0 itself: point 1 is that corner.)
-    let closing = vec![Edge::Line(End::Point(n - 3), End::Point(n - 2)), Edge::Line(End::Point(n - 2), End::Point(n - 1)), Edge::Line(End::Point(n - 1), End::Point(first))];
+    let closing = vec![
+        Edge::Line(End::Point(n - 3), End::Point(n - 2)),
+        Edge::Line(End::Point(n - 2), End::Point(n - 1)),
+        Edge::Line(End::Point(n - 1), End::Point(first)),
+    ];
     Ok(ToothCell {
         who: src.who.clone(),
         member: src.member,
@@ -1056,9 +1084,11 @@ fn teeth_phase(f: &ToothFlank, n: u32, o: &Outline) -> Option<f64> {
         return None;
     }
     let tol = 1e-7 * f.ra.abs().max(1.0);
-    let same = reference.segs.iter().zip(&o.segs).all(|(a, b)| {
-        std::mem::discriminant(a) == std::mem::discriminant(b) && close(a.start(), b.start(), tol) && close(a.end(), b.end(), tol)
-    });
+    let same = reference
+        .segs
+        .iter()
+        .zip(&o.segs)
+        .all(|(a, b)| std::mem::discriminant(a) == std::mem::discriminant(b) && close(a.start(), b.start(), tol) && close(a.end(), b.end(), tol));
     same.then_some(phase)
 }
 
@@ -1082,7 +1112,9 @@ fn cell_matches(cell: &ToothCell, o: &Outline, per_tooth: usize) -> bool {
     }
     // Every outline piece but the root arc is one of the cell's pieces (either way round); the
     // root arc runs from the last piece's end to the next tooth.
-    ends.iter().take(per_tooth.saturating_sub(1)).all(|(a, b)| want.iter().any(|(c, d)| (close(*a, *c, tol) && close(*b, *d, tol)) || (close(*a, *d, tol) && close(*b, *c, tol))))
+    ends.iter()
+        .take(per_tooth.saturating_sub(1))
+        .all(|(a, b)| want.iter().any(|(c, d)| (close(*a, *c, tol) && close(*b, *d, tol)) || (close(*a, *d, tol) && close(*b, *c, tol))))
 }
 
 /// The formulas for an outline of a planned set: the cell of whichever source made it (tooth 0

@@ -103,7 +103,19 @@ pub struct PlacedBearing {
 
 impl Default for Clearance {
     fn default() -> Self {
-        Self { radial: 0.5, axial: 0.5, shaft_extension: 0.0, ring_as_housing: true, bearing: None, bearing_size: None, bearing_fit: 0.0, seats: Vec::new(), travel: 0.0, keep_out: true, bearing_bodies: false }
+        Self {
+            radial: 0.5,
+            axial: 0.5,
+            shaft_extension: 0.0,
+            ring_as_housing: true,
+            bearing: None,
+            bearing_size: None,
+            bearing_fit: 0.0,
+            seats: Vec::new(),
+            travel: 0.0,
+            keep_out: true,
+            bearing_bodies: false,
+        }
     }
 }
 
@@ -134,7 +146,13 @@ pub fn check(c: &Clearance) -> Result<(), String> {
     if let Some(b) = c.bearing_size
         && c.bearing.is_none()
     {
-        let ok = [b.bore, b.od, b.width].iter().all(|v| v.is_finite()) && b.od > 0.0 && b.width > 0.0 && b.bore >= 0.0 && b.bore < b.od && b.od <= 2000.0 && b.width <= 1000.0;
+        let ok = [b.bore, b.od, b.width].iter().all(|v| v.is_finite())
+            && b.od > 0.0
+            && b.width > 0.0
+            && b.bore >= 0.0
+            && b.bore < b.od
+            && b.od <= 2000.0
+            && b.width <= 1000.0;
         if !ok {
             return Err("clearance: a bearing needs an outside diameter and a width over 0 (and a bore under the outside diameter)".into());
         }
@@ -189,11 +207,7 @@ pub(crate) fn motions(kind: Kind, bodies: &[Body]) -> Vec<Motion> {
             Kind::BevelPlanetary if bodies[i].name.contains(crate::plan::bevel_planet::CARRIER) => Motion::Turns,
             Kind::BevelPlanetary if i > 0 => {
                 let (sun, f) = (&bodies[0].frame, &bodies[i].frame);
-                if coaxial(sun, f) {
-                    if dot(sun.z, f.z) > 0.0 { Motion::Ring } else { Motion::Turns }
-                } else {
-                    orbit(sun, f)
-                }
+                if coaxial(sun, f) { if dot(sun.z, f.z) > 0.0 { Motion::Ring } else { Motion::Turns } } else { orbit(sun, f) }
             }
             _ => Motion::Turns,
         })
@@ -437,7 +451,8 @@ fn bore_of(s: &Spec, role: u8) -> (Bore, bool, f64) {
 /// with no teeth), or it is that bar: such a body's shaft clearance runs only as far as the
 /// bar's own envelope (no stub on past it), since the bar's own clearance is the shaft's.
 fn on_built_shaft(p: &Plan) -> Vec<bool> {
-    let bars: Vec<usize> = p.shafts.iter().map(|sh| sh.body).filter(|b| p.members.iter().any(|m| m.body == Some(*b) && m.teeth == 0) && *b < p.bodies.len()).collect();
+    let bars: Vec<usize> =
+        p.shafts.iter().map(|sh| sh.body).filter(|b| p.members.iter().any(|m| m.body == Some(*b) && m.teeth == 0) && *b < p.bodies.len()).collect();
     (0..p.bodies.len())
         .map(|b| {
             if bars.contains(&b) {
@@ -475,7 +490,9 @@ fn build(
     // its bore is no shaft); named with none, say what to do.
     let bearing = match c.chosen_bearing()? {
         Some((name, _)) if c.seats.is_empty() => {
-            warn.push(format!("clearance: bearing {name} has nowhere to sit: put bearing points on a shaft line (Shafts & Bores tab), or turn bearings off"));
+            warn.push(format!(
+                "clearance: bearing {name} has nowhere to sit: put bearing points on a shaft line (Shafts & Bores tab), or turn bearings off"
+            ));
             None
         }
         b => b,
@@ -512,7 +529,22 @@ fn build(
             Motion::Turns if s.kind == Kind::BevelPlanetary => 1,
             _ => 2,
         };
-        members.push(Member { who: who_of(s, b), body: b.clone(), motion: *motion, pts, z, teeth: first.z, mid, planet, hz, h, role, group: None, shaft: None, shaft_d: None });
+        members.push(Member {
+            who: who_of(s, b),
+            body: b.clone(),
+            motion: *motion,
+            pts,
+            z,
+            teeth: first.z,
+            mid,
+            planet,
+            hz,
+            h,
+            role,
+            group: None,
+            shaft: None,
+            shaft_d: None,
+        });
     }
     let rings_only = members.iter().all(|m| m.motion == Motion::Ring);
     if rings_only && c.ring_as_housing {
@@ -542,7 +574,14 @@ fn build(
                 let travel = if c.travel > 0.0 { c.travel } else { length };
                 let (x0, x1) = (lo[0] - travel / 2.0 - margin, hi[0] + travel / 2.0 + margin);
                 let (y0, y1) = (lo[1] - margin, hi[1] + margin);
-                let rect = Outline { segs: vec![Seg::Line(V2::new(x0, y0), V2::new(x1, y0)), Seg::Line(V2::new(x1, y0), V2::new(x1, y1)), Seg::Line(V2::new(x1, y1), V2::new(x0, y1)), Seg::Line(V2::new(x0, y1), V2::new(x0, y0))] };
+                let rect = Outline {
+                    segs: vec![
+                        Seg::Line(V2::new(x0, y0), V2::new(x1, y0)),
+                        Seg::Line(V2::new(x1, y0), V2::new(x1, y1)),
+                        Seg::Line(V2::new(x1, y1), V2::new(x0, y1)),
+                        Seg::Line(V2::new(x0, y1), V2::new(x0, y0)),
+                    ],
+                };
                 prisms.push((f, Region { outer: vec![rect], holes: vec![] }, lo[2] - ax, hi[2] - lo[2] + 2.0 * ax));
                 facts.push((format!("clearance: {} slot length", m.who), x1 - x0, Unit::Mm));
                 facts.push((format!("clearance: {} travel", m.who), travel, Unit::Mm));
@@ -702,7 +741,11 @@ fn build(
                 Seat::Point(pt) => match nearest(&members, *pt) {
                     Some((k, along, off)) => {
                         if off > b.od {
-                            warn.push(format!("clearance: bearing seat {n}'s point is {} mm off {}'s axis; it is moved onto the axis", num(off), members[k].who));
+                            warn.push(format!(
+                                "clearance: bearing seat {n}'s point is {} mm off {}'s axis; it is moved onto the axis",
+                                num(off),
+                                members[k].who
+                            ));
                         }
                         (k, along)
                     }
@@ -714,11 +757,17 @@ fn build(
             };
             let m = &members[mi];
             let Some(gi) = m.group else {
-                warn.push(format!("clearance: bearing seat {n} is on {}, which has no axis in the housing (a slide or a ring left to the housing); left out", m.who));
+                warn.push(format!(
+                    "clearance: bearing seat {n} is on {}, which has no axis in the housing (a slide or a ring left to the housing); left out",
+                    m.who
+                ));
                 continue;
             };
             if m.planet {
-                warn.push(format!("clearance: bearing seat {n} is on {}, which goes round with the carrier: its seat is not part of the housing; left out", m.who));
+                warn.push(format!(
+                    "clearance: bearing seat {n} is on {}, which goes round with the carrier: its seat is not part of the housing; left out",
+                    m.who
+                ));
                 continue;
             }
             let g = &mut groups[gi];
@@ -732,7 +781,13 @@ fn build(
                 rule.anchors.extend([(z0, 0.5), (z1, 0.5)]);
             }
             g.bands.push((z0, z1, r));
-            placed.push(PlacedBearing { seat: n, member: mi, frame: Frame { origin: f.world([0.0, 0.0, m.mid + along]), x: f.x, z: f.z }, name: name.clone(), size: *b });
+            placed.push(PlacedBearing {
+                seat: n,
+                member: mi,
+                frame: Frame { origin: f.world([0.0, 0.0, m.mid + along]), x: f.x, z: f.z },
+                name: name.clone(),
+                size: *b,
+            });
             facts.push((format!("clearance: bearing seat {n} on {} at", m.who), along, Unit::Mm));
             match m.shaft {
                 Some((lo, hi, _)) if z0 >= lo - 1e-9 && z1 <= hi + 1e-9 => {}
@@ -744,12 +799,22 @@ fn build(
                     num(lo - centre + along),
                     num(hi - centre + along)
                 )),
-                None => warn.push(format!("clearance: bearing seat {n} is on {}, which has no shaft (no bore, integral shaft or bearing bore)", m.who)),
+                None => {
+                    warn.push(format!("clearance: bearing seat {n} is on {}, which has no shaft (no bore, integral shaft or bearing bore)", m.who))
+                }
             }
-            let (zlo, zhi) = (dot(sub(f.world([0.0, 0.0, m.teeth.0]), g.frame.origin), g.frame.z), dot(sub(f.world([0.0, 0.0, m.teeth.1]), g.frame.origin), g.frame.z));
+            let (zlo, zhi) = (
+                dot(sub(f.world([0.0, 0.0, m.teeth.0]), g.frame.origin), g.frame.z),
+                dot(sub(f.world([0.0, 0.0, m.teeth.1]), g.frame.origin), g.frame.z),
+            );
             let (zlo, zhi) = (zlo.min(zhi), zlo.max(zhi));
             if z1 > zlo + 1e-9 && z0 < zhi - 1e-9 {
-                warn.push(format!("clearance: bearing seat {n} overlaps the teeth of {} (they run {}…{} mm from their middle)", m.who, num(m.teeth.0 - m.mid), num(m.teeth.1 - m.mid)));
+                warn.push(format!(
+                    "clearance: bearing seat {n} overlaps the teeth of {} (they run {}…{} mm from their middle)",
+                    m.who,
+                    num(m.teeth.0 - m.mid),
+                    num(m.teeth.1 - m.mid)
+                ));
             }
             if b.bore > 0.0
                 && let Some(d) = m.shaft_d
@@ -806,14 +871,26 @@ fn nearest(members: &[Member], p: [f64; 3]) -> Option<(usize, f64, f64)> {
 
 /// Sprockets and pulleys: the chain or belt round a single wheel (a band on its axis), and
 /// between two (a prism round both wheels and the runs).
-fn chain_run(s: &Spec, c: &Clearance, members: &[Member], preview: &[PreviewGear], groups: &mut [Group], prisms: &mut Vec<(Frame, Region, f64, f64)>, facts: &mut Vec<(String, f64, Unit)>) {
+fn chain_run(
+    s: &Spec,
+    c: &Clearance,
+    members: &[Member],
+    preview: &[PreviewGear],
+    groups: &mut [Group],
+    prisms: &mut Vec<(Frame, Region, f64, f64)>,
+    facts: &mut Vec<(String, f64, Unit)>,
+) {
     if !matches!(s.kind, Kind::Sprocket | Kind::Pulley) {
         return;
     }
     let chain = s.kind == Kind::Sprocket;
     let radius = |names: &[&str]| preview.iter().find(|g| names.contains(&g.name.as_str())).map(|g| g.pitch_radius).filter(|r| *r > 0.0);
     let (w1, w2): (&[&str], &[&str]) = if chain { (&["sprocket", "sprocket 1"], &["sprocket 2"]) } else { (&["pulley", "pulley 1"], &["pulley 2"]) };
-    let wheels: Vec<(usize, f64, u32)> = [(0usize, radius(w1), s.teeth), (1, radius(w2), s.teeth2)].into_iter().filter_map(|(i, r, z)| Some((i, r?, z))).filter(|(i, _, z)| *i < members.len() && *z > 0).collect();
+    let wheels: Vec<(usize, f64, u32)> = [(0usize, radius(w1), s.teeth), (1, radius(w2), s.teeth2)]
+        .into_iter()
+        .filter_map(|(i, r, z)| Some((i, r?, z)))
+        .filter(|(i, _, z)| *i < members.len() && *z > 0)
+        .collect();
     // How far the chain's plates or the belt's back stand out past the pitch circle, and how
     // much wider than the teeth the chain is on each side.
     let pitch = |r: f64, z: u32| if chain { 2.0 * r * (std::f64::consts::PI / f64::from(z)).sin() } else { std::f64::consts::TAU * r / f64::from(z) };
@@ -826,7 +903,8 @@ fn chain_run(s: &Spec, c: &Clearance, members: &[Member], preview: &[PreviewGear
         let Some(gi) = m.group else { continue };
         let g = &mut groups[gi];
         let f = m.body.frame;
-        let (a, b) = (dot(sub(f.world([0.0, 0.0, m.z.0]), g.frame.origin), g.frame.z), dot(sub(f.world([0.0, 0.0, m.z.1]), g.frame.origin), g.frame.z));
+        let (a, b) =
+            (dot(sub(f.world([0.0, 0.0, m.z.0]), g.frame.origin), g.frame.z), dot(sub(f.world([0.0, 0.0, m.z.1]), g.frame.origin), g.frame.z));
         g.bands.push((a.min(b) - side - c.axial, a.max(b) + side + c.axial, r + off));
     }
     if wheels.len() == 2 {
@@ -841,7 +919,10 @@ fn chain_run(s: &Spec, c: &Clearance, members: &[Member], preview: &[PreviewGear
         {
             let x = mul(across, 1.0 / a);
             let frame = Frame { origin: f1.origin, x, z: f1.z };
-            let zs = [m1, m2].iter().flat_map(|m| [m.z.0, m.z.1].map(|z| dot(sub(m.body.frame.world([0.0, 0.0, z]), f1.origin), f1.z))).fold((f64::MAX, f64::MIN), |a, z| (a.0.min(z), a.1.max(z)));
+            let zs = [m1, m2]
+                .iter()
+                .flat_map(|m| [m.z.0, m.z.1].map(|z| dot(sub(m.body.frame.world([0.0, 0.0, z]), f1.origin), f1.z)))
+                .fold((f64::MAX, f64::MIN), |a, z| (a.0.min(z), a.1.max(z)));
             let (z0, z1) = (zs.0 - side - c.axial, zs.1 + side + c.axial);
             prisms.push((frame, Region { outer: vec![path], holes: vec![] }, z0, z1 - z0));
             let what = if chain { "chain" } else { "belt" };
@@ -1040,7 +1121,10 @@ pub(crate) fn add_bearing_bodies(s: &Spec, p: &mut Plan) {
         // A bore not known: an inner ring at 0.4 of the outside radius.
         let ri = if ri > 0.0 { ri } else { 0.4 * ro };
         let t = (ro - ri) / 3.0;
-        let ring = |r0: f64, r1: f64| Step::Revolve { profile: vec![V2::new(r0, -w / 2.0), V2::new(r1, -w / 2.0), V2::new(r1, w / 2.0), V2::new(r0, w / 2.0)], op: Op::New };
+        let ring = |r0: f64, r1: f64| Step::Revolve {
+            profile: vec![V2::new(r0, -w / 2.0), V2::new(r1, -w / 2.0), V2::new(r1, w / 2.0), V2::new(r0, w / 2.0)],
+            op: Op::New,
+        };
         let axis = crate::axes::Axis { origin: b.frame.origin, dir: b.frame.z };
         for (part, r0, r1) in [("outer", ro - t, ro), ("inner", ri, ri + t)] {
             let index = p.bodies.len();

@@ -16,10 +16,14 @@
 
 use std::f64::consts::{PI, TAU};
 
+use super::{
+    Body, Frame, Kind, Plan, PreviewGear, Spec, Unit, hub_steps, mesh_warnings, name, ring_warnings, tooth_warnings, twist_for, wanted, with_bore,
+};
 use crate::axes::num;
-use super::{Body, Frame, Kind, Plan, PreviewGear, Spec, Unit, hub_steps, mesh_warnings, name, ring_warnings, tooth_warnings, twist_for, wanted, with_bore};
 use crate::geom::{Outline, Region, V2, wrap_period};
-use crate::involute::{Internal, Involute, ToothFlank, contact_ratio_external, mesh_external, mesh_internal, mesh_phase, mesh_phase_internal, teeth_outline};
+use crate::involute::{
+    Internal, Involute, ToothFlank, contact_ratio_external, mesh_external, mesh_internal, mesh_phase, mesh_phase_internal, teeth_outline,
+};
 
 /// The most gears a train takes.
 pub const MAX_GEARS: usize = 64;
@@ -200,7 +204,15 @@ pub struct Motion {
 impl Train {
     /// The links of gear `i`, with the gear at the other end.
     fn links_of(&self, i: usize) -> impl Iterator<Item = (usize, usize)> + '_ {
-        self.links.iter().enumerate().filter_map(move |(k, l)| if l.a == i { Some((k, l.b)) } else if l.b == i { Some((k, l.a)) } else { None })
+        self.links.iter().enumerate().filter_map(move |(k, l)| {
+            if l.a == i {
+                Some((k, l.b))
+            } else if l.b == i {
+                Some((k, l.a))
+            } else {
+                None
+            }
+        })
     }
 
     /// The spanning tree and speeds (see [`Motion`]).
@@ -289,7 +301,8 @@ pub fn check(t: &Train) -> Result<(), String> {
     }
     for (k, sh) in t.shafts.iter().enumerate() {
         let w = format!("shaft {}", k + 1);
-        if !(sh.diameter.is_finite() && sh.diameter > 0.0) || !(sh.from.is_finite() && sh.to.is_finite() && sh.to > sh.from) || !sh.center.is_finite() {
+        if !(sh.diameter.is_finite() && sh.diameter > 0.0) || !(sh.from.is_finite() && sh.to.is_finite() && sh.to > sh.from) || !sh.center.is_finite()
+        {
             return Err(format!("{w}: needs a diameter over 0 and a length"));
         }
         if sh.gears.is_empty() || sh.gears.iter().any(|g| *g >= n) {
@@ -313,7 +326,11 @@ pub fn check(t: &Train) -> Result<(), String> {
         match l.kind {
             LinkKind::External | LinkKind::Internal => {
                 if (ga.module - gb.module).abs() > 1e-9 * ga.module {
-                    return Err(format!("{pair} mesh but have different modules ({} and {}): meshing gears share one module", num(ga.module), num(gb.module)));
+                    return Err(format!(
+                        "{pair} mesh but have different modules ({} and {}): meshing gears share one module",
+                        num(ga.module),
+                        num(gb.module)
+                    ));
                 }
                 let same_hand = l.kind == LinkKind::Internal;
                 let want = if same_hand { ga.helix } else { -ga.helix };
@@ -336,7 +353,9 @@ pub fn check(t: &Train) -> Result<(), String> {
                 let r = if ga.ring { l.a } else { l.b };
                 return Err(format!("gear {} is a ring gear: gears mesh only inside it, not on its outside", r + 1));
             }
-            LinkKind::Internal if ga.ring || !gb.ring => return Err(format!("{pair}: gear {} must be the ring and gear {} a gear inside it", l.b + 1, l.a + 1)),
+            LinkKind::Internal if ga.ring || !gb.ring => {
+                return Err(format!("{pair}: gear {} must be the ring and gear {} a gear inside it", l.b + 1, l.a + 1));
+            }
             LinkKind::Internal if gb.teeth < ga.teeth + 3 => {
                 return Err(format!("{pair}: the ring needs at least 3 teeth more than the gear inside it ({} and {})", gb.teeth, ga.teeth));
             }
@@ -534,7 +553,9 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
         let (from_a, from_b) = (up(l.a), up(l.b));
         // A compound gear on one side of the loop only (not shared by both sides' paths to gear
         // 1), whose shaft link is not yet used to close another loop.
-        let free = |side: &[usize], other: &[usize]| side.iter().copied().find(|c| !other.contains(c) && motion.driver[*c].is_some_and(|d| t.links[d].kind == LinkKind::Compound && !freed[d]));
+        let free = |side: &[usize], other: &[usize]| {
+            side.iter().copied().find(|c| !other.contains(c) && motion.driver[*c].is_some_and(|d| t.links[d].kind == LinkKind::Compound && !freed[d]))
+        };
         let turned = if let Some(c) = free(&from_b, &from_a) {
             // Turning c's side turns b by speed_b / speed_c of it.
             Some((c, miss * motion.speed[c] / motion.speed[l.b]))
@@ -558,9 +579,9 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
                     None => return false,
                 }
             };
-            for i in 0..n {
+            for (i, ph) in phase.iter_mut().enumerate().take(n) {
                 if motion.group[i] == motion.group[c] && below(i) {
-                    phase[i] += by * motion.speed[i] / motion.speed[c];
+                    *ph += by * motion.speed[i] / motion.speed[c];
                 }
             }
         }
@@ -631,9 +652,14 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
                 } else {
                     Region { outer: region.outer.clone(), holes: vec![teeth_outline(&sf, tg.teeth, phase[i] + lead(i) + PI / f64::from(tg.teeth))] }
                 };
-                let mut steps = super::tooth_steps(region, face, twist_for(&ring.gear, face), (herring || tg.herringbone) && tg.helix != 0.0, super::Op::New);
+                let mut steps =
+                    super::tooth_steps(region, face, twist_for(&ring.gear, face), (herring || tg.herringbone) && tg.helix != 0.0, super::Op::New);
                 crate::body::ring_chamfers(sg, sf.rf, outer_r, face, &mut steps, p, &w);
-                built[i] = Some(Body { name: name(s, &format!("Ring gear {} z{}", i + 1, tg.teeth)), frame: Frame::at(s.origin).shifted([tg.center.x, tg.center.y, lo[i]]), steps });
+                built[i] = Some(Body {
+                    name: name(s, &format!("Ring gear {} z{}", i + 1, tg.teeth)),
+                    frame: Frame::at(s.origin).shifted([tg.center.x, tg.center.y, lo[i]]),
+                    steps,
+                });
             }
             outlines.push(region);
         } else {
@@ -661,7 +687,11 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
                 let face = faces[i];
                 let mut steps = crate::body::tooth_body(sg, g, &f, phase[i] + lead(i), face, (herring || tg.herringbone) && tg.helix != 0.0, p, &w);
                 hub_steps(sg, if i == 0 { &sg.bore } else { &sg.bore2 }, f.rf - s.elephant_foot, face, &mut steps, p, &w);
-                built[i] = Some(Body { name: name(s, &format!("Gear {} z{}", i + 1, tg.teeth)), frame: Frame::at(s.origin).shifted([tg.center.x, tg.center.y, lo[i]]), steps });
+                built[i] = Some(Body {
+                    name: name(s, &format!("Gear {} z{}", i + 1, tg.teeth)),
+                    frame: Frame::at(s.origin).shifted([tg.center.x, tg.center.y, lo[i]]),
+                    steps,
+                });
             }
             outlines.push(with_bore(Region { outer: vec![o], holes: vec![] }, bore));
         }
@@ -708,7 +738,10 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
             && let Some(ring) = &rings[l.b]
             && crate::involute::internal_tip_interference(&gs[l.a], gs[l.a].ra(), ring, m)
         {
-            p.warn(format!("{pair}: the tips hit going in and out of mesh (ring − gear = {} teeth is too few)", t.gears[l.b].teeth - t.gears[l.a].teeth));
+            p.warn(format!(
+                "{pair}: the tips hit going in and out of mesh (ring − gear = {} teeth is too few)",
+                t.gears[l.b].teeth - t.gears[l.a].teeth
+            ));
         }
     }
     for i in 1..n {
@@ -718,7 +751,12 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
     }
     let loose: Vec<String> = (1..n).filter(|i| motion.group[*i] != 0).map(|i| (i + 1).to_string()).collect();
     if !loose.is_empty() {
-        p.warn(format!("gear{} {} not driven by gear 1: nothing ties {} to it", if loose.len() > 1 { "s" } else { "" }, loose.join(", "), if loose.len() > 1 { "them" } else { "it" }));
+        p.warn(format!(
+            "gear{} {} not driven by gear 1: nothing ties {} to it",
+            if loose.len() > 1 { "s" } else { "" },
+            loose.join(", "),
+            if loose.len() > 1 { "them" } else { "it" }
+        ));
     }
     // Shafts must clear the gears they don't carry.
     for (k, sh) in t.shafts.iter().enumerate() {
@@ -747,8 +785,10 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
         if s.only != 0 {
             // Built alone: the gear's own body.
             for &i in &gears {
-                body[i] = Some(p.bodies.len());
-                p.bodies.push(built[i].take().unwrap_or_else(|| unreachable!()));
+                if let Some(b) = built[i].take() {
+                    body[i] = Some(p.bodies.len());
+                    p.bodies.push(b);
+                }
             }
             continue;
         }
@@ -756,7 +796,7 @@ pub(crate) fn build(s: &Spec, t: &Train, p: &mut Plan) {
         let c = t.gears[gears[0]].center;
         let mut steps = Vec::new();
         for &i in &gears {
-            let b = built[i].take().unwrap_or_else(|| unreachable!());
+            let Some(b) = built[i].take() else { continue };
             let dz = lo[i] - base;
             for st in b.steps {
                 let mut st = if dz == 0.0 { st } else { crate::body::shift_z(st, dz) };
@@ -904,7 +944,14 @@ pub(crate) fn assembly_edges(t: &Train) -> Vec<crate::plan::AssemblyLink> {
         .iter()
         .map(|l| match l.kind {
             LinkKind::Compound => crate::plan::AssemblyLink::Rigid { a: l.a, b: l.b },
-            kind => crate::plan::AssemblyLink::Gear { a: l.a, b: l.b, ra: teeth(&t.gears[l.a]), rb: teeth(&t.gears[l.b]), internal: kind == LinkKind::Internal, reverse: false },
+            kind => crate::plan::AssemblyLink::Gear {
+                a: l.a,
+                b: l.b,
+                ra: teeth(&t.gears[l.a]),
+                rb: teeth(&t.gears[l.b]),
+                internal: kind == LinkKind::Internal,
+                reverse: false,
+            },
         })
         .collect()
 }

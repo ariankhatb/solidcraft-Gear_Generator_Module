@@ -68,11 +68,7 @@ pub fn cycloidal_outline(c: &Cycloidal, phase: f64) -> (Outline, ToothFlank) {
     // Highest radius the epicycloid reaches: r + 2a.
     let mut ra = ra_full.min(r + 2.0 * a_add * 0.999);
     let half = |rr: f64| -> f64 {
-        if rr >= r {
-            half_pitch - cycloid_polar(r, a_add, true, rr)
-        } else {
-            half_pitch + cycloid_polar(r, a_ded, false, rr).abs().min(PI)
-        }
+        if rr >= r { half_pitch - cycloid_polar(r, a_add, true, rr) } else { half_pitch + cycloid_polar(r, a_ded, false, rr).abs().min(PI) }
     };
     // A pointed (ogival) tip ends where the flanks meet.
     let mut pointed = false;
@@ -94,7 +90,20 @@ pub fn cycloidal_outline(c: &Cycloidal, phase: f64) -> (Outline, ToothFlank) {
     // radially with their angle growing as that distance to the power 3/2, which the fit cannot
     // follow in even steps of radius.
     let ded = side_points(&half, &|s| if s >= 1.0 { r } else { r - (r - lowest) * (1.0 - s) * (1.0 - s) }, tol, min_gap);
-    let add = side_points(&half, &|s| if s <= 0.0 { r } else if s >= 1.0 { ra } else { r + (ra - r) * s * s }, tol, min_gap);
+    let add = side_points(
+        &half,
+        &|s| {
+            if s <= 0.0 {
+                r
+            } else if s >= 1.0 {
+                ra
+            } else {
+                r + (ra - r) * s * s
+            }
+        },
+        tol,
+        min_gap,
+    );
     let pitch = TAU / f64::from(c.teeth);
     let (fillet, flank, root_half);
     if ded.len() >= 2 && add.len() >= 2 && ded[0].0 - rf <= min_gap {
@@ -171,7 +180,13 @@ impl CycloidalDrive {
         let len: Vec<f64> = f.windows(2).map(|w| w[0].dist(w[1])).collect();
         let turn: Vec<f64> = (0..fine)
             .map(|i| {
-                let bend = |j: usize| if j == 0 || j >= fine { 0.0 } else { (f[j] - f[j - 1]).cross(f[j + 1] - f[j]).atan2((f[j] - f[j - 1]).dot(f[j + 1] - f[j])).abs() };
+                let bend = |j: usize| {
+                    if j == 0 || j >= fine {
+                        0.0
+                    } else {
+                        (f[j] - f[j - 1]).cross(f[j + 1] - f[j]).atan2((f[j] - f[j - 1]).dot(f[j + 1] - f[j])).abs()
+                    }
+                };
                 0.5 * (bend(i) + bend(i + 1))
             })
             .collect();

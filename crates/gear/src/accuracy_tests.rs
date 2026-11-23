@@ -174,7 +174,14 @@ fn fitted_flanks_stay_within_a_micron_per_module_of_the_involute() {
         for alpha in [14.5f64, 20.0, 25.0, 30.0] {
             for x in [-0.4, 0.0, 0.5, 1.0] {
                 for beta in [0.0f64, 25.0] {
-                    let g = Involute { teeth: z, module: 1.0, pressure_angle: alpha.to_radians(), helix: beta.to_radians(), shift: x, ..Involute::default() };
+                    let g = Involute {
+                        teeth: z,
+                        module: 1.0,
+                        pressure_angle: alpha.to_radians(),
+                        helix: beta.to_radians(),
+                        shift: x,
+                        ..Involute::default()
+                    };
                     let f = external_flank(&g);
                     if f.defect().is_some() || f.flank.len() < 2 {
                         continue;

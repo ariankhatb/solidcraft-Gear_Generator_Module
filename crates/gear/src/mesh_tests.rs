@@ -5,7 +5,9 @@
 use std::f64::consts::{PI, TAU};
 
 use crate::geom::{Region, V2};
-use crate::involute::{Internal, Involute, external_flank, external_outline, internal_tip_interference, mesh_internal, mesh_phase, mesh_phase_internal};
+use crate::involute::{
+    Internal, Involute, external_flank, external_outline, internal_tip_interference, mesh_internal, mesh_phase, mesh_phase_internal,
+};
 use crate::mesh2d::{Member, Motion, Stat, probe, run};
 use crate::plan::{Kind, Plan, PreviewGear, Spec, plan};
 
@@ -94,7 +96,8 @@ fn pairs_mesh_plain_and_undercut() {
 
 #[test]
 fn pairs_mesh_shifted_and_at_a_centre_distance() {
-    for (z1, z2, x1, x2) in [(12, 30, 0.4, 0.0), (10, 20, 0.5, 0.3), (20, 32, -0.2, 0.2), (15, 45, 0.3, -0.3), (8, 12, 0.5, 0.4), (14, 50, 0.0, 0.6)] {
+    for (z1, z2, x1, x2) in [(12, 30, 0.4, 0.0), (10, 20, 0.5, 0.3), (20, 32, -0.2, 0.2), (15, 45, 0.3, -0.3), (8, 12, 0.5, 0.4), (14, 50, 0.0, 0.6)]
+    {
         pair_row(&format!("{z1}/{z2} x {x1}/{x2}"), &pair_spec(z1, z2, x1, x2)).check();
     }
     for (z1, z2, x1, a) in [(20, 32, 0.0, 52.8), (20, 30, 0.2, 51.0), (14, 22, 0.0, 37.0), (20, 32, 0.0, 51.5), (11, 17, 0.3, 29.0)] {
@@ -194,7 +197,9 @@ fn planetary_sets_mesh_with_uneven_spacing() {
 fn planetary_ring_shifts_to_reach_the_planets() {
     // Shifted sun and planets, and ring tooth counts off sun + 2 × planet: the ring's own shift
     // brings it to the planets' centre distance.
-    for (zs, zp, zr, n, x1, x2) in [(18, 18, 54, 3, 0.3, 0.2), (12, 18, 48, 4, 0.4, 0.0), (20, 16, 51, 1, 0.0, 0.0), (20, 16, 53, 1, 0.0, 0.0), (15, 15, 45, 3, 0.2, 0.3)] {
+    for (zs, zp, zr, n, x1, x2) in
+        [(18, 18, 54, 3, 0.3, 0.2), (12, 18, 48, 4, 0.4, 0.0), (20, 16, 51, 1, 0.0, 0.0), (20, 16, 53, 1, 0.0, 0.0), (15, 15, 45, 3, 0.2, 0.3)]
+    {
         let s = Spec { shift: x1, shift2: x2, ..planetary_spec(zs, zp, zr, n) };
         let p = plan(&s).unwrap();
         assert!(!p.warnings.iter().any(|w| w.contains("planets sit at")), "{:?}", p.warnings);
@@ -206,7 +211,17 @@ fn planetary_ring_shifts_to_reach_the_planets() {
 }
 
 fn involute_of(s: &Spec, teeth: u32, shift: f64, helix: f64) -> Involute {
-    Involute { teeth, module: s.module, pressure_angle: s.pressure_angle.to_radians(), helix: helix.to_radians(), shift, rack: s.rack, backlash: s.backlash, tip_shortening: 0.0, virtual_teeth: 0.0 }
+    Involute {
+        teeth,
+        module: s.module,
+        pressure_angle: s.pressure_angle.to_radians(),
+        helix: helix.to_radians(),
+        shift,
+        rack: s.rack,
+        backlash: s.backlash,
+        tip_shortening: 0.0,
+        virtual_teeth: 0.0,
+    }
 }
 
 fn gear_region(g: &Involute, phase: f64) -> Region {
@@ -286,18 +301,33 @@ fn rack_row(zp: u32, xp: f64, xr: f64, helix: f64, backlash: f64) -> Row {
     // Over the space between teeth 4 and 5, a tooth pointing down into it; the profile shifts
     // lift the pinion off the line y = 0. The rack slides at the pinion's pitch circle speed.
     let centre = V2::new(5.0 * pitch, pinion.r() + (xp + xr) * s.module);
-    let rack = Member::new(&p.preview[0].region, Motion { center: V2::ZERO, speed: 0.0, slide: pinion.r(), orbit: 0.0 }, 0.2 * s.module, 2e-5 * s.module);
+    let rack =
+        Member::new(&p.preview[0].region, Motion { center: V2::ZERO, speed: 0.0, slide: pinion.r(), orbit: 0.0 }, 0.2 * s.module, 2e-5 * s.module);
     let pin = Member::new(&gear_region(&pinion, -PI / 2.0), Motion::turning(centre, 1.0), 0.2 * s.module, 2e-5 * s.module);
     let turn = TAU / f64::from(zp);
     let stat = run(&pin, &rack, -turn, turn, STEPS);
-    Row { label: format!("rack pinion {zp} x {xp} rack x {xr} helix {helix} backlash {backlash}"), m: s.module, stat, want_gap: backlash * pinion.alpha_t().cos(), warnings: p.warnings }
+    Row {
+        label: format!("rack pinion {zp} x {xp} rack x {xr} helix {helix} backlash {backlash}"),
+        m: s.module,
+        stat,
+        want_gap: backlash * pinion.alpha_t().cos(),
+        warnings: p.warnings,
+    }
 }
 
 #[test]
 fn racks_mesh_with_a_pinion() {
-    for (zp, xp, xr, helix, b) in
-        [(20, 0.0, 0.0, 0.0, 0.0), (12, 0.0, 0.0, 0.0, 0.0), (8, 0.0, 0.0, 0.0, 0.0), (10, 0.4, 0.0, 0.0, 0.0), (20, 0.0, 0.3, 0.0, 0.0), (15, 0.2, -0.2, 0.0, 0.0), (18, 0.0, 0.0, 20.0, 0.0), (20, 0.0, 0.0, 0.0, 0.1), (40, -0.3, 0.0, 0.0, 0.0)]
-    {
+    for (zp, xp, xr, helix, b) in [
+        (20, 0.0, 0.0, 0.0, 0.0),
+        (12, 0.0, 0.0, 0.0, 0.0),
+        (8, 0.0, 0.0, 0.0, 0.0),
+        (10, 0.4, 0.0, 0.0, 0.0),
+        (20, 0.0, 0.3, 0.0, 0.0),
+        (15, 0.2, -0.2, 0.0, 0.0),
+        (18, 0.0, 0.0, 20.0, 0.0),
+        (20, 0.0, 0.0, 0.0, 0.1),
+        (40, -0.3, 0.0, 0.0, 0.0),
+    ] {
         rack_row(zp, xp, xr, helix, b).check();
     }
 }
@@ -312,7 +342,18 @@ fn cycloidal_row(z1: u32, z2: u32, m: f64, backlash: f64) -> Row {
 
 #[test]
 fn cycloidal_pairs_mesh() {
-    for (z1, z2, m, b) in [(60, 8, 1.0, 0.0), (30, 10, 1.0, 0.0), (40, 12, 2.0, 0.0), (64, 8, 0.5, 0.0), (20, 20, 1.0, 0.0), (96, 12, 1.0, 0.0), (30, 6, 1.0, 0.0), (8, 60, 1.0, 0.0), (12, 7, 1.0, 0.0), (60, 8, 1.0, 0.05)] {
+    for (z1, z2, m, b) in [
+        (60, 8, 1.0, 0.0),
+        (30, 10, 1.0, 0.0),
+        (40, 12, 2.0, 0.0),
+        (64, 8, 0.5, 0.0),
+        (20, 20, 1.0, 0.0),
+        (96, 12, 1.0, 0.0),
+        (30, 6, 1.0, 0.0),
+        (8, 60, 1.0, 0.0),
+        (12, 7, 1.0, 0.0),
+        (60, 8, 1.0, 0.05),
+    ] {
         cycloidal_row(z1, z2, m, b).check();
     }
 }
@@ -326,12 +367,27 @@ fn drive_row(pins: u32, pin_circle: f64, pin_diameter: f64, e: f64, backlash: f6
     let (disc, ring) = (&p.preview[0], &p.preview[1]);
     assert_eq!((disc.orbit, disc.speed, ring.speed), (1.0, -1.0 / (f64::from(pins) - 1.0), 0.0));
     let stat = run(&member(disc, m), &member(ring, m), 0.0, TAU, 240);
-    Row { label: format!("drive {pins} pins d{pin_diameter} on d{pin_circle} e {e} backlash {backlash}"), m, stat, want_gap: backlash / 2.0, warnings: p.warnings }
+    Row {
+        label: format!("drive {pins} pins d{pin_diameter} on d{pin_circle} e {e} backlash {backlash}"),
+        m,
+        stat,
+        want_gap: backlash / 2.0,
+        warnings: p.warnings,
+    }
 }
 
 #[test]
 fn cycloidal_drive_discs_roll_in_the_pins() {
-    for (n, pc, pd, e, b) in [(12, 60.0, 6.0, 1.5, 0.0), (10, 50.0, 5.0, 1.0, 0.0), (20, 80.0, 5.0, 1.5, 0.0), (30, 100.0, 4.0, 1.0, 0.0), (8, 40.0, 6.0, 2.0, 0.0), (11, 60.0, 8.0, 2.0, 0.0), (12, 60.0, 6.0, 1.5, 0.1), (40, 120.0, 4.0, 0.8, 0.0)] {
+    for (n, pc, pd, e, b) in [
+        (12, 60.0, 6.0, 1.5, 0.0),
+        (10, 50.0, 5.0, 1.0, 0.0),
+        (20, 80.0, 5.0, 1.5, 0.0),
+        (30, 100.0, 4.0, 1.0, 0.0),
+        (8, 40.0, 6.0, 2.0, 0.0),
+        (11, 60.0, 8.0, 2.0, 0.0),
+        (12, 60.0, 6.0, 1.5, 0.1),
+        (40, 120.0, 4.0, 0.8, 0.0),
+    ] {
         let r = drive_row(n, pc, pd, e, b);
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
         r.check();

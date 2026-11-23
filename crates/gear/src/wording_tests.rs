@@ -60,7 +60,11 @@ fn a_block_shaft_wider_than_a_gears_roots_is_said_as_the_shaft() {
     );
     // A compound (its own shaft line, which takes the block's Ø): its 11-tooth layer, profile
     // shifted to the drawn centre distance.
-    let mut b = GearItem::new("B", ItemKind::Compound).with(vec![Thing::line([19.375, 0.0, -6.0], [19.375, 0.0, 20.0]), Thing::circle([19.375, 0.0, 0.0], Z, 6.875), Thing::circle([19.375, 0.0, 12.0], Z, 15.0)]);
+    let mut b = GearItem::new("B", ItemKind::Compound).with(vec![
+        Thing::line([19.375, 0.0, -6.0], [19.375, 0.0, 20.0]),
+        Thing::circle([19.375, 0.0, 0.0], Z, 6.875),
+        Thing::circle([19.375, 0.0, 12.0], Z, 15.0),
+    ]);
     b.gears = vec![GearSettings::default(), GearSettings::default()];
     for links in [Vec::new(), vec![mesh(g(0, 0), g(1, 0))]] {
         let sp = planned(&[spur("A", [0.0; 3], 12.5), b.clone()], &links, &blocks);
@@ -71,8 +75,15 @@ fn a_block_shaft_wider_than_a_gears_roots_is_said_as_the_shaft() {
         );
     }
     // A Shaft item of its own (no block): "shaft S".
-    let s = GearItem { shaft_diameter: Some(15.0), ..GearItem::new("S", ItemKind::Shaft).with(vec![Thing::line([19.375, 0.0, -10.0], [19.375, 0.0, 10.0])]) };
-    let sp = planned(&[spur("A", [0.0; 3], 12.5), spur("B", [19.375, 0.0, 0.0], 6.875), s], &[], &[ModuleBlock { id: "M1".into(), module: Some(1.25), members: vec![0, 1], ..ModuleBlock::default() }]);
+    let s = GearItem {
+        shaft_diameter: Some(15.0),
+        ..GearItem::new("S", ItemKind::Shaft).with(vec![Thing::line([19.375, 0.0, -10.0], [19.375, 0.0, 10.0])])
+    };
+    let sp = planned(
+        &[spur("A", [0.0; 3], 12.5), spur("B", [19.375, 0.0, 0.0], 6.875), s],
+        &[],
+        &[ModuleBlock { id: "M1".into(), module: Some(1.25), members: vec![0, 1], ..ModuleBlock::default() }],
+    );
     assert_eq!(
         sp.error.as_deref(),
         Some("Gear B sits on shaft S (Ø15), which is wider than its tooth roots (Ø10.6): use a shaft of at most Ø8 or a bigger gear")

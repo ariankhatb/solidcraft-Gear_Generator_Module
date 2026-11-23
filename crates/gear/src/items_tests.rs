@@ -63,7 +63,7 @@ fn close(a: V, b: V) -> bool {
 
 #[test]
 fn every_kind_names_and_parses() {
-    for k in ItemKind::ALL {
+    for k in ItemKind::ALL.iter().copied() {
         assert_eq!(ItemKind::parse(k.name()), Some(k));
         assert!(!slots(k).is_empty());
     }
@@ -658,7 +658,10 @@ fn two_shaft_lines_meeting_are_a_bevel_side_view() {
     let g = gear_geoms(&it);
     assert_eq!(g.len(), 2);
     assert!(g.iter().all(|g| (g.radius.unwrap() - 20.0).abs() < 1e-9), "{g:?}");
-    it.gears = vec![GearSettings { teeth: Some(20), module: Some(2.0), ..GearSettings::default() }, GearSettings { teeth: Some(30), ..GearSettings::default() }];
+    it.gears = vec![
+        GearSettings { teeth: Some(20), module: Some(2.0), ..GearSettings::default() },
+        GearSettings { teeth: Some(30), ..GearSettings::default() },
+    ];
     let g = gear_geoms(&it);
     assert_eq!(g.len(), 2);
     assert!((g[0].radius.unwrap() - 20.0).abs() < 1e-9 && (g[1].radius.unwrap() - 30.0).abs() < 1e-9, "{g:?}");

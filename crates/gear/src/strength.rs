@@ -247,9 +247,13 @@ pub const MATERIALS: &[(Material, MaterialData)] = &[
     ),
 ];
 
+/// Stands in for a material missing from the table (none is), so that looking one up can't
+/// panic. Worked out when compiling, so it can't fail at run time either.
+const FALLBACK: &MaterialData = &MATERIALS[0].1;
+
 impl Material {
     pub fn data(self) -> &'static MaterialData {
-        &MATERIALS.iter().find(|(m, _)| *m == self).expect("every material is in the table").1
+        MATERIALS.iter().find(|(m, _)| *m == self).map_or(FALLBACK, |(_, d)| d)
     }
     pub fn name(self) -> &'static str {
         self.data().name

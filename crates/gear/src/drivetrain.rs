@@ -289,12 +289,12 @@ pub fn read_with(items: &[Item], style: Option<Kind>, settings: &Simple, base: &
     }
     let lines: Vec<usize> = (0..n).filter(|i| matches!(items[*i].thing, Thing::Line(_)) && err[*i].is_none()).collect();
     let line = |i: usize| match items[i].thing {
-        Thing::Line(l) => l,
-        _ => unreachable!(),
+        Thing::Line(l) => Some(l),
+        _ => None,
     };
     // The roles: what is asked, else a circle is a gear of the style, a line a shaft, and a point
     // on a shaft line a bearing.
-    let on_line = |p: V, size: f64| lines.iter().copied().find(|&k| line(k).distance(p) <= 1e-6 + TOLERANCE * size.max(1.0) * 0.1);
+    let on_line = |p: V, size: f64| lines.iter().copied().find(|&k| line(k).is_some_and(|l| l.distance(p) <= 1e-6 + TOLERANCE * size.max(1.0) * 0.1));
     let mut role: Vec<Option<Role>> = vec![None; n];
     for (i, it) in items.iter().enumerate() {
         role[i] = Some(match (it.thing, it.ask.role) {
@@ -303,7 +303,11 @@ pub fn read_with(items: &[Item], style: Option<Kind>, settings: &Simple, base: &
                 r
             }
             (Thing::Circle(_), Some(Role::Shaft | Role::Bearing)) => {
-                fail(&mut err, i, format!("{}: a circle is a gear's pitch circle; select its shaft line or a point on it for a shaft or bearing", who(items, i)));
+                fail(
+                    &mut err,
+                    i,
+                    format!("{}: a circle is a gear's pitch circle; select its shaft line or a point on it for a shaft or bearing", who(items, i)),
+                );
                 Role::Gear(style)
             }
             (_, Some(r)) => r,
@@ -327,7 +331,10 @@ pub fn read_with(items: &[Item], style: Option<Kind>, settings: &Simple, base: &
                 let c = Circle3 { n, ..c };
                 // The shaft line its axis lies along, if one is drawn (else its axis is its shaft:
                 // a drivetrain may be drawn in several sketches, its shafts in only some).
-                out.members[i].shaft = lines.iter().copied().find(|&k| line(k).dir().is_some_and(|u| parallel(u, n)) && line(k).distance(c.c) <= 1e-6 + TOLERANCE * c.r);
+                out.members[i].shaft = lines
+                    .iter()
+                    .copied()
+                    .find(|&k| line(k).is_some_and(|l| l.dir().is_some_and(|u| parallel(u, n)) && l.distance(c.c) <= 1e-6 + TOLERANCE * c.r));
                 gears.push((i, c));
             }
             Thing::Line(l) => {
@@ -357,7 +364,9 @@ pub fn read_with(items: &[Item], style: Option<Kind>, settings: &Simple, base: &
                     out.members[i].shaft = Some(k);
                     out.seats.push(p);
                 }
-                None if it.ask.role == Some(Role::Bearing) => fail(&mut err, i, format!("{}: a bearing must lie on a shaft line, and this point is on none", who(items, i))),
+                None if it.ask.role == Some(Role::Bearing) => {
+                    fail(&mut err, i, format!("{}: a bearing must lie on a shaft line, and this point is on none", who(items, i)))
+                }
                 // A dot (an origin), not a bearing.
                 None => out.members[i].role = "point",
             },
@@ -389,7 +398,8 @@ pub fn read_with(items: &[Item], style: Option<Kind>, settings: &Simple, base: &
     };
     if gears.is_empty() {
         if out.error.is_none() && err.iter().all(Option::is_none) {
-            out.error = Some("nothing to make a gear of: draw a pitch circle (on its shaft line), or ask a shaft for a gear with its pitch diameter".into());
+            out.error =
+                Some("nothing to make a gear of: draw a pitch circle (on its shaft line), or ask a shaft for a gear with its pitch diameter".into());
         }
         return finish(out, err);
     }
@@ -411,7 +421,17 @@ pub fn read_with(items: &[Item], style: Option<Kind>, settings: &Simple, base: &
 
 /// Gears on parallel shafts: a train (see [`read`]).
 #[allow(clippy::too_many_arguments)]
-fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], style: Kind, settings: &Simple, base: &Spec, shafts: bool, out: &mut Outcome, err: &mut [Option<String>]) {
+fn train(
+    items: &[Item],
+    gears: &[(usize, Circle3)],
+    role: &[Option<Role>],
+    style: Kind,
+    settings: &Simple,
+    base: &Spec,
+    shafts: bool,
+    out: &mut Outcome,
+    err: &mut [Option<String>],
+) {
     // Each gear's tooth style (its own); meshing gears share one (checked after the sizing finds
     // the meshes), gears on one shaft may differ.
     let mut chosen: Option<(usize, Kind)> = None;
@@ -420,7 +440,9 @@ fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], styl
         let k = match role[i] {
             Some(Role::Gear(k)) if is_style(k) => k,
             Some(Role::Gear(k)) => {
-                err[i].get_or_insert_with(|| format!("{}: a {} needs its shaft at an angle to its mate's; these shafts are parallel", who(items, i), Role::Gear(k).name()));
+                err[i].get_or_insert_with(|| {
+                    format!("{}: a {} needs its shaft at an angle to its mate's; these shafts are parallel", who(items, i), Role::Gear(k).name())
+                });
                 continue;
             }
             Some(Role::Wheel) => {
@@ -508,7 +530,13 @@ fn train(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], styl
                 && a != b
             {
                 err[*i].get_or_insert_with(|| {
-                    format!("{} is {} but {} it meshes with is {}: meshing gears share one tooth style", who(items, *i), Role::Gear(a).name(), who(items, jj), Role::Gear(b).name())
+                    format!(
+                        "{} is {} but {} it meshes with is {}: meshing gears share one tooth style",
+                        who(items, *i),
+                        Role::Gear(a).name(),
+                        who(items, jj),
+                        Role::Gear(b).name()
+                    )
                 });
             }
         }
@@ -542,7 +570,16 @@ fn renamed(text: &str, items: &[Item], gears: &[(usize, Circle3)]) -> String {
 
 /// Two gears on shafts at an angle: the set their shafts imply (see [`read`]).
 #[allow(clippy::too_many_arguments)]
-fn crossed(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], style: Kind, settings: &Simple, base: &Spec, out: &mut Outcome, err: &mut [Option<String>]) {
+fn crossed(
+    items: &[Item],
+    gears: &[(usize, Circle3)],
+    role: &[Option<Role>],
+    style: Kind,
+    settings: &Simple,
+    base: &Spec,
+    out: &mut Outcome,
+    err: &mut [Option<String>],
+) {
     let (mut g1, mut g2) = (gears[0], gears[1]);
     // A family asked (bevel, worm...), from either gear's role; a worm's wheel goes first.
     let kind_of = |i: usize| match role[i] {
@@ -562,7 +599,9 @@ fn crossed(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], st
     if let (Some(a), Some(b)) = (kind_of(g1.0), kind_of(g2.0))
         && a != b
     {
-        err[g2.0].get_or_insert_with(|| format!("{} is a {} but {} is a {}: a pair is one kind", who(items, g2.0), Role::Gear(b).name(), who(items, g1.0), Role::Gear(a).name()));
+        err[g2.0].get_or_insert_with(|| {
+            format!("{} is a {} but {} is a {}: a pair is one kind", who(items, g2.0), Role::Gear(b).name(), who(items, g1.0), Role::Gear(a).name())
+        });
         return;
     }
     let axis = |c: &Circle3| Axis::new(c.c, c.n).unwrap_or(Axis { origin: c.c, dir: [0.0, 0.0, 1.0] });
@@ -586,11 +625,17 @@ fn crossed(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], st
                 return;
             }
         }
-        crate::axes::Relation::Skew { offset, .. } if !matches!(family, Some(Kind::Worm | Kind::Hypoid))
-            && (offset - g1.1.r - g2.1.r).abs() > 1e-6 + TOLERANCE * g1.1.r.min(g2.1.r) =>
+        crate::axes::Relation::Skew { offset, .. }
+            if !matches!(family, Some(Kind::Worm | Kind::Hypoid)) && (offset - g1.1.r - g2.1.r).abs() > 1e-6 + TOLERANCE * g1.1.r.min(g2.1.r) =>
         {
             err[g2.0].get_or_insert_with(|| {
-                format!("{} and {} don't touch: their shafts are {} mm apart and their radii add up to {} mm", who(items, g1.0), who(items, g2.0), num(offset), num(g1.1.r + g2.1.r))
+                format!(
+                    "{} and {} don't touch: their shafts are {} mm apart and their radii add up to {} mm",
+                    who(items, g1.0),
+                    who(items, g2.0),
+                    num(offset),
+                    num(g1.1.r + g2.1.r)
+                )
             });
             return;
         }
@@ -599,7 +644,15 @@ fn crossed(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], st
     let ask = |i: usize| items[i].ask;
     let modules: Vec<f64> = [g1.0, g2.0].iter().filter_map(|i| ask(*i).module).collect();
     if modules.len() == 2 && (modules[0] - modules[1]).abs() > 1e-9 {
-        err[g2.0].get_or_insert_with(|| format!("{} asks module {} but {} it meshes with asks {}: meshing gears share one module", who(items, g2.0), num(modules[1]), who(items, g1.0), num(modules[0])));
+        err[g2.0].get_or_insert_with(|| {
+            format!(
+                "{} asks module {} but {} it meshes with asks {}: meshing gears share one module",
+                who(items, g2.0),
+                num(modules[1]),
+                who(items, g1.0),
+                num(modules[0])
+            )
+        });
         return;
     }
     let shafts = [
@@ -608,7 +661,15 @@ fn crossed(items: &[Item], gears: &[(usize, Circle3)], role: &[Option<Role>], st
     ];
     let helical = matches!(role[g1.0], Some(Role::Gear(Kind::Helical | Kind::Herringbone))) || matches!(style, Kind::Helical | Kind::Herringbone);
     let kind = family.or(helical.then_some(Kind::Helical)).or(Some(style));
-    let sa = ShaftAsk { kind, module: modules.first().copied().or(settings.module), ratio: None, along: 0.0, face_width: ask(g1.0).face_width.or(settings.face_width), helix: settings.helix, left_hand: settings.left_hand == Some(true) };
+    let sa = ShaftAsk {
+        kind,
+        module: modules.first().copied().or(settings.module),
+        ratio: None,
+        along: 0.0,
+        face_width: ask(g1.0).face_width.or(settings.face_width),
+        helix: settings.helix,
+        left_hand: settings.left_hand == Some(true),
+    };
     match set_on_shafts(&shafts, &sa, base) {
         Ok(solved) => {
             let s = &solved.spec;

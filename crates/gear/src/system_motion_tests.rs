@@ -23,7 +23,8 @@ fn bevel(x: f64) -> GearItem {
 /// The hypoid at the end of the bent line: the ring (Ø50, axis y) at (±125, 0, 20), the pinion
 /// along the bent line.
 fn hypoid(x: f64) -> GearItem {
-    let mut it = GearItem::new("H", ItemKind::Hypoid).with(vec![Thing::circle([x.signum() * 125.0, 0.0, 20.0], [0.0, 1.0, 0.0], 25.0), Thing::line([x, 0.0, 0.0], bend(x))]);
+    let mut it = GearItem::new("H", ItemKind::Hypoid)
+        .with(vec![Thing::circle([x.signum() * 125.0, 0.0, 20.0], [0.0, 1.0, 0.0], 25.0), Thing::line([x, 0.0, 0.0], bend(x))]);
     it.gears = teeth(37, 9, None);
     it
 }
@@ -106,4 +107,3 @@ fn front_and_rear_axles_turn_the_same_way_about_y() {
     assert!((front.abs() - rear.abs()).abs() < 1e-9, "{front} {rear}");
     assert!(front * rear > 0.0, "the front axle turns {front} about +y per turn of the prop shaft, the rear {rear}");
 }
-

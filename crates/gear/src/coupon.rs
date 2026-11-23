@@ -116,7 +116,8 @@ fn window(o: &Outline, z: u32, n: u32, dir: f64) -> Option<Window> {
     // Each tooth ends with the root land to the next, unless the fillets meet.
     let last = &o.segs[per - 1];
     let root = o.segs[0].start().len();
-    let land = per >= 2 && matches!(last, Seg::Arc { c, a, b, .. } if c.len() < 1e-9 * root && (a.len() - root).abs() < 1e-9 * root && (b.len() - root).abs() < 1e-9 * root);
+    let land = per >= 2
+        && matches!(last, Seg::Arc { c, a, b, .. } if c.len() < 1e-9 * root && (a.len() - root).abs() < 1e-9 * root && (b.len() - root).abs() < 1e-9 * root);
     // Where a window starting before tooth 0 begins.
     let begin0 = if land { halves(&o.segs[o.segs.len() - 1])?.1.start() } else { o.segs[0].start() };
     let pick = |n: u32| -> (i64, f64) {
@@ -496,7 +497,11 @@ pub(crate) fn plan(s: &Spec) -> Result<Plan, String> {
                     let back = at - inward * 2.5 * m;
                     let corners = [u * at + v * y0, u * at + v * y1, u * back + v * y1, u * back + v * y0];
                     // Counter-clockwise whichever side the fence is on.
-                    let c: Vec<V2> = if inward > 0.0 { corners.iter().map(|q| pc.center + *q).collect() } else { corners.iter().rev().map(|q| pc.center + *q).collect() };
+                    let c: Vec<V2> = if inward > 0.0 {
+                        corners.iter().map(|q| pc.center + *q).collect()
+                    } else {
+                        corners.iter().rev().map(|q| pc.center + *q).collect()
+                    };
                     for q in &c {
                         cover(*q);
                     }

@@ -46,96 +46,98 @@ pub mod body;
 pub mod clearance;
 pub mod coupon;
 pub mod cycloid;
-pub mod elliptic;
-pub mod face_gear;
 pub mod design;
 pub mod diff;
 pub mod drivetrain;
+pub mod elliptic;
 pub mod equations;
+pub mod face_gear;
 pub mod geom;
 pub mod hub;
 pub mod hypoid;
-pub mod items;
 pub mod involute;
+pub mod items;
 pub mod mesh2d;
 pub mod mesh3d;
 pub mod octoid;
 mod par;
 pub mod plan;
 pub mod pulley;
-pub mod spline;
-pub mod sprocket;
 pub mod select;
 pub mod simple;
 pub mod sketch_rules;
+pub mod spline;
+pub mod sprocket;
 pub mod strength;
 pub mod worm;
 pub mod wrap;
 
 pub use geom::{Outline, Region, Seg, V2};
 pub use mesh2d::{MeshPair, MeshResult, Verdict, check_mesh};
-pub use plan::{Assembly, AssemblyIssue, AssemblyLink, AssemblyMember, Body, Fact, Frame, Kind, Op, Plan, PreviewGear, SetMember, Spec, Step, Unit, plan};
+pub use plan::{
+    Assembly, AssemblyIssue, AssemblyLink, AssemblyMember, Body, Fact, Frame, Kind, Op, Plan, PreviewGear, SetMember, Spec, Step, Unit, plan,
+};
 
 #[cfg(test)]
-mod test_util;
-#[cfg(test)]
-mod bevel_planet_tests;
+mod accuracy_tests;
 #[cfg(test)]
 mod analysis_tests;
 #[cfg(test)]
-mod diff_tests;
+mod assembly_tests;
 #[cfg(test)]
 mod axes_tests;
 #[cfg(test)]
+mod bevel_planet_tests;
+#[cfg(test)]
 mod blocks_tests;
-#[cfg(test)]
-mod fused_tests;
-#[cfg(test)]
-mod accuracy_tests;
 #[cfg(test)]
 mod body_tests;
 #[cfg(test)]
 mod clearance_tests;
 #[cfg(test)]
+mod diff_tests;
+#[cfg(test)]
+mod fused_tests;
+#[cfg(test)]
 mod sweep_tests;
 #[cfg(test)]
-mod tests;
+mod test_util;
 #[cfg(test)]
-mod assembly_tests;
+mod tests;
 
 #[cfg(test)]
 mod coupon_tests;
 #[cfg(test)]
+mod drivetrain_tests;
+#[cfg(test)]
 mod equations_tests;
+#[cfg(test)]
+mod flat_bevel_tests;
+#[cfg(test)]
+mod items_tests;
+#[cfg(test)]
+mod loft_slip_tests;
 #[cfg(test)]
 mod mesh3d_tests;
 #[cfg(test)]
 mod mesh_tests;
 #[cfg(test)]
-mod tests_extras;
-#[cfg(test)]
-mod tools_tests;
-#[cfg(test)]
-mod loft_slip_tests;
-#[cfg(test)]
-mod flat_bevel_tests;
-#[cfg(test)]
-mod train_tests;
-#[cfg(test)]
-mod system_tests;
-#[cfg(test)]
 mod select_tests;
-#[cfg(test)]
-mod drivetrain_tests;
-#[cfg(test)]
-mod items_tests;
 #[cfg(test)]
 mod solid_tests;
 #[cfg(test)]
 mod system_compose_tests;
 #[cfg(test)]
+mod system_motion_tests;
+#[cfg(test)]
 mod system_shaft_tests;
 #[cfg(test)]
-mod system_motion_tests;
+mod system_tests;
+#[cfg(test)]
+mod tests_extras;
+#[cfg(test)]
+mod tools_tests;
+#[cfg(test)]
+mod train_tests;
 #[cfg(test)]
 mod wording_tests;

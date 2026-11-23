@@ -9,22 +9,22 @@ use crate::cycloid::{Cycloidal, CycloidalDrive, cycloidal_outline};
 use crate::geom::{Outline, Region, V2, inv, wrap_period};
 use crate::hub::{Bore, Chamfer, Hardware, Shaft, lightening_holes};
 use crate::involute::{
-    BasicRack, Internal, Involute, ToothFlank, ToothSides, contact_ratio_external, external_flank, external_outline, internal_tip_interference, mesh_external, mesh_internal, mesh_phase, rack_outline,
-    shift_sum_for_center, sided_outline, teeth_outline,
+    BasicRack, Internal, Involute, ToothFlank, ToothSides, contact_ratio_external, external_flank, external_outline, internal_tip_interference,
+    mesh_external, mesh_internal, mesh_phase, rack_outline, shift_sum_for_center, sided_outline, teeth_outline,
 };
 use crate::octoid::Crown;
-use crate::worm::Hob;
 use crate::spline::SplineStandard;
+use crate::worm::Hob;
 
-pub(crate) mod extras;
-pub mod left_out;
-pub mod bevel_planet;
-pub mod train;
 pub(crate) mod assembly;
+pub mod bevel_planet;
+pub mod chamfer;
+pub(crate) mod extras;
+pub mod fused;
+pub mod left_out;
 pub mod solid;
 pub mod system;
-pub mod chamfer;
-pub mod fused;
+pub mod train;
 
 pub use bevel_planet::BevelPlanetMode;
 pub use train::{LinkKind, SidePreset, Train, TrainGear, TrainLink, TrainShaft};
@@ -77,7 +77,7 @@ pub enum Axes {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 21] = [
+    pub const ALL: &[Kind] = &[
         Kind::Spur,
         Kind::Helical,
         Kind::Herringbone,
@@ -623,8 +623,8 @@ impl Frame {
     }
     /// This frame moved by `d` (world).
     pub fn shifted(mut self, d: [f64; 3]) -> Frame {
-        for i in 0..3 {
-            self.origin[i] += d[i];
+        for (o, d) in self.origin.iter_mut().zip(d) {
+            *o += d;
         }
         self
     }
@@ -673,14 +673,24 @@ impl Step {
     pub fn op(&self) -> Op {
         match self {
             Step::Placed { step, .. } => step.op(),
-            Step::Prism { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => *op,
+            Step::Prism { op, .. }
+            | Step::Taper { op, .. }
+            | Step::RingTaper { op, .. }
+            | Step::Loft { op, .. }
+            | Step::Revolve { op, .. }
+            | Step::Coil { op, .. } => *op,
         }
     }
     /// The step's operation, to change (a placed step's own).
     pub fn op_mut(&mut self) -> &mut Op {
         match self {
             Step::Placed { step, .. } => step.op_mut(),
-            Step::Prism { op, .. } | Step::Taper { op, .. } | Step::RingTaper { op, .. } | Step::Loft { op, .. } | Step::Revolve { op, .. } | Step::Coil { op, .. } => op,
+            Step::Prism { op, .. }
+            | Step::Taper { op, .. }
+            | Step::RingTaper { op, .. }
+            | Step::Loft { op, .. }
+            | Step::Revolve { op, .. }
+            | Step::Coil { op, .. } => op,
         }
     }
 }
@@ -1014,9 +1024,14 @@ impl AssemblyLink {
         match self.clone() {
             AssemblyLink::Gear { a, b, ra, rb, internal, reverse } => AssemblyLink::Gear { a: b, b: a, ra: rb, rb: ra, internal, reverse },
             // The wheel driving the worm: a gear of `wheel_teeth` against one of `starts`.
-            AssemblyLink::Worm { worm, wheel, starts, wheel_teeth } => {
-                AssemblyLink::Gear { a: wheel, b: worm, ra: f64::from(wheel_teeth.max(1)), rb: f64::from(starts.max(1)), internal: false, reverse: false }
-            }
+            AssemblyLink::Worm { worm, wheel, starts, wheel_teeth } => AssemblyLink::Gear {
+                a: wheel,
+                b: worm,
+                ra: f64::from(wheel_teeth.max(1)),
+                rb: f64::from(starts.max(1)),
+                internal: false,
+                reverse: false,
+            },
             AssemblyLink::Rigid { a, b } => AssemblyLink::Rigid { a: b, b: a },
             l => l,
         }
@@ -1120,7 +1135,13 @@ impl Assembly {
             for l in &self.links {
                 let (a, b) = l.members();
                 let r = l.ratio();
-                let next = if a == m { Some((b, here * r)) } else if b == m && r != 0.0 { Some((a, here / r)) } else { None };
+                let next = if a == m {
+                    Some((b, here * r))
+                } else if b == m && r != 0.0 {
+                    Some((a, here / r))
+                } else {
+                    None
+                };
                 if let Some((n, v)) = next
                     && n < seen.len()
                     && seen[n].is_none()
@@ -1195,7 +1216,9 @@ pub fn check(s: &Spec) -> Result<(), String> {
     {
         return Err(format!("mating teeth must be between {min} and 2000"));
     }
-    if matches!(s.kind, Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical | Kind::BevelPlanetary) && !(5.0..=175.0).contains(&s.shaft_angle) {
+    if matches!(s.kind, Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical | Kind::BevelPlanetary)
+        && !(5.0..=175.0).contains(&s.shaft_angle)
+    {
         return Err("shaft angle must be between 5° and 175°".into());
     }
     if s.kind == Kind::BevelPlanetary {
@@ -1323,7 +1346,7 @@ pub fn plan(s: &Spec) -> Result<Plan, String> {
     }
     let mut p = Plan::default();
     match s.kind {
-        Kind::Spur | Kind::Helical | Kind::Herringbone if s.train.is_some() => train::build(s, s.train.as_ref().unwrap(), &mut p),
+        Kind::Spur | Kind::Helical | Kind::Herringbone if let Some(t) = s.train.as_ref() => train::build(s, t, &mut p),
         Kind::Spur | Kind::Helical | Kind::Herringbone => single(s, &mut p),
         Kind::Internal => internal(s, &mut p),
         Kind::Rack => rack(s, &mut p),
@@ -1471,7 +1494,13 @@ fn hub_steps_tip(s: &Spec, bore: &Bore, root_radius: f64, tip: f64, face: f64, s
         if hub_r <= reach {
             p.warn(format!("{who}: the hub is no bigger than the bore"));
         }
-        steps.push(Step::Prism { region: Region { outer: vec![Outline::circle(V2::ZERO, hub_r)], holes: vec![] }, z0: face, height: s.hub_length, twist: 0.0, op: Op::Join });
+        steps.push(Step::Prism {
+            region: Region { outer: vec![Outline::circle(V2::ZERO, hub_r)], holes: vec![] },
+            z0: face,
+            height: s.hub_length,
+            twist: 0.0,
+            op: Op::Join,
+        });
     }
     let built = crate::body::add_solids(s, &member, steps, p);
     let rim = root_radius - 2.0 * s.module;
@@ -1489,7 +1518,14 @@ fn hub_steps_tip(s: &Spec, bore: &Bore, root_radius: f64, tip: f64, face: f64, s
         if !(room > s.module) || !(d > 0.0) {
             p.warn(format!("{who}: no room for lightening holes; left out"));
         } else if d > most {
-            p.warn(format!("{who}: {} lightening holes Ø{} don't fit between Ø{} and Ø{} (Ø{} at most); left out", s.holes, num(d), num(2.0 * inner), num(2.0 * rim), num(most)));
+            p.warn(format!(
+                "{who}: {} lightening holes Ø{} don't fit between Ø{} and Ø{} (Ø{} at most); left out",
+                s.holes,
+                num(d),
+                num(2.0 * inner),
+                num(2.0 * rim),
+                num(most)
+            ));
         } else {
             let holes = lightening_holes(s.holes, d, at, PI / f64::from(s.holes));
             steps.push(Step::Prism { region: Region { outer: holes, holes: vec![] }, z0: -1.0, height: face + 2.0, twist: 0.0, op: Op::Cut });
@@ -1500,7 +1536,13 @@ fn hub_steps_tip(s: &Spec, bore: &Bore, root_radius: f64, tip: f64, face: f64, s
         if reach >= root_radius - s.module {
             p.warn(format!("{who}: under one module of material between the bore and the tooth roots"));
         }
-        steps.push(Step::Prism { region: Region { outer: vec![o], holes: vec![] }, z0: built.lo - 1.0, height: built.hi - built.lo + 2.0, twist: 0.0, op: Op::Cut });
+        steps.push(Step::Prism {
+            region: Region { outer: vec![o], holes: vec![] },
+            z0: built.lo - 1.0,
+            height: built.hi - built.lo + 2.0,
+            twist: 0.0,
+            op: Op::Cut,
+        });
     }
     crate::body::add_details(s, &member, &built, steps, p);
 }
@@ -1570,7 +1612,11 @@ fn ring_warnings(p: &mut Plan, who: &str, ring: &Internal, f: &ToothFlank) {
     let g = &ring.gear;
     let tooth_tip = (PI / g.z() - f.root_half) * f.rf;
     if f.defect().is_some() || !(tooth_tip > 0.0) || !f.tip_half.is_finite() {
-        p.refuse(format!("{who}: {} teeth with profile shift {} leave no room for internal teeth: use more teeth or a shift nearer 0", g.teeth, num(g.shift)));
+        p.refuse(format!(
+            "{who}: {} teeth with profile shift {} leave no room for internal teeth: use more teeth or a shift nearer 0",
+            g.teeth,
+            num(g.shift)
+        ));
         return;
     }
     if f.rf > ring.r_tip() + 1e-9 * g.module {
@@ -1610,7 +1656,16 @@ fn internal(s: &Spec, p: &mut Plan) {
     let mut steps = tooth_steps(region.clone(), s.face_width, twist_for(&g, s.face_width), false, Op::New);
     crate::body::ring_chamfers(s, sf.rf, outer_r, s.face_width, &mut steps, p, "ring");
     p.bodies.push(Body { name: name(s, &format!("Ring gear z{}", s.teeth)), frame: Frame::at(s.origin), steps });
-    p.preview.push(PreviewGear { name: "ring".into(), region, center: V2::ZERO, speed: 1.0, slide: 0.0, pitch_radius: g.r() , orbit: 0.0, period: 0.0});
+    p.preview.push(PreviewGear {
+        name: "ring".into(),
+        region,
+        center: V2::ZERO,
+        speed: 1.0,
+        slide: 0.0,
+        pitch_radius: g.r(),
+        orbit: 0.0,
+        period: 0.0,
+    });
 }
 
 fn rack(s: &Spec, p: &mut Plan) {
@@ -1644,7 +1699,16 @@ fn rack(s: &Spec, p: &mut Plan) {
         vec![Step::Prism { region: region.clone(), z0: 0.0, height: s.face_width, twist: 0.0, op: Op::New }]
     };
     p.bodies.push(Body { name: name(s, &format!("Rack m{}", num(s.module))), frame: Frame::at(s.origin), steps });
-    p.preview.push(PreviewGear { name: "rack".into(), region, center: V2::ZERO, speed: 0.0, slide: 1.0, pitch_radius: 0.0 , orbit: 0.0, period: PI * g.mt()});
+    p.preview.push(PreviewGear {
+        name: "rack".into(),
+        region,
+        center: V2::ZERO,
+        speed: 0.0,
+        slide: 1.0,
+        pitch_radius: 0.0,
+        orbit: 0.0,
+        period: PI * g.mt(),
+    });
 }
 
 fn pair(s: &Spec, p: &mut Plan) {
@@ -1766,8 +1830,9 @@ pub(crate) fn mesh_warnings(p: &mut Plan, who: &str, m: &crate::involute::Mesh) 
 /// reaches it.
 pub(crate) fn ring_shift_for_center(pinion: &Involute, ring: &Involute, a: f64) -> Option<f64> {
     let reach = (ring.r() - pinion.r()) * pinion.alpha_t().cos() / a;
-    (ring.teeth > pinion.teeth && reach > 0.0 && reach <= 1.0)
-        .then(|| pinion.shift + (inv(reach.acos()) - inv(pinion.alpha_t())) * f64::from(ring.teeth - pinion.teeth) / (2.0 * pinion.pressure_angle.tan()))
+    (ring.teeth > pinion.teeth && reach > 0.0 && reach <= 1.0).then(|| {
+        pinion.shift + (inv(reach.acos()) - inv(pinion.alpha_t())) * f64::from(ring.teeth - pinion.teeth) / (2.0 * pinion.pressure_angle.tan())
+    })
 }
 
 /// Shortens a ring's tips so they stay on the involute of `pinion` (an undercut or shifted
@@ -1809,7 +1874,10 @@ fn planetary(s: &Spec, p: &mut Plan) {
             p.fact("ring profile shift", x, Unit::None);
         }
         if (x - s.shift2).abs() > 0.6 {
-            p.warn(format!("the ring needs a profile shift of {x:.2} to reach the planets: ring teeth = sun + 2 × planet ({}) fits without", zs + 2 * zp));
+            p.warn(format!(
+                "the ring needs a profile shift of {x:.2} to reach the planets: ring teeth = sun + 2 × planet ({}) fits without",
+                zs + 2 * zp
+            ));
         }
     }
     // The ring's tips stay on the planets' involute: an undercut or shifted planet has less of
@@ -1817,7 +1885,10 @@ fn planetary(s: &Spec, p: &mut Plan) {
     let planet_flank = clear_ring_tips(&mut ring_gear, &planet, s.face_width);
     let m_pr = mesh_internal(&planet, &ring_gear, s.face_width);
     if internal_tip_interference(&planet, planet_flank.ra, &ring_gear, &m_pr) {
-        p.warn(format!("the planets' tips hit the ring's tips going in and out of mesh (ring − planet = {} teeth is too few)", i64::from(zr) - i64::from(zp)));
+        p.warn(format!(
+            "the planets' tips hit the ring's tips going in and out of mesh (ring − planet = {} teeth is too few)",
+            i64::from(zr) - i64::from(zp)
+        ));
     }
     if m_pr.contact_ratio < 1.0 {
         p.warn(format!("planet–ring contact ratio {:.2} is below 1: the teeth lose contact", m_pr.contact_ratio));
@@ -1896,7 +1967,11 @@ fn planetary(s: &Spec, p: &mut Plan) {
             let at = placing.eval(&x, None).and_then(|x| Ok((x, placing.eval(&y, None)?)));
             if placed && at.is_ok_and(|(x, y)| (x - c.x).abs() + (y - c.y).abs() <= 1e-6 * a.max(1.0)) {
                 p.placing.centres.push((index, x, y));
-                p.teeth_phase("planet", &format!("planet{}_phase", k + 1), format!("{t} * 1 rad + pi * 1 rad + pi / {{teeth2}} * 1 rad + {{teeth}} / {{teeth2}} * {t} * 1 rad"));
+                p.teeth_phase(
+                    "planet",
+                    &format!("planet{}_phase", k + 1),
+                    format!("{t} * 1 rad + pi * 1 rad + pi / {{teeth2}} * 1 rad + {{teeth}} / {{teeth2}} * {t} * 1 rad"),
+                );
             }
         }
         p.preview.push(PreviewGear::turning(
@@ -2050,14 +2125,22 @@ fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, face: Con
         let sigma = s.shaft_angle.to_radians();
         let range = if delta.to_degrees() > 80.0 && s.shaft_angle > 90.0 && s.shaft_angle < 170.0 {
             let k = |d: f64| sigma.sin() / d.to_radians().tan() - sigma.cos();
-            format!("; at this {}° shaft angle a tooth ratio of about {} to {} keeps both cones at 85° or less", num(s.shaft_angle), num((k(85.0) * 100.0).round() / 100.0), num((k(s.shaft_angle - 85.0) * 100.0).round() / 100.0))
+            format!(
+                "; at this {}° shaft angle a tooth ratio of about {} to {} keeps both cones at 85° or less",
+                num(s.shaft_angle),
+                num((k(85.0) * 100.0).round() / 100.0),
+                num((k(s.shaft_angle - 85.0) * 100.0).round() / 100.0)
+            )
         } else {
             String::new()
         };
         let need = min_cone_teeth(z, ha * ds / (0.5 * h), crown.dedendum / (0.9 * re * delta.tan()));
         p.refuse(format!("{who}: {}{range}", too_tall_for_cone(delta, z, need, "the shaft angle")));
         let none = ConeTeeth { steps: Vec::new(), ends: ConeEnds { back: 0.0, front: 0.0, small_root: 0.0 }, tip_radius: 0.0 };
-        return (none, ToothFlank { rf: 0.0, ra: 0.0, root_half: 0.0, tip_half: 0.0, fillet: Vec::new(), flank: Vec::new(), undercut: false, pointed: false });
+        return (
+            none,
+            ToothFlank { rf: 0.0, ra: 0.0, root_half: 0.0, tip_half: 0.0, fillet: Vec::new(), flank: Vec::new(), undercut: false, pointed: false },
+        );
     }
     // A spiral bevel's teeth are the straight bevel's with every point turned about the axis by
     // the logarithm of its distance from the apex (a logarithmic spiral of constant spiral angle
@@ -2104,10 +2187,20 @@ fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, face: Con
         let core = 0.98 * (d_in * ds - hf / dc);
         if core > 0.0 {
             let (z0, z1) = (at(d_out), at(d_in));
-            steps.push(Step::Revolve { profile: vec![V2::new(0.0, z0 - 0.05 * m), V2::new(core, z0 - 0.05 * m), V2::new(core, z1 + 0.05 * m), V2::new(0.0, z1 + 0.05 * m)], op: Op::Join });
+            steps.push(Step::Revolve {
+                profile: vec![V2::new(0.0, z0 - 0.05 * m), V2::new(core, z0 - 0.05 * m), V2::new(core, z1 + 0.05 * m), V2::new(0.0, z1 + 0.05 * m)],
+                op: Op::Join,
+            });
         }
         p.fact(format!("{who} V teeth groove at mid-face"), d_out - d_in, Unit::Mm);
-        (ConeTeeth { steps, ends: ConeEnds { back: b.ends.back, front: a.ends.front, small_root: a.ends.small_root }, tip_radius: b.tip_radius.max(a.tip_radius) }, fl)
+        (
+            ConeTeeth {
+                steps,
+                ends: ConeEnds { back: b.ends.back, front: a.ends.front, small_root: a.ends.small_root },
+                tip_radius: b.tip_radius.max(a.tip_radius),
+            },
+            fl,
+        )
     } else {
         lined_up_cone_teeth(&crown, z, mn, &skew, phase, delta, re, face, wind, m)
     };
@@ -2149,20 +2242,35 @@ pub(crate) fn taper_slips(step: &Step, teeth: u32) -> bool {
 /// spiral taper's loft would otherwise slip within the kernel's curve limit (as a big worm
 /// wheel's do).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn lined_up_cone_teeth(crown: &Crown, z: u32, mn: f64, skew: &dyn Fn(f64) -> f64, phase: f64, delta: f64, re: f64, face: ConeFace, wind: f64, m: f64) -> (ConeTeeth, ToothFlank) {
-    let mut out = None;
-    for coarse in [1.0, 1.5, 2.0, 3.0] {
+pub(crate) fn lined_up_cone_teeth(
+    crown: &Crown,
+    z: u32,
+    mn: f64,
+    skew: &dyn Fn(f64) -> f64,
+    phase: f64,
+    delta: f64,
+    re: f64,
+    face: ConeFace,
+    wind: f64,
+    m: f64,
+) -> (ConeTeeth, ToothFlank) {
+    let attempt = |coarse: f64| {
         let (sides, flank) = crown.tooth_with(z, mn, skew, coarse);
         let teeth = cone_teeth(&sides, z, phase, delta, re, face, wind, m);
         // (Only a flat cone's taper is long enough to need it; a big gear's check would cost
         // more than the plan.)
         let slips = wind != 0.0 && delta > 60f64.to_radians() && z <= 120 && teeth.steps.first().is_some_and(|st| taper_slips(st, z));
-        out = Some((teeth, flank));
-        if !slips {
+        (teeth, flank, slips)
+    };
+    // The finest first, then coarser while the loft would slip; the coarsest is kept whatever.
+    let mut out = attempt(1.0);
+    for coarse in [1.5, 2.0, 3.0] {
+        if !out.2 {
             break;
         }
+        out = attempt(coarse);
     }
-    out.expect("at least one try")
+    (out.0, out.1)
 }
 
 /// Where a bevel member's body ends along its axis, in its frame (the large end's pitch circle on
@@ -2357,7 +2465,9 @@ fn bevel(s: &Spec, p: &mut Plan) {
     // (teeth / cos of the pitch cone angle) is rarely whole, and a gear drawn all the way round
     // needs a whole count, so each is drawn with the nearest: the teeth are the 3D ones to
     // within that rounding, and the pair meshes all the way round.
-    let virt = |z: f64, d: f64, helix: f64, shift: f64| bevel_involute(s, (z / d.cos().max(1e-3)).round().clamp(3.0, 2000.0) as u32, spiral, helix, shift, 0.0);
+    let virt = |z: f64, d: f64, helix: f64, shift: f64| {
+        bevel_involute(s, (z / d.cos().max(1e-3)).round().clamp(3.0, 2000.0) as u32, spiral, helix, shift, 0.0)
+    };
     let (v1, v2) = (virt(z1, d1, spiral, s.shift), virt(z2, d2, -spiral, -s.shift));
     let (rv1, rv2) = (v1.r(), v2.r());
     p.preview_note = "back-cone (Tredgold) development at the large end, virtual tooth counts rounded".into();
@@ -2381,13 +2491,26 @@ fn bevel_hub(s: &Spec, bore: &Bore, max_r: f64, ends: &ConeEnds, steps: &mut Vec
         && bore.reach() >= root - 0.05 * s.module
     {
         let words = crate::hub::root_words(bore, 2.0 * root, s.module);
-        p.refuse(format!("{who}{}", if bore.on_shaft { words.replace("its tooth roots", "its tooth roots at the small end") } else { words.replace("the tooth roots", "the tooth roots at the small end") }));
+        p.refuse(format!(
+            "{who}{}",
+            if bore.on_shaft {
+                words.replace("its tooth roots", "its tooth roots at the small end")
+            } else {
+                words.replace("the tooth roots", "the tooth roots at the small end")
+            }
+        ));
         return;
     }
     let hub_r = (s.hub_diameter / 2.0).min(max_r);
     let hub_l = if hub_r > 0.0 && s.hub_length > 0.0 { s.hub_length } else { 0.0 };
     if hub_l > 0.0 {
-        steps.push(Step::Prism { region: Region { outer: vec![Outline::circle(V2::ZERO, hub_r)], holes: vec![] }, z0: back - s.hub_length, height: s.hub_length + 0.01, twist: 0.0, op: Op::Join });
+        steps.push(Step::Prism {
+            region: Region { outer: vec![Outline::circle(V2::ZERO, hub_r)], holes: vec![] },
+            z0: back - s.hub_length,
+            height: s.hub_length + 0.01,
+            twist: 0.0,
+            op: Op::Join,
+        });
     }
     // Shafts: the back one from the large end's face (through the hub), the front one from the
     // small end, where the roots are the limit.
@@ -2399,7 +2522,13 @@ fn bevel_hub(s: &Spec, bore: &Bore, max_r: f64, ends: &ConeEnds, steps: &mut Vec
             p.warn(format!("{who}: the bore is large for this gear"));
         }
         let low = built.map_or(back, |b| b.lo).min(back - s.hub_length.max(0.0)) - 1.0;
-        steps.push(Step::Prism { region: Region { outer: vec![o], holes: vec![] }, z0: low, height: 1e4_f64.min(10.0 * s.module * f64::from(s.teeth.max(s.teeth2)) + 100.0), twist: 0.0, op: Op::Cut });
+        steps.push(Step::Prism {
+            region: Region { outer: vec![o], holes: vec![] },
+            z0: low,
+            height: 1e4_f64.min(10.0 * s.module * f64::from(s.teeth.max(s.teeth2)) + 100.0),
+            twist: 0.0,
+            op: Op::Cut,
+        });
     }
     if let (Some(b), Some(z)) = (built, front) {
         crate::body::shaft_ends(&b, bore, back, hub_l, z, 0.0, steps, p, who);
@@ -2448,12 +2577,24 @@ fn crossed(s: &Spec, p: &mut Plan) {
     involute_facts(p, "gear 2", &g2, &f2);
     let face = s.face_width;
     if wanted(s, 1) {
-        let mut steps = vec![Step::Prism { region: Region { outer: vec![o1.rotated(-twist_for(&g1, face) / 2.0)], holes: vec![] }, z0: -face / 2.0, height: face, twist: twist_for(&g1, face), op: Op::New }];
+        let mut steps = vec![Step::Prism {
+            region: Region { outer: vec![o1.rotated(-twist_for(&g1, face) / 2.0)], holes: vec![] },
+            z0: -face / 2.0,
+            height: face,
+            twist: twist_for(&g1, face),
+            op: Op::New,
+        }];
         hub_steps_centered(s, &s.bore, f1.rf, face, &mut steps, p, "gear 1");
         p.bodies.push(Body { name: name(s, &format!("Crossed helical z{}", s.teeth)), frame: Frame::at(s.origin), steps });
     }
     if wanted(s, 2) {
-        let mut steps = vec![Step::Prism { region: Region { outer: vec![o2.rotated(-twist_for(&g2, face) / 2.0)], holes: vec![] }, z0: -face / 2.0, height: face, twist: twist_for(&g2, face), op: Op::New }];
+        let mut steps = vec![Step::Prism {
+            region: Region { outer: vec![o2.rotated(-twist_for(&g2, face) / 2.0)], holes: vec![] },
+            z0: -face / 2.0,
+            height: face,
+            twist: twist_for(&g2, face),
+            op: Op::New,
+        }];
         hub_steps_centered(s, &s.bore2, f2.rf, face, &mut steps, p, "gear 2");
         p.bodies.push(Body { name: name(s, &format!("Crossed helical z{}", s.teeth2)), frame: crossed_frame2(s.origin, e, sigma), steps });
     }
@@ -2573,7 +2714,11 @@ fn worm(s: &Spec, p: &mut Plan) {
         return;
     }
     if s.bore2.outline().is_some() && s.bore2.reach() >= rf1 - 0.05 * m {
-        p.refuse(format!("worm: the bore (reaching Ø{}) cuts into the thread roots (Ø{}); use a smaller bore", num(2.0 * s.bore2.reach()), num(2.0 * rf1)));
+        p.refuse(format!(
+            "worm: the bore (reaching Ø{}) cuts into the thread roots (Ø{}); use a smaller bore",
+            num(2.0 * s.bore2.reach()),
+            num(2.0 * rf1)
+        ));
         return;
     }
     // The wheel's face: no wider than the worm's root (beyond it the teeth no longer wrap the
@@ -2594,7 +2739,8 @@ fn worm(s: &Spec, p: &mut Plan) {
         p.warn(format!("wheel: the face is narrowed to {} mm, the most this worm's threads wrap without undercutting the teeth", num(face)));
     }
     p.fact("wheel face width", face, Unit::Mm);
-    let length = if s.worm_length > 0.0 { s.worm_length } else { (2.0 * (outside.powi(2) - (r2 - m).powi(2)).max(0.0).sqrt() + lead).max(4.0 * PI * m) };
+    let length =
+        if s.worm_length > 0.0 { s.worm_length } else { (2.0 * (outside.powi(2) - (r2 - m).powi(2)).max(0.0).sqrt() + lead).max(4.0 * PI * m) };
     p.fact("worm length", length, Unit::Mm);
     // The thread in axial section: straight sides at the axial pressure angle (a ZA worm). The
     // worm's thread is thinner by half the backlash, the hob's (the wheel's spaces) wider.
@@ -2626,7 +2772,14 @@ fn worm(s: &Spec, p: &mut Plan) {
     let ease = outside - throat;
     let tip_at = |w: f64| {
         let u = a - ((rf1 + clearance).powi(2) - w * w).max(0.0).sqrt() - outside;
-        outside + if u <= -ease { u } else if u >= ease { 0.0 } else { u - (u + ease).powi(2) / (4.0 * ease) }
+        outside
+            + if u <= -ease {
+                u
+            } else if u >= ease {
+                0.0
+            } else {
+                u - (u + ease).powi(2) / (4.0 * ease)
+            }
     };
     p.fact("wheel outside diameter", 2.0 * tip_at(face / 2.0), Unit::Mm);
     // The kernel skins the loft cubic across its sections; the true tooth bends more across the
@@ -2695,14 +2848,26 @@ fn worm(s: &Spec, p: &mut Plan) {
     let mid_tooth = sections[count / 2].1.clone();
     let outlines: Vec<(Outline, f64)> = sections.iter().map(|(w, t)| (sided_outline(t, zw, PI / f64::from(zw)), *w)).collect();
     let mid_outline = outlines[count / 2].0.clone();
-    let tip_land = |t: &ToothSides| t.ra * (t.upper.last().and_then(|q| q.last()).map_or(0.0, |q| q.1) - t.lower.last().and_then(|q| q.last()).map_or(0.0, |q| q.1));
+    let tip_land = |t: &ToothSides| {
+        t.ra * (t.upper.last().and_then(|q| q.last()).map_or(0.0, |q| q.1) - t.lower.last().and_then(|q| q.last()).map_or(0.0, |q| q.1))
+    };
     if sections.iter().any(|(w, t)| t.ra < tip_at(*w) - 1e-6) {
         p.warn("wheel: the teeth come to a point towards the edges of the face; the tips are lowered there");
     } else if tip_land(&mid_tooth) < 0.25 * m {
         p.warn(format!("wheel: thin tooth tips ({} mm; 0.25 × module or more is usual)", num(tip_land(&mid_tooth))));
     }
     // In the mid plane the wheel is a spur gear of the worm's axial module and pressure angle.
-    let mid_gear = Involute { teeth: zw, module: m, pressure_angle: ax, helix: 0.0, shift: s.shift, rack: s.rack, backlash: s.backlash / 2.0, tip_shortening: 0.0, virtual_teeth: 0.0 };
+    let mid_gear = Involute {
+        teeth: zw,
+        module: m,
+        pressure_angle: ax,
+        helix: 0.0,
+        shift: s.shift,
+        rack: s.rack,
+        backlash: s.backlash / 2.0,
+        tip_shortening: 0.0,
+        virtual_teeth: 0.0,
+    };
     if mid_gear.undercut() {
         p.warn(format!("wheel: undercut ({zw} teeth; about {:.1} or more avoid it at this profile shift): use more teeth (a finer module) or a larger pressure angle", mid_gear.min_teeth_no_undercut()));
     }
@@ -2716,7 +2881,13 @@ fn worm(s: &Spec, p: &mut Plan) {
             let inner = rf1 - 0.05 * m;
             vec![V2::new(inner, z - half(inner)), V2::new(ra1, z - half(ra1)), V2::new(ra1, z + half(ra1)), V2::new(inner, z + half(inner))]
         };
-        let mut steps = vec![Step::Prism { region: Region { outer: vec![Outline::circle(V2::ZERO, rf1)], holes: vec![] }, z0: -length / 2.0, height: length, twist: 0.0, op: Op::New }];
+        let mut steps = vec![Step::Prism {
+            region: Region { outer: vec![Outline::circle(V2::ZERO, rf1)], holes: vec![] },
+            z0: -length / 2.0,
+            height: length,
+            twist: 0.0,
+            op: Op::New,
+        }];
         // The worm's frame has x towards the wheel's axis: a coil starts on that side, and one
         // thread is centred on the wheel's mid plane there, in the tooth space the wheel turns
         // towards the worm.
@@ -2725,18 +2896,40 @@ fn worm(s: &Spec, p: &mut Plan) {
             let z = -below * lead + PI * m * f64::from(k);
             steps.push(Step::Coil { section: section_at(z), pitch: lead, z0: z, height: 2.0 * below * lead, left, op: Op::Join });
         }
-        steps.push(Step::Prism { region: Region { outer: vec![Outline::circle(V2::ZERO, ra1 + 0.01)], holes: vec![] }, z0: -length / 2.0, height: length, twist: 0.0, op: Op::Intersect });
+        steps.push(Step::Prism {
+            region: Region { outer: vec![Outline::circle(V2::ZERO, ra1 + 0.01)], holes: vec![] },
+            z0: -length / 2.0,
+            height: length,
+            twist: 0.0,
+            op: Op::Intersect,
+        });
         // The worm's shafts (gear 2's) run on from its two ends.
         let built = crate::body::shafts(s, true, &s.bore2, -length / 2.0, rf1, length / 2.0, rf1, &mut steps, p, "worm");
         if let Some(b) = s.bore2.outline() {
-            steps.push(Step::Prism { region: Region { outer: vec![b], holes: vec![] }, z0: built.lo - 1.0, height: built.hi - built.lo + 2.0, twist: 0.0, op: Op::Cut });
+            steps.push(Step::Prism {
+                region: Region { outer: vec![b], holes: vec![] },
+                z0: built.lo - 1.0,
+                height: built.hi - built.lo + 2.0,
+                twist: 0.0,
+                op: Op::Cut,
+            });
         }
         crate::body::shaft_ends(&built, &s.bore2, -length / 2.0, 0.0, length / 2.0, 0.0, &mut steps, p, "worm");
         p.bodies.push(Body { name: name(s, &format!("Worm {z1}-start")), frame: crossed_frame2(s.origin, a, FRAC_PI_2), steps });
     }
     // The preview: the wheel's mid plane section and the worm's axial section (a rack) in it.
     p.preview_note = "wheel mid plane, worm in axial section".into();
-    let rack_g = Involute { teeth: 1, module: m, pressure_angle: ax, helix: 0.0, shift: 0.0, rack: s.rack, backlash: s.backlash / 2.0, tip_shortening: 0.0, virtual_teeth: 0.0 };
+    let rack_g = Involute {
+        teeth: 1,
+        module: m,
+        pressure_angle: ax,
+        helix: 0.0,
+        shift: 0.0,
+        rack: s.rack,
+        backlash: s.backlash / 2.0,
+        tip_shortening: 0.0,
+        virtual_teeth: 0.0,
+    };
     let n = (length / (PI * m)).ceil().max(1.0) as u32;
     // Teeth towards the wheel (−x) from the worm's reference line; a thread centred on the
     // wheel's mid plane at rest (the preview slides it from half a pitch back), as the 3D
@@ -2774,13 +2967,22 @@ fn cycloidal(s: &Spec, p: &mut Plan) {
     p.fact("gear 1 pitch diameter", 2.0 * r1, Unit::Mm);
     p.fact("gear 1 tip diameter", 2.0 * f1.ra, Unit::Mm);
     if wanted(s, 1) {
-        let mut steps = vec![Step::Prism { region: Region { outer: vec![o1.clone()], holes: vec![] }, z0: 0.0, height: s.face_width, twist: 0.0, op: Op::New }];
+        let mut steps =
+            vec![Step::Prism { region: Region { outer: vec![o1.clone()], holes: vec![] }, z0: 0.0, height: s.face_width, twist: 0.0, op: Op::New }];
         hub_steps(s, &s.bore, f1.rf, s.face_width, &mut steps, p, "gear 1");
         p.bodies.push(Body { name: name(s, &format!("Cycloidal z{z1}")), frame: Frame::at(s.origin), steps });
     }
     p.preview.push(PreviewGear::turning("gear 1", with_bore(Region { outer: vec![o1], holes: vec![] }, &s.bore), V2::ZERO, 1.0, r1));
     if !single_only {
-        let c2 = Cycloidal { teeth: z2, module: m, rolling_radius_addendum: r1 / 2.0, rolling_radius_dedendum: r2 / 2.0, addendum: 1.0, dedendum: s.rack.dedendum.max(1.2), backlash: s.backlash };
+        let c2 = Cycloidal {
+            teeth: z2,
+            module: m,
+            rolling_radius_addendum: r1 / 2.0,
+            rolling_radius_dedendum: r2 / 2.0,
+            addendum: 1.0,
+            dedendum: s.rack.dedendum.max(1.2),
+            backlash: s.backlash,
+        };
         let ph2 = mesh_phase(z1, 0.0, z2, 0.0);
         let (o2, f2) = cycloidal_outline(&c2, ph2);
         p.fact("ratio", f64::from(z1) / f64::from(z2), Unit::None);
@@ -2788,7 +2990,13 @@ fn cycloidal(s: &Spec, p: &mut Plan) {
         p.fact("gear 2 pitch diameter", 2.0 * r2, Unit::Mm);
         p.fact("gear 2 tip diameter", 2.0 * f2.ra, Unit::Mm);
         if wanted(s, 2) {
-            let mut steps = vec![Step::Prism { region: Region { outer: vec![o2.clone()], holes: vec![] }, z0: 0.0, height: s.face_width, twist: 0.0, op: Op::New }];
+            let mut steps = vec![Step::Prism {
+                region: Region { outer: vec![o2.clone()], holes: vec![] },
+                z0: 0.0,
+                height: s.face_width,
+                twist: 0.0,
+                op: Op::New,
+            }];
             hub_steps(s, &s.bore2, f2.rf, s.face_width, &mut steps, p, "gear 2");
             p.bodies.push(Body { name: name(s, &format!("Cycloidal z{z2}")), frame: Frame::at(s.origin).shifted([r1 + r2, 0.0, 0.0]), steps });
         }
@@ -2803,7 +3011,13 @@ fn cycloidal(s: &Spec, p: &mut Plan) {
 }
 
 fn drive(s: &Spec, p: &mut Plan) {
-    let d = CycloidalDrive { pins: s.pins, pin_circle_radius: s.pin_circle / 2.0, pin_radius: s.pin_diameter / 2.0, eccentricity: s.eccentricity, clearance: s.backlash / 2.0 };
+    let d = CycloidalDrive {
+        pins: s.pins,
+        pin_circle_radius: s.pin_circle / 2.0,
+        pin_radius: s.pin_diameter / 2.0,
+        eccentricity: s.eccentricity,
+        clearance: s.backlash / 2.0,
+    };
     let disc = d.disc();
     let n = f64::from(s.pins);
     p.fact("reduction", n - 1.0, Unit::None);
@@ -2819,7 +3033,12 @@ fn drive(s: &Spec, p: &mut Plan) {
     }
     let pitch_gap = TAU * d.pin_circle_radius / n - s.pin_diameter;
     if pitch_gap <= 0.02 * s.pin_diameter {
-        p.refuse(format!("the ring pins overlap ({} pins of Ø{} on a Ø{} circle): fewer pins, smaller pins or a bigger pin circle", s.pins, num(s.pin_diameter), num(s.pin_circle)));
+        p.refuse(format!(
+            "the ring pins overlap ({} pins of Ø{} on a Ø{} circle): fewer pins, smaller pins or a bigger pin circle",
+            s.pins,
+            num(s.pin_diameter),
+            num(s.pin_circle)
+        ));
         return;
     }
     let valley = d.valley_radius();
@@ -2836,7 +3055,11 @@ fn drive(s: &Spec, p: &mut Plan) {
     let wall = 0.03 * s.pin_circle;
     if let Some(b) = s.bore.outline() {
         if reach >= valley - wall {
-            p.refuse(format!("the bore (reaching Ø{}) leaves no disc inside the lobes (Ø{} at the valleys); use a smaller bore", num(2.0 * reach), num(2.0 * valley)));
+            p.refuse(format!(
+                "the bore (reaching Ø{}) leaves no disc inside the lobes (Ø{} at the valleys); use a smaller bore",
+                num(2.0 * reach),
+                num(2.0 * valley)
+            ));
             return;
         }
         holes.push(b);
@@ -2851,7 +3074,12 @@ fn drive(s: &Spec, p: &mut Plan) {
         let pin = if s.hole_diameter > 0.0 { s.hole_diameter } else { (0.15 * s.pin_circle).min(most - 2.0 * s.eccentricity) };
         let hole = pin + 2.0 * s.eccentricity;
         if !(pin > 0.0) || hole > most {
-            p.warn(format!("{} output holes of Ø{} don't fit between the bore and the lobes (Ø{} at most); left out", s.holes, num(hole.max(0.0)), num(most.max(0.0))));
+            p.warn(format!(
+                "{} output holes of Ø{} don't fit between the bore and the lobes (Ø{} at most); left out",
+                s.holes,
+                num(hole.max(0.0)),
+                num(most.max(0.0))
+            ));
         } else {
             holes.extend(lightening_holes(s.holes, hole, at, 0.0));
             p.fact("output hole diameter", hole, Unit::Mm);
@@ -2871,12 +3099,27 @@ fn drive(s: &Spec, p: &mut Plan) {
         p.bodies.push(Body {
             name: name(s, &format!("Ring pins ×{}", s.pins)),
             frame: Frame::at(s.origin),
-            steps: vec![Step::Prism { region: Region { outer: pins.clone(), holes: vec![] }, z0: 0.0, height: s.face_width, twist: 0.0, op: Op::New }],
+            steps: vec![Step::Prism {
+                region: Region { outer: pins.clone(), holes: vec![] },
+                z0: 0.0,
+                height: s.face_width,
+                twist: 0.0,
+                op: Op::New,
+            }],
         });
     }
     // The input crank carries the disc's centre round the pin circle's; the pins turn the disc
     // back one lobe per turn of the crank.
-    p.preview.push(PreviewGear { name: "disc".into(), region, center: V2::new(s.eccentricity, 0.0), speed: -1.0 / (n - 1.0), slide: 0.0, pitch_radius: 0.0, orbit: 1.0, period: 0.0 });
+    p.preview.push(PreviewGear {
+        name: "disc".into(),
+        region,
+        center: V2::new(s.eccentricity, 0.0),
+        speed: -1.0 / (n - 1.0),
+        slide: 0.0,
+        pitch_radius: 0.0,
+        orbit: 1.0,
+        period: 0.0,
+    });
     p.preview.push(PreviewGear::turning("pins", Region { outer: pins, holes: vec![] }, V2::ZERO, 0.0, 0.0));
     p.preview_note = "the disc turns slowly backwards while its centre goes round with the input".into();
 }

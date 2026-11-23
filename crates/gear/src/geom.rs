@@ -87,7 +87,12 @@ impl Neg for V2 {
 pub enum Seg {
     Line(V2, V2),
     /// An arc about `c` from `a` to `b`: counter-clockwise when `ccw`, else clockwise.
-    Arc { c: V2, a: V2, b: V2, ccw: bool },
+    Arc {
+        c: V2,
+        a: V2,
+        b: V2,
+        ccw: bool,
+    },
     /// A fit point spline through the points, first to last.
     Spline(Vec<V2>),
     /// A whole circle (only as an outline of its own).
@@ -248,7 +253,8 @@ pub fn fit_profile(half: &dyn Fn(f64) -> f64, grade: &dyn Fn(f64) -> f64, tol: f
         turning[i] = turning[i - 1] + turn;
     }
     let (total_l, total_t) = (length[DENSE].max(1e-300), turning[DENSE]);
-    let measure: Vec<f64> = (0..=DENSE).map(|i| if total_t > 1e-9 { 0.5 * length[i] / total_l + 0.5 * turning[i] / total_t } else { length[i] / total_l }).collect();
+    let measure: Vec<f64> =
+        (0..=DENSE).map(|i| if total_t > 1e-9 { 0.5 * length[i] / total_l + 0.5 * turning[i] / total_t } else { length[i] / total_l }).collect();
     // The dense parameter s at which the measure reaches u.
     let s_at = |u: f64| -> f64 {
         let i = measure.partition_point(|m| *m < u).clamp(1, DENSE);
@@ -263,7 +269,13 @@ pub fn fit_profile(half: &dyn Fn(f64) -> f64, grade: &dyn Fn(f64) -> f64, tol: f
                 let t = j as f64 / n as f64;
                 // Somewhat closer together at the ends, where the spline's free ends sag most.
                 let u = 0.6 * t + 0.4 * (1.0 - (PI * t).cos()) / 2.0;
-                if j == 0 { 0.0 } else if j == n { 1.0 } else { s_at(u) }
+                if j == 0 {
+                    0.0
+                } else if j == n {
+                    1.0
+                } else {
+                    s_at(u)
+                }
             })
             .collect();
         // Between the dense samples by a straight line while searching (they are close enough
@@ -305,7 +317,18 @@ pub fn fit_profile(half: &dyn Fn(f64) -> f64, grade: &dyn Fn(f64) -> f64, tol: f
         }
         let done = worst <= tol && sharpest <= 30f64.to_radians();
         if done || n >= max.max(min.max(1)) {
-            best = ss.iter().map(|s| if *s == 0.0 { dense[0] } else if *s == 1.0 { dense[DENSE] } else { at(*s) }).collect();
+            best = ss
+                .iter()
+                .map(|s| {
+                    if *s == 0.0 {
+                        dense[0]
+                    } else if *s == 1.0 {
+                        dense[DENSE]
+                    } else {
+                        at(*s)
+                    }
+                })
+                .collect();
             break;
         }
     }

@@ -29,7 +29,6 @@ use crate::plan::{Body, Frame, Kind, Op, Plan, Spec, Step, taper_turn};
 
 type P3 = [f64; 3];
 
-
 fn arc_sweep(c: V2, a: V2, b: V2, ccw: bool) -> (f64, f64, f64) {
     let r = c.dist(a);
     let a0 = (a - c).angle();
@@ -263,9 +262,7 @@ pub(crate) fn spline_weights(xs: &[f64], x: f64) -> Vec<f64> {
             let t = (x - xs[0]) / (xs[1] - xs[0]);
             vec![1.0 - t, t]
         }
-        3 => (0..3)
-            .map(|i| (0..3).filter(|&j| j != i).map(|j| (x - xs[j]) / (xs[i] - xs[j])).product())
-            .collect(),
+        3 => (0..3).map(|i| (0..3).filter(|&j| j != i).map(|j| (x - xs[j]) / (xs[i] - xs[j])).product()).collect(),
         _ => {
             let h: Vec<f64> = (0..n - 1).map(|i| xs[i + 1] - xs[i]).collect();
             let k = (0..n - 1).find(|&i| x <= xs[i + 1]).unwrap_or(n - 2);
@@ -295,7 +292,10 @@ pub(crate) fn spline_weights(xs: &[f64], x: f64) -> Vec<f64> {
                     let m = &ms[d];
                     let (t0, t1) = (xs[k + 1] - x, x - xs[k]);
                     let hk = h[k];
-                    m[k] * t0.powi(3) / (6.0 * hk) + m[k + 1] * t1.powi(3) / (6.0 * hk) + (y(k) / hk - m[k] * hk / 6.0) * t0 + (y(k + 1) / hk - m[k + 1] * hk / 6.0) * t1
+                    m[k] * t0.powi(3) / (6.0 * hk)
+                        + m[k + 1] * t1.powi(3) / (6.0 * hk)
+                        + (y(k) / hk - m[k] * hk / 6.0) * t0
+                        + (y(k + 1) / hk - m[k + 1] * hk / 6.0) * t1
                 })
                 .collect()
         }
@@ -304,6 +304,8 @@ pub(crate) fn spline_weights(xs: &[f64], x: f64) -> Vec<f64> {
 
 /// Gaussian elimination with partial pivoting of `r` systems with one matrix: `a` is
 /// n × (n + r), the matrix then the right-hand sides; the solutions, one per right-hand side.
+// The elimination indexes two rows of one matrix at once, which reads plainest as indices.
+#[allow(clippy::needless_range_loop)]
 fn solve_many(mut a: Vec<Vec<f64>>, r: usize) -> Vec<Vec<f64>> {
     let n = a.len();
     for c in 0..n {
@@ -352,15 +354,48 @@ fn across(polys: &[Vec<V2>], zs: &[f64], sub: usize) -> (Vec<Vec<V2>>, Vec<f64>)
 }
 
 enum Part {
-    Prism { outer: Vec<Poly>, holes: Vec<Poly>, z0: f64, height: f64, twist: f64 },
-    Taper { poly: Poly, z0: f64, height: f64, twist: f64, scale: f64 },
+    Prism {
+        outer: Vec<Poly>,
+        holes: Vec<Poly>,
+        z0: f64,
+        height: f64,
+        twist: f64,
+    },
+    Taper {
+        poly: Poly,
+        z0: f64,
+        height: f64,
+        twist: f64,
+        scale: f64,
+    },
     /// Inside the cylinder of radius `rim` and outside the taper.
-    RingTaper { poly: Poly, rim: f64, z0: f64, height: f64, twist: f64, scale: f64 },
-    Loft { slabs: Vec<Slab> },
-    Revolve { profile: Vec<V2> },
-    Coil { section: Vec<V2>, pitch: f64, turns: f64, left: bool, zlo: f64, zhi: f64 },
+    RingTaper {
+        poly: Poly,
+        rim: f64,
+        z0: f64,
+        height: f64,
+        twist: f64,
+        scale: f64,
+    },
+    Loft {
+        slabs: Vec<Slab>,
+    },
+    Revolve {
+        profile: Vec<V2>,
+    },
+    Coil {
+        section: Vec<V2>,
+        pitch: f64,
+        turns: f64,
+        left: bool,
+        zlo: f64,
+        zhi: f64,
+    },
     /// A part in a frame of its own, given in the body's.
-    Placed { frame: Frame, inner: Box<Part> },
+    Placed {
+        frame: Frame,
+        inner: Box<Part>,
+    },
 }
 
 /// A step as a part, its op, and the cylinder about the body's axis that holds it (radius,
@@ -540,7 +575,8 @@ impl Part {
             }
             Part::RingTaper { poly, rim, z0, height, twist, scale } => {
                 let teeth = Part::Taper { poly: poly.clone(), z0: *z0, height: *height, twist: *twist, scale: *scale };
-                let wall = Part::Revolve { profile: vec![V2::new(0.0, *z0), V2::new(*rim, *z0), V2::new(*rim, z0 + height), V2::new(0.0, z0 + height)] };
+                let wall =
+                    Part::Revolve { profile: vec![V2::new(0.0, *z0), V2::new(*rim, *z0), V2::new(*rim, z0 + height), V2::new(0.0, z0 + height)] };
                 (teeth.turned_rows(h, hz, false).0, wall.turned_rows(h, hz, first_revolved).1)
             }
             Part::Revolve { profile } if first_revolved => {
@@ -574,7 +610,8 @@ impl Part {
             Part::RingTaper { poly, rim, z0, height, twist, scale } => {
                 let teeth = Part::Taper { poly: poly.clone(), z0: *z0, height: *height, twist: *twist, scale: *scale };
                 out.extend(teeth.sheets(h, hz, band));
-                let wall = Part::Revolve { profile: vec![V2::new(0.0, *z0), V2::new(*rim, *z0), V2::new(*rim, z0 + height), V2::new(0.0, z0 + height)] };
+                let wall =
+                    Part::Revolve { profile: vec![V2::new(0.0, *z0), V2::new(*rim, *z0), V2::new(*rim, z0 + height), V2::new(0.0, z0 + height)] };
                 out.extend(wall.sheets(h, hz, band));
             }
             Part::Taper { poly, z0, height, twist, scale } => {
@@ -610,7 +647,11 @@ impl Part {
                 let pts = refined(profile, h);
                 let rmax = pts.iter().map(|q| q.x).fold(0.0, f64::max);
                 let n = layers(TAU * rmax).max(24);
-                out.push((0..=n).map(|j| pts.iter().map(|q| V2::polar(q.x, TAU * j as f64 / n as f64)).zip(&pts).map(|(c, q)| [c.x, c.y, q.y]).collect()).collect());
+                out.push(
+                    (0..=n)
+                        .map(|j| pts.iter().map(|q| V2::polar(q.x, TAU * j as f64 / n as f64)).zip(&pts).map(|(c, q)| [c.x, c.y, q.y]).collect())
+                        .collect(),
+                );
             }
             Part::Coil { section, pitch, turns, left, zlo, zhi } => {
                 let pts = refined(section, h);
@@ -959,7 +1000,12 @@ impl Surface {
                         let j = (i + 1) % n;
                         let (a, b, c, d) = (r0[i], r0[j], r1[i], r1[j]);
                         let p = [0, 1, 2].map(|k| 0.25 * (a[k] + b[k] + c[k] + d[k]));
-                        if p[2] < zlo || p[2] > zhi || p[0].hypot(p[1]) < rmin || window.is_some_and(|(mid, half)| crate::geom::wrap(p[1].atan2(p[0]) - mid).abs() > half) || !reachable(p) {
+                        if p[2] < zlo
+                            || p[2] > zhi
+                            || p[0].hypot(p[1]) < rmin
+                            || window.is_some_and(|(mid, half)| crate::geom::wrap(p[1].atan2(p[0]) - mid).abs() > half)
+                            || !reachable(p)
+                        {
                             continue;
                         }
                         let du = [0, 1, 2].map(|k| 0.5 * (b[k] + d[k] - a[k] - c[k]));
@@ -1064,32 +1110,35 @@ fn one_way(queries: &[Sample], target: &Solid, ts: &[Sample], cell: f64) -> (f64
         hi = [0.0; 3];
     }
     let dims = if ts.is_empty() { [1usize; 3] } else { [0, 1, 2].map(|k| ((hi[k] - lo[k]) / cell).floor() as usize + 1) };
-    let index = |p: P3| -> Option<[i64; 3]> {
-        let c = [0, 1, 2].map(|k| ((p[k] - lo[k]) / cell).floor() as i64);
-        Some(c)
-    };
+    let index = |p: P3| -> [i64; 3] { [0, 1, 2].map(|k| ((p[k] - lo[k]) / cell).floor() as i64) };
     let flat = |c: [i64; 3]| -> Option<usize> {
-        if (0..3).all(|k| c[k] >= 0 && (c[k] as usize) < dims[k]) { Some((c[0] as usize * dims[1] + c[1] as usize) * dims[2] + c[2] as usize) } else { None }
+        if (0..3).all(|k| c[k] >= 0 && (c[k] as usize) < dims[k]) {
+            Some((c[0] as usize * dims[1] + c[1] as usize) * dims[2] + c[2] as usize)
+        } else {
+            None
+        }
     };
     // Counting sort of the target's samples into the grid's cells.
     let cells = dims[0] * dims[1] * dims[2];
     let mut start = vec![0u32; cells + 1];
-    let keys: Vec<usize> = ts.iter().map(|s| flat(index(s.p).unwrap()).unwrap()).collect();
-    for k in &keys {
+    // Each sample with its cell (the grid spans them all; a sample that isn't a number has none
+    // and is left out).
+    let keys: Vec<(usize, usize)> = ts.iter().enumerate().filter_map(|(i, s)| Some((i, flat(index(s.p))?))).collect();
+    for (_, k) in &keys {
         start[k + 1] += 1;
     }
     for i in 0..cells {
         start[i + 1] += start[i];
     }
-    let mut order = vec![0u32; ts.len()];
+    let mut order = vec![0u32; keys.len()];
     let mut fill = start.clone();
-    for (i, k) in keys.iter().enumerate() {
-        order[fill[*k] as usize] = i as u32;
-        fill[*k] += 1;
+    for &(i, k) in &keys {
+        order[fill[k] as usize] = i as u32;
+        fill[k] += 1;
     }
     let (mut deep, mut near, mut volume) = (0.0f64, Stat::FAR, 0.0f64);
     for q in queries {
-        let c = index(q.p).unwrap();
+        let c = index(q.p);
         // The nearest patch (a sample with the parallelogram it stands for): how far, which
         // side of it, and whether the nearest point is within the patch or on its border.
         let mut best: Option<(f64, f64, bool)> = None;
@@ -1119,16 +1168,11 @@ fn one_way(queries: &[Sample], target: &Solid, ts: &[Sample], cell: f64) -> (f64
         }
         let signed = match best {
             Some((dist, along, true)) => {
-                if along >= 0.0 {
-                    dist
-                // Behind a patch near the body's edge but not in the body (just past a convex
-                // edge, where a face's plane runs on beyond the body): outside, by the body's
-                // own word. Asked only for depths the checks could count.
-                } else if dist > 1e-3 && !target.contains(q.p) {
-                    dist
-                } else {
-                    -dist
-                }
+                // In front of the patch, or behind a patch near the body's edge but not in the
+                // body (just past a convex edge, where a face's plane runs on beyond the body):
+                // outside, by the body's own word. The body is asked only for depths the checks
+                // could count, and only when the point is behind the patch.
+                if along >= 0.0 || (dist > 1e-3 && !target.contains(q.p)) { dist } else { -dist }
             }
             // Nearest a patch's border (past an edge of the body, or of the sampled zone): the
             // body itself says which side, asked only when it could matter.
@@ -1174,7 +1218,13 @@ pub fn mesh_stat(a: &Solid, sa: &Surface, b: &Solid, sb: &Surface) -> Stat {
     let (d1, g1, v1, p1) = one_way(&wa, b, &wb, cell);
     let (d2, g2, v2, p2) = one_way(&wb, a, &wa, cell);
     let penetration = d1.max(d2);
-    let at = if penetration > 0.0 { if d1 >= d2 { p1 } else { p2 } } else if g1 <= g2 { p1 } else { p2 };
+    let at = if penetration > 0.0 {
+        if d1 >= d2 { p1 } else { p2 }
+    } else if g1 <= g2 {
+        p1
+    } else {
+        p2
+    };
     Stat { penetration, gap: if penetration > 0.0 { 0.0 } else { g1.min(g2) }, volume: 0.5 * (v1 + v2), at }
 }
 
@@ -1217,7 +1267,8 @@ impl Pair {
     pub fn for_run(a: &Body, b: &Body, h: f64, hz: f64, ratio: f64, t0: f64, t1: f64) -> Pair {
         let (a, b) = crate::par::join(|| Solid::new(a, h), || Solid::new(b, h));
         let (b0, b1) = (ratio * t0, ratio * t1);
-        let (sa, sb) = crate::par::join(|| Surface::of(&a, &b, hz, Some((t0.min(t1), t0.max(t1)))), || Surface::of(&b, &a, hz, Some((b0.min(b1), b0.max(b1)))));
+        let (sa, sb) =
+            crate::par::join(|| Surface::of(&a, &b, hz, Some((t0.min(t1), t0.max(t1)))), || Surface::of(&b, &a, hz, Some((b0.min(b1), b0.max(b1)))));
         Pair { a, b, sa, sb }
     }
     /// The pair with the first body turned `ta` and the second `tb` about their own axes.

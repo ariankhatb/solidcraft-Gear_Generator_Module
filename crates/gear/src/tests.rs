@@ -73,7 +73,7 @@ fn mesh_of_standard_gears_and_shift_for_a_centre_distance() {
 
 #[test]
 fn every_kind_plans() {
-    for k in Kind::ALL {
+    for k in Kind::ALL.iter().copied() {
         let s = Spec::defaults_for(k);
         let p = plan(&s).unwrap_or_else(|e| panic!("{k:?}: {e}"));
         assert!(!p.bodies.is_empty(), "{k:?}");

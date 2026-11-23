@@ -13,7 +13,11 @@ fn circle(x: f64, y: f64, r: f64) -> Circle {
 
 /// A compound train: 1 drives 2; 2 and 3 share a shaft; 3 drives 4.
 fn compound() -> crate::plan::Plan {
-    let d = Drawn { points: vec![], circles: vec![circle(0.0, 0.0, 20.0), circle(50.0, 0.0, 30.0), circle(50.0, 0.0, 15.0), circle(50.0, 35.0, 20.0)], lines: vec![] };
+    let d = Drawn {
+        points: vec![],
+        circles: vec![circle(0.0, 0.0, 20.0), circle(50.0, 0.0, 30.0), circle(50.0, 0.0, 15.0), circle(50.0, 35.0, 20.0)],
+        lines: vec![],
+    };
     let Reading::Train { circles: picked } = read(Some(Kind::Spur), &d).unwrap_or_else(|e| panic!("{e}")) else { panic!("not read as a train") };
     let cs: Vec<Circle> = picked.iter().map(|i| d.circles[*i]).collect();
     let settings = Simple { module: Some(2.0), ..Simple::default() };
@@ -88,7 +92,8 @@ fn holes_go_with_the_outline_round_them() {
 /// (module 2, 10 mm faces).
 fn sided(circles: &[(f64, f64, f64, f64, Option<crate::plan::SidePreset>)]) -> Spec {
     use crate::sketch_rules::{TrainCircle, size_train};
-    let cs: Vec<TrainCircle> = circles.iter().map(|&(x, y, r, z, sides)| TrainCircle { z: Some(z), sides, ..TrainCircle::of(circle(x, y, r)) }).collect();
+    let cs: Vec<TrainCircle> =
+        circles.iter().map(|&(x, y, r, z, sides)| TrainCircle { z: Some(z), sides, ..TrainCircle::of(circle(x, y, r)) }).collect();
     let settings = Simple { module: Some(2.0), face_width: Some(10.0), ..Simple::default() };
     let sized = size_train(&cs, Kind::Spur, &settings, &Spec::defaults_for(Kind::Spur));
     sized.spec.unwrap_or_else(|| panic!("{:?}", sized.error))
@@ -102,7 +107,13 @@ fn close(a: f64, b: f64) -> bool {
 fn face_sides_set_where_each_face_runs() {
     use crate::plan::SidePreset::{AOnly, BOnly, Custom, Symmetric};
     // (preset, side A, side B): the face runs from z − b to z + a about the sketch plane at 5.
-    for (preset, a, b) in [(None, 10.0, 0.0), (Some(AOnly), 10.0, 0.0), (Some(Symmetric), 5.0, 5.0), (Some(BOnly), 0.0, 10.0), (Some(Custom { a: 3.0, b: 4.0 }), 3.0, 4.0)] {
+    for (preset, a, b) in [
+        (None, 10.0, 0.0),
+        (Some(AOnly), 10.0, 0.0),
+        (Some(Symmetric), 5.0, 5.0),
+        (Some(BOnly), 0.0, 10.0),
+        (Some(Custom { a: 3.0, b: 4.0 }), 3.0, 4.0),
+    ] {
         let spec = sided(&[(0.0, 0.0, 20.0, 5.0, preset), (50.0, 0.0, 30.0, 5.0, preset)]);
         let t = spec.train.as_ref().unwrap();
         assert!(t.gears.iter().all(|g| close(g.z, 5.0) && g.span_of(&spec) == (5.0 - b, 5.0 + a)), "{preset:?}: {:?}", t.gears);
@@ -126,7 +137,12 @@ fn a_compound_gear_with_a_b_side_gear_and_an_a_side_gear_is_one_body() {
     use crate::plan::SidePreset::{AOnly, BOnly};
     // 1 drives 2 on the plane at 0, both on side B; 3 shares 2's shaft on the plane at 12 and
     // drives 4 there, both on side A.
-    let spec = sided(&[(0.0, 0.0, 20.0, 0.0, Some(BOnly)), (50.0, 0.0, 30.0, 0.0, Some(BOnly)), (50.0, 0.0, 15.0, 12.0, Some(AOnly)), (50.0, 35.0, 20.0, 12.0, Some(AOnly))]);
+    let spec = sided(&[
+        (0.0, 0.0, 20.0, 0.0, Some(BOnly)),
+        (50.0, 0.0, 30.0, 0.0, Some(BOnly)),
+        (50.0, 0.0, 15.0, 12.0, Some(AOnly)),
+        (50.0, 35.0, 20.0, 12.0, Some(AOnly)),
+    ]);
     let p = crate::plan(&spec).unwrap_or_else(|e| panic!("{e}"));
     let oz = spec.origin[2];
     assert_eq!(p.clusters, vec![vec![1, 2]]);
@@ -165,7 +181,12 @@ fn meshing_gears_whose_faces_dont_meet_are_refused() {
 fn gears_on_one_shaft_whose_faces_overlap_are_refused() {
     use crate::plan::SidePreset::{AOnly, BOnly};
     // Gear 2 reaches 0 to 10 on side A, gear 3 (on its shaft at 6) back to −4 on side B.
-    let spec = sided(&[(0.0, 0.0, 20.0, 0.0, None), (50.0, 0.0, 30.0, 0.0, Some(AOnly)), (50.0, 0.0, 15.0, 6.0, Some(BOnly)), (50.0, 35.0, 20.0, 6.0, Some(BOnly))]);
+    let spec = sided(&[
+        (0.0, 0.0, 20.0, 0.0, None),
+        (50.0, 0.0, 30.0, 0.0, Some(AOnly)),
+        (50.0, 0.0, 15.0, 6.0, Some(BOnly)),
+        (50.0, 35.0, 20.0, 6.0, Some(BOnly)),
+    ]);
     let e = crate::plan(&spec).unwrap_err();
     assert!(e.contains("gears 2 and 3 share a shaft but their faces overlap along it by 6 mm"), "{e}");
 }

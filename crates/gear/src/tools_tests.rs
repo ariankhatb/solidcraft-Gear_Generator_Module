@@ -27,7 +27,10 @@ fn plans_list_their_meshes() {
     let p = plan(&Spec::defaults_for(Kind::Pair)).unwrap();
     assert_eq!(p.meshes.iter().map(|m| (m.a, m.b, m.internal)).collect::<Vec<_>>(), [(0, 1, false)]);
     let p = plan(&planetary(18, 18, 54, 3)).unwrap();
-    assert_eq!(p.meshes.iter().map(|m| (m.a, m.b, m.internal)).collect::<Vec<_>>(), [(0, 1, false), (1, 4, true), (0, 2, false), (2, 4, true), (0, 3, false), (3, 4, true)]);
+    assert_eq!(
+        p.meshes.iter().map(|m| (m.a, m.b, m.internal)).collect::<Vec<_>>(),
+        [(0, 1, false), (1, 4, true), (0, 2, false), (2, 4, true), (0, 3, false), (3, 4, true)]
+    );
     assert_eq!((p.preview[0].name.as_str(), p.preview[4].name.as_str()), ("sun", "ring"));
     let p = plan(&Spec::defaults_for(Kind::Cycloidal)).unwrap();
     assert_eq!(p.meshes.len(), 1);
@@ -77,7 +80,10 @@ fn sound_sets_check_ok() {
         let r = check_mesh(&p);
         assert_eq!(r.len(), p.meshes.len());
         for x in &r {
-            eprintln!("{:?} {}/{}/{}: {}  (depth {:.5}, gap {:.5}..{:.5})", s.kind, s.teeth, s.teeth2, s.teeth3, x.message, x.penetration_mm, x.gap_min_mm, x.gap_max_mm);
+            eprintln!(
+                "{:?} {}/{}/{}: {}  (depth {:.5}, gap {:.5}..{:.5})",
+                s.kind, s.teeth, s.teeth2, s.teeth3, x.message, x.penetration_mm, x.gap_min_mm, x.gap_max_mm
+            );
             assert_eq!(x.verdict, Verdict::Ok, "{:?} {}/{}: {}", s.kind, s.teeth, s.teeth2, x.message);
             assert!(x.gap_max_mm >= x.gap_min_mm && x.gap_min_mm >= 0.0 && x.penetration_mm >= 0.0);
             // Backlash shows as the gap (a little less along the flanks than on the pitch circle).

@@ -119,14 +119,32 @@ fn a_hub_and_shafts_are_a_blank_of_their_own_with_their_own_cuts() {
 
 #[test]
 fn a_bearing_pocket_and_twisted_teeth_keep_their_booleans_and_their_solid() {
-    let pocket = Spec { bore: Bore { kind: BoreKind::Round, diameter: 5.0, ..Bore::default() }, hardware: Hardware { bearing_od: 13.0, bearing_width: 4.0, ..Hardware::default() }, ..spur() };
+    let pocket = Spec {
+        bore: Bore { kind: BoreKind::Round, diameter: 5.0, ..Bore::default() },
+        hardware: Hardware { bearing_od: 13.0, bearing_width: 4.0, ..Hardware::default() },
+        ..spur()
+    };
     same_solids(&pocket);
-    let helical = Spec { helix: 20.0, bore: Bore { kind: BoreKind::Round, diameter: 5.0, ..Bore::default() }, hub_diameter: 14.0, hub_length: 5.0, holes: 4, ..Spec { kind: Kind::Helical, ..spur() } };
+    let helical = Spec {
+        helix: 20.0,
+        bore: Bore { kind: BoreKind::Round, diameter: 5.0, ..Bore::default() },
+        hub_diameter: 14.0,
+        hub_length: 5.0,
+        holes: 4,
+        ..Spec { kind: Kind::Helical, ..spur() }
+    };
     same_solids(&helical);
     let foot = Spec { elephant_foot: 0.2, bore: Bore { kind: BoreKind::DFlat, diameter: 5.0, ..Bore::default() }, holes: 3, ..spur() };
     let (n, ..) = same_solids(&foot);
     assert_eq!(n, 1, "both layers of the foot take the bore");
-    let pair = Spec { kind: Kind::Pair, teeth2: 45, bore: Bore { kind: BoreKind::Hex, diameter: 6.0, ..Bore::default() }, bore2: Bore { kind: BoreKind::Round, diameter: 8.0, ..Bore::default() }, holes: 6, ..spur() };
+    let pair = Spec {
+        kind: Kind::Pair,
+        teeth2: 45,
+        bore: Bore { kind: BoreKind::Hex, diameter: 6.0, ..Bore::default() },
+        bore2: Bore { kind: BoreKind::Round, diameter: 8.0, ..Bore::default() },
+        holes: 6,
+        ..spur()
+    };
     let (n, ..) = same_solids(&pair);
     assert!(n >= 1);
 }
@@ -137,7 +155,11 @@ fn a_compounds_bores_are_holes_in_each_layer() {
     use crate::test_util::{g, mesh};
     const Z: [f64; 3] = [0.0, 0.0, 1.0];
     // A compound on a drawn shaft line (bored to it) meshing a spur.
-    let mut l = GearItem::new("L", ItemKind::Compound).with(vec![Thing::line([0.0, 0.0, -6.0], [0.0, 0.0, 30.0]), Thing::circle([0.0; 3], Z, 15.0), Thing::circle([0.0, 0.0, 12.0], Z, 8.0)]);
+    let mut l = GearItem::new("L", ItemKind::Compound).with(vec![
+        Thing::line([0.0, 0.0, -6.0], [0.0, 0.0, 30.0]),
+        Thing::circle([0.0; 3], Z, 15.0),
+        Thing::circle([0.0, 0.0, 12.0], Z, 8.0),
+    ]);
     l.shaft_diameter = Some(6.0);
     l.gears = vec![GearSettings::default(); 2];
     let mut a = GearItem::new("A", ItemKind::Spur).with(vec![Thing::circle([25.0, 0.0, 0.0], Z, 10.0)]);

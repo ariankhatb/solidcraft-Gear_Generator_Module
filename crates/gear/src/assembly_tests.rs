@@ -13,17 +13,30 @@ fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
 /// Every type's defaults, and the other shapes some types take.
 fn variants() -> Vec<(String, Spec)> {
     let mut v: Vec<(String, Spec)> = Kind::ALL.iter().map(|k| (k.name().to_string(), Spec::defaults_for(*k))).collect();
-    let bp = |mode, sigma, zs, zp, n| Spec { bevel_planet_mode: mode, shaft_angle: sigma, teeth: zs, teeth2: zp, planets: n, ..Spec::defaults_for(Kind::BevelPlanetary) };
+    let bp = |mode, sigma, zs, zp, n| Spec {
+        bevel_planet_mode: mode,
+        shaft_angle: sigma,
+        teeth: zs,
+        teeth2: zp,
+        planets: n,
+        ..Spec::defaults_for(Kind::BevelPlanetary)
+    };
     v.push(("sprocket pair".into(), Spec { teeth2: 34, ..Spec::defaults_for(Kind::Sprocket) }));
     v.push(("pulley pair".into(), Spec { teeth2: 40, ..Spec::defaults_for(Kind::Pulley) }));
     v.push(("helical pair".into(), Spec { helix: 15.0, ..Spec::defaults_for(Kind::Pair) }));
-    v.push(("planetary of 4 with a ring of 60".into(), Spec { planets: 4, teeth: 20, teeth2: 20, teeth3: 60, ..Spec::defaults_for(Kind::Planetary) }));
+    v.push((
+        "planetary of 4 with a ring of 60".into(),
+        Spec { planets: 4, teeth: 20, teeth2: 20, teeth3: 60, ..Spec::defaults_for(Kind::Planetary) },
+    ));
     v.push(("bevel at 70°".into(), Spec { shaft_angle: 70.0, ..Spec::defaults_for(Kind::Bevel) }));
     v.push(("bevel planetary single".into(), Spec { bevel_planet_mode: BevelPlanetMode::Single, ..Spec::defaults_for(Kind::BevelPlanetary) }));
     v.push(("bevel planetary ring".into(), bp(BevelPlanetMode::Ring, 45.0, 20, 10, 3)));
     v.push(("left-hand worm".into(), Spec { helix: -1.0, ..Spec::defaults_for(Kind::Worm) }));
     v.push(("2-start worm".into(), Spec { starts: 2, ..Spec::defaults_for(Kind::Worm) }));
-    v.push(("placed pair".into(), Spec { placement: Some(Frame { origin: [10.0, 20.0, 30.0], x: [0.0, 1.0, 0.0], z: [1.0, 0.0, 0.0] }), ..Spec::defaults_for(Kind::Pair) }));
+    v.push((
+        "placed pair".into(),
+        Spec { placement: Some(Frame { origin: [10.0, 20.0, 30.0], x: [0.0, 1.0, 0.0], z: [1.0, 0.0, 0.0] }), ..Spec::defaults_for(Kind::Pair) },
+    ));
     v
 }
 
@@ -115,7 +128,13 @@ fn links_turn_the_set_by_the_ratios_the_mesh_checkers_use() {
         for j in 1..p.bodies.len() {
             let Some(sj) = speed_of(j) else { continue };
             let got = a.ratio(0, j).unwrap_or_else(|| panic!("{label}: member {j} isn't linked")) * sense(&p, 0) * sense(&p, j);
-            assert!(close(got, sj / first), "{label}: {} turns {got} per turn of {}, the preview turns it {}", p.bodies[j].name, p.bodies[0].name, sj / first);
+            assert!(
+                close(got, sj / first),
+                "{label}: {} turns {got} per turn of {}, the preview turns it {}",
+                p.bodies[j].name,
+                p.bodies[0].name,
+                sj / first
+            );
             checked += 1;
         }
     }

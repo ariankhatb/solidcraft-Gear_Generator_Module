@@ -60,7 +60,7 @@ const REFERENCE_IDLE_MS: f64 = 13.0;
 /// The reference job's best time now (ms).
 pub(crate) fn reference_ms() -> f64 {
     let s = Spec { teeth: 60, teeth2: 97, ..Spec::defaults_for(Kind::Helical) };
-    best_ms(5, || (0..20).map(|_| crate::plan::plan(&s).is_ok()).count())
+    best_ms(5, || (0..20).filter(|_| crate::plan::plan(&s).is_ok()).count())
 }
 
 /// Asserts `ms` (a time measured in this test) is under `limit_ms`, the limit on an idle machine,

@@ -3,7 +3,11 @@ use crate::plan::plan;
 use std::time::Instant;
 
 fn fact(p: &crate::Plan, label: &str) -> f64 {
-    p.facts.iter().find(|f| f.label == label).unwrap_or_else(|| panic!("no fact `{label}` in {:?}", p.facts.iter().map(|f| &f.label).collect::<Vec<_>>())).value
+    p.facts
+        .iter()
+        .find(|f| f.label == label)
+        .unwrap_or_else(|| panic!("no fact `{label}` in {:?}", p.facts.iter().map(|f| &f.label).collect::<Vec<_>>()))
+        .value
 }
 
 fn row(s: &Solved, label: &str) -> f64 {
@@ -26,7 +30,7 @@ fn close(a: [f64; 3], b: [f64; 3], tol: f64) -> bool {
 
 #[test]
 fn every_kind_solves_from_defaults_and_plans() {
-    for k in Kind::ALL {
+    for k in Kind::ALL.iter().copied() {
         let base = Spec::defaults_for(k);
         let s = solved(&of(k), &base);
         assert_eq!(s.kind, k);
@@ -46,7 +50,7 @@ fn every_kind_solves_from_defaults_and_plans() {
 #[test]
 fn defaults_solve_to_themselves() {
     // Advanced → Simple → solve gives the set back.
-    for k in Kind::ALL {
+    for k in Kind::ALL.iter().copied() {
         let d = Spec::defaults_for(k);
         let back = solved(&outputs_of(&d), &d).spec;
         assert_eq!((back.module, back.teeth, back.teeth2, back.face_width), (d.module, d.teeth, d.teeth2, d.face_width), "{k:?}");
@@ -57,7 +61,9 @@ fn defaults_solve_to_themselves() {
 #[test]
 fn pair_hits_centre_distance_exactly() {
     let base = Spec::defaults_for(Kind::Pair);
-    for (ratio, a, helix) in [(1.6, 52.0, 0.0), (3.0, 80.0, 0.0), (2.0, 47.3, 0.0), (1.0, 33.33, 0.0), (4.5, 120.0, 20.0), (2.7, 61.0, 15.0), (7.0, 200.0, 0.0)] {
+    for (ratio, a, helix) in
+        [(1.6, 52.0, 0.0), (3.0, 80.0, 0.0), (2.0, 47.3, 0.0), (1.0, 33.33, 0.0), (4.5, 120.0, 20.0), (2.7, 61.0, 15.0), (7.0, 200.0, 0.0)]
+    {
         let x = Simple { ratio: Some(ratio), center_distance: Some(a), helix: Some(helix), ..of(Kind::Pair) };
         let s = solved(&x, &base);
         let p = plan(&s.spec).unwrap();
@@ -145,7 +151,10 @@ fn planetary_from_circles_and_ratio() {
         assert!((s.spec.module * zr - ring).abs() <= 2.0 * s.spec.module, "{ring}: {}", s.spec.module * zr);
     }
     // Drawn sun, planet and ring that don't close: snapped, and said so.
-    let s = solved(&Simple { pitch_diameter: Some(30.0), pitch_diameter2: Some(31.0), ring_diameter: Some(90.0), planets: Some(3), ..of(Kind::Planetary) }, &base);
+    let s = solved(
+        &Simple { pitch_diameter: Some(30.0), pitch_diameter2: Some(31.0), ring_diameter: Some(90.0), planets: Some(3), ..of(Kind::Planetary) },
+        &base,
+    );
     assert!(s.notes.iter().any(|n| n.contains("don't close")), "{:?}", s.notes);
     plan(&s.spec).unwrap();
 }
@@ -154,7 +163,11 @@ fn planetary_from_circles_and_ratio() {
 fn bevels_from_angle_ratio_and_one_size() {
     let base = Spec::defaults_for(Kind::Bevel);
     for (sigma, ratio) in [(90.0, 1.5), (60.0, 2.0), (120.0, 1.0), (30.0, 3.0), (150.0, 2.0)] {
-        for size in [Simple { pitch_diameter: Some(40.0), ..Simple::default() }, Simple { pitch_diameter2: Some(90.0), ..Simple::default() }, Simple { cone_distance: Some(60.0), ..Simple::default() }] {
+        for size in [
+            Simple { pitch_diameter: Some(40.0), ..Simple::default() },
+            Simple { pitch_diameter2: Some(90.0), ..Simple::default() },
+            Simple { cone_distance: Some(60.0), ..Simple::default() },
+        ] {
             let x = Simple { kind: Some(Kind::Bevel), shaft_angle: Some(sigma), ratio: Some(ratio), ..size.clone() };
             let s = solved(&x, &base);
             let p = plan(&s.spec).unwrap_or_else(|e| panic!("{sigma} {ratio}: {e}"));
@@ -162,7 +175,11 @@ fn bevels_from_angle_ratio_and_one_size() {
                 assert!((fact(&p, "gear 1 outer pitch diameter") - d).abs() <= s.spec.module);
             }
             if let Some(d) = size.pitch_diameter2 {
-                assert!((fact(&p, "gear 2 outer pitch diameter") - d).abs() <= ratio * s.spec.module + 1e-9, "{sigma} {ratio}: {}", fact(&p, "gear 2 outer pitch diameter"));
+                assert!(
+                    (fact(&p, "gear 2 outer pitch diameter") - d).abs() <= ratio * s.spec.module + 1e-9,
+                    "{sigma} {ratio}: {}",
+                    fact(&p, "gear 2 outer pitch diameter")
+                );
             }
             if let Some(re) = size.cone_distance {
                 assert!((fact(&p, "gear 1 cone distance") - re).abs() <= 2.0 * s.spec.module);
@@ -180,7 +197,10 @@ fn bevels_from_angle_ratio_and_one_size() {
 fn skew_sets_from_offsets() {
     // Crossed helical: pitch cylinders touching across the offset, exactly.
     for (sigma, e, ratio) in [(90.0, 40.0, 1.0), (90.0, 55.0, 2.0), (60.0, 30.0, 1.5)] {
-        let s = solved(&Simple { kind: Some(Kind::CrossedHelical), shaft_angle: Some(sigma), offset: Some(e), ratio: Some(ratio), ..Simple::default() }, &Spec::defaults_for(Kind::CrossedHelical));
+        let s = solved(
+            &Simple { kind: Some(Kind::CrossedHelical), shaft_angle: Some(sigma), offset: Some(e), ratio: Some(ratio), ..Simple::default() },
+            &Spec::defaults_for(Kind::CrossedHelical),
+        );
         let p = plan(&s.spec).unwrap();
         assert!((fact(&p, "centre distance") - e).abs() < 1e-6, "{e}: {}", fact(&p, "centre distance"));
         assert!((fact(&p, "gear 1 helix angle") + fact(&p, "gear 2 helix angle") - sigma).abs() < 1e-9);
@@ -193,13 +213,30 @@ fn skew_sets_from_offsets() {
         assert!((fact(&p, "ratio") / ratio - 1.0).abs() < 0.05);
     }
     // Worm from a wheel circle and a tangent line (its pitch line): the line's distance.
-    let s = solved(&Simple { pitch_diameter2: Some(60.0), center_distance: Some(40.0), ratio: Some(30.0), ..of(Kind::Worm) }, &Spec::defaults_for(Kind::Worm));
+    let s = solved(
+        &Simple { pitch_diameter2: Some(60.0), center_distance: Some(40.0), ratio: Some(30.0), ..of(Kind::Worm) },
+        &Spec::defaults_for(Kind::Worm),
+    );
     let p = plan(&s.spec).unwrap();
     assert!((fact(&p, "centre distance") - 40.0).abs() < 1e-6 && (fact(&p, "wheel pitch diameter") - 60.0).abs() <= 2.0 * s.spec.module);
     // Hypoid: ring gear Ø, ratio, offset.
-    let s = solved(&Simple { kind: Some(Kind::Hypoid), pitch_diameter2: Some(150.0), ratio: Some(3.0), offset: Some(20.0), shaft_angle: Some(90.0), ..Simple::default() }, &Spec::defaults_for(Kind::Hypoid));
+    let s = solved(
+        &Simple {
+            kind: Some(Kind::Hypoid),
+            pitch_diameter2: Some(150.0),
+            ratio: Some(3.0),
+            offset: Some(20.0),
+            shaft_angle: Some(90.0),
+            ..Simple::default()
+        },
+        &Spec::defaults_for(Kind::Hypoid),
+    );
     let p = plan(&s.spec).unwrap();
-    assert!((fact(&p, "gear outer pitch diameter") - 150.0).abs() < 1e-9 && (fact(&p, "offset") - 20.0).abs() < 1e-9 && (fact(&p, "ratio") - 3.0).abs() < 1e-9);
+    assert!(
+        (fact(&p, "gear outer pitch diameter") - 150.0).abs() < 1e-9
+            && (fact(&p, "offset") - 20.0).abs() < 1e-9
+            && (fact(&p, "ratio") - 3.0).abs() < 1e-9
+    );
 }
 
 #[test]
@@ -213,7 +250,11 @@ fn auto_kind_sweeps() {
     for e in [0.5, 5.0, 15.0, 25.0, 35.0, 60.0, 75.0, 90.0] {
         kinds.push(first(relation_of(90.0, e), &x));
     }
-    assert_eq!(kinds, [Kind::Hypoid, Kind::Hypoid, Kind::Hypoid, Kind::Hypoid, Kind::Hypoid, Kind::CrossedHelical, Kind::CrossedHelical, Kind::CrossedHelical], "{kinds:?}");
+    assert_eq!(
+        kinds,
+        [Kind::Hypoid, Kind::Hypoid, Kind::Hypoid, Kind::Hypoid, Kind::Hypoid, Kind::CrossedHelical, Kind::CrossedHelical, Kind::CrossedHelical],
+        "{kinds:?}"
+    );
     // A 30:1 ratio: hypoid near, worm far (wheel 100 mm: 50 mm and more).
     let x = Simple { ratio: Some(30.0), pitch_diameter2: Some(100.0), ..Simple::default() };
     let w: Vec<Kind> = [5.0, 60.0, 70.0].iter().map(|e| first(relation_of(90.0, *e), &x)).collect();
@@ -254,7 +295,11 @@ fn auto_kind_sweeps() {
                 }
                 // (No bevel cone is that slim: nothing fits, and the ranking says so.)
                 if a > 0.0 && e == 0.0 && r == 30.0 {
-                    assert!(auto_kind(&relation_of(a, e), &Simple { ratio: Some(r), ..Simple::default() }).iter().all(|c| c.2 == 0.0 || c.0 == Kind::FaceGear));
+                    assert!(
+                        auto_kind(&relation_of(a, e), &Simple { ratio: Some(r), ..Simple::default() })
+                            .iter()
+                            .all(|c| c.2 == 0.0 || c.0 == Kind::FaceGear)
+                    );
                     continue;
                 }
                 let x = Simple { shaft_angle: Some(a), offset: Some(e), ratio: Some(r), pitch_diameter2: Some(100.0), ..Simple::default() };
@@ -327,11 +372,30 @@ fn round_trips() {
         let s = solved(&x, &Spec::defaults_for(x.kind.unwrap()));
         let y = measures(&s.spec);
         let m = s.spec.module.max(1.0);
-        for f in [Field::ShaftAngle, Field::Offset, Field::CenterDistance, Field::PitchDiameter, Field::PitchDiameter2, Field::RingDiameter, Field::OuterDiameter, Field::Length, Field::Helix, Field::Planets, Field::Eccentricity, Field::Teeth] {
+        for f in [
+            Field::ShaftAngle,
+            Field::Offset,
+            Field::CenterDistance,
+            Field::PitchDiameter,
+            Field::PitchDiameter2,
+            Field::RingDiameter,
+            Field::OuterDiameter,
+            Field::Length,
+            Field::Helix,
+            Field::Planets,
+            Field::Eccentricity,
+            Field::Teeth,
+        ] {
             if let Some(want) = x.get(f) {
                 let got = y.get(f).unwrap_or_else(|| panic!("{:?} {f:?} missing", x.kind));
                 let tol = match f {
-                    Field::CenterDistance | Field::Offset | Field::ShaftAngle | Field::Helix | Field::Planets | Field::Eccentricity | Field::Teeth => 1e-6,
+                    Field::CenterDistance
+                    | Field::Offset
+                    | Field::ShaftAngle
+                    | Field::Helix
+                    | Field::Planets
+                    | Field::Eccentricity
+                    | Field::Teeth => 1e-6,
                     Field::Length => PI * m / 2.0 + 1e-9,
                     _ => 2.0 * m,
                 };
@@ -344,7 +408,12 @@ fn round_trips() {
         }
         // And the driving outputs solve to the same set.
         let again = solved(&outputs_of(&s.spec), &s.spec).spec;
-        assert_eq!((again.module, again.teeth, again.teeth2, again.shift, again.shift2), (s.spec.module, s.spec.teeth, s.spec.teeth2, s.spec.shift, s.spec.shift2), "{:?}", x.kind);
+        assert_eq!(
+            (again.module, again.teeth, again.teeth2, again.shift, again.shift2),
+            (s.spec.module, s.spec.teeth, s.spec.teeth2, s.spec.shift, s.spec.shift2),
+            "{:?}",
+            x.kind
+        );
     }
 }
 
@@ -417,7 +486,14 @@ fn schematic_frames_match_the_plan() {
         for m in &sch.members {
             let Some(bi) = m.body else { continue };
             let f = p.bodies[bi].frame;
-            assert!(close(m.frame.origin, f.origin, 1e-6) && close(m.frame.x, f.x, 1e-9) && close(m.frame.z, f.z, 1e-9), "{:?} {}: {:?} against the plan's {:?}", s.kind, m.name, m.frame, f);
+            assert!(
+                close(m.frame.origin, f.origin, 1e-6) && close(m.frame.x, f.x, 1e-9) && close(m.frame.z, f.z, 1e-9),
+                "{:?} {}: {:?} against the plan's {:?}",
+                s.kind,
+                m.name,
+                m.frame,
+                f
+            );
         }
     }
 }
@@ -434,14 +510,23 @@ fn schematic_diameters_match_the_plan() {
     let cases: Vec<(Spec, Vec<(&str, &str, Option<&str>)>)> = vec![
         (Spec::defaults_for(Kind::Spur), vec![("gear", "pitch diameter", Some("tip diameter"))]),
         (Spec::defaults_for(Kind::Helical), vec![("gear", "pitch diameter", Some("tip diameter"))]),
-        (Spec { center_distance: 55.0, ..Spec::defaults_for(Kind::Pair) }, vec![("gear 1", "gear 1 pitch diameter", Some("gear 1 tip diameter")), ("gear 2", "gear 2 pitch diameter", Some("gear 2 tip diameter"))]),
+        (
+            Spec { center_distance: 55.0, ..Spec::defaults_for(Kind::Pair) },
+            vec![("gear 1", "gear 1 pitch diameter", Some("gear 1 tip diameter")), ("gear 2", "gear 2 pitch diameter", Some("gear 2 tip diameter"))],
+        ),
         (Spec::defaults_for(Kind::Internal), vec![("ring", "pitch diameter", None)]),
         (Spec::defaults_for(Kind::Bevel), vec![("gear 1", "gear 1 outer pitch diameter", None), ("gear 2", "gear 2 outer pitch diameter", None)]),
-        (Spec::defaults_for(Kind::CrossedHelical), vec![("gear 1", "gear 1 pitch diameter", Some("gear 1 tip diameter")), ("gear 2", "gear 2 pitch diameter", Some("gear 2 tip diameter"))]),
+        (
+            Spec::defaults_for(Kind::CrossedHelical),
+            vec![("gear 1", "gear 1 pitch diameter", Some("gear 1 tip diameter")), ("gear 2", "gear 2 pitch diameter", Some("gear 2 tip diameter"))],
+        ),
         (Spec::defaults_for(Kind::Worm), vec![("wheel", "wheel pitch diameter", None), ("worm", "worm pitch diameter", Some("worm tip diameter"))]),
         (Spec::defaults_for(Kind::Cycloidal), vec![("gear 1", "gear 1 pitch diameter", None), ("gear 2", "gear 2 pitch diameter", None)]),
         (Spec::defaults_for(Kind::Sprocket), vec![("sprocket", "pitch diameter", None)]),
-        (Spec { teeth2: 36, center_distance: 120.0, ..Spec::defaults_for(Kind::Pulley) }, vec![("pulley 1", "pulley 1 pitch diameter", None), ("pulley 2", "pulley 2 pitch diameter", None)]),
+        (
+            Spec { teeth2: 36, center_distance: 120.0, ..Spec::defaults_for(Kind::Pulley) },
+            vec![("pulley 1", "pulley 1 pitch diameter", None), ("pulley 2", "pulley 2 pitch diameter", None)],
+        ),
         (Spec::defaults_for(Kind::Spline), vec![("shaft", "pitch diameter", None)]),
         (Spec::defaults_for(Kind::FaceGear), vec![("pinion", "pinion pitch diameter", None), ("face gear", "face gear pitch diameter (m·z₂)", None)]),
         (Spec::defaults_for(Kind::Hypoid), vec![("gear", "gear outer pitch diameter", None), ("pinion", "pinion mean pitch diameter", None)]),
@@ -450,7 +535,13 @@ fn schematic_diameters_match_the_plan() {
         let p = plan(&s).unwrap();
         let sch = schematic(&s);
         for (member, pitch, tip) in rows {
-            assert!((pitch_of(&sch, member) - fact(&p, pitch)).abs() < 1e-6, "{:?} {member}: {} against {}", s.kind, pitch_of(&sch, member), fact(&p, pitch));
+            assert!(
+                (pitch_of(&sch, member) - fact(&p, pitch)).abs() < 1e-6,
+                "{:?} {member}: {} against {}",
+                s.kind,
+                pitch_of(&sch, member),
+                fact(&p, pitch)
+            );
             if let Some(t) = tip {
                 let got = tip_of(&sch, member).unwrap();
                 assert!((got - fact(&p, t)).abs() < 1e-6, "{:?} {member} tip: {got} against {}", s.kind, fact(&p, t));
@@ -479,7 +570,14 @@ fn schematic_diameters_match_the_plan() {
 
 #[test]
 fn shafts_only_when_unsolvable() {
-    let x = Simple { kind: Some(Kind::Worm), shaft_angle: Some(90.0), offset: Some(5.0), pitch_diameter2: Some(100.0), ratio: Some(30.0), ..Simple::default() };
+    let x = Simple {
+        kind: Some(Kind::Worm),
+        shaft_angle: Some(90.0),
+        offset: Some(5.0),
+        pitch_diameter2: Some(100.0),
+        ratio: Some(30.0),
+        ..Simple::default()
+    };
     let (s, sch) = schematic_of(&x, &Spec::default());
     assert!(s.error.is_some());
     assert_eq!(sch.members.len(), 2);
@@ -490,7 +588,7 @@ fn shafts_only_when_unsolvable() {
 fn fast_enough() {
     // Defaults, every family: solve under 5 ms, schematic under 1 ms (a hypoid's schematic is
     // cached after its first call).
-    for k in Kind::ALL {
+    for k in Kind::ALL.iter().copied() {
         let base = Spec::defaults_for(k);
         let x = outputs_of(&base);
         let n = 20;
@@ -543,24 +641,57 @@ fn bevel_planetary_sets_by_their_outputs() {
     assert_eq!(auto_kind(&meet, &Simple { planets: Some(4), ..Simple::default() })[0].0, Kind::BevelPlanetary);
     assert_ne!(auto_kind(&meet, &Simple::default())[0].0, Kind::BevelPlanetary);
     // A differential at 90°: equal side gears, sized by the sun.
-    let d = solved(&Simple { bevel_planet_mode: Some(Differential), shaft_angle: Some(90.0), ratio: Some(0.625), planets: Some(4), pitch_diameter: Some(48.0), ..of(Kind::BevelPlanetary) }, &base);
+    let d = solved(
+        &Simple {
+            bevel_planet_mode: Some(Differential),
+            shaft_angle: Some(90.0),
+            ratio: Some(0.625),
+            planets: Some(4),
+            pitch_diameter: Some(48.0),
+            ..of(Kind::BevelPlanetary)
+        },
+        &base,
+    );
     assert_eq!(d.spec.teeth3, d.spec.teeth, "{:?}", d.chosen);
     assert!((d.spec.module * f64::from(d.spec.teeth) - 48.0).abs() < 0.05 * 48.0);
     assert_eq!((d.spec.teeth + d.spec.teeth3) % 4, 0);
     plan(&d.spec).unwrap();
     // A bevel epicyclic at 45°: the counts keep the cone angle near the one asked.
-    let r = solved(&Simple { bevel_planet_mode: Some(Ring), shaft_angle: Some(45.0), ratio: Some(0.5), planets: Some(3), cone_distance: Some(40.0), ..of(Kind::BevelPlanetary) }, &base);
+    let r = solved(
+        &Simple {
+            bevel_planet_mode: Some(Ring),
+            shaft_angle: Some(45.0),
+            ratio: Some(0.5),
+            planets: Some(3),
+            cone_distance: Some(40.0),
+            ..of(Kind::BevelPlanetary)
+        },
+        &base,
+    );
     assert!((row(&r, "cone angle") - 45.0).abs() < 2.0, "{:?}", r.chosen);
     assert!(r.spec.teeth3 > r.spec.teeth + r.spec.teeth2, "{:?}", r.spec);
     plan(&r.spec).unwrap();
     // A single sun, by the planet's size.
-    let s = solved(&Simple { bevel_planet_mode: Some(Single), shaft_angle: Some(70.0), ratio: Some(0.6), planets: Some(3), pitch_diameter2: Some(24.0), ..of(Kind::BevelPlanetary) }, &base);
+    let s = solved(
+        &Simple {
+            bevel_planet_mode: Some(Single),
+            shaft_angle: Some(70.0),
+            ratio: Some(0.6),
+            planets: Some(3),
+            pitch_diameter2: Some(24.0),
+            ..of(Kind::BevelPlanetary)
+        },
+        &base,
+    );
     assert_eq!(s.spec.teeth3, 0);
     plan(&s.spec).unwrap();
     // Switched to Simple, each solves to itself.
     for x in [&d.spec, &r.spec, &s.spec] {
         let again = solved(&outputs_of(x), x).spec;
-        assert_eq!((again.module, again.teeth, again.teeth2, again.teeth3, again.shaft_angle.round(), again.planets, again.bevel_planet_mode), (x.module, x.teeth, x.teeth2, x.teeth3, x.shaft_angle.round(), x.planets, x.bevel_planet_mode));
+        assert_eq!(
+            (again.module, again.teeth, again.teeth2, again.teeth3, again.shaft_angle.round(), again.planets, again.bevel_planet_mode),
+            (x.module, x.teeth, x.teeth2, x.teeth3, x.shaft_angle.round(), x.planets, x.bevel_planet_mode)
+        );
     }
     // Switched to a ring from the 90° differential default, a workable cone angle is taken.
     let sw = solved(&Simple { bevel_planet_mode: Some(Ring), ..of(Kind::BevelPlanetary) }, &base);

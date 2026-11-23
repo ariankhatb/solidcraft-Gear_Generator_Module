@@ -21,7 +21,10 @@ pub(crate) fn flat_sets() -> Vec<(&'static str, Spec)> {
         ("straight 100deg 17:34 m2.5", m25(Kind::Bevel, 100.0)),
         ("spiral 120deg 20:30", Spec { shaft_angle: 120.0, teeth: 20, teeth2: 30, ..d(Kind::SpiralBevel) }),
         ("straight 120deg 20:30 backlash", Spec { shaft_angle: 120.0, teeth: 20, teeth2: 30, backlash: 0.1, ..d(Kind::Bevel) }),
-        ("spiral left 105deg 15:40 backlash", Spec { shaft_angle: 105.0, teeth: 15, teeth2: 40, spiral_angle: -25.0, backlash: 0.1, ..d(Kind::SpiralBevel) }),
+        (
+            "spiral left 105deg 15:40 backlash",
+            Spec { shaft_angle: 105.0, teeth: 15, teeth2: 40, spiral_angle: -25.0, backlash: 0.1, ..d(Kind::SpiralBevel) },
+        ),
         ("straight 150deg 20:20 both flat", Spec { shaft_angle: 150.0, teeth: 20, teeth2: 20, ..d(Kind::Bevel) }),
         ("spiral 150deg 20:20 both flat", Spec { shaft_angle: 150.0, teeth: 20, teeth2: 20, spiral_angle: 30.0, ..d(Kind::SpiralBevel) }),
     ]
@@ -65,7 +68,10 @@ pub(crate) fn own_face_sets() -> Vec<(&'static str, Spec)> {
         ("straight 20:30 gear 2 face 8", Spec { face_width2: 8.0, ..d(Kind::Bevel) }),
         ("straight 20:30 gear 2 face 16 heel in 2", Spec { face_width2: 16.0, face_offset2: 2.0, backlash: 0.1, ..d(Kind::Bevel) }),
         ("spiral 17:34 gear 2 face 9 heel in 1.5", Spec { face_width2: 9.0, face_offset2: 1.5, ..d(Kind::SpiralBevel) }),
-        ("spiral 110deg 17:34 m2.5 gear 2 heel out 1", Spec { module: 2.5, teeth: 17, teeth2: 34, shaft_angle: 110.0, face_offset2: -1.0, backlash: 0.1, ..d(Kind::SpiralBevel) }),
+        (
+            "spiral 110deg 17:34 m2.5 gear 2 heel out 1",
+            Spec { module: 2.5, teeth: 17, teeth2: 34, shaft_angle: 110.0, face_offset2: -1.0, backlash: 0.1, ..d(Kind::SpiralBevel) },
+        ),
     ]
 }
 
@@ -122,7 +128,9 @@ fn bevels_end_on_their_back_and_front_cones() {
             assert!(most <= heel + 1e-3 * m, "{label} {}: a tooth reaches {} along the pitch element, past the heel at {heel}", body.name, most);
             // Nothing of the teeth is nearer the apex than the front cone: what is (the body's
             // front face and its hub) is under the roots, no higher than the front face.
-            let Some(Step::Revolve { profile, .. }) = body.steps.iter().find(|st| matches!(st, Step::Revolve { op: Op::Intersect, .. })) else { unreachable!() };
+            let Some(Step::Revolve { profile, .. }) = body.steps.iter().find(|st| matches!(st, Step::Revolve { op: Op::Intersect, .. })) else {
+                unreachable!()
+            };
             let face = profile.last().map_or(0.0, |q| q.y);
             let inside = pts.iter().filter(|q| along(q) < toe - 1e-3 * m).map(|q| q[2]).fold(f64::MIN, f64::max);
             assert!(inside <= face + 1e-6, "{label} {}: material inside the front cone at z {inside}, above the front face at {face}", body.name);
@@ -178,7 +186,14 @@ fn probe_flat() {
 pub(crate) fn planetary_sets() -> Vec<(&'static str, Spec)> {
     use crate::plan::BevelPlanetMode::{Differential, Single};
     let bp = d(Kind::BevelPlanetary);
-    let set = |mode, angle: f64, zs: u32, zp: u32, n: u32| Spec { bevel_planet_mode: mode, shaft_angle: angle, teeth: zs, teeth2: zp, planets: n, ..bp.clone() };
+    let set = |mode, angle: f64, zs: u32, zp: u32, n: u32| Spec {
+        bevel_planet_mode: mode,
+        shaft_angle: angle,
+        teeth: zs,
+        teeth2: zp,
+        planets: n,
+        ..bp.clone()
+    };
     vec![
         ("bp single 100 12:30 x1 flat planet", set(Single, 100.0, 12, 30, 1)),
         ("bp diff 90 10:30 x2 flat planets spiral 30", Spec { spiral_angle: 30.0, ..set(Differential, 90.0, 10, 30, 2) }),
@@ -192,7 +207,6 @@ fn bevel_planetary_flat_and_own_faces_mesh() {
         crate::bevel_planet_tests::prove(label, &s);
     }
 }
-
 
 /// Writes CLI scripts that build a bevel body's teeth (its taper and trim) from primitive
 /// commands with the kernel's check on every step: `FLAT_DUMP=dir`.
@@ -218,7 +232,12 @@ fn dump_trim_scripts() {
         let mut cmds = vec![r#"{"command":"diagnostics.validation","params":{"mode":"each_step"}}"#.to_string()];
         let mut sketch = 0;
         let outline_cmds = |cmds: &mut Vec<String>, o: &Outline, h: f64| {
-            cmds.push(format!(r#"{{"command":"sketch.create","params":{{"plane":{{"origin":{},"x_dir":{},"y_dir":{}}},"project_edges":false}}}}"#, v3(f.world([0.0, 0.0, h])), v3(x), v3(y)));
+            cmds.push(format!(
+                r#"{{"command":"sketch.create","params":{{"plane":{{"origin":{},"x_dir":{},"y_dir":{}}},"project_edges":false}}}}"#,
+                v3(f.world([0.0, 0.0, h])),
+                v3(x),
+                v3(y)
+            ));
             for sg in &o.segs {
                 cmds.push(match sg {
                     Seg::Line(a, c) => format!(r#"{{"command":"sketch.line","params":{{"points":[{},{}]}}}}"#, p2(*a), p2(*c)),
@@ -226,7 +245,10 @@ fn dump_trim_scripts() {
                         let (a, b) = if *ccw { (*a, *b) } else { (*b, *a) };
                         format!(r#"{{"command":"sketch.arc.center_point","params":{{"center":{},"start":{},"end":{}}}}}"#, p2(*c), p2(a), p2(b))
                     }
-                    Seg::Spline(pts) => format!(r#"{{"command":"sketch.spline.fit_point","params":{{"points":[{}]}}}}"#, pts.iter().map(|q| p2(*q)).collect::<Vec<_>>().join(",")),
+                    Seg::Spline(pts) => format!(
+                        r#"{{"command":"sketch.spline.fit_point","params":{{"points":[{}]}}}}"#,
+                        pts.iter().map(|q| p2(*q)).collect::<Vec<_>>().join(",")
+                    ),
                     Seg::Circle(..) => panic!(),
                 });
             }
@@ -237,7 +259,16 @@ fn dump_trim_scripts() {
         let dense: usize = std::env::var("FLAT_DENSE").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
         let lines = std::env::var("FLAT_LINES").is_ok();
         let outline = &if lines {
-            Outline { segs: outline.segs.iter().flat_map(|sg| match sg { Seg::Spline(pts) => pts.windows(2).map(|w| Seg::Line(w[0], w[1])).collect::<Vec<_>>(), other => vec![other.clone()] }).collect() }
+            Outline {
+                segs: outline
+                    .segs
+                    .iter()
+                    .flat_map(|sg| match sg {
+                        Seg::Spline(pts) => pts.windows(2).map(|w| Seg::Line(w[0], w[1])).collect::<Vec<_>>(),
+                        other => vec![other.clone()],
+                    })
+                    .collect(),
+            }
         } else if dense > 1 {
             Outline {
                 segs: outline
@@ -257,7 +288,11 @@ fn dump_trim_scripts() {
         } else {
             outline.clone()
         };
-        let n = if twist.abs() < 1e-12 { std::env::var("FLAT_N").ok().and_then(|v| v.parse().ok()).unwrap_or(2) } else { taper_sections(outline, *twist, *scale) };
+        let n = if twist.abs() < 1e-12 {
+            std::env::var("FLAT_N").ok().and_then(|v| v.parse().ok()).unwrap_or(2)
+        } else {
+            taper_sections(outline, *twist, *scale)
+        };
         let mut ids = Vec::new();
         for k in 0..n {
             let t = k as f64 / (n - 1) as f64;
@@ -268,11 +303,20 @@ fn dump_trim_scripts() {
         }
         cmds.push(format!(r#"{{"command":"solid.loft","params":{{"sections":[{}],"operation":"new","body_name":"G"}}}}"#, ids.join(",")));
         let Some(Step::Revolve { profile, .. }) = b.steps.get(1).filter(|st| matches!(st, Step::Revolve { op: Op::Intersect, .. })) else {
-            std::fs::write(format!("{dir}/{name}.json"), format!("{{\"commands\":[
+            std::fs::write(
+                format!("{dir}/{name}.json"),
+                format!(
+                    "{{\"commands\":[
 {}
 ]}}
-", cmds.join(",
-"))).unwrap();
+",
+                    cmds.join(
+                        ",
+"
+                    )
+                ),
+            )
+            .unwrap();
             eprintln!("{name}: {n} sections, {} commands, no trim", cmds.len());
             continue;
         };
@@ -301,8 +345,16 @@ fn dump_trim_scripts() {
             let top = profile[3].y;
             profile = vec![profile[0], profile[1], profile[2], profile[3], crate::geom::V2::new(0.0, top)];
         }
-        cmds.push(format!(r#"{{"command":"sketch.create","params":{{"plane":{{"origin":{},"x_dir":{},"y_dir":{}}},"project_edges":false}}}}"#, v3(f.origin), v3(x), v3(z)));
-        cmds.push(format!(r#"{{"command":"sketch.line","params":{{"points":[{}],"closed":true}}}}"#, profile.iter().map(|q| p2(*q)).collect::<Vec<_>>().join(",")));
+        cmds.push(format!(
+            r#"{{"command":"sketch.create","params":{{"plane":{{"origin":{},"x_dir":{},"y_dir":{}}},"project_edges":false}}}}"#,
+            v3(f.origin),
+            v3(x),
+            v3(z)
+        ));
+        cmds.push(format!(
+            r#"{{"command":"sketch.line","params":{{"points":[{}],"closed":true}}}}"#,
+            profile.iter().map(|q| p2(*q)).collect::<Vec<_>>().join(",")
+        ));
         cmds.push(r#"{"command":"sketch.finish","params":{}}"#.to_string());
         cmds.push(r#"{"command":"solid.revolve","params":{"axis":"y","operation":"intersect","targets":["G"]}}"#.to_string());
         std::fs::write(format!("{dir}/{name}.json"), format!("{{\"commands\":[\n{}\n]}}\n", cmds.join(",\n"))).unwrap();

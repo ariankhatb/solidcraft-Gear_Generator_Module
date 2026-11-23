@@ -44,7 +44,7 @@ fn calculate_builds_nothing() {
 
 #[test]
 fn parameters_round_trip_through_the_spec() {
-    for k in solidcraft_gear::Kind::ALL {
+    for k in solidcraft_gear::Kind::ALL.iter().copied() {
         let spec = solidcraft_gear::Spec::defaults_for(k);
         let p = crate::gear_params_of(&spec);
         let back: crate::schema::gear::GearParams = serde_json::from_value(p.clone()).unwrap_or_else(|e| panic!("{p}: {e}"));
@@ -64,7 +64,7 @@ fn bad_values_are_refused() {
 #[test]
 #[ignore]
 fn every_type_builds() {
-    for k in solidcraft_gear::Kind::ALL {
+    for k in solidcraft_gear::Kind::ALL.iter().copied() {
         let mut s = Session::default();
         let p = crate::gear_params_of(&solidcraft_gear::Spec::defaults_for(k));
         let r = s.execute("gear.create", &p).unwrap_or_else(|e| panic!("{k:?}: {e}"));
@@ -785,7 +785,7 @@ fn clearance_parameters_round_trip_and_bad_ones_are_refused() {
 #[test]
 #[ignore]
 fn every_type_builds_its_clearance_body() {
-    for k in solidcraft_gear::Kind::ALL {
+    for k in solidcraft_gear::Kind::ALL.iter().copied() {
         let mut s = Session::default();
         let mut p = crate::gear_params_of(&solidcraft_gear::Spec::defaults_for(k));
         p["clearance_body"] = json!({});

@@ -62,10 +62,15 @@
 
 use std::f64::consts::{PI, TAU};
 
+use super::{
+    Body, ConeEnds, ConeFace, Frame, Op, Plan, PreviewGear, Spec, Step, Unit, bevel_hub, bevel_involute, cone_faces, lined_up_cone_teeth, name,
+    tooth_warnings, wanted,
+};
 use crate::axes::num;
-use super::{Body, ConeEnds, ConeFace, Frame, Op, Plan, PreviewGear, Spec, Step, Unit, bevel_hub, bevel_involute, cone_faces, lined_up_cone_teeth, name, tooth_warnings, wanted};
 use crate::geom::{Outline, Region, V2};
-use crate::involute::{Internal, PROFILE_TOLERANCE, ToothSides, external_outline, mesh_phase, mesh_phase_internal, side_points, sided_outline, teeth_outline};
+use crate::involute::{
+    Internal, PROFILE_TOLERANCE, ToothSides, external_outline, mesh_phase, mesh_phase_internal, side_points, sided_outline, teeth_outline,
+};
 use crate::mesh3d::MeshPair3;
 use crate::octoid::Crown;
 
@@ -167,7 +172,12 @@ pub fn geometry(s: &Spec) -> Result<Geometry, String> {
                 if c.abs() < 0.996 { format!("{} teeth → {}°", z, deg(c.acos())) } else { String::new() }
             };
             let exact = fs + 2.0 * fp * asked.cos();
-            let options: Vec<String> = [exact.floor(), exact.ceil()].iter().filter(|z| **z >= 3.0 && **z != f64::from(z_far)).map(|z| near(*z)).filter(|t| !t.is_empty()).collect();
+            let options: Vec<String> = [exact.floor(), exact.ceil()]
+                .iter()
+                .filter(|z| **z >= 3.0 && **z != f64::from(z_far))
+                .map(|z| near(*z))
+                .filter(|t| !t.is_empty())
+                .collect();
             warnings.push(format!(
                 "the cone angle is {}° (not {}°): a {what} of {z_far} teeth fits only there ({what} teeth = sun + 2 × planet × cos Σ = {}){}",
                 deg(sigma),
@@ -246,7 +256,22 @@ pub fn geometry(s: &Spec) -> Result<Geometry, String> {
             deg(need)
         ));
     }
-    Ok(Geometry { mode, sigma, z_sun: zs, z_planet: zp, z_far, delta_sun: ds, delta_planet: dp, delta_far: df, re, face, azimuths, spiral, least_axis_angle: least, warnings })
+    Ok(Geometry {
+        mode,
+        sigma,
+        z_sun: zs,
+        z_planet: zp,
+        z_far,
+        delta_sun: ds,
+        delta_planet: dp,
+        delta_far: df,
+        re,
+        face,
+        azimuths,
+        spiral,
+        least_axis_angle: least,
+        warnings,
+    })
 }
 
 /// The flank gap the backlash asks for (least, at the small end, and most; mm): every member is
@@ -404,11 +429,11 @@ fn ring_member(s: &Spec, g: &Geometry, spiral: f64, phase: f64, p: &mut Plan) ->
                 let j0 = ((lo - r_tip) / (r_root - r_tip) * bins as f64).ceil().max(0.0);
                 let j1 = ((hi - r_tip) / (r_root - r_tip) * bins as f64).floor().min(bins as f64);
                 if j1 >= j0 {
-                    for j in (j0 as usize)..=(j1 as usize) {
+                    for (j, w) in widest.iter_mut().enumerate().take(j1 as usize + 1).skip(j0 as usize) {
                         let f = if (r2 - r1).abs() > 1e-15 { (r_at(j) - r1) / (r2 - r1) } else { 0.0 };
                         let th = (t1 + (t2 - t1) * f).abs();
-                        if widest[j].is_none_or(|w| th > w) {
-                            widest[j] = Some(th);
+                        if w.is_none_or(|x| th > x) {
+                            *w = Some(th);
                         }
                     }
                 }
@@ -428,7 +453,9 @@ fn ring_member(s: &Spec, g: &Geometry, spiral: f64, phase: f64, p: &mut Plan) ->
     let vals: Vec<f64> = (0..=bins).map(|j| widest[j.clamp(first, last)].unwrap_or(0.0) + widen).collect();
     let land = 0.02 * m;
     if vals.iter().enumerate().any(|(j, v)| (pitch_r - v) * r_at(j) < land / 2.0) {
-        p.warn("ring: its teeth come to a point (the planets need wider spaces than the ring's pitch leaves): use more ring teeth or smaller planets");
+        p.warn(
+            "ring: its teeth come to a point (the planets need wider spaces than the ring's pitch leaves): use more ring teeth or smaller planets",
+        );
     }
     let space_half = |r: f64| -> f64 {
         let x = ((r - r_tip) / (r_root - r_tip) * bins as f64).clamp(0.0, bins as f64);
@@ -569,7 +596,8 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
     let pin = (pin_bore - 0.2).max(0.0);
     let with_pin_bore;
     let sp: &Spec = if whole && s.bore2.outline().is_none() && pin > 0.5 {
-        with_pin_bore = Spec { bore2: crate::hub::Bore { kind: crate::hub::BoreKind::Round, diameter: pin_bore, ..crate::hub::Bore::default() }, ..s.clone() };
+        with_pin_bore =
+            Spec { bore2: crate::hub::Bore { kind: crate::hub::BoreKind::Round, diameter: pin_bore, ..crate::hub::Bore::default() }, ..s.clone() };
         &with_pin_bore
     } else {
         s
@@ -581,7 +609,9 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
             .steps
             .iter()
             .map(|st| match st {
-                Step::Taper { outline, z0, height, twist, scale, op } => Step::Taper { outline: outline.rotated(phase), z0: *z0, height: *height, twist: *twist, scale: *scale, op: *op },
+                Step::Taper { outline, z0, height, twist, scale, op } => {
+                    Step::Taper { outline: outline.rotated(phase), z0: *z0, height: *height, twist: *twist, scale: *scale, op: *op }
+                }
                 other => other.clone(),
             })
             .collect();
@@ -713,7 +743,9 @@ pub(super) fn build(s: &Spec, p: &mut Plan) {
     }
 
     // ---- Preview: one spoke developed on the back cones (Tredgold) at the large end. ----
-    let virt = |z: u32, d: f64, helix: f64| bevel_involute(s, (f64::from(z) / d.cos().abs().max(1e-3)).round().clamp(3.0, 2000.0) as u32, beta, helix, 0.0, 0.0);
+    let virt = |z: u32, d: f64, helix: f64| {
+        bevel_involute(s, (f64::from(z) / d.cos().abs().max(1e-3)).round().clamp(3.0, 2000.0) as u32, beta, helix, 0.0, 0.0)
+    };
     let (vs, vp) = (virt(zs, g.delta_sun, beta), virt(zp, g.delta_planet, -beta));
     let (rs, rp) = (vs.r(), vp.r());
     let php = mesh_phase(vs.teeth, 0.0, vp.teeth, 0.0);

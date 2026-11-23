@@ -47,7 +47,7 @@ pub enum Opt {
 
 impl Opt {
     /// Every option, in the order warnings list them.
-    pub const ALL: [Opt; 26] = [
+    pub const ALL: &[Opt] = &[
         Opt::TipRound,
         Opt::XyCompensation,
         Opt::ElephantFoot,
@@ -293,7 +293,7 @@ pub(crate) fn left_out(s: &Spec, p: &mut Plan) {
     // A spline's two members are its shaft and its hub: their options aren't told apart.
     let qualify = s.kind != Kind::Spline;
     let mut groups: Vec<(Why, Vec<String>)> = Vec::new();
-    for o in Opt::ALL {
+    for o in Opt::ALL.iter().copied() {
         if !o.is_set(s) {
             continue;
         }

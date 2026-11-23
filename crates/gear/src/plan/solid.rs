@@ -158,8 +158,10 @@ pub fn nudged(profile: &[V2], nudge: f64) -> Vec<V2> {
 /// below it does, turned the same). Mirrored and joined, it is the same solid for one sweep and a
 /// mirror in place of two sweeps. The plane's height, in the body's frame.
 pub fn mirrored_half(body: &Body, i: usize, step: &Step) -> Option<f64> {
-    let (Some(Step::Prism { region: r0, z0: a, height: h, twist: t, op: Op::New }), Some(Step::Prism { region: r1, z0: b, height: h1, twist: t1, op: Op::Join })) =
-        (body.steps.first(), body.steps.get(1))
+    let (
+        Some(Step::Prism { region: r0, z0: a, height: h, twist: t, op: Op::New }),
+        Some(Step::Prism { region: r1, z0: b, height: h1, twist: t1, op: Op::Join }),
+    ) = (body.steps.first(), body.steps.get(1))
     else {
         return None;
     };
@@ -192,7 +194,10 @@ pub fn region_parts(r: &Region) -> Vec<(usize, Vec<usize>)> {
     let mut parts: Vec<(usize, Vec<usize>)> = (0..r.outer.len()).map(|k| (k, Vec::new())).collect();
     for (h, hole) in r.holes.iter().enumerate() {
         let Some(q) = hole.segs.first().map(|s| s.start()) else { continue };
-        let home = (0..rings.len()).filter(|k| inside(&rings[*k], q)).min_by(|a, b| r.outer[*a].area().abs().total_cmp(&r.outer[*b].area().abs())).unwrap_or(0);
+        let home = (0..rings.len())
+            .filter(|k| inside(&rings[*k], q))
+            .min_by(|a, b| r.outer[*a].area().abs().total_cmp(&r.outer[*b].area().abs()))
+            .unwrap_or(0);
         if let Some(p) = parts.get_mut(home) {
             p.1.push(h);
         }

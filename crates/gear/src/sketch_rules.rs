@@ -463,7 +463,12 @@ fn measure_own(k: Kind, d: &Drawn, picks: &[Option<usize>], dot: Option<V2>) -> 
             if let Some(b) = b {
                 let dist = a.c.dist(b.c);
                 if dist <= a.r + b.r {
-                    return Err(format!("the two circles overlap: a chain or belt drive needs them apart (centres {} mm apart, radii {} and {} mm)", num(dist), num(a.r), num(b.r)));
+                    return Err(format!(
+                        "the two circles overlap: a chain or belt drive needs them apart (centres {} mm apart, radii {} and {} mm)",
+                        num(dist),
+                        num(a.r),
+                        num(b.r)
+                    ));
                 }
                 (m.c2, m.d2, m.center_distance) = (Some(b), 2.0 * b.r, dist);
             }
@@ -479,7 +484,11 @@ fn measure_own(k: Kind, d: &Drawn, picks: &[Option<usize>], dot: Option<V2>) -> 
                 }
                 let dist = ring.c.dist(p.c);
                 if !near(dist, ring.r - p.r, p.r) {
-                    return Err(format!("the pinion's circle must touch the ring's inside: centres {} mm apart, the radii differ by {} mm", num(dist), num(ring.r - p.r)));
+                    return Err(format!(
+                        "the pinion's circle must touch the ring's inside: centres {} mm apart, the radii differ by {} mm",
+                        num(dist),
+                        num(ring.r - p.r)
+                    ));
                 }
                 (m.c2, m.d2, m.center_distance) = (Some(p), 2.0 * p.r, dist);
                 m.notes.push("the pinion is not built with the ring: make it as a single gear on its circle".into());
@@ -495,7 +504,10 @@ fn measure_own(k: Kind, d: &Drawn, picks: &[Option<usize>], dot: Option<V2>) -> 
                 return Err("the planet's circle must touch the sun's outside".into());
             }
             if !near(planet.c.dist(ring.c), ring.r - planet.r, planet.r) {
-                return Err(format!("the planet's circle must touch the ring's inside: the ring Ø should be {} mm (sun + 2 × planet)", num(2.0 * (sun.r + 2.0 * planet.r))));
+                return Err(format!(
+                    "the planet's circle must touch the ring's inside: the ring Ø should be {} mm (sun + 2 × planet)",
+                    num(2.0 * (sun.r + 2.0 * planet.r))
+                ));
             }
             let mut m = Measured::new(k, Shape::Planetary);
             (m.c1, m.c2, m.c3) = (Some(sun), Some(planet), Some(ring));
@@ -514,7 +526,11 @@ fn measure_own(k: Kind, d: &Drawn, picks: &[Option<usize>], dot: Option<V2>) -> 
                 } else {
                     "it misses the circle: that makes crossed helicals"
                 };
-                return Err(format!("the line must touch the circle (tangent): it is {} mm from the centre, the radius is {} mm; {what}", num(e), num(c.r)));
+                return Err(format!(
+                    "the line must touch the circle (tangent): it is {} mm from the centre, the radius is {} mm; {what}",
+                    num(e),
+                    num(c.r)
+                ));
             }
             let mut m = Measured::new(k, Shape::Tangent);
             (m.c1, m.line, m.d1, m.offset) = (Some(c), Some(l), 2.0 * c.r, e);
@@ -545,17 +561,26 @@ fn measure_own(k: Kind, d: &Drawn, picks: &[Option<usize>], dot: Option<V2>) -> 
                     let names = if planetary { ["the sun's", "the planet's"] } else { ["gear 1's", "gear 2's"] };
                     for (l, which) in [(&l1, names[0]), (&l2, names[1])] {
                         if !near(l.distance(p), 0.0, reach) {
-                            return Err(format!("{which} shaft line must pass through the origin dot (the apex where the shafts meet); it is {} mm off", num(l.distance(p))));
+                            return Err(format!(
+                                "{which} shaft line must pass through the origin dot (the apex where the shafts meet); it is {} mm off",
+                                num(l.distance(p))
+                            ));
                         }
                     }
                     p
                 }
-                None => crossing(&l1, &l2).ok_or("the two shaft lines are parallel: a bevel's shafts meet at the apex (parallel shafts make a pair)")?,
+                None => {
+                    crossing(&l1, &l2).ok_or("the two shaft lines are parallel: a bevel's shafts meet at the apex (parallel shafts make a pair)")?
+                }
             };
             let (r1, r2) = (ray(&l1, apex), ray(&l2, apex));
             let sigma = r1.cross(r2).abs().atan2(r1.dot(r2)).to_degrees();
             if !(5.0..=175.0).contains(&sigma) {
-                return Err(format!("the shafts meet at {}°: {} 5° to 175°", num(sigma), if planetary { "a bevel planetary set needs" } else { "bevels need" }));
+                return Err(format!(
+                    "the shafts meet at {}°: {} 5° to 175°",
+                    num(sigma),
+                    if planetary { "a bevel planetary set needs" } else { "bevels need" }
+                ));
             }
             let mut m = Measured::new(k, Shape::SideView);
             (m.line, m.line2, m.apex, m.shaft_angle) = (Some(l2), Some(l1), Some(apex), Some(sigma));
@@ -578,10 +603,17 @@ fn measure_own(k: Kind, d: &Drawn, picks: &[Option<usize>], dot: Option<V2>) -> 
             let l = line(1)?.ok_or("a line is missing")?;
             let e = l.distance(c.c);
             if e <= 1e-6 + TOLERANCE * c.r {
-                return Err("the pinion shaft passes through the ring gear's centre: that is a spiral bevel (offset 0). Move it off the centre for a hypoid".into());
+                return Err(
+                    "the pinion shaft passes through the ring gear's centre: that is a spiral bevel (offset 0). Move it off the centre for a hypoid"
+                        .into(),
+                );
             }
             if e >= c.r {
-                return Err(format!("the pinion shaft misses the ring gear's circle ({} mm from the centre, radius {} mm): a hypoid's shaft crosses it; further out makes crossed helicals", num(e), num(c.r)));
+                return Err(format!(
+                    "the pinion shaft misses the ring gear's circle ({} mm from the centre, radius {} mm): a hypoid's shaft crosses it; further out makes crossed helicals",
+                    num(e),
+                    num(c.r)
+                ));
             }
             let mut m = Measured::new(k, Shape::Crossing);
             (m.c1, m.line, m.d1, m.offset) = (Some(c), Some(l), 2.0 * c.r, e);
@@ -592,7 +624,11 @@ fn measure_own(k: Kind, d: &Drawn, picks: &[Option<usize>], dot: Option<V2>) -> 
             let l = line(1)?.ok_or("a line is missing")?;
             let e = l.distance(c.c);
             if e <= c.r * (1.0 + TOLERANCE) + 1e-6 {
-                return Err(format!("shaft 2 must miss the circle: it is {} mm from the centre, the radius is {} mm (crossing makes a hypoid, through the centre a bevel)", num(e), num(c.r)));
+                return Err(format!(
+                    "shaft 2 must miss the circle: it is {} mm from the centre, the radius is {} mm (crossing makes a hypoid, through the centre a bevel)",
+                    num(e),
+                    num(c.r)
+                ));
             }
             let mut m = Measured::new(k, Shape::Missing);
             (m.c1, m.line, m.d1, m.offset) = (Some(c), Some(l), 2.0 * c.r, e);
@@ -719,7 +755,14 @@ pub fn auto_module(ds: &[(f64, f64)], zmin: u32) -> (f64, Vec<u32>, Option<Strin
         let zs = counts(m);
         let few = fewest(&zs);
         if few >= zmin {
-            return (m, zs, Some(format!("no standard module gives the smallest gear {AUTO_TEETH} teeth: module {} gives it {few}, cleared of undercut by profile shift", num(m))));
+            return (
+                m,
+                zs,
+                Some(format!(
+                    "no standard module gives the smallest gear {AUTO_TEETH} teeth: module {} gives it {few}, cleared of undercut by profile shift",
+                    num(m)
+                )),
+            );
         }
     }
     let small = ds.iter().map(|(d, f)| d / f).fold(f64::INFINITY, f64::min);
@@ -955,9 +998,13 @@ fn other_sizes(ds: &[(f64, f64)], m: f64, zs: &[u32], name: &dyn Fn(usize) -> St
 fn shift_refusal(why: ShiftFail, name: &dyn Fn(usize) -> String, zs: &[u32], m: f64, what: &str, ideas: &[String]) -> String {
     let counts: Vec<String> = zs.iter().enumerate().map(|(k, z)| format!("{} z{z}", name(k))).collect();
     let text = match why {
-        ShiftFail::Unreachable(a, b) => format!("no profile shift puts {} and {} at {what} ({} at module {})", name(a), name(b), and_list(&counts), num(m)),
+        ShiftFail::Unreachable(a, b) => {
+            format!("no profile shift puts {} and {} at {what} ({} at module {})", name(a), name(b), and_list(&counts), num(m))
+        }
         ShiftFail::Limits { low, high } => {
-            let says = |(k, cut): (usize, bool)| if cut { format!("{} would be undercut", name(k)) } else { format!("{}'s tips would come to a point", name(k)) };
+            let says = |(k, cut): (usize, bool)| {
+                if cut { format!("{} would be undercut", name(k)) } else { format!("{}'s tips would come to a point", name(k)) }
+            };
             let mut list = vec![says(low)];
             if high != low {
                 list.push(says(high));
@@ -965,7 +1012,11 @@ fn shift_refusal(why: ShiftFail, name: &dyn Fn(usize) -> String, zs: &[u32], m: 
             format!("holding {what} needs more profile shift than these teeth take at module {} ({}): {}", num(m), and_list(&counts), and_list(&list))
         }
     };
-    if ideas.is_empty() { format!("{text}: draw the circles nearer whole teeth at this module") } else { format!("{text}. These would work: {}", ideas.join(", ")) }
+    if ideas.is_empty() {
+        format!("{text}: draw the circles nearer whole teeth at this module")
+    } else {
+        format!("{text}. These would work: {}", ideas.join(", "))
+    }
 }
 
 /// One gear of a stage to size ([`size_stage`]).
@@ -1042,7 +1093,8 @@ pub fn size_stage(kind: Kind, gears: &[StageGear], module: Option<f64>, base: &S
             m
         }
     };
-    let zs: Vec<u32> = sized.iter().map(|g| g.teeth.filter(|z| *z > 0).unwrap_or_else(|| (g.d / (m * g.factor)).round().clamp(3.0, 1e6) as u32)).collect();
+    let zs: Vec<u32> =
+        sized.iter().map(|g| g.teeth.filter(|z| *z > 0).unwrap_or_else(|| (g.d / (m * g.factor)).round().clamp(3.0, 1e6) as u32)).collect();
     match stage_at(kind, gears, m, &zs, base, &mut notes) {
         Ok(mut s) => {
             s.notes.splice(0..0, notes);
@@ -1068,7 +1120,11 @@ fn stage_at(kind: Kind, gears: &[StageGear], m: f64, zs: &[u32], base: &Spec, no
             let internal = kind == Kind::Internal;
             // Internal: gear 1 is the ring, gear 2 inside it (the mesh's `b` is the ring).
             let gs = [inv(m, zs[0], gears[0].factor), inv(m, zs[1], gears[1].factor)];
-            let (gs, ring, dist) = if internal { ([gs[1], gs[0]], [false, true], (gears[0].d - gears[1].d) / 2.0) } else { (gs, [false, false], (gears[0].d + gears[1].d) / 2.0) };
+            let (gs, ring, dist) = if internal {
+                ([gs[1], gs[0]], [false, true], (gears[0].d - gears[1].d) / 2.0)
+            } else {
+                (gs, [false, false], (gears[0].d + gears[1].d) / 2.0)
+            };
             let mut xs = group_shifts(&gs, &ring, &[GroupMesh { a: 0, b: 1, internal, dist }]).map_err(|e| if internal { swap(e) } else { e })?;
             if internal {
                 xs.swap(0, 1);
@@ -1099,7 +1155,11 @@ fn stage_at(kind: Kind, gears: &[StageGear], m: f64, zs: &[u32], base: &Spec, no
             let z1 = zs[0];
             let me = gears[0].d / f64::from(z1);
             if (me - m).abs() > 1e-9 * m {
-                notes.push(format!("module {} keeps gear 1's drawn outer pitch Ø{} with {z1} teeth (a bevel's pitch cones fix its size: no shift reaches it)", num(me), num(gears[0].d)));
+                notes.push(format!(
+                    "module {} keeps gear 1's drawn outer pitch Ø{} with {z1} teeth (a bevel's pitch cones fix its size: no shift reaches it)",
+                    num(me),
+                    num(gears[0].d)
+                ));
             }
             let z2 = match gears.get(1) {
                 Some(g) => g.teeth.filter(|z| *z > 0).unwrap_or_else(|| (g.d / me).round().clamp(3.0, 1e6) as u32),
@@ -1204,7 +1264,10 @@ pub fn spec_for(m: &Measured, base: &Spec) -> Result<(Spec, Vec<String>), String
             (s.module, s.teeth, s.teeth2) = (md, z[0], z[1]);
             s.teeth3 = z[0] + 2 * z[1];
             if !(s.teeth + s.teeth3).is_multiple_of(s.planets.max(1)) {
-                notes.push(format!("{} planets don't space evenly with {} + {} teeth: (sun + ring) ÷ planets must be whole", s.planets, s.teeth, s.teeth3));
+                notes.push(format!(
+                    "{} planets don't space evenly with {} + {} teeth: (sun + ring) ÷ planets must be whole",
+                    s.planets, s.teeth, s.teeth3
+                ));
             }
         }
         Kind::Bevel | Kind::SpiralBevel | Kind::BevelPlanetary => {
@@ -1329,6 +1392,9 @@ pub fn is_style(k: Kind) -> bool {
 }
 
 /// What a whole drawing makes ([`read`]).
+// A reading is made once per drawing and matched in many places, so boxing its big variant buys
+// nothing worth the noise.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Reading {
     /// One of the modes of the table at the top, measured from these picks (what [`measure`]
@@ -1537,7 +1603,20 @@ pub struct TrainCircle {
 impl TrainCircle {
     /// A circle with nothing asked of it.
     pub fn of(circle: Circle) -> TrainCircle {
-        TrainCircle { circle, z: None, module: None, teeth: None, face_width: None, ring: None, shaft: false, shaft_span: None, shaft_diameter: None, helix: None, herringbone: None, sides: None }
+        TrainCircle {
+            circle,
+            z: None,
+            module: None,
+            teeth: None,
+            face_width: None,
+            ring: None,
+            shaft: false,
+            shaft_span: None,
+            shaft_diameter: None,
+            helix: None,
+            herringbone: None,
+            sides: None,
+        }
     }
 }
 
@@ -1633,7 +1712,11 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
                     let e = if near(a.r, b.r, a.r.min(b.r)) {
                         format!("gears {} and {}: their circles are the same circle", i + 1, j + 1)
                     } else {
-                        format!("gears {} and {} are concentric in one plane: draw one further along the shaft (gears on one shaft are a cluster)", i + 1, j + 1)
+                        format!(
+                            "gears {} and {} are concentric in one plane: draw one further along the shaft (gears on one shaft are a cluster)",
+                            i + 1,
+                            j + 1
+                        )
                     };
                     fail(&mut err, i, e.clone());
                     fail(&mut err, j, e);
@@ -1654,8 +1737,12 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
     let ring: Vec<bool> = (0..n).map(|i| links.iter().any(|l| l.kind == LinkKind::Internal && l.b == i)).collect();
     for i in 0..n {
         match circles[i].ring {
-            Some(true) if !ring[i] => fail(&mut err, i, format!("gear {} is to be a ring gear (internal), but no gear's circle touches its circle inside", i + 1)),
-            Some(false) if ring[i] => fail(&mut err, i, format!("gear {} is a ring gear (a gear touches its circle inside), but it is not to be internal", i + 1)),
+            Some(true) if !ring[i] => {
+                fail(&mut err, i, format!("gear {} is to be a ring gear (internal), but no gear's circle touches its circle inside", i + 1))
+            }
+            Some(false) if ring[i] => {
+                fail(&mut err, i, format!("gear {} is a ring gear (a gear touches its circle inside), but it is not to be internal", i + 1))
+            }
             _ => {}
         }
     }
@@ -1664,11 +1751,18 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             LinkKind::External if ring[l.a] || ring[l.b] => {
                 let (r, other) = if ring[l.a] { (l.a, l.b) } else { (l.b, l.a) };
                 let inside = links.iter().find(|k| k.kind == LinkKind::Internal && k.b == r).map_or(0, |k| k.a);
-                let e = format!("gear {} is a ring gear (gear {} meshes inside it), but gear {} touches its outside: gears mesh only inside a ring", r + 1, inside + 1, other + 1);
+                let e = format!(
+                    "gear {} is a ring gear (gear {} meshes inside it), but gear {} touches its outside: gears mesh only inside a ring",
+                    r + 1,
+                    inside + 1,
+                    other + 1
+                );
                 fail(&mut err, r, e.clone());
                 fail(&mut err, other, e);
             }
-            LinkKind::Internal if ring[l.a] => fail(&mut err, l.a, format!("gear {} is a ring gear inside ring gear {}: a ring can't mesh inside another", l.a + 1, l.b + 1)),
+            LinkKind::Internal if ring[l.a] => {
+                fail(&mut err, l.a, format!("gear {} is a ring gear inside ring gear {}: a ring can't mesh inside another", l.a + 1, l.b + 1))
+            }
             _ => {}
         }
     }
@@ -1691,7 +1785,11 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
     }
     for l in links.iter().filter(|l| l.kind == LinkKind::Compound) {
         if group[l.a] == group[l.b] {
-            let e = format!("gears {} and {} share a shaft (their circles are concentric) but also mesh through the train: they would lock", l.a + 1, l.b + 1);
+            let e = format!(
+                "gears {} and {} share a shaft (their circles are concentric) but also mesh through the train: they would lock",
+                l.a + 1,
+                l.b + 1
+            );
             fail(&mut err, l.a, e.clone());
             fail(&mut err, l.b, e);
         }
@@ -1723,7 +1821,11 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
                             queue.push(other);
                         }
                         Some(v) if v == here => {
-                            let e = format!("gears {} and {} share a shaft and would sit on the same layer: their groups are tied in a loop of shared shafts", l.a + 1, l.b + 1);
+                            let e = format!(
+                                "gears {} and {} share a shaft and would sit on the same layer: their groups are tied in a loop of shared shafts",
+                                l.a + 1,
+                                l.b + 1
+                            );
                             fail(&mut err, l.a, e.clone());
                             fail(&mut err, l.b, e);
                         }
@@ -1757,7 +1859,12 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             }
             let gap = |j: usize| (c[i].c.dist(c[j].c) - c[i].r - c[j].r).abs();
             let e = match (0..n).filter(|j| *j != i).min_by(|a, b| gap(*a).total_cmp(&gap(*b))) {
-                Some(j) => format!("gear {} touches no other gear: make it tangent to the gear it meshes with (Tangent constraint); it is {} mm from gear {}'s circle", i + 1, num(gap(j)), j + 1),
+                Some(j) => format!(
+                    "gear {} touches no other gear: make it tangent to the gear it meshes with (Tangent constraint); it is {} mm from gear {}'s circle",
+                    i + 1,
+                    num(gap(j)),
+                    j + 1
+                ),
                 None => format!("gear {} touches no other gear", i + 1),
             };
             fail(&mut err, i, e);
@@ -1817,7 +1924,13 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
                     Some((j, hj)) if (h - hj).abs() > 1e-9 => fail(
                         &mut err,
                         i,
-                        format!("gear {} asks a {}° helix, but gear {} it meshes with asks {}°: meshing gears share one helix angle (of opposite hands)", i + 1, num(h), j + 1, num(hj)),
+                        format!(
+                            "gear {} asks a {}° helix, but gear {} it meshes with asks {}°: meshing gears share one helix angle (of opposite hands)",
+                            i + 1,
+                            num(h),
+                            j + 1,
+                            num(hj)
+                        ),
                     ),
                     Some(_) => {}
                 }
@@ -1825,7 +1938,9 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             if let Some(v) = circles[i].herringbone {
                 match vee {
                     None => vee = Some((i, v)),
-                    Some((j, vj)) if v != vj => fail(&mut err, i, format!("gear {} and gear {} mesh: both have V (herringbone) teeth, or neither", i + 1, j + 1)),
+                    Some((j, vj)) if v != vj => {
+                        fail(&mut err, i, format!("gear {} and gear {} mesh: both have V (herringbone) teeth, or neither", i + 1, j + 1))
+                    }
                     Some(_) => {}
                 }
             }
@@ -1871,14 +1986,22 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
                 Some((j, mj)) if (m - mj).abs() > 1e-9 * mj => fail(
                     &mut err,
                     i,
-                    format!("gear {} asks module {}, but gear {} it meshes with is module {}: meshing gears share one module", i + 1, num(m), j + 1, num(mj)),
+                    format!(
+                        "gear {} asks module {}, but gear {} it meshes with is module {}: meshing gears share one module",
+                        i + 1,
+                        num(m),
+                        j + 1,
+                        num(mj)
+                    ),
                 ),
                 Some(_) => {}
             }
         }
         let by_teeth = members.iter().find_map(|&i| circles[i].teeth.filter(|z| *z > 0).map(|z| d(i) / (f * f64::from(z))));
         let fixed = asked.map(|a| a.1).or(by_teeth).or(settings.module.filter(|m| *m > 0.0 && m.is_finite()));
-        let nearest = |m: f64| -> Vec<u32> { members.iter().map(|&i| circles[i].teeth.filter(|z| *z > 0).unwrap_or_else(|| (d(i) / (m * f)).round().clamp(1.0, 1e6) as u32)).collect() };
+        let nearest = |m: f64| -> Vec<u32> {
+            members.iter().map(|&i| circles[i].teeth.filter(|z| *z > 0).unwrap_or_else(|| (d(i) / (m * f)).round().clamp(1.0, 1e6) as u32)).collect()
+        };
         let (m, zs) = match fixed {
             Some(m) => (m, nearest(m)),
             None => {
@@ -1908,7 +2031,18 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             let d = 2.0 * c[i].r;
             let most = (d / 3.0 * 10.0).floor() / 10.0;
             let fix = if most > 0.0 { format!("draw it bigger or use a smaller module (≤{})", num(most)) } else { "draw it bigger".to_string() };
-            fail(&mut err, i, format!("gear {}: a Ø{} mm pitch circle gives {} {} at module {}, and a gear needs 3 or more; {fix}", i + 1, num(d), teeth[i], if teeth[i] == 1 { "tooth" } else { "teeth" }, num(module[i])));
+            fail(
+                &mut err,
+                i,
+                format!(
+                    "gear {}: a Ø{} mm pitch circle gives {} {} at module {}, and a gear needs 3 or more; {fix}",
+                    i + 1,
+                    num(d),
+                    teeth[i],
+                    if teeth[i] == 1 { "tooth" } else { "teeth" },
+                    num(module[i])
+                ),
+            );
         }
     }
     // The shifts that keep every drawn centre distance, per meshing group ([`group_shifts`]):
@@ -1996,7 +2130,9 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
         }
     };
     // A custom split of the face fixes its width; the presets take the width worked out here.
-    let faces: Vec<f64> = (0..n).map(|i| circles[i].sides.and_then(SidePreset::width).or(circles[i].face_width).filter(|f| *f > 0.0).unwrap_or_else(|| auto(i))).collect();
+    let faces: Vec<f64> = (0..n)
+        .map(|i| circles[i].sides.and_then(SidePreset::width).or(circles[i].face_width).filter(|f| *f > 0.0).unwrap_or_else(|| auto(i)))
+        .collect();
     // Each face's reach (side A along +z, side B along −z) from its sketch plane; nothing asked:
     // all on side A, as before sides existed.
     let sides: Vec<(f64, f64)> = (0..n).map(|i| circles[i].sides.unwrap_or(SidePreset::AOnly).sides(faces[i])).collect();
@@ -2047,7 +2183,19 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             face_a: sides[i].0,
             face_b: sides[i].1,
             ring: ring[i],
-            meshes_with: links.iter().filter(|l| l.kind != LinkKind::Compound).filter_map(|l| if l.a == i { Some(l.b) } else if l.b == i { Some(l.a) } else { None }).collect(),
+            meshes_with: links
+                .iter()
+                .filter(|l| l.kind != LinkKind::Compound)
+                .filter_map(|l| {
+                    if l.a == i {
+                        Some(l.b)
+                    } else if l.b == i {
+                        Some(l.a)
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
             cluster: cluster[i],
             body: None,
         })
@@ -2085,9 +2233,17 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
             .find_map(|j| circles[*j].shaft_diameter.filter(|d| *d > 0.0))
             .or((base.bore.diameter > 0.0).then_some(base.bore.diameter))
             .unwrap_or_else(|| (root.floor() / 2.0).max(1.0));
-        let (lo, hi) = on.iter().map(|&j| (z_of(j) - sides[j].1, z_of(j) + sides[j].0)).fold((f64::INFINITY, f64::NEG_INFINITY), |a, b| (a.0.min(b.0), a.1.max(b.1)));
+        let (lo, hi) = on
+            .iter()
+            .map(|&j| (z_of(j) - sides[j].1, z_of(j) + sides[j].0))
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |a, b| (a.0.min(b.0), a.1.max(b.1)));
         let ext = (0.25 * d).max(2.0);
-        let (from, to) = on.iter().filter_map(|j| circles[*j].shaft_span).reduce(|a, b| (a.0.min(b.0), a.1.max(b.1))).map(|(a, b)| (a.min(b), a.max(b))).unwrap_or((lo - ext, hi + ext));
+        let (from, to) = on
+            .iter()
+            .filter_map(|j| circles[*j].shaft_span)
+            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
+            .map(|(a, b)| (a.min(b), a.max(b)))
+            .unwrap_or((lo - ext, hi + ext));
         if to - from > 1e-6 {
             shafts.push(crate::plan::TrainShaft { center: c[i].c, from, to, diameter: d, gears: on });
         }
@@ -2371,7 +2527,12 @@ mod tests {
             // The sun on its drawn shaft below the apex (sketch -y), its z pointing back up at it.
             let (sun, planet) = (p.bodies[0].frame, p.bodies[1].frame);
             assert!(sun.origin[1] < 0.0 && sun.origin[0].abs() < 1e-6 && (sun.z[1] - 1.0).abs() < 1e-9, "{deg}: {sun:?}");
-            assert!(close(sun.origin, s.frames[0].origin) && close(planet.origin, s.frames[1].origin), "{deg}: {:?} against {:?}", (sun, planet), s.frames);
+            assert!(
+                close(sun.origin, s.frames[0].origin) && close(planet.origin, s.frames[1].origin),
+                "{deg}: {:?} against {:?}",
+                (sun, planet),
+                s.frames
+            );
             // Planet 1 on the drawn line (in the sketch's plane), at the built cone angle.
             let built = crate::plan::bevel_planet::geometry(&s.spec).unwrap().sigma;
             let u = [-planet.z[0], -planet.z[1], -planet.z[2]];
@@ -2470,14 +2631,26 @@ mod tests {
         through_simple(Kind::Spur, &drawn(vec![circle(0.0, 0.0, 20.0)], vec![]), none());
         through_simple(Kind::Planetary, &drawn(vec![circle(0.0, 0.0, 18.0), circle(36.0, 0.0, 18.0), circle(0.0, 0.0, 54.0)], vec![]), none());
         through_simple(Kind::Worm, &drawn(vec![circle(0.0, 0.0, 30.0)], vec![line(-40.0, 30.0, 40.0, 30.0)]), none());
-        let h = through_simple(Kind::Hypoid, &drawn(vec![circle(0.0, 0.0, 100.0)], vec![line(-120.0, -25.0, 120.0, -25.0)]), Simple { shaft_angle: Some(90.0), ..none() });
+        let h = through_simple(
+            Kind::Hypoid,
+            &drawn(vec![circle(0.0, 0.0, 100.0)], vec![line(-120.0, -25.0, 120.0, -25.0)]),
+            Simple { shaft_angle: Some(90.0), ..none() },
+        );
         assert!((h.spec.offset - 25.0).abs() < 1e-6);
-        through_simple(Kind::CrossedHelical, &drawn(vec![circle(0.0, 0.0, 20.0)], vec![line(-60.0, 45.0, 60.0, 45.0)]), Simple { shaft_angle: Some(90.0), ..none() });
+        through_simple(
+            Kind::CrossedHelical,
+            &drawn(vec![circle(0.0, 0.0, 20.0)], vec![line(-60.0, 45.0, 60.0, 45.0)]),
+            Simple { shaft_angle: Some(90.0), ..none() },
+        );
     }
 
     #[test]
     fn bevel_at_80_degrees_through_the_simple_solver() {
-        let s = through_simple(Kind::Bevel, &side_view(80.0), crate::simple::Simple { ratio: Some(1.5), pitch_diameter: Some(40.0), ..Default::default() });
+        let s = through_simple(
+            Kind::Bevel,
+            &side_view(80.0),
+            crate::simple::Simple { ratio: Some(1.5), pitch_diameter: Some(40.0), ..Default::default() },
+        );
         assert!((s.spec.shaft_angle - 80.0).abs() < 1e-6, "{}", s.spec.shaft_angle);
         assert!((s.spec.module * f64::from(s.spec.teeth) - 40.0).abs() < 0.5, "{} × {}", s.spec.module, s.spec.teeth);
     }

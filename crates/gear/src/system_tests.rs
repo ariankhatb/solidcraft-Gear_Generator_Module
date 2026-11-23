@@ -157,7 +157,8 @@ fn a_loop_whose_ratios_dont_agree_is_reported_per_member() {
     }
     assert!(!close(issue.given, issue.asked));
     // The same ring with the third mesh inside a ring gear agrees: no issue.
-    let edges = vec![ext(0, 1, 10.0, 20.0), ext(1, 2, 20.0, 30.0), AssemblyLink::Gear { a: 0, b: 2, ra: 10.0, rb: 30.0, internal: true, reverse: false }];
+    let edges =
+        vec![ext(0, 1, 10.0, 20.0), ext(1, 2, 20.0, 30.0), AssemblyLink::Gear { a: 0, b: 2, ra: 10.0, rb: 30.0, internal: true, reverse: false }];
     let (a, issues) = Assembly::from_graph(members.clone(), &edges, 0);
     assert!(issues.is_empty(), "{issues:?}");
     assert!(close(a.ratio(0, 2).unwrap(), 10.0 / 30.0));
@@ -200,7 +201,18 @@ fn read_set(frames: &[crate::plan::Frame], teeth: &[u32], rings: &[usize], meshe
     for (i, f) in frames.iter().enumerate() {
         p.bodies.push(crate::plan::Body { name: format!("g{}", i + 1), frame: *f, steps: Vec::new() });
         let mut m = crate::plan::SetMember { source: i, module: 2.0, teeth: teeth[i], ring: rings.contains(&i), body: Some(i), ..Default::default() };
-        m.meshes_with = meshes.iter().filter_map(|&(a, b)| if a == i { Some(b) } else if b == i { Some(a) } else { None }).collect();
+        m.meshes_with = meshes
+            .iter()
+            .filter_map(|&(a, b)| {
+                if a == i {
+                    Some(b)
+                } else if b == i {
+                    Some(a)
+                } else {
+                    None
+                }
+            })
+            .collect();
         m.cluster = clusters.iter().position(|c| c.contains(&i));
         p.members.push(m);
     }
@@ -323,14 +335,7 @@ pub(crate) fn gaerbox_circles() -> Vec<Circle> {
     let a = 45.98f64.to_radians();
     let (cx, cy) = (22.5 * a.cos(), 22.5 * a.sin());
     let x0 = cx + (400.0 - cy * cy).sqrt();
-    vec![
-        circle(0.0, 0.0, 15.0),
-        circle(cx, cy, 7.5),
-        circle(cx, cy, 12.5),
-        circle(cx, -cy, 7.5),
-        circle(cx, -cy, 12.5),
-        circle(x0, 0.0, 7.5),
-    ]
+    vec![circle(0.0, 0.0, 15.0), circle(cx, cy, 7.5), circle(cx, cy, 12.5), circle(cx, -cy, 7.5), circle(cx, -cy, 12.5), circle(x0, 0.0, 7.5)]
 }
 
 #[test]
@@ -358,4 +363,3 @@ fn the_gaerbox_drawn_as_circles_turns_and_meshes() {
     }
     assert_eq!(check_mesh(&p).len(), 4, "four meshes");
 }
-

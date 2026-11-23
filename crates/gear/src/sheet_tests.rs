@@ -229,7 +229,7 @@ fn the_design_sheet_lists_inputs_results_checks_and_parts() {
     let s = Spec::defaults_for(Kind::Worm);
     let md = design_sheet(&s, &plan(&s).unwrap());
     assert!(md.contains("- wheel and worm mesh: no overlap") && md.contains("| Worm starts | 1 |"));
-    for kind in Kind::ALL {
+    for kind in Kind::ALL.iter().copied() {
         let s = Spec::defaults_for(kind);
         let md = design_sheet(&s, &plan(&s).unwrap());
         assert!(md.contains(kind.label()) && md.len() > 300 && !md.contains("NaN"), "{kind:?}");

@@ -549,7 +549,12 @@ pub(crate) fn check_plan(p: &Plan) -> Result<(), String> {
                     if k == 0 && region.outer.len() == 1 {
                         base = Some(loops[0].clone());
                     }
-                    if *op != Op::Cut && *op != Op::Intersect && region.outer.len() == 1 && region.outer[0].segs.len() > 1 && (k == 0 || base.is_some()) {
+                    if *op != Op::Cut
+                        && *op != Op::Intersect
+                        && region.outer.len() == 1
+                        && region.outer[0].segs.len() > 1
+                        && (k == 0 || base.is_some())
+                    {
                         base_z = (base_z.0.min(*z0), base_z.1.max(z0 + height));
                     }
                     let in_teeth = z0 + height > base_z.0 + 1e-9 && *z0 < base_z.1 - 1e-9;
@@ -591,7 +596,14 @@ pub(crate) fn check_plan(p: &Plan) -> Result<(), String> {
                     base = Some(check_outline(outline).map_err(|e| format!("{at}: {e}"))?);
                 }
                 Step::RingTaper { outline, rim, z0, height, twist, scale, .. } => {
-                    if !(z0.is_finite() && height.is_finite() && *height > 0.0 && twist.is_finite() && scale.is_finite() && *scale > 0.0 && rim.is_finite()) {
+                    if !(z0.is_finite()
+                        && height.is_finite()
+                        && *height > 0.0
+                        && twist.is_finite()
+                        && scale.is_finite()
+                        && *scale > 0.0
+                        && rim.is_finite())
+                    {
                         return Err(format!("{at}: ring taper z0 {z0} height {height} twist {twist} scale {scale} rim {rim}"));
                     }
                     check_outline(outline).map_err(|e| format!("{at}: {e}"))?;
@@ -610,7 +622,9 @@ pub(crate) fn check_plan(p: &Plan) -> Result<(), String> {
                 }
                 Step::Placed { frame, step } => {
                     let dot = |a: &[f64; 3], b: &[f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-                    let square = (dot(&frame.x, &frame.x) - 1.0).abs() < 1e-9 && (dot(&frame.z, &frame.z) - 1.0).abs() < 1e-9 && dot(&frame.x, &frame.z).abs() < 1e-9;
+                    let square = (dot(&frame.x, &frame.x) - 1.0).abs() < 1e-9
+                        && (dot(&frame.z, &frame.z) - 1.0).abs() < 1e-9
+                        && dot(&frame.x, &frame.z).abs() < 1e-9;
                     if !square || frame.origin.iter().any(|v| !v.is_finite()) {
                         return Err(format!("{at}: placed in a frame that is not one"));
                     }
@@ -625,7 +639,8 @@ pub(crate) fn check_plan(p: &Plan) -> Result<(), String> {
                         // (A differential's pinion pins and an integral ring's teeth: any step, in its frame.)
                         inner => {
                             let mut one = Plan::default();
-                            one.bodies = vec![crate::plan::Body { name: at.clone(), frame: crate::plan::Frame::at([0.0; 3]), steps: vec![inner.clone()] }];
+                            one.bodies =
+                                vec![crate::plan::Body { name: at.clone(), frame: crate::plan::Frame::at([0.0; 3]), steps: vec![inner.clone()] }];
                             check_plan(&one)?;
                         }
                     }
@@ -735,7 +750,7 @@ fn sweep_cycloidal_kinds() {
 /// `plan` stays interactive for big gears: under 50 ms for 400 teeth of any kind.
 #[test]
 fn big_gears_plan_quickly() {
-    for kind in Kind::ALL {
+    for kind in Kind::ALL.iter().copied() {
         let mut s = Spec::defaults_for(kind);
         s.teeth = 400;
         s.teeth2 = 400;
@@ -771,7 +786,9 @@ fn big_gears_plan_quickly() {
             assert!(!p.bodies.is_empty());
         }
         let points: usize = match plan(&s).unwrap().bodies[0].steps.first() {
-            Some(Step::Prism { region, .. }) => region.outer.iter().chain(&region.holes).flat_map(|o| &o.segs).map(|g| if let Seg::Spline(p) = g { p.len() } else { 2 }).sum(),
+            Some(Step::Prism { region, .. }) => {
+                region.outer.iter().chain(&region.holes).flat_map(|o| &o.segs).map(|g| if let Seg::Spline(p) = g { p.len() } else { 2 }).sum()
+            }
             _ => 0,
         };
         eprintln!("timing {kind:?}: {best:.2} ms, first sketch {points} points");

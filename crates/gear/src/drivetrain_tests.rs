@@ -1,12 +1,12 @@
 //! Drivetrains read from 3D geometry: trains with clusters, long trains, bevels, bearings and
 //! per-member errors; and the flat sketch of the user's build 6 report.
 
+use crate::V2;
 use crate::drivetrain::{Ask, Circle3, Item, Line3, Outcome, Role, Thing, read};
 use crate::mesh2d::{Verdict, check_mesh};
 use crate::plan::{Kind, Spec};
 use crate::simple::Simple;
 use crate::sketch_rules::{Circle, Drawn, Reading};
-use crate::V2;
 
 fn circle(c: [f64; 3], n: [f64; 3], r: f64) -> Item {
     Item { thing: Thing::Circle(Circle3 { c, n, r }), ask: Ask::default() }
@@ -128,7 +128,10 @@ fn a_ten_gear_train() {
     let tilt = [0.0, -0.6, 0.8];
     let x_dir = [1.0, 0.0, 0.0];
     let y_dir = [0.0, 0.8, 0.6];
-    let items: Vec<Item> = circles.iter().map(|c| circle([c.c.x * x_dir[0] + c.c.y * y_dir[0], c.c.x * x_dir[1] + c.c.y * y_dir[1], c.c.x * x_dir[2] + c.c.y * y_dir[2]], tilt, c.r)).collect();
+    let items: Vec<Item> = circles
+        .iter()
+        .map(|c| circle([c.c.x * x_dir[0] + c.c.y * y_dir[0], c.c.x * x_dir[1] + c.c.y * y_dir[1], c.c.x * x_dir[2] + c.c.y * y_dir[2]], tilt, c.r))
+        .collect();
     let o = read(&items, None, &Simple::default(), &Spec::default());
     let p = planned(&o);
     clean(&p, 9);
@@ -140,7 +143,12 @@ fn a_ten_gear_train() {
 fn shafts_meeting_make_a_bevel_pair_and_the_circles_must_touch() {
     // Gear 1 on the z axis 30 below the apex, gear 2 on the x axis 20 out: they touch at
     // (20, 0, -30).
-    let items = vec![line([0.0; 3], [0.0, 0.0, -60.0]), line([0.0; 3], [60.0, 0.0, 0.0]), circle([0.0, 0.0, -30.0], Z, 20.0), circle([20.0, 0.0, 0.0], [1.0, 0.0, 0.0], 30.0)];
+    let items = vec![
+        line([0.0; 3], [0.0, 0.0, -60.0]),
+        line([0.0; 3], [60.0, 0.0, 0.0]),
+        circle([0.0, 0.0, -30.0], Z, 20.0),
+        circle([20.0, 0.0, 0.0], [1.0, 0.0, 0.0], 30.0),
+    ];
     let o = read(&items, None, &Simple::default(), &Spec::default());
     let p = planned(&o);
     let spec = &o.solved.as_ref().unwrap().spec;
@@ -203,7 +211,11 @@ fn build_6_sketch_names_the_circle_that_meshes_with_nothing() {
         Circle { c: V2::new(-10.180755625393433, 20.064949911424925), r: 7.5 },
         Circle { c: V2::new(12.062125004376336, 21.214432234647948), r: 7.5 },
     ];
-    let d = Drawn { points: vec![V2::new(-6.787170416928201, 13.376633274281524), V2::new(0.0, 21.214432234647948)], circles: circles.clone(), lines: vec![] };
+    let d = Drawn {
+        points: vec![V2::new(-6.787170416928201, 13.376633274281524), V2::new(0.0, 21.214432234647948)],
+        circles: circles.clone(),
+        lines: vec![],
+    };
     let Ok(Reading::Train { .. }) = crate::sketch_rules::read(Some(Kind::Spur), &d) else { panic!("not a train") };
     let e = crate::sketch_rules::train_spec(&circles, Kind::Spur, &Simple::default(), &Spec::default()).unwrap_err();
     assert!(e.starts_with("gear 3 touches no other gear") && !e.contains("gear 1:") && !e.contains("gear 2:"), "{e}");
@@ -325,7 +337,10 @@ fn up_dir() -> [f64; 3] {
 fn chevron_bevels_mesh_at_90_and_60_degrees() {
     for (label, s) in [
         ("chevron 90deg 17:34 35deg", Spec { herringbone: true, ..Spec::defaults_for(Kind::SpiralBevel) }),
-        ("chevron 60deg 19:28 30deg", Spec { herringbone: true, shaft_angle: 60.0, teeth: 19, teeth2: 28, spiral_angle: 30.0, ..Spec::defaults_for(Kind::SpiralBevel) }),
+        (
+            "chevron 60deg 19:28 30deg",
+            Spec { herringbone: true, shaft_angle: 60.0, teeth: 19, teeth2: 28, spiral_angle: 30.0, ..Spec::defaults_for(Kind::SpiralBevel) },
+        ),
     ] {
         let p = crate::plan(&s).unwrap_or_else(|e| panic!("{label}: {e}"));
         // Each member's teeth are two tapers (one per half), the second joined to the first.

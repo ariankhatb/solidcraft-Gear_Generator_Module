@@ -167,7 +167,11 @@ impl Generated {
                 for _ in 0..48 {
                     let mid = 0.5 * (lo + hi);
                     p = self.cutter.gear(k, mid);
-                    if (p.0 < rr) == up { lo = mid } else { hi = mid }
+                    if (p.0 < rr) == up {
+                        lo = mid
+                    } else {
+                        hi = mid
+                    }
                     if hi - lo < 1e-15 {
                         break;
                     }
@@ -240,12 +244,22 @@ impl Crown {
         let span = handover - rf;
         let side = |sign: f64| -> Vec<Vec<(f64, f64)>> {
             let mut fillet = if span > 0.0 {
-                side_points(&|rr| sign * fillet_half(rr) + skew(rr), &|s| if s >= 1.0 { handover } else { rf + span * s * s }, coarse * FILLET_TOLERANCE * m, min_gap)
+                side_points(
+                    &|rr| sign * fillet_half(rr) + skew(rr),
+                    &|s| if s >= 1.0 { handover } else { rf + span * s * s },
+                    coarse * FILLET_TOLERANCE * m,
+                    min_gap,
+                )
             } else {
                 Vec::new()
             };
             let flank = if has_flank {
-                side_points(&|rr| sign * flank_half(rr) + skew(rr), &|s| if s >= 1.0 { ra } else { handover + (ra - handover) * s }, coarse * PROFILE_TOLERANCE * m, min_gap)
+                side_points(
+                    &|rr| sign * flank_half(rr) + skew(rr),
+                    &|s| if s >= 1.0 { ra } else { handover + (ra - handover) * s },
+                    coarse * PROFILE_TOLERANCE * m,
+                    min_gap,
+                )
             } else {
                 Vec::new()
             };

@@ -12,12 +12,26 @@ fn spec(d: Diff) -> Spec {
 }
 
 fn fact(p: &Plan, label: &str) -> f64 {
-    p.facts.iter().find(|f| f.label == label).unwrap_or_else(|| panic!("no fact {label}: {:?}", p.facts.iter().map(|f| f.label.clone()).collect::<Vec<_>>())).value
+    p.facts
+        .iter()
+        .find(|f| f.label == label)
+        .unwrap_or_else(|| panic!("no fact {label}: {:?}", p.facts.iter().map(|f| f.label.clone()).collect::<Vec<_>>()))
+        .value
 }
 
 fn show(label: &str, p: &Plan) {
     eprintln!("== {label}: {} bodies: {}", p.bodies.len(), p.bodies.iter().map(|b| b.name.clone()).collect::<Vec<_>>().join(", "));
-    for l in ["case outside diameter", "case length (journal ends)", "ring gear pitch diameter", "ring gear least root diameter", "ring bolts", "ring bolt size (M)", "drive pinion to case clearance", "torque bias ratio TBR (estimate)", "pinion axis angle to the axle"] {
+    for l in [
+        "case outside diameter",
+        "case length (journal ends)",
+        "ring gear pitch diameter",
+        "ring gear least root diameter",
+        "ring bolts",
+        "ring bolt size (M)",
+        "drive pinion to case clearance",
+        "torque bias ratio TBR (estimate)",
+        "pinion axis angle to the axle",
+    ] {
         if let Some(f) = p.facts.iter().find(|f| f.label == l) {
             eprint!("   {l} = {:.3};", f.value);
         }
@@ -38,7 +52,17 @@ fn styles() -> Vec<(String, Spec)> {
                 }
                 // (The straight bevel planner's 11-tooth pinion interferes with a 41 ring on its own: 13.)
                 let zp = if drive == DriveKind::Bevel { 13 } else { 11 };
-                v.push((format!("{style:?} {drive:?} {mount:?}"), spec(Diff { drive, mount, keep_out: true, drive_pinion_teeth: zp, drive_spiral: if drive == DriveKind::Hypoid { 50.0 } else { 35.0 }, ..Diff::defaults_for(style) })));
+                v.push((
+                    format!("{style:?} {drive:?} {mount:?}"),
+                    spec(Diff {
+                        drive,
+                        mount,
+                        keep_out: true,
+                        drive_pinion_teeth: zp,
+                        drive_spiral: if drive == DriveKind::Hypoid { 50.0 } else { 35.0 },
+                        ..Diff::defaults_for(style)
+                    }),
+                ));
             }
         }
     }
@@ -134,7 +158,12 @@ fn every_drive_meshes() {
 fn the_assembly_has_no_collisions() {
     // Every style with no drive, a separate spiral bevel ring and an integral helical one (the case
     // is the same with the other drives; their meshes are checked by every_drive_meshes).
-    let picked = |label: &String| label.ends_with("None Bolted") || label.ends_with("SpiralBevel Bolted") || label.ends_with("Helical Integral") || label == "Open Hypoid Bolted";
+    let picked = |label: &String| {
+        label.ends_with("None Bolted")
+            || label.ends_with("SpiralBevel Bolted")
+            || label.ends_with("Helical Integral")
+            || label == "Open Hypoid Bolted"
+    };
     for (label, s) in styles().into_iter().filter(|(l, _)| picked(l)) {
         let p = plan(&s).unwrap();
         let m = s.diff.module;
@@ -142,7 +171,9 @@ fn the_assembly_has_no_collisions() {
         let meshing = |a: &str, b: &str| {
             p.meshes3d.iter().any(|mp| mp.bodies.as_ref().is_some_and(|[x, y]| (x.name == a && y.name == b) || (x.name == b && y.name == a)))
         };
-        let rigid = |i: usize, j: usize| p.assembly.links.iter().any(|l| matches!(l, AssemblyLink::Rigid { .. }) && (l.members() == (i, j) || l.members() == (j, i)));
+        let rigid = |i: usize, j: usize| {
+            p.assembly.links.iter().any(|l| matches!(l, AssemblyLink::Rigid { .. }) && (l.members() == (i, j) || l.members() == (j, i)))
+        };
         let solids: Vec<Solid> = p.bodies.iter().map(|b| Solid::new(b, 0.05 * m)).collect();
         let t = std::time::Instant::now();
         let mut worst = (0.0f64, String::new());
@@ -188,7 +219,10 @@ fn torque_split_and_speeds() {
     let a = &open.assembly;
     let r = a.ratio(2, 0).unwrap();
     assert!((r.abs() - 11.0 / 41.0).abs() < 1e-9, "{r}");
-    let (sa, sb) = (open.bodies.iter().position(|b| b.name.starts_with("Side gear A")).unwrap(), open.bodies.iter().position(|b| b.name.starts_with("Side gear B")).unwrap());
+    let (sa, sb) = (
+        open.bodies.iter().position(|b| b.name.starts_with("Side gear A")).unwrap(),
+        open.bodies.iter().position(|b| b.name.starts_with("Side gear B")).unwrap(),
+    );
     let r = a.ratio(sa, sb).unwrap();
     assert!((r.abs() - 1.0).abs() < 1e-9, "{r}");
 }
@@ -255,7 +289,8 @@ fn simple_mode_designs_by_outputs() {
 #[test]
 fn each_part_alone_builds_its_bodies() {
     use crate::diff::Parts;
-    let none = Parts { side_a: false, side_b: false, pinions: false, which_pinions: vec![], pins: false, case: false, ring: false, drive_pinion: false };
+    let none =
+        Parts { side_a: false, side_b: false, pinions: false, which_pinions: vec![], pins: false, case: false, ring: false, drive_pinion: false };
     let full = plan(&spec(Diff::defaults_for(Style::Open))).unwrap();
     let names = |p: &Plan| p.bodies.iter().map(|b| b.name.clone()).collect::<Vec<_>>();
     for (label, parts, want) in [
@@ -299,7 +334,12 @@ fn each_part_alone_builds_its_bodies() {
     assert!(g.assembly.members.iter().all(|m| m.carrier.is_none()));
     assert!(g.clearance.is_none());
     // Torsen B: elements by number (1a and 1b), with the sides they mesh.
-    let t = plan(&spec(Diff { drive: DriveKind::None, parts: Parts { which_pinions: vec![1, 2], ..Parts::gears_only() }, ..Diff::defaults_for(Style::TorsenB) })).unwrap();
+    let t = plan(&spec(Diff {
+        drive: DriveKind::None,
+        parts: Parts { which_pinions: vec![1, 2], ..Parts::gears_only() },
+        ..Diff::defaults_for(Style::TorsenB)
+    }))
+    .unwrap();
     assert_eq!(names(&t), vec!["Side gear A z18", "Side gear B z18", "Element 1a z11", "Element 1b z11"]);
     assert_eq!(t.meshes3d.len(), 3);
     // An integral ring without its case is built as a separate ring.

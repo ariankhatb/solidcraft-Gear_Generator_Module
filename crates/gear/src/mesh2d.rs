@@ -171,10 +171,27 @@ impl Member {
         lo = lo - V2::new(2.137 * c, 2.291 * c);
         let nx = ((hi.x - lo.x) / c).ceil() as usize + 3;
         let ny = ((hi.y - lo.y) / c).ceil() as usize + 3;
-        let mut m = Member { loops, edges, lo, c, nx, ny, cells: vec![Vec::new(); nx * ny], solid: vec![false; nx * ny], rows: vec![Vec::new(); ny], rmax: 0.0, hollow: 0.0, motion };
+        let mut m = Member {
+            loops,
+            edges,
+            lo,
+            c,
+            nx,
+            ny,
+            cells: vec![Vec::new(); nx * ny],
+            solid: vec![false; nx * ny],
+            rows: vec![Vec::new(); ny],
+            rmax: 0.0,
+            hollow: 0.0,
+            motion,
+        };
         for (k, e) in m.edges.iter().enumerate() {
-            let (i0, j0) = m.cell(V2::new(e.a.x.min(e.b.x), e.a.y.min(e.b.y))).unwrap();
-            let (i1, j1) = m.cell(V2::new(e.a.x.max(e.b.x), e.a.y.max(e.b.y))).unwrap();
+            // The grid spans every edge, so both corners are in it.
+            let (Some((i0, j0)), Some((i1, j1))) =
+                (m.cell(V2::new(e.a.x.min(e.b.x), e.a.y.min(e.b.y))), m.cell(V2::new(e.a.x.max(e.b.x), e.a.y.max(e.b.y))))
+            else {
+                continue;
+            };
             for j in j0..=j1 {
                 m.rows[j].push(k as u32);
                 for i in i0..=i1 {
@@ -431,12 +448,26 @@ pub fn topology(s: &Spec, preview: &[PreviewGear]) -> Vec<MeshPair> {
         return crate::plan::train::mesh_pairs(s, t, preview);
     }
     let n = preview.len();
-    let pair = |a: usize, b: usize, internal: bool, teeth: u32| MeshPair { a, b, internal, period: TAU / f64::from(teeth.max(1)), slack: s.backlash, scale: s.module };
+    let pair = |a: usize, b: usize, internal: bool, teeth: u32| MeshPair {
+        a,
+        b,
+        internal,
+        period: TAU / f64::from(teeth.max(1)),
+        slack: s.backlash,
+        scale: s.module,
+    };
     match s.kind {
         Kind::Pair | Kind::Cycloidal if n == 2 => vec![pair(0, 1, false, s.teeth)],
         // Sun first, ring last, the planets between.
         Kind::Planetary if n >= 3 => (1..n - 1).flat_map(|k| [pair(0, k, false, s.teeth), pair(k, n - 1, true, s.teeth)]).collect(),
-        Kind::CycloidalDrive if n == 2 => vec![MeshPair { a: 0, b: 1, internal: true, period: TAU / f64::from(s.pins.max(1)), slack: s.backlash / 2.0, scale: s.pin_diameter / 2.0 }],
+        Kind::CycloidalDrive if n == 2 => vec![MeshPair {
+            a: 0,
+            b: 1,
+            internal: true,
+            period: TAU / f64::from(s.pins.max(1)),
+            slack: s.backlash / 2.0,
+            scale: s.pin_diameter / 2.0,
+        }],
         Kind::Bevel | Kind::SpiralBevel | Kind::Hypoid | Kind::CrossedHelical | Kind::Worm | Kind::BevelPlanetary | Kind::Differential => Vec::new(),
         // A rack with a pinion on it, should a set come to have both: the first sliding member
         // against the first turning one.
@@ -444,7 +475,9 @@ pub fn topology(s: &Spec, preview: &[PreviewGear]) -> Vec<MeshPair> {
             let rack = preview.iter().position(|g| g.slide != 0.0 && g.period > 0.0);
             let pinion = preview.iter().position(|g| g.slide == 0.0 && g.speed != 0.0 && g.pitch_radius > 0.0);
             match (pinion, rack) {
-                (Some(a), Some(b)) => vec![MeshPair { a, b, internal: false, period: preview[b].period / preview[a].pitch_radius, slack: s.backlash, scale: s.module }],
+                (Some(a), Some(b)) => {
+                    vec![MeshPair { a, b, internal: false, period: preview[b].period / preview[a].pitch_radius, slack: s.backlash, scale: s.module }]
+                }
                 _ => Vec::new(),
             }
         }
@@ -522,10 +555,11 @@ fn check_mesh_2d(plan: &Plan) -> Vec<MeshResult> {
     for ((i, _), m) in wanted.iter().zip(built) {
         members[*i] = Some(m);
     }
+    // Each pair with its two members (every pair's members were built above).
+    let pairs: Vec<(&MeshPair, &Member, &Member)> = pairs.iter().filter_map(|m| Some((*m, members[m.a].as_ref()?, members[m.b].as_ref()?))).collect();
     // Every pair's probes at once, merged afterwards in the order one thread would.
     let probes = crate::par::map(pairs.len() * CHECK_STEPS, |k| {
-        let (m, i) = (pairs[k / CHECK_STEPS], k % CHECK_STEPS);
-        let (a, b) = (members[m.a].as_ref().unwrap(), members[m.b].as_ref().unwrap());
+        let ((m, a, b), i) = (pairs[k / CHECK_STEPS], k % CHECK_STEPS);
         // Either side of the drawn position: a coupon's few teeth are centred on it.
         let t = if i == 0 { -0.5 * m.period } else { m.period * (i as f64 / CHECK_STEPS as f64 - 0.5) };
         probe(a, b, t)
@@ -533,7 +567,7 @@ fn check_mesh_2d(plan: &Plan) -> Vec<MeshResult> {
     pairs
         .iter()
         .enumerate()
-        .map(|(k, m)| {
+        .map(|(k, &(m, _, _))| {
             let mine = &probes[k * CHECK_STEPS..(k + 1) * CHECK_STEPS];
             let mut s = mine[0];
             for p in &mine[1..] {

@@ -27,7 +27,15 @@ fn proves(goal: &Goal, s: &Suggestion) -> Plan {
     assert!((fact(&p, "gear 2 tip diameter") - s.outer_diameter2).abs() < 1e-6);
     // The plan measures the contact ratio on the flanks as generated.
     assert!((fact(&p, "contact ratio") - s.contact_ratio).abs() < 0.02, "{} {s:?}", fact(&p, "contact ratio"));
-    assert!(!p.warnings.iter().any(|w| w.contains("undercut") || w.contains("thin tooth") || w.contains("point") || w.contains("contact ratio") || w.contains("clearance")), "{s:?}: {:?}", p.warnings);
+    assert!(
+        !p.warnings.iter().any(|w| w.contains("undercut")
+            || w.contains("thin tooth")
+            || w.contains("point")
+            || w.contains("contact ratio")
+            || w.contains("clearance")),
+        "{s:?}: {:?}",
+        p.warnings
+    );
     assert_eq!(worst(&check_mesh(&p)), Some(Verdict::Ok), "{s:?}");
     p
 }
@@ -140,13 +148,24 @@ fn shift_lets_small_pinions_in_without_undercut() {
 
 #[test]
 fn preferences_and_loads_rank_differently() {
-    let load = Load { torque: 8.0, speed: 600.0, material: Material::SteelThroughHardened, material2: Material::SteelThroughHardened, ..Load::default() };
+    let load =
+        Load { torque: 8.0, speed: 600.0, material: Material::SteelThroughHardened, material2: Material::SteelThroughHardened, ..Load::default() };
     let base = Goal { ratio: 3.0, max_outer_diameter: 160.0, max_module: 3.0, face_width: 12.0, load: load.clone(), ..Goal::default() };
     let pick = |prefer: Prefer| suggest(&Goal { prefer, ..base.clone() });
     let (small, quiet, strong) = (pick(Prefer::Smallest), pick(Prefer::Quietest), pick(Prefer::Strongest));
     for (name, out) in [("smallest", &small), ("quietest", &quiet), ("strongest", &strong)] {
         let s = &out[0];
-        eprintln!("{name:<9} z {}/{} m {} a {:.2} da2 {:.1} eps {:.2} SF {:.2} SH {:.2}", s.teeth, s.teeth2, s.module, s.center_distance, s.outer_diameter2, s.contact_ratio, s.safety_bending.unwrap(), s.safety_contact.unwrap());
+        eprintln!(
+            "{name:<9} z {}/{} m {} a {:.2} da2 {:.1} eps {:.2} SF {:.2} SH {:.2}",
+            s.teeth,
+            s.teeth2,
+            s.module,
+            s.center_distance,
+            s.outer_diameter2,
+            s.contact_ratio,
+            s.safety_bending.unwrap(),
+            s.safety_contact.unwrap()
+        );
         assert!(out.windows(2).all(|w| w[0].score <= w[1].score));
     }
     let margin = |s: &Suggestion| (s.safety_bending.unwrap() / SF_MIN).min(s.safety_contact.unwrap() / SH_MIN);
@@ -185,7 +204,18 @@ fn preferences_and_loads_rank_differently() {
 #[test]
 fn suggesting_is_quick() {
     // The widest search: every module, no size limit, rated.
-    let goal = Goal { ratio: 3.7, ratio_tolerance: 0.02, min_module: 0.2, max_module: 50.0, second_choice_modules: true, allow_shift: true, max_teeth: 400, load: Load { torque: 5.0, speed: 1000.0, ..Load::default() }, prefer: Prefer::Strongest, ..Goal::default() };
+    let goal = Goal {
+        ratio: 3.7,
+        ratio_tolerance: 0.02,
+        min_module: 0.2,
+        max_module: 50.0,
+        second_choice_modules: true,
+        allow_shift: true,
+        max_teeth: 400,
+        load: Load { torque: 5.0, speed: 1000.0, ..Load::default() },
+        prefer: Prefer::Strongest,
+        ..Goal::default()
+    };
     let t = Instant::now();
     let out = suggest(&goal);
     let ms = t.elapsed().as_secs_f64() * 1e3;
@@ -204,7 +234,12 @@ fn ratios_split_into_even_hunting_stages() {
         assert!(!out.is_empty(), "{total} in {n}");
         let even = total.powf(1.0 / f64::from(n));
         let s = &out[0];
-        eprintln!("{total} in {n}: {:?} = {:.4} ({:+.3} %)", s.stages.iter().map(|st| (st.teeth, st.teeth2)).collect::<Vec<_>>(), s.ratio, s.error * 100.0);
+        eprintln!(
+            "{total} in {n}: {:?} = {:.4} ({:+.3} %)",
+            s.stages.iter().map(|st| (st.teeth, st.teeth2)).collect::<Vec<_>>(),
+            s.ratio,
+            s.error * 100.0
+        );
         assert_eq!(s.stages.len(), n as usize);
         let product: f64 = s.stages.iter().map(|st| st.ratio).product();
         assert!((product - s.ratio).abs() < 1e-9 * total && (s.error - (s.ratio / total - 1.0)).abs() < 1e-12);

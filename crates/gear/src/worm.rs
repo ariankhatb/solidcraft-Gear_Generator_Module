@@ -37,7 +37,10 @@ impl<F: Fn(usize, f64) -> (f64, f64)> Envelope<F> {
             let n = c.len() - 1;
             for i in 0..n {
                 let (ra, rb) = (c[i].0, c[i + 1].0);
-                if !(ra.is_finite() && rb.is_finite() && c[i].1.is_finite() && c[i + 1].1.is_finite()) || (ra - rr) * (rb - rr) > 0.0 || (ra - rb).abs() <= 1e-12 * rr {
+                if !(ra.is_finite() && rb.is_finite() && c[i].1.is_finite() && c[i + 1].1.is_finite())
+                    || (ra - rr) * (rb - rr) > 0.0
+                    || (ra - rb).abs() <= 1e-12 * rr
+                {
                     continue;
                 }
                 let up = rb > ra;
@@ -50,7 +53,11 @@ impl<F: Fn(usize, f64) -> (f64, f64)> Envelope<F> {
                         break;
                     }
                     p = q;
-                    if (p.0 < rr) == up { lo = mid } else { hi = mid }
+                    if (p.0 < rr) == up {
+                        lo = mid
+                    } else {
+                        hi = mid
+                    }
                     if hi - lo < 1e-15 {
                         break;
                     }
@@ -183,7 +190,9 @@ impl Hob {
         let envelopes = [1.0, -1.0].map(|side| Envelope::new(move |k, t| self.cut(corner, w, side, k, t), &[60, 240]));
         // Where each side of the space is at a radius (angle × side), and what cut it.
         let roots = [(lean + zc) / self.wheel_pitch, (zc - lean) / self.wheel_pitch];
-        let space = |i: usize, rr: f64| -> (f64, usize) { if rr <= rf * (1.0 + 1e-12) { (roots[i], 0) } else { envelopes[i].extreme(rr).unwrap_or((roots[i], 0)) } };
+        let space = |i: usize, rr: f64| -> (f64, usize) {
+            if rr <= rf * (1.0 + 1e-12) { (roots[i], 0) } else { envelopes[i].extreme(rr).unwrap_or((roots[i], 0)) }
+        };
         let thickness = |rr: f64| (2.0 * pitch_half - space(0, rr).0 - space(1, rr).0) * rr;
         let land = 0.02 * m;
         if !(tip_radius > rf + 0.2 * m) || !(thickness(rf) > land) {
@@ -215,7 +224,13 @@ impl Hob {
             let angle = |rr: f64| sign * (pitch_half - space(i, rr.clamp(rf, ra)).0);
             // The fillet up to where the flank takes over, each piece a fair share of the side.
             let split = handover[i].unwrap_or(rf).clamp(rf + 0.04 * (ra - rf), rf + 0.6 * (ra - rf));
-            let mut fillet = fit_profile(&angle, &|s| if s >= 1.0 { split } else { rf + (split - rf) * s * s }, FILLET_TOLERANCE * m, fillet_points, fillet_points);
+            let mut fillet = fit_profile(
+                &angle,
+                &|s| if s >= 1.0 { split } else { rf + (split - rf) * s * s },
+                FILLET_TOLERANCE * m,
+                fillet_points,
+                fillet_points,
+            );
             // The flank's points at set places along it (closer at the ends), not crowded where it
             // bends as a fitted side's are: a nearly straight flank's bends are noise that would
             // move its points about from one section to the next, and the loft's skin with them.
@@ -243,4 +258,3 @@ fn bisect(mut lo: f64, mut hi: f64, inside: &dyn Fn(f64) -> bool) -> f64 {
     }
     lo
 }
-

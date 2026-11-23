@@ -77,7 +77,8 @@ const TOUCH: f64 = 1e-6;
 const SQUARE: f64 = 0.01;
 
 /// ISO 54 series I modules, with the usual small ones below 1 (DIN 780).
-pub const MODULES: [f64; 25] = [0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 16.0, 20.0, 25.0, 32.0, 40.0, 50.0];
+pub const MODULES: [f64; 25] =
+    [0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 12.0, 16.0, 20.0, 25.0, 32.0, 40.0, 50.0];
 /// ISO 54 series II modules (second choice).
 pub const MODULES_2: [f64; 17] = [1.125, 1.375, 1.75, 2.25, 2.75, 3.5, 4.5, 5.5, 7.0, 9.0, 11.0, 14.0, 18.0, 22.0, 28.0, 36.0, 45.0];
 
@@ -251,7 +252,9 @@ fn candidate(kind: Kind, rel: Option<&Relation>) -> Candidate {
             _ => no(format!("{}: an elliptical pair needs parallel axes", lie(rel))),
         },
         Kind::FaceGear => match rel {
-            Relation::Intersecting { angle, .. } if (fold(*angle) - 90.0).abs() <= SQUARE => yes(false, "the pinion's axis crosses the face gear's above its teeth"),
+            Relation::Intersecting { angle, .. } if (fold(*angle) - 90.0).abs() <= SQUARE => {
+                yes(false, "the pinion's axis crosses the face gear's above its teeth")
+            }
             Relation::Intersecting { angle, .. } => no(format!("the axes meet at {}°: a face gear needs 90°", num(fold(*angle)))),
             _ => no(format!("{}: a face gear needs intersecting axes", lie(rel))),
         },
@@ -261,7 +264,9 @@ fn candidate(kind: Kind, rel: Option<&Relation>) -> Candidate {
             _ => no(format!("{}: bevels need intersecting axes", lie(rel))),
         },
         Kind::BevelPlanetary => match rel {
-            Relation::Intersecting { angle, .. } if (5.0..=175.0).contains(angle) => yes(false, "the first planet's shaft meets the sun's at the apex; the other planets are patterned round the sun"),
+            Relation::Intersecting { angle, .. } if (5.0..=175.0).contains(angle) => {
+                yes(false, "the first planet's shaft meets the sun's at the apex; the other planets are patterned round the sun")
+            }
             Relation::Intersecting { .. } => no("the axes meet at under 5°: too flat for bevels".into()),
             _ => no(format!("{}: a bevel planetary set needs the planet's shaft to meet the sun's", lie(rel))),
         },
@@ -380,7 +385,8 @@ pub fn solve(axis1: &Axis, axis2: Option<&Axis>, kind: Option<Kind>, base: &Spec
         return Err(c.reason);
     }
     let mut spec = Spec { kind, origin: [0.0; 3], center_distance: 0.0, ..base.clone() };
-    let mut out = Solved { spec: spec.clone(), relation, frames: [Frame::at([0.0; 3]); 2], facts: Vec::new(), notes: Vec::new(), derived: Derived::default() };
+    let mut out =
+        Solved { spec: spec.clone(), relation, frames: [Frame::at([0.0; 3]); 2], facts: Vec::new(), notes: Vec::new(), derived: Derived::default() };
     // A single gear, a coaxial set, or a set with only its first axis: on axis 1.
     let on_axis_1 = |out: &mut Solved, spec: Spec| {
         let z = flipped(a1.dir, drive.flip1);
@@ -403,7 +409,8 @@ pub fn solve(axis1: &Axis, axis2: Option<&Axis>, kind: Option<Kind>, base: &Spec
         return Ok(out);
     };
     match rel {
-        Relation::Coincident => unreachable!("no two-axis set fits coincident axes"),
+        // No two-axis set fits coincident axes (the candidates turn them down first).
+        Relation::Coincident => return Err("the axes are the same line: a pair needs them apart".into()),
         Relation::Parallel { distance, foot1, foot2 } => {
             out.facts.push(fact("axis distance", distance, Unit::Mm));
             if kind == Kind::Cycloidal {
@@ -446,7 +453,12 @@ pub fn solve(axis1: &Axis, axis2: Option<&Axis>, kind: Option<Kind>, base: &Spec
             let place = Frame { origin: sub(apex, mul(t1, r1)), x, z: t1 };
             let local2 = Frame { origin: [0.0, 0.0, r1], x: [0.0, 0.0, -1.0], z: [1.0, 0.0, 0.0] };
             out.frames = [place, place.compose(&local2)];
-            out.notes.push(format!("{} pinion teeth, {} face gear teeth (ratio {})", spec.teeth, spec.teeth2, num(f64::from(spec.teeth2) / f64::from(spec.teeth))));
+            out.notes.push(format!(
+                "{} pinion teeth, {} face gear teeth (ratio {})",
+                spec.teeth,
+                spec.teeth2,
+                num(f64::from(spec.teeth2) / f64::from(spec.teeth))
+            ));
             spec.placement = Some(place);
         }
         Relation::Intersecting { apex, .. } if kind == Kind::BevelPlanetary => {
@@ -483,7 +495,11 @@ pub fn solve(axis1: &Axis, axis2: Option<&Axis>, kind: Option<Kind>, base: &Spec
             }
             let g = crate::plan::bevel_planet::geometry(&spec)?;
             if (g.sigma - sigma).abs() > 1e-4 {
-                out.notes.push(format!("the planets sit at {}° to the sun's shaft (not the axes' {}°): the second sun's or ring's whole teeth set the cone angle", num(g.sigma.to_degrees()), num(sigma.to_degrees())));
+                out.notes.push(format!(
+                    "the planets sit at {}° to the sun's shaft (not the axes' {}°): the second sun's or ring's whole teeth set the cone angle",
+                    num(g.sigma.to_degrees()),
+                    num(sigma.to_degrees())
+                ));
             }
             out.facts.push(fact("outer cone distance", g.re, Unit::Mm));
             let t1 = mul(s1, -1.0);
@@ -535,7 +551,11 @@ pub fn solve(axis1: &Axis, axis2: Option<&Axis>, kind: Option<Kind>, base: &Spec
             let (t1, t2) = (mul(s1, -1.0), mul(s2, -1.0));
             let x = unit(sub(mul(t1, sigma.cos()), t2)).unwrap_or_else(|| square_to(t1));
             let place = Frame { origin: sub(apex, mul(t1, h1)), x, z: t1 };
-            let local2 = Frame { origin: [sigma.sin() * h2, 0.0, h1 - sigma.cos() * h2], x: [sigma.cos(), 0.0, sigma.sin()], z: [-sigma.sin(), 0.0, sigma.cos()] };
+            let local2 = Frame {
+                origin: [sigma.sin() * h2, 0.0, h1 - sigma.cos() * h2],
+                x: [sigma.cos(), 0.0, sigma.sin()],
+                z: [-sigma.sin(), 0.0, sigma.cos()],
+            };
             out.frames = [place, place.compose(&local2)];
             spec.placement = Some(place);
         }
@@ -591,7 +611,10 @@ pub fn solve(axis1: &Axis, axis2: Option<&Axis>, kind: Option<Kind>, base: &Spec
                     let have = sense(l2.z, ly, lz);
                     if tries == 0 && want * have < -1e-9 {
                         spec.left_hand = !spec.left_hand;
-                        out.notes.push(format!("{}-hand spiral pinion: the hand that fits how these axes cross", if spec.left_hand { "left" } else { "right" }));
+                        out.notes.push(format!(
+                            "{}-hand spiral pinion: the hand that fits how these axes cross",
+                            if spec.left_hand { "left" } else { "right" }
+                        ));
                         tries += 1;
                         continue;
                     }
@@ -655,8 +678,11 @@ fn pair(a: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) -> Result<(), 
     let cb = spec.helix.to_radians().cos();
     let ratio = drive.ratio.unwrap_or(f64::from(spec.teeth2) / f64::from(spec.teeth));
     let (free1, free2) = (drive.teeth_free, drive.teeth2_free);
-    let modules: Vec<(f64, bool)> =
-        if drive.module_free { MODULES.iter().map(|m| (*m, false)).chain(MODULES_2.iter().map(|m| (*m, true))).collect() } else { vec![(spec.module, false)] };
+    let modules: Vec<(f64, bool)> = if drive.module_free {
+        MODULES.iter().map(|m| (*m, false)).chain(MODULES_2.iter().map(|m| (*m, true))).collect()
+    } else {
+        vec![(spec.module, false)]
+    };
     let mut best: Option<(f64, f64, u32, u32)> = None;
     for (m, second) in modules {
         let ideal = 2.0 * a * cb / m;
@@ -703,7 +729,13 @@ fn pair(a: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) -> Result<(), 
         // Fixed teeth that no standard module brings near the distance: the exact module.
         None if drive.module_free && !free1 && !free2 => {
             let m = 2.0 * a * cb / f64::from(spec.teeth + spec.teeth2);
-            out.notes.push(format!("no standard module brings {} + {} teeth to {} mm: using the exact module {}", spec.teeth, spec.teeth2, num(a), num(m)));
+            out.notes.push(format!(
+                "no standard module brings {} + {} teeth to {} mm: using the exact module {}",
+                spec.teeth,
+                spec.teeth2,
+                num(a),
+                num(m)
+            ));
             (m, spec.teeth, spec.teeth2)
         }
         None => {
@@ -734,7 +766,11 @@ fn pair(a: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) -> Result<(), 
         ));
     };
     if !(-0.6..=1.6).contains(&sum) {
-        out.notes.push(format!("the profile shift sum {} is large: teeth nearer {} would suit this distance better", num(sum), num(2.0 * a * cb / m)));
+        out.notes.push(format!(
+            "the profile shift sum {} is large: teeth nearer {} would suit this distance better",
+            num(sum),
+            num(2.0 * a * cb / m)
+        ));
     }
     // An exact fit needs no working distance (and no rounding noise in the shift sum).
     spec.center_distance = if (a - reference).abs() < 1e-9 { 0.0 } else { a };
@@ -751,7 +787,14 @@ fn pair(a: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) -> Result<(), 
     out.facts.push(fact("module (chosen)", m, Unit::None));
     out.facts.push(fact("reference centre distance", reference, Unit::Mm));
     out.facts.push(fact("profile shift sum", sum, Unit::None));
-    out.notes.push(format!("module {}, {} + {} teeth (ratio {}); profile shifts take up {} mm", num(m), z1, z2, num(f64::from(z2) / f64::from(z1)), num(a - reference)));
+    out.notes.push(format!(
+        "module {}, {} + {} teeth (ratio {}); profile shifts take up {} mm",
+        num(m),
+        z1,
+        z2,
+        num(f64::from(z2) / f64::from(z1)),
+        num(a - reference)
+    ));
     Ok(())
 }
 
@@ -787,7 +830,10 @@ fn wrapped(a: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) {
     spec.center_distance = a;
     out.derived.center_distance = true;
     let what = if spec.kind == Kind::Sprocket { "links" } else { "belt teeth" };
-    out.notes.push(format!("centre distance {} mm asked of the drive: it takes the nearest whole number of {what}, so gear 2 may sit a little off axis 2", num(a)));
+    out.notes.push(format!(
+        "centre distance {} mm asked of the drive: it takes the nearest whole number of {what}, so gear 2 may sit a little off axis 2",
+        num(a)
+    ));
 }
 
 /// An elliptical pair on two parallel shafts: its centre distance grows with the module, so
@@ -859,7 +905,14 @@ fn worm(a: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) -> Result<(), 
     out.derived.center_distance = true;
     out.facts.push(fact("module (chosen)", m, Unit::None));
     out.facts.push(fact("worm pitch diameter (solved)", d1, Unit::Mm));
-    out.notes.push(format!("axial module {}, {} wheel teeth, {} start(s); worm pitch Ø {} (q = {})", num(m), spec.teeth, spec.starts, num(d1), num(d1 / m)));
+    out.notes.push(format!(
+        "axial module {}, {} wheel teeth, {} start(s); worm pitch Ø {} (q = {})",
+        num(m),
+        spec.teeth,
+        spec.starts,
+        num(d1),
+        num(d1 / m)
+    ));
     Ok(())
 }
 
@@ -892,7 +945,11 @@ fn skew(e: f64, sigma: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) ->
     let (z1, z2) = (f64::from(spec.teeth), f64::from(spec.teeth2));
     let limit = 80f64.to_radians();
     // The hypoid builder keeps both angles positive; crossed helicals may take either hand.
-    let (lo, hi) = if kind == Kind::Hypoid { (1e-3_f64.max(sigma - limit), (sigma - 1e-3).min(limit)) } else { ((sigma - limit).max(-limit) + 1e-6, (sigma + limit).min(limit) - 1e-6) };
+    let (lo, hi) = if kind == Kind::Hypoid {
+        (1e-3_f64.max(sigma - limit), (sigma - 1e-3).min(limit))
+    } else {
+        ((sigma - limit).max(-limit) + 1e-6, (sigma + limit).min(limit) - 1e-6)
+    };
     if lo >= hi {
         return Err(format!("the axes cross at {}°: too far from square for these gears", num(sigma.to_degrees())));
     }
@@ -961,7 +1018,11 @@ fn skew(e: f64, sigma: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) ->
         Some(0.5 * (near + far))
     };
     let Some(b1) = solve_on(towards_hi).or_else(|| solve_on(!towards_hi)) else {
-        return Err(format!("module {} is too small for an offset of {} mm with these teeth: a helix angle would pass 80°; use a larger module or more teeth", num(m), num(e)));
+        return Err(format!(
+            "module {} is too small for an offset of {} mm with these teeth: a helix angle would pass 80°; use a larger module or more teeth",
+            num(m),
+            num(e)
+        ));
     };
     spec.helix = b1.to_degrees();
     out.derived.helix = true;

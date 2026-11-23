@@ -42,7 +42,7 @@ fn a_side_view_bevel_pairs_refusal_names_its_gear() {
     let items = vec![side_bevel("E", [0.0; 3], 160.0, 15), side_bevel("F", [200.0, 0.0, 0.0], 160.0, 15)];
     let blocks = [ModuleBlock { id: "M1".into(), module: Some(1.25), members: vec![0, 1], settings: make_shaft(15.0) }];
     let sp = planned(&items, &[], &blocks);
-    let tall = "the teeth are too tall for a cone this flat or this slim (pitch cone angle 80°): use a smaller module, more teeth or a different shaft angle";
+    let tall = "the teeth are too tall for its cone (pitch cone angle 80°): at this angle it needs at least 23 teeth, it has 15. The module doesn't change this, since the whole gear scales with it: give both gears more teeth at the same ratio, or change the shaft angle";
     assert_eq!(sp.error.as_deref(), Some(format!("Gear E1: {tall}; Gear F1: {tall}").as_str()));
 }
 
@@ -86,4 +86,19 @@ fn a_block_shaft_wider_than_a_gears_roots_is_said_as_the_shaft() {
 fn a_bore_wider_than_the_roots_is_said_as_the_bore() {
     let s = Spec { bore: crate::hub::Bore { kind: crate::hub::BoreKind::Round, diameter: 36.0, ..Default::default() }, ..Spec::default() };
     assert_eq!(crate::plan::plan(&s).err().as_deref(), Some("gear: the bore (reaching Ø36) cuts into the tooth roots (Ø35); use a smaller bore"));
+}
+
+/// Teeth too tall for a flat cone: the module scales tooth and cone alike, so the refusal names
+/// the fewest teeth instead (23 at a 160° pair's 80° cones), at any module, and 23 teeth pass.
+#[test]
+fn a_flat_cones_refusal_names_the_fewest_teeth_at_any_module() {
+    for m in [0.6, 1.25, 3.0] {
+        let block = |z: u32| {
+            let blocks = [ModuleBlock { id: "M1".into(), module: Some(m), members: vec![0], settings: BlockSettings::default() }];
+            planned(&[side_bevel("E", [0.0; 3], 160.0, z)], &[], &blocks).error.unwrap_or_default()
+        };
+        let few = block(22);
+        assert!(few.contains("needs at least 23 teeth, it has 22") && few.contains("module doesn't change this"), "m{m}: {few}");
+        assert!(!block(23).contains("too tall"), "m{m}: {}", block(23));
+    }
 }

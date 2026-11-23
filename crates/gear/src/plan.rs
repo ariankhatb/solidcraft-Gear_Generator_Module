@@ -2002,6 +2002,23 @@ pub(crate) fn bevel_involute(s: &Spec, teeth: u32, spiral: f64, helix: f64, shif
     }
 }
 
+/// The fewest teeth a bevel gear needs at its cone angle, from how far over the two limits it
+/// is (each ratio is tooth size over cone size: at a fixed cone angle the cone grows with the
+/// tooth count and both grow with the module, so only the tooth count helps).
+pub(crate) fn min_cone_teeth(z: u32, over_tip: f64, over_root: f64) -> u32 {
+    let need = |over: f64| if over.is_finite() && over > 0.0 { (f64::from(z) * over).floor() as u32 + 1 } else { 0 };
+    need(over_tip).max(need(over_root)).max(z + 1)
+}
+
+/// The refusal for teeth too tall for their cone: the fewest teeth that fit, and that the
+/// module doesn't change it.
+pub(crate) fn too_tall_for_cone(delta: f64, z: u32, need: u32, angle: &str) -> String {
+    format!(
+        "the teeth are too tall for its cone (pitch cone angle {}°): at this angle it needs at least {need} teeth, it has {z}. The module doesn't change this, since the whole gear scales with it: give both gears more teeth at the same ratio, or change {angle}",
+        num(delta.to_degrees())
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, face: ConeFace, p: &mut Plan, who: &str) -> (ConeTeeth, ToothFlank) {
     let m = s.module;
@@ -2033,11 +2050,12 @@ fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, face: Con
         let sigma = s.shaft_angle.to_radians();
         let range = if delta.to_degrees() > 80.0 && s.shaft_angle > 90.0 && s.shaft_angle < 170.0 {
             let k = |d: f64| sigma.sin() / d.to_radians().tan() - sigma.cos();
-            format!("; at this {}° shaft angle the tooth ratio must be about {} to {} (equal teeth always work)", num(s.shaft_angle), num((k(85.0) * 100.0).round() / 100.0), num((k(s.shaft_angle - 85.0) * 100.0).round() / 100.0))
+            format!("; at this {}° shaft angle a tooth ratio of about {} to {} keeps both cones at 85° or less", num(s.shaft_angle), num((k(85.0) * 100.0).round() / 100.0), num((k(s.shaft_angle - 85.0) * 100.0).round() / 100.0))
         } else {
             String::new()
         };
-        p.refuse(format!("{who}: the teeth are too tall for a cone this flat or this slim (pitch cone angle {}°): use a smaller module, more teeth or a different shaft angle{range}", num(delta.to_degrees())));
+        let need = min_cone_teeth(z, ha * ds / (0.5 * h), crown.dedendum / (0.9 * re * delta.tan()));
+        p.refuse(format!("{who}: {}{range}", too_tall_for_cone(delta, z, need, "the shaft angle")));
         let none = ConeTeeth { steps: Vec::new(), ends: ConeEnds { back: 0.0, front: 0.0, small_root: 0.0 }, tip_radius: 0.0 };
         return (none, ToothFlank { rf: 0.0, ra: 0.0, root_half: 0.0, tip_half: 0.0, fillet: Vec::new(), flank: Vec::new(), undercut: false, pointed: false });
     }

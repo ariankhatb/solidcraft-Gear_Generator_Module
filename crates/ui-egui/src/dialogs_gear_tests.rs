@@ -170,8 +170,8 @@ fn slots_are_the_gear_crates() {
 /// one before it.
 #[test]
 fn each_gears_part_of_a_refusal_goes_on_its_card() {
-    let tall = "the teeth are too tall for a cone this flat or this slim (pitch cone angle 80°): use a smaller module, more teeth or a different shaft angle";
-    let range = "at this 160° shaft angle the tooth ratio must be about 0.97 to 1.03 (equal teeth always work)";
+    let tall = "the teeth are too tall for its cone (pitch cone angle 80°): at this angle it needs at least 23 teeth, it has 15. The module doesn't change this, since the whole gear scales with it: give both gears more teeth at the same ratio, or change the shaft angle";
+    let range = "at this 160° shaft angle a tooth ratio of about 0.97 to 1.03 keeps both cones at 85° or less";
     let shaft = "Gear B2 sits on Block 1's shaft S1 (Ø15), which is wider than its tooth roots (Ø12.1): use a shaft of at most Ø9 or a bigger gear";
     let e = format!("Gear E1: {tall}; {range}; Gear F1: {tall}; Gear F2: {tall}; {shaft}");
     let mut per = vec![Vec::new(); 8];

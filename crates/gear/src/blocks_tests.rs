@@ -315,3 +315,32 @@ fn a_shaft_line_already_on_a_bevels_axis_reaches_it_and_is_one_body_with_it() {
         assert!(lo[2] < 17.0, "links {links:?}: the shaft starts at z {}", lo[2]);
     }
 }
+
+/// The RC 4x4's front and rear bevel pairs as side views: apexes at x ±85 on the prop shaft's
+/// line, each wheel shaft 148° from it, 15 : 15 teeth in a block at module 1.25 with Make shaft
+/// Ø10 and no shaft drawn. Each block shaft stops in its bevel gear on the apex side (past it the
+/// mate's shaft crosses) and runs on out of the gear's back: none is cut back off its gears.
+#[test]
+fn a_block_shaft_stops_in_a_bevel_gear_at_its_apex_side_and_reaches_it() {
+    let pair = |id: &str, apex: [f64; 3], s: f64| {
+        let a = 148f64.to_radians();
+        let inward = [apex[0] - s * 60.0, apex[1], apex[2]];
+        let wheel = [apex[0] + s * 60.0 * -a.cos(), apex[1], apex[2] + 60.0 * a.sin()];
+        let mut it = GearItem::new(id, ItemKind::Bevel).with(vec![Thing::line(apex, inward), Thing::line(apex, wheel)]);
+        let gs = GearSettings { teeth: Some(15), ..GearSettings::default() };
+        it.gears = vec![gs, gs];
+        it
+    };
+    let items = vec![pair("A", [-85.0, 0.0, 0.0], -1.0), pair("B", [85.0, 0.0, 0.0], 1.0)];
+    let settings = BlockSettings { shaft_diameter: Some(10.0), ..BlockSettings::default() };
+    let blocks = [ModuleBlock { id: "M1".into(), module: Some(1.25), members: vec![0, 1], settings }];
+    let shafts = block_shafts(&items, &blocks);
+    assert_eq!(shafts.len(), 3, "the prop shaft and two wheel shafts: {shafts:?}");
+    // The prop shaft ends inside each pinion, short of the apex (x ±85), and the wheel shafts
+    // start inside theirs and run outward.
+    let prop = shafts.iter().find(|s| s.a[2].abs() < 1e-6 && s.b[2].abs() < 1e-6).expect("prop shaft");
+    let (x0, x1) = (prop.a[0].min(prop.b[0]), prop.a[0].max(prop.b[0]));
+    assert!(x0 > -85.0 && x0 < -82.3 && x1 < 85.0 && x1 > 82.3, "prop shaft x {x0} .. {x1}");
+    let (sp, _) = planned(&items, &[], &blocks);
+    assert!(!sp.notes.iter().any(|n| n.contains("cut back")), "{:?}", sp.notes);
+}

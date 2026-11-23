@@ -303,10 +303,8 @@ fn member(s: &Spec, g: &Geometry, z: u32, delta: f64, spiral: f64, phase: f64, f
     let crown = crown_of(s, g, delta, spiral);
     let ds = delta.sin();
     if crown.addendum * ds >= 0.5 * h || crown.dedendum >= 0.9 * re * delta.tan() {
-        p.refuse(format!(
-            "{who}: the teeth are too tall for a cone this flat or this slim (pitch cone angle {}°): use a smaller module, more teeth or a different cone angle",
-            deg(delta)
-        ));
+        let need = crate::plan::min_cone_teeth(z, crown.addendum * ds / (0.5 * h), crown.dedendum / (0.9 * re * delta.tan()));
+        p.refuse(format!("{who}: {}", crate::plan::too_tall_for_cone(delta, z, need, "the cone angle")));
         return None;
     }
     let rm = face.mid;

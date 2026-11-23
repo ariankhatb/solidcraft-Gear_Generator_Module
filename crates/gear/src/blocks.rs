@@ -218,6 +218,37 @@ fn line_on(items: &[GearItem], o: V, u: V, t: f64) -> Option<usize> {
     })
 }
 
+/// For a bevel pair's gear `g`: which way along its axis (`geos[g].axis`) its pitch cone's apex
+/// lies from its centre (+1 or -1), and how far from the centre toward the apex a shaft of
+/// radius `r` on it may reach and still clear a shaft of the same radius on the mate's axis
+/// (both running from the apex out: at a shaft angle θ of 90° or more the two ends must stand
+/// r·cot(θ/2) off the apex, under 90° 2r / sin θ), less a running gap; 0 where even the centre
+/// is too near. `None` for other gears, and for axes that don't meet (a hypoid's).
+fn apex_side(it: &GearItem, geos: &[GearGeom], g: usize, r: f64) -> Option<(f64, f64)> {
+    const GAP: f64 = 0.5;
+    if it.kind != ItemKind::Bevel || geos.len() != 2 {
+        return None;
+    }
+    let (me, mate) = (&geos[g], &geos[1 - g]);
+    let (u, v) = (unit(me.axis)?, unit(mate.axis)?);
+    let n = cross(u, v);
+    let nn = dot(n, n);
+    if nn <= ANGLE_TOL * ANGLE_TOL {
+        return None;
+    }
+    // The point on my axis nearest the mate's (the apex), and how far apart the axes pass there.
+    let w = sub(mate.centre, me.centre);
+    let t = dot(cross(w, v), n) / nn;
+    let gap = dot(w, n).abs() / nn.sqrt();
+    if gap > tol(me.radius.unwrap_or(1.0)) || t.abs() <= 1e-9 {
+        return None;
+    }
+    let apex = add(me.centre, mul(u, t));
+    let theta = dot(unit(sub(me.centre, apex))?, unit(sub(mate.centre, apex))?).clamp(-1.0, 1.0).acos();
+    let clear = if theta >= std::f64::consts::FRAC_PI_2 { r / (0.5 * theta).tan() } else { 2.0 * r / theta.sin().max(1e-6) } + GAP;
+    Some((t.signum(), (t.abs() - clear).max(0.0)))
+}
+
 /// The shafts the blocks with a shaft Ø make: one per distinct axis their gears are on (gears
 /// on one axis share it), over the gears' faces (at the block's module, or the Auto one its
 /// gears' sizes give) and a margin past them, or out to the bearing points picked on that axis.
@@ -249,11 +280,13 @@ pub fn block_shafts_linked(items: &[GearItem], links: &[ItemLink], blocks: &[Mod
             (!ds.is_empty()).then(|| auto_module(&ds, 8).0)
         };
         let block_module = positive(b.module).or_else(auto);
-        // Each axis: a point on it, its direction, its gears, how far they reach along it.
-        let mut axes: Vec<(V, V, Vec<GearRef>, f64, f64)> = Vec::new();
+        // Each axis: a point on it, its direction, its gears, how far they reach along it, and
+        // whether each end stops at a bevel gear's apex side (no margin past it there).
+        let mut axes: Vec<(V, V, Vec<GearRef>, (f64, bool), (f64, bool))> = Vec::new();
         for &i in &members {
             let it = &items[i];
-            for (g, geo) in gear_geoms(it).iter().enumerate() {
+            let geos = gear_geoms(it);
+            for (g, geo) in geos.iter().enumerate() {
                 let Some(w) = unit(geo.axis).filter(|_| on_a_shaft(it, geo)) else { continue };
                 let s = it.settings(g);
                 let m = resolve_module(blocks, i, &s).module.or(block_module).unwrap_or(1.0);
@@ -262,15 +295,31 @@ pub fn block_shafts_linked(items: &[GearItem], links: &[ItemLink], blocks: &[Mod
                 let at = match axes.iter().position(|(o, u, ..)| coaxial(*o, *u, geo.centre, w, t)) {
                     Some(x) => x,
                     None => {
-                        axes.push((geo.centre, w, Vec::new(), f64::INFINITY, f64::NEG_INFINITY));
+                        axes.push((geo.centre, w, Vec::new(), (f64::INFINITY, false), (f64::NEG_INFINITY, false)));
                         axes.len() - 1
                     }
                 };
                 let (o, u, gears, lo, hi) = &mut axes[at];
                 let c = dot(sub(geo.centre, *o), *u);
-                let (ahead, behind) = if dot(w, *u) >= 0.0 { (fa, fb) } else { (fb, fa) };
-                *lo = lo.min(c - behind);
-                *hi = hi.max(c + ahead);
+                let (mut ahead, mut behind) = if dot(w, *u) >= 0.0 { (fa, fb) } else { (fb, fa) };
+                // A bevel gear's shaft stops on its apex side short of where its mate's shaft
+                // crosses (run on, the two would cut each other back off both gears), with no
+                // margin past it there. It runs on out of the gear's back.
+                let near = apex_side(it, &geos, g, d / 2.0);
+                let apex = near.map(|(s, _)| s * dot(w, *u));
+                if let Some((_, room)) = near {
+                    if apex.is_some_and(|s| s > 0.0) {
+                        ahead = ahead.min(room);
+                    } else {
+                        behind = behind.min(room);
+                    }
+                }
+                if c - behind < lo.0 {
+                    *lo = (c - behind, apex.is_some_and(|s| s < 0.0));
+                }
+                if c + ahead > hi.0 {
+                    *hi = (c + ahead, apex.is_some_and(|s| s > 0.0));
+                }
                 gears.push(GearRef::new(i, g));
             }
         }
@@ -284,9 +333,10 @@ pub fn block_shafts_linked(items: &[GearItem], links: &[ItemLink], blocks: &[Mod
                     _ => None,
                 })
                 .collect();
+            let ((lo, lo_apex), (hi, hi_apex)) = (lo, hi);
             let (lo, hi) = if bearings.is_empty() {
                 let margin = d.max(3.0);
-                (lo - margin, hi + margin)
+                (if lo_apex { lo } else { lo - margin }, if hi_apex { hi } else { hi + margin })
             } else {
                 (bearings.iter().copied().fold(lo, f64::min), bearings.iter().copied().fold(hi, f64::max))
             };

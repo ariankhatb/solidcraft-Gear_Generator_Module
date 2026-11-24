@@ -1,9 +1,9 @@
+use serde_json::{Value, json};
 #[allow(unused_imports)]
 use solidcraft_geom::prelude::*;
-use serde_json::{Value, json};
 
-use crate::Session;
 use super::test_util::{circle, line, no_errors, run, volume};
+use crate::Session;
 
 #[test]
 fn a_spur_gear_is_one_body_of_the_right_volume_and_one_undo_step() {
@@ -106,7 +106,11 @@ fn from_axes_classifies_and_solves_without_building() {
     assert_eq!(r["relation"]["kind"], "parallel", "{r}");
     assert!((r["relation"]["distance"].as_f64().unwrap() - 40.0).abs() < 1e-9);
     assert_eq!(r["type"], "pair");
-    assert_eq!((r["params"]["module"].as_f64(), r["params"]["teeth"].as_u64(), r["params"]["teeth2"].as_u64()), (Some(2.0), Some(16), Some(24)), "{r}");
+    assert_eq!(
+        (r["params"]["module"].as_f64(), r["params"]["teeth"].as_u64(), r["params"]["teeth2"].as_u64()),
+        (Some(2.0), Some(16), Some(24)),
+        "{r}"
+    );
     assert!(r["derived"].as_array().unwrap().contains(&json!("module")));
     assert_eq!(r["frames"].as_array().unwrap().len(), 2);
     let fits = |r: &Value, t: &str| r["candidates"].as_array().unwrap().iter().find(|c| c["type"] == t).unwrap()["fits"].as_bool().unwrap();
@@ -193,7 +197,11 @@ fn sets_are_built_on_intersecting_and_skew_axes() {
     // Intersecting at 90° and at 60°, away from the origin; skew at 90° (a worm) and 60°.
     let cases = [
         (json!({"origin": [5, 5, 0], "dir": [0, 0, 1]}), json!({"origin": [5, 5, 20], "dir": [1, 0, 0]}), json!({"ratio": 2, "module": 2})),
-        (json!({"origin": [5, 5, 0], "dir": [0, 0, 1]}), json!({"origin": [5, 5, 20], "dir": [r3, 0, 0.5]}), json!({"ratio": 1.5, "cone_distance": 40})),
+        (
+            json!({"origin": [5, 5, 0], "dir": [0, 0, 1]}),
+            json!({"origin": [5, 5, 20], "dir": [r3, 0, 0.5]}),
+            json!({"ratio": 1.5, "cone_distance": 40}),
+        ),
         (json!({"origin": [0, 0, 0], "dir": [0, 0, 1]}), json!({"origin": [30, 0, 0], "dir": [0, 1, 0]}), json!({"ratio": 20})),
         (json!({"origin": [0, 0, 0], "dir": [0, 0, 1]}), json!({"origin": [30, 0, 0], "dir": [0, r3, 0.5]}), json!({"ratio": 2})),
     ];
@@ -225,7 +233,9 @@ fn hypoid_parameters_reach_the_spec() {
     assert_eq!(crate::gear_spec_of(&back).unwrap(), s);
     let mut session = Session::default();
     let r = run(&mut session, "gear.calculate", json!({"type": "hypoid"}));
-    let fact = |label: &str| r["facts"].as_array().unwrap().iter().find(|f| f["label"].as_str().unwrap().starts_with(label)).map(|f| f["value"].as_f64().unwrap());
+    let fact = |label: &str| {
+        r["facts"].as_array().unwrap().iter().find(|f| f["label"].as_str().unwrap().starts_with(label)).map(|f| f["value"].as_f64().unwrap())
+    };
     assert!(fact("pinion mean spiral angle").unwrap() > fact("gear mean spiral angle").unwrap());
     assert_eq!(fact("offset"), Some(25.0));
 }
@@ -412,7 +422,10 @@ fn a_parametric_spur_gear_follows_its_tooth_count_parameter_and_undoes() {
     let (_, fitted20) = made(&mut Session::default(), json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 10}));
     let (_, fitted24) = made(&mut Session::default(), json!({"type": "spur", "module": 2, "teeth": 24, "face_width": 10}));
     let mut s = Session::default();
-    let (r, v) = made(&mut s, json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 10, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "G"}));
+    let (r, v) = made(
+        &mut s,
+        json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 10, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "G"}),
+    );
     no_errors(&s);
     assert!((v / fitted20 - 1.0).abs() < 1e-3, "{v} vs {fitted20}");
     for name in ["G_module", "G_teeth", "G_pressure_angle", "G_shift", "G_backlash", "G_face_width"] {
@@ -506,7 +519,10 @@ fn a_helical_rack_says_why_its_teeth_stay_fitted() {
 #[test]
 fn a_parametric_ring_keeps_its_rim_profile_through_a_tooth_count_change() {
     let mut s = Session::default();
-    let (r, v) = made(&mut s, json!({"type": "internal", "module": 1.5, "teeth": 48, "face_width": 8, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "R"}));
+    let (r, v) = made(
+        &mut s,
+        json!({"type": "internal", "module": 1.5, "teeth": 48, "face_width": 8, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "R"}),
+    );
     let body = r["bodies"][0].as_str().unwrap().to_string();
     // More teeth in the same rim: a bigger tooth circle, less material; the extrusion's profile
     // is picked by the rim circle, which stays.
@@ -578,7 +594,11 @@ fn sketch_bevel_side_view_at_80_degrees() {
     let mut s = Session::default();
     let sk = sketch_with(
         &mut s,
-        &[("sketch.point", json!({"point": [0, 0], "id": "apex"})), line([0.0, 0.0], [0.0, -50.0], "s1"), line([0.0, 0.0], [50.0 * a.sin(), -50.0 * a.cos()], "s2")],
+        &[
+            ("sketch.point", json!({"point": [0, 0], "id": "apex"})),
+            line([0.0, 0.0], [0.0, -50.0], "s1"),
+            line([0.0, 0.0], [50.0 * a.sin(), -50.0 * a.cos()], "s2"),
+        ],
     );
     let r = run(&mut s, "gear.calculate", json!({"sketch": sk, "type": "bevel", "picks": ["apex", "s1", "s2"]}));
     assert!((fact_opt(&r, "shaft angle (from the axes)").unwrap() - 80.0).abs() < 1e-6, "{r}");
@@ -690,8 +710,12 @@ fn a_clearance_body_comes_with_the_set_and_cuts_a_housing() {
     assert!(hits.is_empty(), "{i}");
     assert!(i["unchecked"].as_array().unwrap().iter().all(|u| u["a"] != "Housing" && u["b"] != "Housing"), "{i}");
     // More clearance: regenerated in place, and the housing's cut follows.
-    let u = run(&mut s, "gear.update", json!({"group": group, "clearance_body": {"radial": 1.0, "axial": 0.5, "bearing": "608", "bearing_fit": 0.1,
-        "seats": [{"member": 1, "along": -14}, {"member": 2, "along": 14}, {"point": [0, 0, 20]}]}}));
+    let u = run(
+        &mut s,
+        "gear.update",
+        json!({"group": group, "clearance_body": {"radial": 1.0, "axial": 0.5, "bearing": "608", "bearing_fit": 0.1,
+        "seats": [{"member": 1, "along": -14}, {"member": 2, "along": 14}, {"point": [0, 0, 20]}]}}),
+    );
     assert_eq!(u["updated"], "in_place", "{u}");
     assert_eq!(u["clearance"], "Drive clearance");
     assert!(u["broken"].as_array().is_none_or(|b| b.is_empty()), "{u}");
@@ -716,8 +740,12 @@ fn a_zero_gap_clearance_body_has_the_gears_box() {
     };
     for gap in [0.0, 0.5] {
         let mut s = Session::default();
-        let r = run(&mut s, "gear.create", json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 32, "face_width": 10, "name": "Drive",
-            "clearance_body": {"radial": gap, "axial": gap}}));
+        let r = run(
+            &mut s,
+            "gear.create",
+            json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 32, "face_width": 10, "name": "Drive",
+            "clearance_body": {"radial": gap, "axial": gap}}),
+        );
         let made = names(&r);
         assert_eq!(made.len(), 3, "{r}");
         no_errors(&s);
@@ -822,7 +850,10 @@ fn a_bevel_side_view_away_from_the_sketch_origin_is_recognised() {
     assert!(r["facts"].as_array().is_some_and(|f| !f.is_empty()), "{r}");
     // With a dot at the apex too.
     let mut s = Session::default();
-    let sk = sketch_with(&mut s, &[("sketch.point", json!({"point": [30, 20], "id": "a"})), line([30.0, 20.0], [30.0, -30.0], "s1"), line([30.0, 20.0], [80.0, 20.0], "s2")]);
+    let sk = sketch_with(
+        &mut s,
+        &[("sketch.point", json!({"point": [30, 20], "id": "a"})), line([30.0, 20.0], [30.0, -30.0], "s1"), line([30.0, 20.0], [80.0, 20.0], "s2")],
+    );
     let r = run(&mut s, "gear.calculate", json!({"sketch": sk}));
     assert!(r["facts"].as_array().is_some_and(|f| !f.is_empty()), "{r}");
 }
@@ -830,7 +861,10 @@ fn a_bevel_side_view_away_from_the_sketch_origin_is_recognised() {
 #[test]
 fn a_drawn_dot_is_the_origin_a_sketch_set_turns_about() {
     let mut s = Session::default();
-    let sk = sketch_with(&mut s, &[circle(10.0, 5.0, 20.0, "g1"), circle(10.0, 55.0, 30.0, "g2"), ("sketch.point", json!({"point": [100, 0], "id": "o"}))]);
+    let sk = sketch_with(
+        &mut s,
+        &[circle(10.0, 5.0, 20.0, "g1"), circle(10.0, 55.0, 30.0, "g2"), ("sketch.point", json!({"point": [100, 0], "id": "o"}))],
+    );
     let auto = run(&mut s, "gear.create", json!({"sketch": sk, "sketch_turn": [0, 0, 90]}));
     let c = centre(&mut s, &auto["bodies"][0]);
     // Gear 1's centre (10, 5) turned 90° about the dot (100, 0): (95, -90).
@@ -873,7 +907,14 @@ fn a_sketch_crossed_helical_takes_its_drawn_sizes() {
 fn a_bevel_planetary_at_60_degrees_builds_without_a_mode() {
     let mut s = Session::default();
     let a = 60f64.to_radians();
-    let sk = sketch_with(&mut s, &[("sketch.point", json!({"point": [0, 0], "id": "apex"})), line([0.0, 0.0], [0.0, -50.0], "s1"), line([0.0, 0.0], [50.0 * a.sin(), -50.0 * a.cos()], "s2")]);
+    let sk = sketch_with(
+        &mut s,
+        &[
+            ("sketch.point", json!({"point": [0, 0], "id": "apex"})),
+            line([0.0, 0.0], [0.0, -50.0], "s1"),
+            line([0.0, 0.0], [50.0 * a.sin(), -50.0 * a.cos()], "s2"),
+        ],
+    );
     let r = run(&mut s, "gear.create", json!({"sketch": sk, "type": "bevel_planetary"}));
     assert!(r["bodies"].as_array().is_some_and(|b| b.len() >= 3), "{r}");
 }
@@ -915,7 +956,11 @@ fn overlap(s: &mut Session, bodies: &[&str]) -> f64 {
 #[test]
 fn a_parametric_pairs_mate_follows_the_centre_distance() {
     let mut s = Session::default();
-    let r = run(&mut s, "gear.create", json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 30, "face_width": 8, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "P"}));
+    let r = run(
+        &mut s,
+        "gear.create",
+        json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 30, "face_width": 8, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "P"}),
+    );
     no_errors(&s);
     let (g1, g2) = (r["bodies"][0].clone(), r["bodies"][1].clone());
     assert!((centre(&mut s, &g2)[0] - 50.0).abs() < 1e-3, "{r}");
@@ -932,7 +977,8 @@ fn a_parametric_pairs_mate_follows_the_centre_distance() {
     // A profile shift pushes it out by the working centre distance.
     run(&mut s, "parameters.change", json!({"name": "P_shift", "expression": "0.3"}));
     no_errors(&s);
-    let shifted = run(&mut s, "gear.calculate", json!({"type": "pair", "module": 2.5, "teeth": 24, "teeth2": 30, "profile_shift": 0.3, "face_width": 8}));
+    let shifted =
+        run(&mut s, "gear.calculate", json!({"type": "pair", "module": 2.5, "teeth": 24, "teeth2": 30, "profile_shift": 0.3, "face_width": 8}));
     let want = fact(&shifted, "centre distance");
     let c = centre(&mut s, &g2);
     assert!((c[0] - want).abs() < 1e-3, "gear 2 at {c:?}, wanted x = {want}");
@@ -943,7 +989,11 @@ fn a_parametric_pairs_mate_follows_the_centre_distance() {
 #[test]
 fn a_parametric_planetary_sets_planets_follow_their_parameters() {
     let mut s = Session::default();
-    let r = run(&mut s, "gear.create", json!({"type": "planetary", "module": 1, "teeth": 12, "teeth2": 24, "planets": 3, "face_width": 6, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "S"}));
+    let r = run(
+        &mut s,
+        "gear.create",
+        json!({"type": "planetary", "module": 1, "teeth": 12, "teeth2": 24, "planets": 3, "face_width": 6, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "S"}),
+    );
     no_errors(&s);
     let bodies: Vec<String> = names(&r);
     assert_eq!(bodies.len(), 5, "{r}");
@@ -1046,7 +1096,11 @@ fn a_parametric_clearance_body_follows_the_parameters() {
 #[test]
 fn an_update_back_to_fitted_teeth_removes_the_sets_parameters() {
     let mut s = Session::default();
-    let r = run(&mut s, "gear.create", json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 30, "face_width": 8, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "P"}));
+    let r = run(
+        &mut s,
+        "gear.create",
+        json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 30, "face_width": 8, "tooth_curves": "equations", "parametric": true, "parameter_prefix": "P"}),
+    );
     let group = r["group"].as_u64().unwrap();
     assert!(s.doc.params.iter().filter(|p| p.name.starts_with("P_")).count() > 5);
     run(&mut s, "parameters.add", json!({"name": "Mine", "expression": "P_module * 2", "unit": "mm"}));
@@ -1155,7 +1209,8 @@ fn an_assembled_planetary_turns_its_planets_and_ring() {
 #[test]
 fn an_assembled_bevel_set_and_its_keep_out() {
     let mut s = Session::default();
-    let r = assembled(&mut s, json!({"type": "bevel", "module": 2, "teeth": 20, "teeth2": 30, "face_width": 10, "assembly": true, "clearance_body": {}}));
+    let r =
+        assembled(&mut s, json!({"type": "bevel", "module": 2, "teeth": 20, "teeth2": 30, "face_width": 10, "assembly": true, "clearance_body": {}}));
     let j = member_joints(&r);
     let got = drive_and_read(&mut s, j[0].unwrap(), 30.0, j[1].unwrap());
     assert!((got + 20.0).abs() < 1e-6, "{got}");
@@ -1184,14 +1239,16 @@ fn an_update_keeps_the_assemblys_components_joints_and_links_in_place() {
     let mut s = Session::default();
     let counts = |s: &Session| (s.doc.components.len(), s.doc.assembly.joints.len(), s.doc.assembly.links.len());
     let empty = counts(&s);
-    let r = assembled(&mut s, json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 32, "face_width": 8, "assembly": true, "clearance_body": {}}));
+    let r =
+        assembled(&mut s, json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 32, "face_width": 8, "assembly": true, "clearance_body": {}}));
     let group = r["group"].as_u64().unwrap();
     let before = counts(&s);
     assert_eq!(before, (empty.0 + 3, empty.1 + 2, empty.2 + 1), "two gears and the keep-out; two joints; one link");
     // (A member's body name and shaft follow the new tooth count; its component, occurrence
     // and joint stay.)
     let ids = |a: &Value| {
-        let members: Vec<(Value, Value, Value)> = a["members"].as_array().unwrap().iter().map(|m| (m["component"].clone(), m["occurrence"].clone(), m["joint"].clone())).collect();
+        let members: Vec<(Value, Value, Value)> =
+            a["members"].as_array().unwrap().iter().map(|m| (m["component"].clone(), m["occurrence"].clone(), m["joint"].clone())).collect();
         (members, a["keep_out"].clone(), a["joints"].clone())
     };
     let made = ids(&r["assembly"]);
@@ -1212,6 +1269,44 @@ fn an_update_keeps_the_assemblys_components_joints_and_links_in_place() {
     run(&mut s, "gear.update", json!({"group": group, "assembly": null}));
     assert_eq!(counts(&s), empty);
     no_errors(&s);
+}
+
+/// A member renamed by an update (gear 2's tooth count is in its body's name) goes back into its
+/// component where its old body was, not where the component has turned to: its transfer keeps
+/// the old one's transform. Placed by the turned component, it would be out of phase with its
+/// mate, whose link assumes the body as built (the RC 4x4's gearbox, after its shafts were
+/// renumbered).
+#[test]
+fn a_renamed_member_goes_back_where_its_old_body_was() {
+    let mut s = Session::default();
+    let r = assembled(&mut s, json!({"type": "pair", "module": 2, "teeth": 20, "teeth2": 32, "face_width": 8, "assembly": true}));
+    let group = r["group"].as_u64().unwrap();
+    let j = member_joints(&r);
+    let components: Vec<u64> = r["assembly"]["members"].as_array().unwrap().iter().filter_map(|m| m["component"].as_u64()).collect();
+    let transforms = |s: &Session| -> Vec<(u64, solidcraft_doc::Mat)> {
+        s.doc
+            .features
+            .iter()
+            .filter_map(|f| match &f.kind {
+                solidcraft_doc::FeatureKind::BodyTransfer { to, transform, .. } if components.contains(to) => Some((*to, *transform)),
+                _ => None,
+            })
+            .collect()
+    };
+    let before = transforms(&s);
+    assert_eq!(before.len(), 2, "{before:?}");
+    // Turned well off where they were built, then gear 2 renamed.
+    run(&mut s, "joint.drive", json!({"joint": j[0].unwrap(), "value": 37.0}));
+    let u = run(&mut s, "gear.update", json!({"group": group, "teeth2": 40}));
+    no_errors(&s);
+    let names: Vec<&str> = u["bodies"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert_ne!(names, r["bodies"].as_array().unwrap().iter().filter_map(Value::as_str).collect::<Vec<_>>(), "gear 2 renamed: {u}");
+    let after = transforms(&s);
+    assert_eq!(after.len(), 2, "{after:?}");
+    for (c, m) in &after {
+        let was = before.iter().find(|(k, _)| k == c).map(|(_, m)| *m).unwrap();
+        assert_eq!(*m, was, "component {c}: placed where the old body was");
+    }
 }
 
 /// Bevel teeth end on their back and front cones: the kernel takes the trim (a revolved blank
@@ -1250,7 +1345,10 @@ fn a_users_joint_to_an_assembled_gear_survives_an_update() {
     run(&mut s, "component.activate", json!({"component": "root"}));
     let bracket = s.doc.occurrence_of(s.doc.find_component("Bracket").unwrap()).unwrap().id;
     let at = |o: u64| json!({"occurrence": o, "point": [0, 0, 8], "z": [0, 0, 1]});
-    let mine = run(&mut s, "joint.create", json!({"type": "rigid", "a": at(gear1), "b": at(bracket), "flip": true, "name": "Bracket on gear 1"}))["joint"].as_u64().unwrap();
+    let mine =
+        run(&mut s, "joint.create", json!({"type": "rigid", "a": at(gear1), "b": at(bracket), "flip": true, "name": "Bracket on gear 1"}))["joint"]
+            .as_u64()
+            .unwrap();
     // More teeth on gear 1: a bigger gear, gear 2 further out.
     let u = run(&mut s, "gear.update", json!({"group": group, "teeth": 24}));
     no_errors(&s);
@@ -1316,7 +1414,11 @@ fn an_update_renames_generated_bodies_and_what_names_them() {
     let group = r["group"].as_u64().unwrap();
     assert_eq!(r["bodies"], json!(["Gear z20", "Gear z32"]));
     // The user's feature on gear 2, by its name: a hole through its centre (x = 52, then 60).
-    run(&mut s, "solid.cylinder", json!({"base": [0, 0, -1], "axis": [0, 0, 1], "radius": 3, "height": 10, "operation": "cut", "targets": ["Gear z20"]}));
+    run(
+        &mut s,
+        "solid.cylinder",
+        json!({"base": [0, 0, -1], "axis": [0, 0, 1], "radius": 3, "height": 10, "operation": "cut", "targets": ["Gear z20"]}),
+    );
     no_errors(&s);
     let u = run(&mut s, "gear.update", json!({"group": group, "teeth2": 40}));
     no_errors(&s);
@@ -1387,7 +1489,14 @@ fn a_users_body_name_stays_through_an_update() {
 #[test]
 fn selected_shafts_and_a_bearing_make_a_train_with_a_bearing() {
     let mut s = Session::default();
-    let sk = sketch_with(&mut s, &[("sketch.point", json!({"point": [0, 0], "id": "p1"})), ("sketch.point", json!({"point": [50, 0], "id": "p2"})), circle(50.0, 45.0, 15.0, "c3")]);
+    let sk = sketch_with(
+        &mut s,
+        &[
+            ("sketch.point", json!({"point": [0, 0], "id": "p1"})),
+            ("sketch.point", json!({"point": [50, 0], "id": "p2"})),
+            circle(50.0, 45.0, 15.0, "c3"),
+        ],
+    );
     let sel = json!([
         {"sketch": sk, "point": "p1", "pitch_diameter": 40},
         {"sketch": sk, "point": "p2"},
@@ -1464,7 +1573,15 @@ fn same_angle(got: f64, want: f64) -> bool {
 fn joint_kinds(s: &mut Session, r: &Value) -> (usize, usize, usize) {
     let l = run(s, "joint.list", json!({}));
     let ours: Vec<u64> = r["assembly"]["joints"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
-    let kind_of = |id: u64| l["joints"].as_array().unwrap().iter().find(|j| j["id"].as_u64() == Some(id)).map(|j| j["type"].as_str().unwrap_or_default().to_lowercase()).unwrap_or_default();
+    let kind_of = |id: u64| {
+        l["joints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|j| j["id"].as_u64() == Some(id))
+            .map(|j| j["type"].as_str().unwrap_or_default().to_lowercase())
+            .unwrap_or_default()
+    };
     let (mut rev, mut rig, mut other) = (0, 0, 0);
     for k in ours.iter().map(|j| kind_of(*j)) {
         match k.as_str() {
@@ -1563,7 +1680,9 @@ fn the_gaerbox_power_split_turns_by_its_teeth() {
     let input = member_on(&r, 0.0, 0.0);
     run(&mut s, "joint.drive", json!({"joint": j[input].unwrap(), "value": 30}));
     eprintln!("GATE gaerbox, input by 30°:");
-    for (what, x, y, want) in [("input", 0.0, 0.0, 30.0), ("countershaft A", cx, cy, -60.0), ("countershaft B", cx, -cy, -60.0), ("output", x0, 0.0, 100.0)] {
+    for (what, x, y, want) in
+        [("input", 0.0, 0.0, 30.0), ("countershaft A", cx, cy, -60.0), ("countershaft B", cx, -cy, -60.0), ("output", x0, 0.0, 100.0)]
+    {
         let got = turned_about(&s, &r, member_on(&r, x, y));
         eprintln!("GATE   {what}: expected {want:+.6}°, measured {got:+.6}°");
         assert!(same_angle(got, want), "{what}: {got}° vs {want}°");
@@ -1594,7 +1713,10 @@ fn an_internal_mesh_turns_the_ring_the_same_way() {
 fn bevels_at_any_shaft_angle_turn_by_their_teeth() {
     for angle in [90.0, 70.0] {
         let mut s = Session::default();
-        let r = assembled(&mut s, json!({"type": "bevel", "module": 2, "teeth": 20, "teeth2": 30, "face_width": 10, "shaft_angle": angle, "assembly": true}));
+        let r = assembled(
+            &mut s,
+            json!({"type": "bevel", "module": 2, "teeth": 20, "teeth2": 30, "face_width": 10, "shaft_angle": angle, "assembly": true}),
+        );
         let j = member_joints(&r);
         run(&mut s, "joint.drive", json!({"joint": j[0].unwrap(), "value": 30}));
         let got = turned_about(&s, &r, 1);
@@ -1694,7 +1816,9 @@ fn build_6_construction_lines_are_left_out_and_the_loose_circle_named() {
 /// second, gear 3 on the second further along (a cluster with gear 2) meshing gear 4 on the
 /// third, and a bearing point on the first shaft.
 fn drivetrain_3d(s: &mut Session) -> u64 {
-    let arc = |c: [f64; 3], r: f64| ("sketch.arc3d", json!({"start": [c[0] + r, c[1], c[2]], "through": [c[0], c[1] + r, c[2]], "end": [c[0] - r, c[1], c[2]]}));
+    let arc = |c: [f64; 3], r: f64| {
+        ("sketch.arc3d", json!({"start": [c[0] + r, c[1], c[2]], "through": [c[0], c[1] + r, c[2]], "end": [c[0] - r, c[1], c[2]]}))
+    };
     sketch_with(
         s,
         &[
@@ -1762,7 +1886,8 @@ fn selected_circles_with_roles_and_sizes_report_each_member() {
 fn a_compound_from_two_sketches_on_parallel_planes_and_a_shaft_in_a_third() {
     let mut s = Session::default();
     let low = sketch_with(&mut s, &[circle(0.0, 0.0, 20.0, "g1"), circle(50.0, 0.0, 30.0, "g2")]);
-    let high = run(&mut s, "sketch.create", json!({"plane": {"origin": [0, 0, 20], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}}))["sketch"].as_u64().unwrap();
+    let high =
+        run(&mut s, "sketch.create", json!({"plane": {"origin": [0, 0, 20], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}}))["sketch"].as_u64().unwrap();
     run(&mut s, "sketch.circle.center", json!({"center": [50, 0], "radius": 15, "id": "g3"}));
     run(&mut s, "sketch.circle.center", json!({"center": [85, 0], "radius": 20, "id": "g4"}));
     run(&mut s, "sketch.finish", json!({}));
@@ -1791,7 +1916,13 @@ fn a_compound_from_two_sketches_on_parallel_planes_and_a_shaft_in_a_third() {
 fn a_blocks_shaft_diameter_makes_one_body_per_axis() {
     let mut s = Session::default();
     let sk = |s: &mut Session, z: f64, draw: &[(&str, Value)]| {
-        let id = run(s, "sketch.create", json!({"plane": {"origin": [0.0, 0.0, z], "x_dir": [1.0, 0.0, 0.0], "y_dir": [0.0, 1.0, 0.0]}, "project_edges": false}))["sketch"].as_u64().unwrap();
+        let id = run(
+            s,
+            "sketch.create",
+            json!({"plane": {"origin": [0.0, 0.0, z], "x_dir": [1.0, 0.0, 0.0], "y_dir": [0.0, 1.0, 0.0]}, "project_edges": false}),
+        )["sketch"]
+            .as_u64()
+            .unwrap();
         for (c, p) in draw {
             run(s, c, p.clone());
         }
@@ -1800,7 +1931,8 @@ fn a_blocks_shaft_diameter_makes_one_body_per_axis() {
     };
     let s1 = sk(&mut s, 0.0, &[circle(0.0, 0.0, 20.0, "a"), circle(50.0, 0.0, 30.0, "b")]);
     let s2 = sk(&mut s, 25.0, &[circle(0.0, 0.0, 10.0, "c")]);
-    let item = |id: &str, sketch: u64, curve: &str| json!({"id": id, "type": "spur", "components": [{"sketch": sketch, "curve": curve, "slot": "pitch"}]});
+    let item =
+        |id: &str, sketch: u64, curve: &str| json!({"id": id, "type": "spur", "components": [{"sketch": sketch, "curve": curve, "slot": "pitch"}]});
     let r = run(
         &mut s,
         "gear.create",
@@ -1826,7 +1958,11 @@ fn a_blocks_shaft_diameter_makes_one_body_per_axis() {
     // two differ by π (4² × the Ø8 bar's outside length − 3² × the Ø6 one's).
     let (a8, b8) = (volume(&mut s, &body("A")), volume(&mut s, &body("B")));
     let group = r["group"].as_u64().unwrap();
-    run(&mut s, "gear.update", json!({"group": group, "module_blocks": [{"id": "M1", "name": "Main", "module": 2, "members": ["A", "B", "C"], "shaft_diameter": 6}]}));
+    run(
+        &mut s,
+        "gear.update",
+        json!({"group": group, "module_blocks": [{"id": "M1", "name": "Main", "module": 2, "members": ["A", "B", "C"], "shaft_diameter": 6}]}),
+    );
     no_errors(&s);
     let (a6, b6) = (volume(&mut s, &body("A")), volume(&mut s, &body("B")));
     let pi = std::f64::consts::PI;
@@ -1834,11 +1970,19 @@ fn a_blocks_shaft_diameter_makes_one_body_per_axis() {
         assert!((d - want).abs() < 0.03 * want, "{what}: {d} vs {want}");
     }
     // Bore only: each gear bored to Ø6, no shaft made.
-    run(&mut s, "gear.update", json!({"group": group, "module_blocks": [{"id": "M1", "module": 2, "members": ["A", "B", "C"], "shaft_diameter": 6, "shaft": "bore"}]}));
+    run(
+        &mut s,
+        "gear.update",
+        json!({"group": group, "module_blocks": [{"id": "M1", "module": 2, "members": ["A", "B", "C"], "shaft_diameter": 6, "shaft": "bore"}]}),
+    );
     no_errors(&s);
-    let c = run(&mut s, "gear.calculate", json!({"items": [item("A", s1, "a"), item("B", s1, "b"), item("C", s2, "c")],
+    let c = run(
+        &mut s,
+        "gear.calculate",
+        json!({"items": [item("A", s1, "a"), item("B", s1, "b"), item("C", s2, "c")],
         "links": [{"a": {"item": "A"}, "b": {"item": "B"}, "kind": "mesh"}],
-        "module_blocks": [{"id": "M1", "module": 2, "members": ["A", "B", "C"], "shaft_diameter": 6, "shaft": "bore"}]}));
+        "module_blocks": [{"id": "M1", "module": 2, "members": ["A", "B", "C"], "shaft_diameter": 6, "shaft": "bore"}]}),
+    );
     assert!(c["gears"].as_array().unwrap().iter().all(|g| g["bore"].as_f64() == Some(6.0)), "{c}");
     assert!(!c.to_string().contains("Shaft S1"), "no shaft made: {c}");
 }
@@ -1852,7 +1996,13 @@ fn inside(s: &Session, name: &str, p: [f64; 3]) -> bool {
 
 /// The body each gear of `item` is in, by gear.
 fn gear_bodies(r: &Value, item: &str) -> Vec<String> {
-    r["gears"].as_array().unwrap().iter().filter(|g| g["item"] == item).map(|g| g["body"].as_str().unwrap_or_else(|| panic!("{r}")).to_string()).collect()
+    r["gears"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|g| g["item"] == item)
+        .map(|g| g["body"].as_str().unwrap_or_else(|| panic!("{r}")).to_string())
+        .collect()
 }
 
 /// A compound K (Ø30 at z 0, Ø16 at z 12, its axis drawn) meshing A and B, all in a block with
@@ -1863,7 +2013,13 @@ fn gear_bodies(r: &Value, item: &str) -> Vec<String> {
 fn a_compound_on_its_blocks_made_shaft_has_no_bore() {
     let mut s = Session::default();
     let sk = |s: &mut Session, z: f64, draw: &[(&str, Value)]| {
-        let id = run(s, "sketch.create", json!({"plane": {"origin": [0.0, 0.0, z], "x_dir": [1.0, 0.0, 0.0], "y_dir": [0.0, 1.0, 0.0]}, "project_edges": false}))["sketch"].as_u64().unwrap();
+        let id = run(
+            s,
+            "sketch.create",
+            json!({"plane": {"origin": [0.0, 0.0, z], "x_dir": [1.0, 0.0, 0.0], "y_dir": [0.0, 1.0, 0.0]}, "project_edges": false}),
+        )["sketch"]
+            .as_u64()
+            .unwrap();
         for (c, p) in draw {
             run(s, c, p.clone());
         }
@@ -1876,7 +2032,8 @@ fn a_compound_on_its_blocks_made_shaft_has_no_bore() {
     let side = run(&mut s, "sketch.create", json!({"plane": "XZ"}))["sketch"].as_u64().unwrap();
     run(&mut s, "sketch.line", json!({"points": [[0, 6], [0, -20]], "ids": ["axis"]}));
     run(&mut s, "sketch.finish", json!({}));
-    let spur = |id: &str, sketch: u64, curve: &str| json!({"id": id, "type": "spur", "components": [{"sketch": sketch, "curve": curve, "slot": "pitch"}]});
+    let spur =
+        |id: &str, sketch: u64, curve: &str| json!({"id": id, "type": "spur", "components": [{"sketch": sketch, "curve": curve, "slot": "pitch"}]});
     let r = run(
         &mut s,
         "gear.create",

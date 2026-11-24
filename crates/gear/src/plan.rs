@@ -2095,6 +2095,35 @@ pub(crate) fn too_tall_for_cone(delta: f64, z: u32, need: u32, angle: &str) -> S
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Where V (chevron) teeth split on a bevel member: the cone distances `(d_in, d_out)` where the
+/// half towards the apex ends and the outer half starts. A flat section through a tooth spans
+/// several cone distances (its tip further from the apex than its root), so each half ends where
+/// the whole of its section is on its own side of the middle of the face; between them is a
+/// groove `d_out - d_in` wide. The flatter the cone, the wider the groove.
+fn v_split(s: &Spec, z: u32, delta: f64, spiral: f64, face: ConeFace, who: &str) -> (f64, f64) {
+    let zv = f64::from(z) / delta.cos();
+    let shift = if who.contains('1') { s.shift } else { -s.shift };
+    let mn = bevel_involute(s, z, spiral, spiral, shift, zv).module;
+    let (ha, hf) = (((s.rack.addendum + shift) * mn).max(0.0), ((s.rack.dedendum - shift) * mn).max(0.0));
+    let (dc, ds) = (delta.cos(), delta.sin());
+    let rm = face.mid;
+    let reach = |d: f64, off: f64| (d * dc).hypot(d * ds + off / dc);
+    let solve = |off: f64| {
+        let (mut lo, mut hi) = (face.toe(), face.heel);
+        for _ in 0..80 {
+            let mid = 0.5 * (lo + hi);
+            if reach(mid, off) < rm { lo = mid } else { hi = mid }
+        }
+        0.5 * (lo + hi)
+    };
+    (solve(ha), solve(-hf))
+}
+
+/// The most of a member's face the groove between V teeth's halves may take: past it each half
+/// is a sliver, an eighth of the face or less (a wheel near a crown gear: 88 % at 12:40 and 90°).
+/// An ordinary pair's wheel takes about 60 % (17:34 at 90°).
+const V_GROOVE_MOST: f64 = 0.75;
+
 fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, face: ConeFace, p: &mut Plan, who: &str) -> (ConeTeeth, ToothFlank) {
     let m = s.module;
     let r = m * f64::from(z) / 2.0;
@@ -2156,17 +2185,8 @@ fn bevel_member(s: &Spec, z: u32, delta: f64, spiral: f64, phase: f64, face: Con
         // several cone distances (its tip further from the apex than its root), so each half ends
         // where the whole of its section is on its own side of `rm`: a narrow groove round the
         // middle of the face, filled under the roots so the halves are one part.
-        let (ha, hf) = (crown.addendum.max(0.0), crown.dedendum.max(0.0));
-        let reach = |d: f64, off: f64| (d * dc).hypot(d * ds + off / dc);
-        let solve = |off: f64| {
-            let (mut lo, mut hi) = (face.toe(), face.heel);
-            for _ in 0..80 {
-                let mid = 0.5 * (lo + hi);
-                if reach(mid, off) < rm { lo = mid } else { hi = mid }
-            }
-            0.5 * (lo + hi)
-        };
-        let (d_in, d_out) = (solve(ha), solve(-hf));
+        let hf = crown.dedendum.max(0.0);
+        let (d_in, d_out) = v_split(s, z, delta, spiral, face, who);
         if !(d_in > face.toe() + 0.1 * m && d_out < face.heel - 0.1 * m && d_out > d_in) {
             p.refuse(format!("{who}: the face is too short for V teeth (each half needs room past the middle of the face): widen the face, or use plain spiral teeth"));
         }
@@ -2419,6 +2439,33 @@ fn bevel(s: &Spec, p: &mut Plan) {
     // Gear 1 has a tooth on the pitch line the two cones share (towards +x) at the middle of
     // the face; gear 2, which sees that line at its own angle π, a space.
     let Some([f1, f2]) = cone_faces(s, re, p, ["gear 1", "gear 2"]) else { return };
+    // V teeth on a cone near a crown gear's leave each half a sliver: the pair is built with plain
+    // spiral teeth instead (both members, so they still mesh).
+    let plain;
+    let s = if s.herringbone && spiral != 0.0 {
+        let groove = [(s.teeth, d1, spiral, f1, "gear 1"), (s.teeth2, d2, -spiral, f2, "gear 2")]
+            .into_iter()
+            .map(|(z, d, sp, f, who)| {
+                let (d_in, d_out) = v_split(s, z, d, sp, f, who);
+                (who, (d_out - d_in).max(0.0), f.width, d)
+            })
+            .find(|(_, g, w, _)| *g > V_GROOVE_MOST * w);
+        match groove {
+            Some((who, g, w, d)) => {
+                p.warn(format!(
+                    "{who}: V teeth would leave it a {} mm groove in its {} mm face (its pitch cone is {}°, near a crown gear's), so each half a sliver: both gears have plain spiral teeth instead",
+                    num(g),
+                    num(w),
+                    num(d.to_degrees())
+                ));
+                plain = Spec { herringbone: false, ..s.clone() };
+                &plain
+            }
+            None => s,
+        }
+    } else {
+        s
+    };
     let (t1, _) = bevel_member(s, s.teeth, d1, spiral, 0.0, f1, p, "gear 1");
     let ph2 = PI / z2 + PI;
     let (t2, _) = bevel_member(s, s.teeth2, d2, -spiral, ph2, f2, p, "gear 2");
@@ -2741,6 +2788,19 @@ fn worm(s: &Spec, p: &mut Plan) {
     p.fact("wheel face width", face, Unit::Mm);
     let length =
         if s.worm_length > 0.0 { s.worm_length } else { (2.0 * (outside.powi(2) - (r2 - m).powi(2)).max(0.0).sqrt() + lead).max(4.0 * PI * m) };
+    // Planning time grows with the turns of the thread: a worm far longer than any wheel engages
+    // is refused rather than built for minutes.
+    const MOST_WORM_TURNS: f64 = 1000.0;
+    if length / lead > MOST_WORM_TURNS {
+        p.refuse(format!(
+            "worm: a {} mm worm is {} turns of its thread, over the {} that can be built: use a worm length of at most {} mm",
+            num(length),
+            num((length / lead).round()),
+            num(MOST_WORM_TURNS),
+            num((MOST_WORM_TURNS * lead).floor())
+        ));
+        return;
+    }
     p.fact("worm length", length, Unit::Mm);
     // The thread in axial section: straight sides at the axial pressure angle (a ZA worm). The
     // worm's thread is thinner by half the backlash, the hob's (the wheel's spaces) wider.

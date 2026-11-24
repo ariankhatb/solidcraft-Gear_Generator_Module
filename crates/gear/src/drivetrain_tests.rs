@@ -352,6 +352,31 @@ fn chevron_bevels_mesh_at_90_and_60_degrees() {
     }
 }
 
+/// V teeth on a wheel near a crown gear (12:40 at 90°, the wheel's cone at 73°): the groove
+/// between its halves would take most of its face, leaving each half a sliver (the RC 4x4's
+/// wheel bevels in a herringbone block). The pair is built with plain spiral teeth instead,
+/// both members (so they mesh), with a warning that says why; the wheel keeps its teeth.
+#[test]
+fn chevron_teeth_on_a_near_crown_wheel_fall_back_to_plain_spiral() {
+    let s = Spec { module: 1.25, teeth: 12, teeth2: 40, face_width: 10.0, spiral_angle: 20.0, ..Spec::defaults_for(Kind::SpiralBevel) };
+    let v = crate::plan(&Spec { herringbone: true, ..s.clone() }).unwrap();
+    let plain = crate::plan(&s).unwrap();
+    assert!(
+        v.warnings.iter().any(|w| w.starts_with("gear 2: V teeth would leave it") && w.contains("plain spiral teeth instead")),
+        "{:?}",
+        v.warnings
+    );
+    assert!(!v.facts.iter().any(|f| f.label.contains("V teeth groove")));
+    // The same bodies as the plain spiral pair, step for step.
+    assert_eq!(v.bodies.len(), plain.bodies.len());
+    for (a, b) in v.bodies.iter().zip(&plain.bodies) {
+        assert_eq!(a.steps, b.steps, "{}", a.name);
+    }
+    // A steeper pair keeps its V teeth.
+    let kept = crate::plan(&Spec { herringbone: true, ..Spec::defaults_for(Kind::SpiralBevel) }).unwrap();
+    assert!(kept.facts.iter().any(|f| f.label == "gear 2 V teeth groove at mid-face"), "{:?}", kept.warnings);
+}
+
 /// A selected shaft given no size between two gears carries the gear filling the spacing to
 /// them (here Ø60 between a Ø40 gear 50 mm away and a Ø30 one 45 mm away): the three are one
 /// train. A shaft carrying a gear, or asked to be a shaft, stays as it is.

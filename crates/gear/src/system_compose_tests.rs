@@ -549,6 +549,57 @@ fn a_tooth_chamfer_goes_on_every_gear_of_the_set() {
     let _ = tip;
 }
 
+/// V (herringbone) teeth take the chamfer at both ends of each half: the two outer ends and, where
+/// the halves meet at mid-face, a V notch round the tip that chamfers both inner ends (four
+/// chamfered edges a gear). Refused when a half has no room for two.
+#[test]
+fn a_tooth_chamfer_on_v_teeth_chamfers_both_ends_of_each_half() {
+    use crate::mesh3d::Solid;
+    use crate::plan::chamfer::{ChamferFaces, ToothChamfer, tooth_chamfer};
+    let mut items = vec![
+        item("A", ItemKind::Herringbone, vec![circ([0.0; 3], Z, 20.0)]),
+        item("B", ItemKind::Herringbone, vec![circ([50.0, 0.0, 0.0], Z, 30.0)]),
+    ];
+    for it in &mut items {
+        it.gears = vec![crate::items::GearSettings { helix: Some(20.0), v: true, ..Default::default() }];
+    }
+    let links = vec![mesh(g(0, 0), g(1, 0))];
+    let plain = plan_items(&items, &links, &[], None, &Spec::default()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(plain.error.is_none(), "{:?}", plain.error);
+    let module = plain.gears[0].module;
+    let shape = *plain.plan.shapes.iter().find(|s| s.pitch_diameter < 45.0).expect("A's shape");
+    let (tip, face) = (shape.tip_diameter / 2.0, shape.face);
+    let c = 0.4 * module;
+    let mut both = plain.clone();
+    tooth_chamfer(&items, &mut both, ToothChamfer { size: c, faces: ChamferFaces::Both }).unwrap_or_else(|e| panic!("{e}"));
+    let count = |sp: &SystemPlan| sp.plan.bodies.iter().map(|b| b.steps.len()).sum::<usize>();
+    assert_eq!(count(&both), count(&plain) + 6, "two ends and the middle of two gears");
+    let body = plain.member_of.iter().find(|(r, _)| *r == g(0, 0)).and_then(|(_, m)| plain.plan.members[*m].body).unwrap();
+    let ring = |sp: &SystemPlan, z: f64| {
+        let s = Solid::new(&sp.plan.bodies[body], 0.002);
+        (0..720)
+            .map(|k| f64::from(k) * std::f64::consts::TAU / 720.0)
+            .filter(|a| s.contains([(tip - 0.25 * c) * a.cos(), (tip - 0.25 * c) * a.sin(), z]))
+            .count()
+    };
+    // Each half's inner end, either side of the middle: teeth before, none after.
+    for z in [0.25 * c, -0.25 * c] {
+        assert!(ring(&plain, z) > 0, "the teeth reach the middle at {z}");
+        assert_eq!(ring(&both, z), 0, "chamfered at the middle, {z}");
+    }
+    // And each outer end; between them the teeth are whole.
+    assert_eq!(ring(&both, face / 2.0 - 0.25 * c), 0);
+    assert_eq!(ring(&both, -face / 2.0 + 0.25 * c), 0);
+    assert_eq!(ring(&both, face / 4.0), ring(&plain, face / 4.0), "the middle of each half untouched");
+    // A half too narrow for two chamfers (where the addendum would take that size): named.
+    let addendum = tip - shape.pitch_diameter / 2.0;
+    if face / 4.0 < addendum {
+        let mut sp = plain.clone();
+        let e = tooth_chamfer(&items, &mut sp, ToothChamfer { size: face / 4.0, faces: ChamferFaces::Both }).unwrap_err();
+        assert!(e.contains("V teeth") && e.contains("both ends"), "{e}");
+    }
+}
+
 /// A worm pair keeps its teeth plain, with a note naming it; a compound's layers are chamfered
 /// except where the smaller layer meets the bigger one.
 #[test]

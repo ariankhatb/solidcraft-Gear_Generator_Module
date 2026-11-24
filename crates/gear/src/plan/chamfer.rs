@@ -2,7 +2,7 @@
 //! edge on the end faces (side A, side B or both) after the set is planned.
 //!
 //! It goes on the gears with flat end faces: spur, helical and herringbone gears (a herringbone's
-//! two outer ends), each layer of a compound (not an end that sits against a bigger layer), an
+//! two outer ends and, where its halves meet at mid-face, both halves' inner ends), each layer of a compound (not an end that sits against a bigger layer), an
 //! internal ring's inner tip edge, and the pinion of an internal or rack item. Bevel, hypoid,
 //! worm, crossed helical, rack and planetary gears are left plain, each with a note naming it.
 //! A size that would take the whole tooth tip (the addendum) or half the face is refused, naming
@@ -74,6 +74,9 @@ struct Ends {
     pitch: f64,
     ring: bool,
     body: usize,
+    /// V (herringbone) teeth: the halves meet at mid-face, where each half's inner end is
+    /// chamfered too.
+    v: bool,
 }
 
 /// Cuts the set's tooth chamfer into `sp`'s bodies (see the module's notes). Errors name the
@@ -123,7 +126,10 @@ pub fn tooth_chamfer(items: &[GearItem], sp: &mut SystemPlan, c: ToothChamfer) -
                 a *= k;
                 b *= k;
             }
+            let set = it.settings(g);
+            let v = it.kind == ItemKind::Herringbone || (set.v && set.helix.is_some_and(|h| h != 0.0));
             ends.push(Ends {
+                v,
                 gear: r,
                 centre: geo.centre,
                 axis: geo.axis,
@@ -146,6 +152,14 @@ pub fn tooth_chamfer(items: &[GearItem], sp: &mut SystemPlan, c: ToothChamfer) -
         let face = e.a + e.b;
         if 2.0 * c.size >= face - 1e-9 {
             return Err(format!("Tooth chamfer {} mm is too big for {name} (face width {} mm)", num(c.size), num(face)));
+        }
+        // V teeth: each half (half the face) is chamfered at both its ends.
+        if e.v && 4.0 * c.size >= face - 1e-9 {
+            return Err(format!(
+                "Tooth chamfer {} mm is too big for {name}'s V teeth (each half is {} mm wide and is chamfered at both ends)",
+                num(c.size),
+                num(face / 2.0)
+            ));
         }
     }
     for (k, e) in ends.iter().enumerate() {
@@ -185,6 +199,21 @@ pub fn tooth_chamfer(items: &[GearItem], sp: &mut SystemPlan, c: ToothChamfer) -
             }
             let dr = if e.ring { 1.0 } else { -1.0 };
             let profile = crate::body::corner_cut(e.tip, zf, dr, dz, c.size, c.size);
+            sp.plan.bodies[e.body].steps.push(Step::Placed { frame, step: Box::new(Step::Revolve { profile, op: Op::Cut }) });
+        }
+        if e.v {
+            // Where the halves meet (mid-face): a V notch round the tip, 45° each way, chamfering
+            // both halves' inner ends. Four points (not corner_cut's three), so it is never read
+            // as one of an end pair (`chamfers_as_one`).
+            let dr = if e.ring { 1.0 } else { -1.0 };
+            let (zm, w) = ((e.a - e.b) / 2.0, c.size);
+            let out = 0.1 * c.size;
+            let profile = vec![
+                crate::geom::V2::new(e.tip + dr * w, zm),
+                crate::geom::V2::new(e.tip - dr * out, zm - w - out),
+                crate::geom::V2::new(e.tip - dr * 2.0 * out, zm),
+                crate::geom::V2::new(e.tip - dr * out, zm + w + out),
+            ];
             sp.plan.bodies[e.body].steps.push(Step::Placed { frame, step: Box::new(Step::Revolve { profile, op: Op::Cut }) });
         }
     }

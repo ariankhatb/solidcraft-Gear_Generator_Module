@@ -136,7 +136,13 @@ fn base_of(a: &Assembly, i: usize) -> Option<usize> {
     }
     a.links.iter().find_map(|l| {
         let (x, y) = l.members();
-        let other = if x == i { y } else if y == i { x } else { return None };
+        let other = if x == i {
+            y
+        } else if y == i {
+            x
+        } else {
+            return None;
+        };
         let c = a.members.get(other)?.carrier?;
         (c != i && a.members.get(c).is_some_and(|cm| cm.axis.coaxial(&m.axis))).then_some(c)
     })
@@ -218,13 +224,19 @@ pub(super) fn sync(
     // Bodies named afresh move into the component of the member they take the place of: the one
     // on the same shaft (a gear added or taken away elsewhere in the system leaves the others
     // where they are), else the one at the same place among the members.
-    let mut rehoused: Vec<(usize, u64)> = Vec::new();
+    // A renamed member's body goes back into its component where the old one was in it (the old
+    // transfer's transform), not where the component has turned to since: placed by the turned
+    // component it would be out of phase with its mates, whose links assume the body as built.
+    let mut rehoused: Vec<(usize, u64, Option<solidcraft_doc::Mat>)> = Vec::new();
     let mut claim: Vec<Option<usize>> = vec![None; left.len()];
     // The shaft each new member is (`Plan::shafts`), the dialog's stable index for it.
     let shaft_of = |i: usize| plan.shafts.iter().position(|sh| sh.body == a.members[i].body);
     for i in (0..n).filter(|i| kept[*i].is_none()) {
         let Some(k_shaft) = shaft_of(i) else { continue };
-        let same = left.iter().enumerate().position(|(k, slot)| claim[k].is_none() && slot.as_ref().is_some_and(|m| !bodies.contains(&m.body) && m.shaft == Some(k_shaft)));
+        let same = left
+            .iter()
+            .enumerate()
+            .position(|(k, slot)| claim[k].is_none() && slot.as_ref().is_some_and(|m| !bodies.contains(&m.body) && m.shaft == Some(k_shaft)));
         if let Some(k) = same {
             claim[k] = Some(i);
         }
@@ -234,14 +246,20 @@ pub(super) fn sync(
             continue;
         }
         let on_shaft = left.iter().enumerate().position(|(k, slot)| {
-            claim[k].is_none() && slot.as_ref().is_some_and(|m| !bodies.contains(&m.body) && m.axis.as_ref().is_some_and(|x| same_shaft(x, &a.members[i].axis)))
+            claim[k].is_none()
+                && slot.as_ref().is_some_and(|m| !bodies.contains(&m.body) && m.axis.as_ref().is_some_and(|x| same_shaft(x, &a.members[i].axis)))
         });
         if let Some(k) = on_shaft {
             claim[k] = Some(i);
         }
     }
     for i in 0..n {
-        if kept[i].is_none() && !claim.contains(&Some(i)) && i < left.len() && claim[i].is_none() && left[i].as_ref().is_some_and(|m| !bodies.contains(&m.body)) {
+        if kept[i].is_none()
+            && !claim.contains(&Some(i))
+            && i < left.len()
+            && claim[i].is_none()
+            && left[i].as_ref().is_some_and(|m| !bodies.contains(&m.body))
+        {
             claim[i] = Some(i);
         }
     }
@@ -250,16 +268,16 @@ pub(super) fn sync(
             && let Some(m) = slot.take()
         {
             let (home, old_body) = (m.component, m.body.clone());
-            rehoused.push((i, home));
             kept[i] = Some(MemberRecord { body: bodies[i].clone(), ..m });
-            // The transfer that moved the old body in has nothing to move now.
-            let stale: Vec<u64> = s
-                .doc
-                .features
-                .iter()
-                .filter(|f| matches!(&f.kind, solidcraft_doc::FeatureKind::BodyTransfer { to, bodies, .. } if *to == home && bodies.iter().any(|b| *b == old_body.as_str())))
-                .map(|f| f.id)
-                .collect();
+            // The transfer that moved the old body in has nothing to move now; its transform is
+            // where the new body goes.
+            let moved_in = |f: &&solidcraft_doc::Feature| matches!(&f.kind, solidcraft_doc::FeatureKind::BodyTransfer { to, bodies, .. } if *to == home && bodies.iter().any(|b| *b == old_body.as_str()));
+            let placed = s.doc.features.iter().filter(moved_in).find_map(|f| match &f.kind {
+                solidcraft_doc::FeatureKind::BodyTransfer { transform, .. } => Some(*transform),
+                _ => None,
+            });
+            rehoused.push((i, home, placed));
+            let stale: Vec<u64> = s.doc.features.iter().filter(moved_in).map(|f| f.id).collect();
             if !stale.is_empty() {
                 s.execute("timeline.delete", &json!({"features": stale}))?;
             }
@@ -304,11 +322,24 @@ pub(super) fn sync(
     if s.model.is_stale() {
         s.refresh();
     }
-    for (i, c) in &rehoused {
+    for (i, c, placed) in &rehoused {
         match s.execute("component.move_bodies", &json!({"bodies": [bodies[*i].clone()], "component": c})) {
-            Ok(r) => transfers.extend(r.get("features").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64)),
+            Ok(r) => {
+                let made: Vec<u64> = r.get("features").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_u64).collect();
+                if let Some(placed) = placed {
+                    for f in s.doc_mut().features.iter_mut().filter(|f| made.contains(&f.id)) {
+                        if let solidcraft_doc::FeatureKind::BodyTransfer { transform, .. } = &mut f.kind {
+                            *transform = *placed;
+                        }
+                    }
+                }
+                transfers.extend(made);
+            }
             Err(e) => return Err(EngineError::Other(format!("assembly: {} could not go into its component ({e})", bodies[*i]))),
         }
+    }
+    if rehoused.iter().any(|(_, _, placed)| placed.is_some()) {
+        s.refresh();
     }
     if !fresh.is_empty() {
         if s.model.is_stale() {
@@ -341,7 +372,8 @@ pub(super) fn sync(
     // itself); kept ones keep what they are (the user may have grounded one), unless now held.
     // All of them (and a new keep-out body, grounded) at once, then one solve: what
     // `occurrence.ground` does for each.
-    let mut grounds: Vec<(u64, bool)> = a.members.iter().enumerate().filter(|(i, m)| kept[*i].is_none() || m.grounded).map(|(i, m)| (occs[i], m.grounded)).collect();
+    let mut grounds: Vec<(u64, bool)> =
+        a.members.iter().enumerate().filter(|(i, m)| kept[*i].is_none() || m.grounded).map(|(i, m)| (occs[i], m.grounded)).collect();
     let new_keep_out_component = match (keep_out_kept, &new_keep_out) {
         (None, Some(body)) => made_component(body),
         _ => None,
@@ -364,7 +396,9 @@ pub(super) fn sync(
                 if let Err(e) = s.execute("component.rename", &json!({"component": c, "name": format!("{set} keep-out")})) {
                     warnings.push(format!("assembly: the keep-out component keeps its body's name ({e})"));
                 }
-                if let Err(e) = s.execute("appearance.assign", &json!({"components": [c.to_string()], "color": KEEP_OUT_COLOR, "opacity": KEEP_OUT_OPACITY})) {
+                if let Err(e) =
+                    s.execute("appearance.assign", &json!({"components": [c.to_string()], "color": KEEP_OUT_COLOR, "opacity": KEEP_OUT_OPACITY}))
+                {
                     warnings.push(format!("assembly: the keep-out component could not be made see-through ({e})"));
                 }
             }
@@ -376,8 +410,10 @@ pub(super) fn sync(
     // A joint per member that moves: on its shaft, to the world or its carrier. A kept joint of
     // the same type on the same side keeps its id, name and value, its frames moved onto the
     // shaft as it is now.
-    let slides: Vec<bool> = (0..n).map(|i| kind == Kind::Rack || a.links.iter().any(|l| matches!(l, AssemblyLink::RackPinion { rack, .. } if *rack == i))).collect();
-    let rigid_to: Vec<Option<usize>> = (0..n).map(|i| a.links.iter().find_map(|l| matches!(l, AssemblyLink::Rigid { b, .. } if *b == i).then(|| l.members().0))).collect();
+    let slides: Vec<bool> =
+        (0..n).map(|i| kind == Kind::Rack || a.links.iter().any(|l| matches!(l, AssemblyLink::RackPinion { rack, .. } if *rack == i))).collect();
+    let rigid_to: Vec<Option<usize>> =
+        (0..n).map(|i| a.links.iter().find_map(|l| matches!(l, AssemblyLink::Rigid { b, .. } if *b == i).then(|| l.members().0))).collect();
     let mut records: Vec<MemberRecord> = Vec::new();
     let mut new_joints = Vec::new();
     let mut moved = false;
@@ -410,7 +446,11 @@ pub(super) fn sync(
         let same = rec.joint.filter(|j| joint_exists(s, *j)).filter(|_| rec.kind == kind_name && rec.base == other);
         if let Some(j) = same {
             // Both frames onto the shaft, each in its side's own coordinates.
-            let at = |inv: &Mat| Snap::Point { point: solidcraft_doc::apply_point(inv, v3(ax.origin)), z: Some(solidcraft_doc::apply_vector(inv, v3(ax.dir))), x: None };
+            let at = |inv: &Mat| Snap::Point {
+                point: solidcraft_doc::apply_point(inv, v3(ax.origin)),
+                z: Some(solidcraft_doc::apply_vector(inv, v3(ax.dir))),
+                x: None,
+            };
             let (sa, sb) = (at(&rec.a_inv), at(&rec.b_inv));
             if let Some(joint) = s.doc_mut().assembly.joints.iter_mut().find(|k| k.id == j)
                 && (joint.a.snap != sa || joint.b.snap != sb)
@@ -491,7 +531,8 @@ pub(super) fn sync(
     let mut links_made = Vec::new();
     for l in &a.links {
         let (x0, y0) = l.members();
-        let rack_first = matches!(l, AssemblyLink::RackPinion { .. }) && reached.get(y0).copied().unwrap_or(false) && !reached.get(x0).copied().unwrap_or(false);
+        let rack_first =
+            matches!(l, AssemblyLink::RackPinion { .. }) && reached.get(y0).copied().unwrap_or(false) && !reached.get(x0).copied().unwrap_or(false);
         for e in [x0, y0] {
             if let Some(r) = reached.get_mut(e) {
                 *r = true;
@@ -510,7 +551,9 @@ pub(super) fn sync(
             continue;
         };
         let mut p = match *l {
-            AssemblyLink::Gear { ra, rb, internal, reverse, .. } => json!({"a": ja, "b": jb, "ra": ra, "rb": rb, "internal": internal, "reverse": reverse}),
+            AssemblyLink::Gear { ra, rb, internal, reverse, .. } => {
+                json!({"a": ja, "b": jb, "ra": ra, "rb": rb, "internal": internal, "reverse": reverse})
+            }
             AssemblyLink::Worm { starts, wheel_teeth, .. } => json!({"a": ja, "b": jb, "ra": f64::from(starts), "rb": f64::from(wheel_teeth)}),
             AssemblyLink::RackPinion { pitch_radius, .. } => json!({"a": ja, "b": jb, "radius": pitch_radius}),
             AssemblyLink::Rigid { .. } => continue,
@@ -561,7 +604,14 @@ pub(super) fn sync(
         .members
         .iter()
         .enumerate()
-        .map(|(i, m)| GearAssemblyMember { body: bodies[i].clone(), component: components[i], occurrence: occs[i], joint: records[i].joint, grounded: m.grounded, axis: [m.axis.origin, m.axis.dir] })
+        .map(|(i, m)| GearAssemblyMember {
+            body: bodies[i].clone(),
+            component: components[i],
+            occurrence: occs[i],
+            joint: records[i].joint,
+            grounded: m.grounded,
+            axis: [m.axis.origin, m.axis.dir],
+        })
         .collect();
     let keep_out_record = keep_out_component.and_then(|c| keep_out.map(|b| (b.to_string(), c)));
     let joints = records.iter().filter_map(|r| r.joint).collect();

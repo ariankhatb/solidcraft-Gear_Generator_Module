@@ -638,7 +638,12 @@ fn a_tooth_chamfer_goes_round_a_bevel_pairs_tips() {
             let (before, after) = (vol(a), vol(b));
             assert!(after < before && after > 0.97 * before, "V {v} {}: {before:.1} -> {after:.1} mm³", a.name);
         }
-        // Too big for the teeth at the small end: named.
+        // Sized for the large end, it shrinks with the teeth towards the apex: 0.7 modules would
+        // not fit the small end's addendum at full size, but goes on.
+        let mut near = plain.clone();
+        tooth_chamfer(&e.items, &mut near, ToothChamfer { size: 0.7 * module, faces: ChamferFaces::Both }).unwrap_or_else(|e| panic!("V {v}: {e}"));
+        assert_eq!(count(&near), count(&sp), "V {v}");
+        // Too big for the teeth at the large end: named.
         let mut big = plain.clone();
         let err = tooth_chamfer(&e.items, &mut big, ToothChamfer { size: 2.0 * module, faces: ChamferFaces::Both }).unwrap_err();
         assert!(err.starts_with("Tooth chamfer") && err.contains("too big for Gear C"), "{err}");

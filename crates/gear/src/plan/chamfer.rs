@@ -266,8 +266,10 @@ fn gear_frame(f: &Frame, centre: [f64; 3], axis: [f64; 3]) -> Option<Frame> {
 /// A bevel gear's tooth chamfer: 45° triangles round its tips where they end, as profiles to
 /// revolve in its own (radius, z) half plane (the apex at z = `apex_z`). The large end (heel)
 /// is side B, the small end (toe, towards the apex) side A; V teeth's relief groove has both
-/// its edges chamfered whichever side is asked. `Err`: why `c` is too big (the tooth's
-/// addendum at the small end, or the run of the teeth).
+/// its edges chamfered whichever side is asked. `c` is the size at the large end: as the teeth
+/// do, each cut scales with its distance from the apex (a 0.8 mm chamfer at the heel of a tooth
+/// half as big at the toe is 0.4 mm there). `Err`: why `c` is too big (the tooth's addendum at
+/// the large end, or the run of the teeth).
 fn bevel_cuts(b: &crate::plan::BevelShape, c: f64, faces: ChamferFaces) -> Result<Vec<Vec<V2>>, String> {
     let (sd, cd) = b.delta.sin_cos();
     let apex = V2::new(0.0, b.apex_z);
@@ -287,20 +289,25 @@ fn bevel_cuts(b: &crate::plan::BevelShape, c: f64, faces: ChamferFaces) -> Resul
     }
     let q = pt - apex;
     let toe = apex + t * ((q.x * dir.y - q.y * dir.x) / den);
-    let addendum = (toe - pt).len();
+    // The size at cone distance d (from the apex along the pitch cone).
+    let size = |d: f64| c * d / b.heel;
+    let addendum = (heel - ph).len();
     if c >= 0.9 * addendum {
-        return Err(format!("addendum at its small end {} mm", num(addendum)));
+        return Err(format!("addendum at its large end {} mm", num(addendum)));
     }
-    let runs: Vec<f64> = match b.v_groove {
-        Some((g0, g1)) => vec![g0 - b.toe, b.heel - g1],
-        None => vec![b.heel - b.toe],
+    if size(b.toe) >= 0.9 * (toe - pt).len() {
+        return Err(format!("addendum at its small end {} mm", num((toe - pt).len())));
+    }
+    let runs: Vec<(f64, f64)> = match b.v_groove {
+        Some((g0, g1)) => vec![(b.toe, g0), (g1, b.heel)],
+        None => vec![(b.toe, b.heel)],
     };
-    if runs.iter().any(|r| 2.0 * c >= *r - 1e-9) {
-        return Err(format!("its teeth run {} mm along the cone between chamfered ends", num(runs.iter().copied().fold(f64::INFINITY, f64::min))));
+    if runs.iter().any(|&(d0, d1)| size(d0) + size(d1) >= d1 - d0 - 1e-9) {
+        return Err(format!("its teeth run {} mm along the cone between chamfered ends", num(runs.iter().map(|&(d0, d1)| d1 - d0).fold(f64::INFINITY, f64::min))));
     }
     // The cut at corner `k`: `end` into the material along the end, `tip` along the tips into the
     // teeth; reaching past the corner, four points (not three: never read as a spur's end pair).
-    let cut = |k: V2, end: V2, tip: V2| {
+    let cut = |k: V2, end: V2, tip: V2, c: f64| {
         let (a, bb) = (k + end * c, k + tip * c);
         let u = (bb - a).norm();
         let e = 0.1 * c;
@@ -312,16 +319,16 @@ fn bevel_cuts(b: &crate::plan::BevelShape, c: f64, faces: ChamferFaces) -> Resul
     let inward = dir * -1.0;
     let mut out = Vec::new();
     if faces != ChamferFaces::A {
-        out.push(cut(heel, inward, t * -1.0));
+        out.push(cut(heel, inward, t * -1.0, c));
     }
     if faces != ChamferFaces::B {
-        out.push(cut(toe, inward, t));
+        out.push(cut(toe, inward, t, size(b.toe)));
     }
     if let Some((g0, g1)) = b.v_groove {
         // The groove's ends are the sphere about the apex: square to the tips there.
         let down = V2::new(t.y, -t.x);
-        out.push(cut(apex + t * g0, down, t * -1.0));
-        out.push(cut(apex + t * g1, down, t));
+        out.push(cut(apex + t * g0, down, t * -1.0, size(g0)));
+        out.push(cut(apex + t * g1, down, t, size(g1)));
     }
     Ok(out)
 }

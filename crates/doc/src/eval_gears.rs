@@ -77,7 +77,8 @@ pub(super) fn eval(doc: &Document, f: &Feature, st: &mut ModelState, warning: &m
     let (members, keep_out, copies) = built?;
     // Members made as moved copies of others, with the body each was moved from: checked as that
     // one is (a rigid move changes nothing the check reads).
-    let moved: Vec<(Body, Body)> = copies.iter().enumerate().filter_map(|(m, c)| Some((members[m].1.clone(), members.get((*c)?)?.1.clone()))).collect();
+    let moved: Vec<(Body, Body)> =
+        copies.iter().enumerate().filter_map(|(m, c)| Some((members[m].1.clone(), members.get((*c)?)?.1.clone()))).collect();
     let cut_by_keep_out = !keep_out_cuts.is_empty();
     if cut_by_keep_out && keep_out.is_none() {
         notes.push("the set has no keep-out body to cut the housing with: ask for one (clearance body)".into());
@@ -121,7 +122,9 @@ pub(super) fn eval(doc: &Document, f: &Feature, st: &mut ModelState, warning: &m
         let fresh: Vec<&ModelBody> = st.bodies.iter().filter(|b| !before.iter().any(|old| old.same_shape(&b.body))).collect();
         let _span = solidcraft_profile::span("gear", "check");
         // A moved copy whose original is among them takes the original's verdict.
-        let original = |b: &ModelBody| moved.iter().find(|(copy, _)| copy.same_shape(&b.body)).and_then(|(_, from)| fresh.iter().position(|o| o.body.same_shape(from)));
+        let original = |b: &ModelBody| {
+            moved.iter().find(|(copy, _)| copy.same_shape(&b.body)).and_then(|(_, from)| fresh.iter().position(|o| o.body.same_shape(from)))
+        };
         let of: Vec<Option<usize>> = fresh.iter().map(|b| original(b)).collect();
         let own: Vec<&ModelBody> = fresh.iter().zip(&of).filter(|(_, o)| o.is_none()).map(|(b, _)| *b).collect();
         let own_verdicts = kernel::map_on_threads(&own, THREADS, |b| {
@@ -610,7 +613,9 @@ fn section_loop(o: &Outline) -> Loop2 {
         .segs
         .iter()
         .map(|s| match s {
-            Seg::Spline(pts) if pts.len() >= 2 => Some(solidcraft_sketch::fit_beziers(&pts.iter().map(|q| v2(*q)).collect::<Vec<_>>())).filter(|f| !f.is_empty()),
+            Seg::Spline(pts) if pts.len() >= 2 => {
+                Some(solidcraft_sketch::fit_beziers(&pts.iter().map(|q| v2(*q)).collect::<Vec<_>>())).filter(|f| !f.is_empty())
+            }
             _ => None,
         })
         .collect();
@@ -620,7 +625,11 @@ fn section_loop(o: &Outline) -> Loop2 {
         let (ta, tb) = (a[3] - a[2], b[1] - b[0]);
         let (la, lb) = (length(ta), length(tb));
         let scale = length(a[3] - a[0]).max(length(b[3] - b[0]));
-        length(a[3] - b[0]) <= 1e-9 * scale && la > 0.0 && lb > 0.0 && (ta.x * tb.y - ta.y * tb.x).abs() <= TANGENT * la * lb && ta.x * tb.x + ta.y * tb.y > 0.0
+        length(a[3] - b[0]) <= 1e-9 * scale
+            && la > 0.0
+            && lb > 0.0
+            && (ta.x * tb.y - ta.y * tb.x).abs() <= TANGENT * la * lb
+            && ta.x * tb.x + ta.y * tb.y > 0.0
     };
     let mut segs = Vec::with_capacity(o.segs.len());
     let mut i = 0;
@@ -746,7 +755,10 @@ fn natural_beziers(p: &[Vec2], t: &[f64]) -> Vec<[Vec2; 4]> {
 
 /// A region as kernel regions: each outer outline with the holes inside it.
 fn regions_of(r: &Region) -> Vec<Region2> {
-    solid::region_parts(r).into_iter().map(|(o, holes)| Region2 { outer: outline_loop(&r.outer[o]), holes: holes.iter().map(|h| outline_loop(&r.holes[*h])).collect() }).collect()
+    solid::region_parts(r)
+        .into_iter()
+        .map(|(o, holes)| Region2 { outer: outline_loop(&r.outer[o]), holes: holes.iter().map(|h| outline_loop(&r.holes[*h])).collect() })
+        .collect()
 }
 
 /// One body of several (a region of more than one outline): their union, side by side when

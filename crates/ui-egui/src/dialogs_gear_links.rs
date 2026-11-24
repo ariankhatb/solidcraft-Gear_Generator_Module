@@ -107,11 +107,11 @@ impl Block {
                 face_width: num(&self.face, ValueKind::Length, "face width")?,
                 backlash: num(&self.backlash, ValueKind::Length, "backlash")?,
                 shaft_diameter: match self.shaft_mode {
-                0 => num(&self.shaft_d, ValueKind::Length, "shaft Ø")?,
-                1 => num(&self.shaft_d, ValueKind::Length, "bore Ø")?,
-                _ => None,
-            },
-            shaft: if self.shaft_mode == 1 { gi::ShaftMode::BoreOnly } else { gi::ShaftMode::Make },
+                    0 => num(&self.shaft_d, ValueKind::Length, "shaft Ø")?,
+                    1 => num(&self.shaft_d, ValueKind::Length, "bore Ø")?,
+                    _ => None,
+                },
+                shaft: if self.shaft_mode == 1 { gi::ShaftMode::BoreOnly } else { gi::ShaftMode::Make },
             },
         })
     }
@@ -323,7 +323,13 @@ impl Links {
         self.blocks
             .iter()
             .enumerate()
-            .map(|(k, b)| b.read(app, &block_id(k), "").unwrap_or_else(|_| gi::ModuleBlock { id: block_id(k), members: b.members.clone(), ..Default::default() }))
+            .map(|(k, b)| {
+                b.read(app, &block_id(k), "").unwrap_or_else(|_| gi::ModuleBlock {
+                    id: block_id(k),
+                    members: b.members.clone(),
+                    ..Default::default()
+                })
+            })
             .collect()
     }
 
@@ -385,7 +391,11 @@ impl Links {
         let made = self.all();
         self.suggested = list
             .into_iter()
-            .filter(|s| !made.iter().any(|(a, ag, b, bg, _)| (*a, *ag, *b, *bg) == (s.a, s.a_gear, s.b, s.b_gear) || (*b, *bg, *a, *ag) == (s.a, s.a_gear, s.b, s.b_gear)))
+            .filter(|s| {
+                !made.iter().any(|(a, ag, b, bg, _)| {
+                    (*a, *ag, *b, *bg) == (s.a, s.a_gear, s.b, s.b_gear) || (*b, *bg, *a, *ag) == (s.a, s.a_gear, s.b, s.b_gear)
+                })
+            })
             .collect();
     }
 
@@ -418,7 +428,9 @@ pub struct Suggested {
 /// A link's end: {item, gear} (or the item alone: gear 0).
 fn end(v: Option<&Value>) -> Option<(usize, usize)> {
     match v {
-        Some(Value::Object(o)) => Some((o.get("item").and_then(item_index)?, o.get("gear").or(o.get("port")).and_then(Value::as_u64).unwrap_or(0) as usize)),
+        Some(Value::Object(o)) => {
+            Some((o.get("item").and_then(item_index)?, o.get("gear").or(o.get("port")).and_then(Value::as_u64).unwrap_or(0) as usize))
+        }
         Some(other) => Some((item_index(other)?, 0)),
         None => None,
     }
@@ -436,7 +448,15 @@ fn notes_of(r: &Value) -> Vec<Note> {
                 let hint = l.get("hint").and_then(Value::as_str).map(|h| format!(": {h}")).unwrap_or_default();
                 format!("{e}{hint}")
             });
-            Some(Note { a, a_gear, b, b_gear, kind: l.get("kind").and_then(Value::as_str).unwrap_or("mesh").to_string(), ratio: l.get("ratio").and_then(Value::as_f64), error })
+            Some(Note {
+                a,
+                a_gear,
+                b,
+                b_gear,
+                kind: l.get("kind").and_then(Value::as_str).unwrap_or("mesh").to_string(),
+                ratio: l.get("ratio").and_then(Value::as_f64),
+                error,
+            })
         })
         .collect()
 }
@@ -448,13 +468,23 @@ fn suggested_of(r: &Value) -> Vec<Suggested> {
         let w: Vec<&str> = s.split_whitespace().collect();
         let at = |k: usize| -> Option<(usize, usize)> {
             let item = item_index(&json!(w.get(k + 1)?.trim_matches(|c: char| !c.is_alphanumeric())))?;
-            let gear = if w.get(k + 2) == Some(&"gear") { w.get(k + 3)?.trim_matches(|c: char| !c.is_ascii_digit()).parse::<usize>().ok()?.saturating_sub(1) } else { 0 };
+            let gear = if w.get(k + 2) == Some(&"gear") {
+                w.get(k + 3)?.trim_matches(|c: char| !c.is_ascii_digit()).parse::<usize>().ok()?.saturating_sub(1)
+            } else {
+                0
+            };
             Some((item, gear))
         };
         let first = w.iter().position(|x| *x == "item")?;
         let second = w.iter().skip(first + 1).position(|x| *x == "item")? + first + 1;
         let ((a, ag), (b, bg)) = (at(first)?, at(second)?);
-        Some(Suggested { a, a_gear: ag, b, b_gear: bg, kind: if s.contains("shaft") || s.contains("coaxial") { "shaft".into() } else { "mesh".into() } })
+        Some(Suggested {
+            a,
+            a_gear: ag,
+            b,
+            b_gear: bg,
+            kind: if s.contains("shaft") || s.contains("coaxial") { "shaft".into() } else { "mesh".into() },
+        })
     };
     r.get("suggestions")
         .and_then(Value::as_array)
@@ -553,7 +583,9 @@ mod tests {
 
     #[test]
     fn the_dialogs_lines_read_the_notes() {
-        let (lines, suggested) = link_notes(&json!({"links": [{"a": {"item": "A", "gear": 0}, "b": {"item": "B", "gear": 1}, "kind": "mesh", "ratio": 0.5}], "suggestions": ["item A gear 1 and item C gear 1 are tangent: link them?"]}));
+        let (lines, suggested) = link_notes(
+            &json!({"links": [{"a": {"item": "A", "gear": 0}, "b": {"item": "B", "gear": 1}, "kind": "mesh", "ratio": 0.5}], "suggestions": ["item A gear 1 and item C gear 1 are tangent: link them?"]}),
+        );
         assert_eq!(lines, vec![("A – B2: 0.50 : 1".to_string(), false)]);
         assert_eq!(suggested, vec![Suggested { a: 0, a_gear: 0, b: 2, b_gear: 0, kind: "mesh".into() }]);
     }

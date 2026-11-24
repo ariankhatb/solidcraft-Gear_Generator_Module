@@ -61,6 +61,8 @@ pub const TABLE: &[(&str, Class)] = &[
     ("render", Class::Layer(1)),
     // multibody dynamics (rigid bodies, joints, forces, time integration; geom only)
     ("dynamics", Class::Layer(1)),
+    // gear geometry: involute, cycloidal, bevel, worm and crossed gears as plans of solid steps; depends only on profile
+    ("gear", Class::Layer(1)),
     ("doc", Class::Layer(2)),
     ("io", Class::Layer(3)),
     ("engine", Class::Layer(4)),
@@ -75,8 +77,6 @@ pub const TABLE: &[(&str, Class)] = &[
     ("color", Class::Shared),
     // length display: a millimetre value in a design unit with its decimal places (no dependencies)
     ("display-units", Class::Shared),
-    // gear geometry: involute, cycloidal, bevel, worm and crossed gears as plans of solid steps (no dependencies)
-    ("gear", Class::Shared),
     // the widget handle and rect registry UI components publish into and scenarios/the control channel read (#12936)
     ("ui-registry", Class::Shared),
     // message catalogs' machinery and bidirectional text: lookup, formatting, language choice (#13290)
@@ -103,10 +103,14 @@ pub const TABLE: &[(&str, Class)] = &[
     ("viewport-gpu", Class::Shared),
     // the viewport in an egui window: egui-wgpu paint callbacks and install (#12943)
     ("viewport-egui", Class::Shared),
+    // the views of a design as plain data: kinds, the set a design keeps open, the saved form (no UI toolkit)
+    ("views", Class::Shared),
     // apps and tooling
     ("solidcraft", Class::Exempt),
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
+    // the UI kit's component gallery (docs.solidcraft.io/kit/), desktop and browser
+    ("ui-kit-gallery", Class::Exempt),
     ("xtask", Class::Exempt),
 ];
 

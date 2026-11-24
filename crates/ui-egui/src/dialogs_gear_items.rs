@@ -19,7 +19,7 @@
 use serde_json::{Map, Value, json};
 use solidcraft_engine::Sel;
 use solidcraft_engine::doc::expr::Kind as ValueKind;
-use solidcraft_gear::items::{self, Bore, BevelStyle, FacePreset, FaceSides, Hand, Hub, ItemKind, SizeBy, Thing};
+use solidcraft_gear::items::{self, BevelStyle, Bore, FacePreset, FaceSides, Hand, Hub, ItemKind, SizeBy, Thing};
 
 use crate::SolveApp;
 use crate::dialogs_gear_links::Links;
@@ -39,7 +39,8 @@ pub fn item_index(id: &Value) -> Option<usize> {
 /// a request written elsewhere (the CLI, a script) may name its items W, G, R; every `item`
 /// that refers to one (links, ratios, the drive) is renamed with it.
 pub fn positional_ids(r: &mut serde_json::Map<String, Value>) {
-    let ids: Vec<Option<String>> = r.get("items").and_then(Value::as_array).into_iter().flatten().map(|v| v.get("id").and_then(Value::as_str).map(str::to_string)).collect();
+    let ids: Vec<Option<String>> =
+        r.get("items").and_then(Value::as_array).into_iter().flatten().map(|v| v.get("id").and_then(Value::as_str).map(str::to_string)).collect();
     let rename: std::collections::HashMap<String, String> =
         ids.iter().enumerate().filter_map(|(i, id)| Some((id.clone()?, item_id(i)))).filter(|(a, b)| a != b).collect();
     if rename.is_empty() {
@@ -231,7 +232,12 @@ impl GearSettings {
         };
         let hub = if self.hub {
             let diameter = len(&self.hub_d, "hub Ø")?;
-            Some(Hub { diameter, length_a: len(&self.hub_a, "hub length A")?.unwrap_or(0.0), length_b: len(&self.hub_b, "hub length B")?.unwrap_or(0.0), auto: diameter.is_none() })
+            Some(Hub {
+                diameter,
+                length_a: len(&self.hub_a, "hub length A")?.unwrap_or(0.0),
+                length_b: len(&self.hub_b, "hub length B")?.unwrap_or(0.0),
+                auto: diameter.is_none(),
+            })
         } else {
             None
         };
@@ -521,12 +527,7 @@ impl GearItem {
         }
         let t = crate::dialogs_gear::thing_of(app, sel)?;
         let g = items::detail_gear(&self.crate_item(app, ""), &t)?;
-        let mut mine: Vec<(Sel, f64)> = self
-            .detail_things(app)
-            .into_iter()
-            .filter(|d| d.0 == g)
-            .map(|(_, _, t, s)| (s, radius(&t)))
-            .collect();
+        let mut mine: Vec<(Sel, f64)> = self.detail_things(app).into_iter().filter(|d| d.0 == g).map(|(_, _, t, s)| (s, radius(&t))).collect();
         if mine.len() >= 2 {
             return Some(Err("this gear has a bore and a hub circle already: click one of them to take it out first".into()));
         }
@@ -670,7 +671,11 @@ pub fn items_request(app: &SolveApp, items: &[GearItem], links: &Links) -> Resul
         let things: Vec<Thing> = it
             .picks
             .iter()
-            .map(|s| crate::dialogs_gear::thing_of(app, s).ok_or_else(|| format!("{who}: its {} is missing (deleted or renamed in its sketch): click its replacement in the view", pick_name(app, s))))
+            .map(|s| {
+                crate::dialogs_gear::thing_of(app, s).ok_or_else(|| {
+                    format!("{who}: its {} is missing (deleted or renamed in its sketch): click its replacement in the view", pick_name(app, s))
+                })
+            })
             .collect::<Result<_, _>>()?;
         if let Some(next) = items::next_slot(it.kind, &things) {
             return Err(format!("{who} still needs a {next}: click one in the view (or remove the gear)"));
@@ -678,16 +683,21 @@ pub fn items_request(app: &SolveApp, items: &[GearItem], links: &Links) -> Resul
         let slots = items::assign(it.kind, &things).map_err(|e| format!("{who}: {e}"))?;
         let mut components = Vec::new();
         for (pick, slot) in it.picks.iter().zip(&slots) {
-            let mut c = crate::dialogs_gear::locate(app, pick).ok_or_else(|| format!("{who}: a pick that can't be part of a gear: remove the gear and make it again"))?;
+            let mut c = crate::dialogs_gear::locate(app, pick)
+                .ok_or_else(|| format!("{who}: a pick that can't be part of a gear: remove the gear and make it again"))?;
             c["slot"] = json!(slot.name);
             components.push(c);
         }
         // Its gears' bore and hub circles (the engine finds the gear each sits in).
         for (sel, hub) in &it.details {
             if crate::dialogs_gear::thing_of(app, sel).is_none() {
-                return Err(format!("{who}: its {} is missing (deleted or renamed in its sketch): click its replacement in the view", pick_name(app, sel)));
+                return Err(format!(
+                    "{who}: its {} is missing (deleted or renamed in its sketch): click its replacement in the view",
+                    pick_name(app, sel)
+                ));
             }
-            let mut c = crate::dialogs_gear::locate(app, sel).ok_or_else(|| format!("{who}: a bore or hub pick that can't be read: click the gear's card and pick it again"))?;
+            let mut c = crate::dialogs_gear::locate(app, sel)
+                .ok_or_else(|| format!("{who}: a bore or hub pick that can't be read: click the gear's card and pick it again"))?;
             c["slot"] = json!(if *hub { "hub" } else { "bore" });
             components.push(c);
         }
@@ -769,7 +779,8 @@ pub fn items_of(r: &Map<String, Value>, ui: Option<&Value>, graph: &mut Links) -
             None => v.get("components").and_then(Value::as_array).into_iter().flatten().filter(|c| !is_detail(c)).filter_map(sel_of).collect(),
         };
         // Its bore and hub circles: as the dialog kept them, else the components so named.
-        let details_ui = ui.and_then(|u| u.get("gear_details")).and_then(|d| d.get(i)).and_then(|d| serde_json::from_value::<Vec<(Sel, bool)>>(d.clone()).ok());
+        let details_ui =
+            ui.and_then(|u| u.get("gear_details")).and_then(|d| d.get(i)).and_then(|d| serde_json::from_value::<Vec<(Sel, bool)>>(d.clone()).ok());
         it.details = details_ui.unwrap_or_else(|| {
             v.get("components")
                 .and_then(Value::as_array)
@@ -805,7 +816,9 @@ pub fn items_of(r: &Map<String, Value>, ui: Option<&Value>, graph: &mut Links) -
         it.keyway = v.get("keyway").and_then(Value::as_bool) == Some(true);
         it.diff = v.get("differential").filter(|d| d.is_object()).map(DiffForm::of);
         // Saved with the circles it keeps out: it takes any new one the drawing gets by itself.
-        if let Some(d) = ui.and_then(|u| u.get("gear_dropped")).and_then(|d| d.get(i)).and_then(|d| serde_json::from_value::<Vec<Sel>>(d.clone()).ok()) {
+        if let Some(d) =
+            ui.and_then(|u| u.get("gear_dropped")).and_then(|d| d.get(i)).and_then(|d| serde_json::from_value::<Vec<Sel>>(d.clone()).ok())
+        {
             it.auto_details = true;
             it.dropped = d;
         }
@@ -821,7 +834,8 @@ pub fn items_of(r: &Map<String, Value>, ui: Option<&Value>, graph: &mut Links) -
             graph.accept(&crate::dialogs_gear_links::Suggested { a, a_gear, b, b_gear, kind });
         }
     }
-    let ids: Vec<Option<&str>> = r.get("items").and_then(Value::as_array).into_iter().flatten().map(|v| v.get("module_block").and_then(Value::as_str)).collect();
+    let ids: Vec<Option<&str>> =
+        r.get("items").and_then(Value::as_array).into_iter().flatten().map(|v| v.get("module_block").and_then(Value::as_str)).collect();
     // (A set saved before blocks had more than a module reads back with only its module.)
     for b in r.get("module_blocks").and_then(Value::as_array).into_iter().flatten() {
         let k = graph.add_block(&[]);
@@ -850,4 +864,3 @@ fn sel_of(c: &Value) -> Option<Sel> {
     }
     c.get("axis").and_then(Value::as_str).map(|name| Sel::Axis { name: name.to_string() })
 }
-

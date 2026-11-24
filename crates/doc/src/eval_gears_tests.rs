@@ -21,7 +21,12 @@ fn planner(input: &GearsInput<'_>) -> Result<Plan, String> {
         Some("sketch") => {
             let id = *input.sketches.first().ok_or("no sketch")?;
             let ss = input.state.sketch(id).ok_or("no sketch")?;
-            let r = ss.sketch.curves.iter().find_map(|c| if let solidcraft_sketch::CurveKind::Circle { r, .. } = c.kind { Some(r) } else { None }).ok_or("no circle")?;
+            let r = ss
+                .sketch
+                .curves
+                .iter()
+                .find_map(|c| if let solidcraft_sketch::CurveKind::Circle { r, .. } = c.kind { Some(r) } else { None })
+                .ok_or("no circle")?;
             Spec { module: 2.0, teeth: (r.round() as u32).max(8), ..Spec::defaults_for(Kind::Pair) }
         }
         other => return Err(format!("no test set {other:?}")),
@@ -109,7 +114,14 @@ fn an_edited_sketch_recomputes_the_set_in_place_under_the_same_names() {
 fn the_keep_out_hollows_a_housing_in_the_same_feature() {
     let mut doc = Document::new("housing");
     doc.add_feature(
-        FeatureKind::Box { corner: point_expr(Vec3::new(-40.0, -40.0, -10.0)), length: "140".into(), width: "80".into(), height: "40".into(), operation: Operation::NewBody, centred: false },
+        FeatureKind::Box {
+            corner: point_expr(Vec3::new(-40.0, -40.0, -10.0)),
+            length: "140".into(),
+            width: "80".into(),
+            height: "40".into(),
+            operation: Operation::NewBody,
+            centred: false,
+        },
         Some("Case"),
     )
     .unwrap();

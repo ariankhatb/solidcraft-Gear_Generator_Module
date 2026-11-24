@@ -3,8 +3,8 @@
 
 use serde_json::{Value, json};
 
-use crate::Session;
 use super::test_util::run;
+use crate::Session;
 
 fn set(s: &mut Session, group: u64) -> Value {
     let r = run(s, "gear.inspect", json!({"group": group}));

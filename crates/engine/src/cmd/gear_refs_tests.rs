@@ -10,8 +10,8 @@
 use serde_json::{Value, json};
 use solidcraft_doc::FeatureKind;
 
-use crate::Session;
 use super::test_util::{gears_features, run, volume};
+use crate::Session;
 
 fn errors(s: &Session) -> Vec<String> {
     s.model.results.iter().filter_map(|r| r.error.as_ref().map(|e| format!("{}: {e}", r.name))).collect()
@@ -100,7 +100,8 @@ fn ids(s: &Session) -> Ids {
 fn ids_of(s: &Session, rec: &super::Record) -> Ids {
     let feature = rec.feature.unwrap();
     let bodies = super::current_names(s, rec);
-    let members: Vec<(String, u64, Option<u64>)> = rec.assembly.as_ref().map(|a| a.members.iter().map(|m| (m.body.clone(), m.component, m.joint)).collect()).unwrap_or_default();
+    let members: Vec<(String, u64, Option<u64>)> =
+        rec.assembly.as_ref().map(|a| a.members.iter().map(|m| (m.body.clone(), m.component, m.joint)).collect()).unwrap_or_default();
     let ours: Vec<u64> = members.iter().filter_map(|m| m.2).collect();
     let mut links: Vec<(u64, u64)> = s.doc.assembly.links.iter().filter(|l| ours.contains(&l.a) || ours.contains(&l.b)).map(|l| (l.a, l.b)).collect();
     links.sort_unstable();
@@ -132,7 +133,11 @@ fn hole(s: &mut Session, body: &str, at: [f64; 2], z: f64) {
     run(s, "sketch.create", json!({"plane": {"origin": [0, 0, z], "x_dir": [1, 0, 0], "y_dir": [0, 1, 0]}, "name": "Hole sketch"}));
     run(s, "sketch.circle.center", json!({"center": at, "radius": 2.0, "id": "h"}));
     run(s, "sketch.finish", json!({}));
-    run(s, "solid.extrude", json!({"sketch": "Hole sketch", "distance": 200, "direction": "symmetric", "operation": "cut", "targets": [body], "name": "Hole"}));
+    run(
+        s,
+        "solid.extrude",
+        json!({"sketch": "Hole sketch", "distance": 200, "direction": "symmetric", "operation": "cut", "targets": [body], "name": "Hole"}),
+    );
     no_errors(s);
 }
 
@@ -164,7 +169,12 @@ fn feature_error(s: &Session, id: u64) -> Option<String> {
 }
 
 fn sketch_named(s: &Session, name: &str) -> u64 {
-    s.doc.features.iter().find(|f| f.name == name && matches!(f.kind, FeatureKind::Sketch { .. })).map(|f| f.id).unwrap_or_else(|| panic!("no sketch {name}"))
+    s.doc
+        .features
+        .iter()
+        .find(|f| f.name == name && matches!(f.kind, FeatureKind::Sketch { .. }))
+        .map(|f| f.id)
+        .unwrap_or_else(|| panic!("no sketch {name}"))
 }
 
 /// The set's request as the feature keeps it.
@@ -443,7 +453,10 @@ fn spur_driver_change_keeps_the_ids() {
     run(&mut f.s, "gear.update", json!({"group": group, "drive": {"item": "B", "gear": 0, "rpm": 500}}));
     let now = whole(&mut f.s);
     assert_eq!(now.bodies, before.bodies);
-    assert_eq!(now.members.iter().map(|m| (m.0.clone(), m.1)).collect::<Vec<_>>(), before.members.iter().map(|m| (m.0.clone(), m.1)).collect::<Vec<_>>());
+    assert_eq!(
+        now.members.iter().map(|m| (m.0.clone(), m.1)).collect::<Vec<_>>(),
+        before.members.iter().map(|m| (m.0.clone(), m.1)).collect::<Vec<_>>()
+    );
     assert_eq!(now.members.iter().map(|m| m.2).collect::<Vec<_>>(), before.members.iter().map(|m| m.2).collect::<Vec<_>>(), "joints keep their ids");
     assert_eq!(now.links.len(), 1, "{now:?}");
 }
@@ -451,7 +464,7 @@ fn spur_driver_change_keeps_the_ids() {
 #[test]
 fn spur_save_reopen_then_edit() {
     let (f, before, _) = spur();
-    let saved = solidcraft_io::write_design(&f.s.doc);
+    let saved = solidcraft_io::write_design(&f.s.doc).unwrap();
     let mut s = Session::new(solidcraft_io::read_design(&saved).unwrap());
     assert_eq!(whole(&mut s), before, "reopened as it was");
     let d = f.dim("Pitch circles", &["a"], "diameter");
@@ -543,7 +556,7 @@ fn common(script: &str, sketch: &str, diameters: &[(&str, &str)], distance: Opti
         run(&mut f.s, "timeline.rename", json!({"feature": id, "name": format!("Renamed {k}")}));
     }
     assert_eq!(whole(&mut f.s), before);
-    let saved = solidcraft_io::write_design(&f.s.doc);
+    let saved = solidcraft_io::write_design(&f.s.doc).unwrap();
     let mut s = Session::new(solidcraft_io::read_design(&saved).unwrap());
     assert_eq!(whole(&mut s), before);
     set_dim(&mut s, &d, to);
@@ -598,7 +611,7 @@ fn everything_drivetrain_keeps_its_references() {
     }
     undo(&mut f.s);
     assert_eq!(whole(&mut f.s), before);
-    let saved = solidcraft_io::write_design(&f.s.doc);
+    let saved = solidcraft_io::write_design(&f.s.doc).unwrap();
     let mut s = Session::new(solidcraft_io::read_design(&saved).unwrap());
     assert_eq!(whole(&mut s), before);
 }
@@ -690,7 +703,10 @@ fn concentric_circles_are_suggested_as_bore_and_hub() {
     let r = run(&mut s, "gear.calculate", detailed_request(&[]));
     let d = r["detail_suggestions"].as_array().unwrap_or_else(|| panic!("{r}"));
     assert_eq!(d.len(), 2, "{r}");
-    assert_eq!((d[0]["item"].clone(), d[0]["slot"].clone(), d[0]["curve"].clone(), d[0]["diameter"].clone(), d[0]["sketch"].clone()), (json!("A"), json!("bore"), json!("ab"), json!(8.0), json!(sk)));
+    assert_eq!(
+        (d[0]["item"].clone(), d[0]["slot"].clone(), d[0]["curve"].clone(), d[0]["diameter"].clone(), d[0]["sketch"].clone()),
+        (json!("A"), json!("bore"), json!("ab"), json!(8.0), json!(sk))
+    );
     assert_eq!((d[1]["slot"].clone(), d[1]["curve"].clone(), d[1]["diameter"].clone()), (json!("hub"), json!("ah"), json!(16.0)));
     // Picked, nothing more is suggested for it; nothing is used until picked.
     let r = run(&mut s, "gear.calculate", detailed_request(&[("ab", "bore")]));
@@ -731,14 +747,23 @@ fn a_shaft_line_sets_the_shafts_length_and_a_point_on_it_is_a_bearing() {
     assert_eq!(plan.shafts.len(), 1, "one shaft, on A's drawn line only");
     assert!((plan.shafts[0].length - 50.0).abs() < 1e-6, "the line's length: {}", plan.shafts[0].length);
     let f = plan.bodies[plan.shafts[0].body].frame;
-    assert!(f.origin.iter().zip([0.0, 0.0, -15.0]).all(|(a, b)| (a - b).abs() < 1e-6) && (f.z[2] - 1.0).abs() < 1e-9, "from the line's first end along it: {f:?}");
+    assert!(
+        f.origin.iter().zip([0.0, 0.0, -15.0]).all(|(a, b)| (a - b).abs() < 1e-6) && (f.z[2] - 1.0).abs() < 1e-9,
+        "from the line's first end along it: {f:?}"
+    );
     // A bearing point goes on a Shaft item's line, or on a gear's own shaft line; a gear without
     // a shaft line refuses it, saying what to pick first.
     s.execute("gear.calculate", &json!({"items": [
         {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a"}, {"sketch": "Shaft", "curve": "s"}, {"sketch": "Shaft", "point": "brg", "slot": "bearing"}]}]}))
         .unwrap_or_else(|e| panic!("a bearing point on A's own shaft line: {e}"));
-    let e = s.execute("gear.calculate", &json!({"items": [
-        {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a"}, {"sketch": "Shaft", "point": "brg", "slot": "bearing"}]}]})).unwrap_err().to_string();
+    let e = s
+        .execute(
+            "gear.calculate",
+            &json!({"items": [
+        {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a"}, {"sketch": "Shaft", "point": "brg", "slot": "bearing"}]}]}),
+        )
+        .unwrap_err()
+        .to_string();
     assert!(e.contains("shaft line first"), "{e}");
     let with_shaft = json!({"items": [
         {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a", "slot": "pitch"}]},
@@ -748,8 +773,13 @@ fn a_shaft_line_sets_the_shafts_length_and_a_point_on_it_is_a_bearing() {
         "module_blocks": [{"id": "M", "module": 2, "members": ["A", "B"]}]});
     let r = s.execute("gear.calculate", &with_shaft);
     let (_, plan) = super::ask(&s, "gear.calculate", &with_shaft).unwrap_or_else(|e| panic!("{e}"));
-    eprintln!("BEARING reply {r:?}
-BEARING plan shafts {:?} clearance {:?} warnings {:?}", plan.shafts, plan.clearance.as_ref().map(|c| c.name.clone()), plan.warnings);
+    eprintln!(
+        "BEARING reply {r:?}
+BEARING plan shafts {:?} clearance {:?} warnings {:?}",
+        plan.shafts,
+        plan.clearance.as_ref().map(|c| c.name.clone()),
+        plan.warnings
+    );
     let r = r.unwrap();
     assert!(r["error"].is_null(), "{r}");
     assert_eq!(plan.shafts.len(), 1, "the Shaft item's line is A's shaft");
@@ -766,7 +796,10 @@ fn bearing_points_on_shaft_lines_are_the_housing_cutouts_seats() {
     run(&mut s, "sketch.circle.center", json!({"center": [0, 0], "radius": 20.0, "id": "a"}));
     run(&mut s, "sketch.circle.center", json!({"center": [50, 0], "radius": 30.0, "id": "b"}));
     run(&mut s, "sketch.finish", json!({}));
-    let sk = run(&mut s, "sketch.create", json!({"plane": {"origin": [0, 0, 0], "x_dir": [1, 0, 0], "y_dir": [0, 0, 1]}, "name": "Shafts"}))["sketch"].as_u64().unwrap();
+    let sk =
+        run(&mut s, "sketch.create", json!({"plane": {"origin": [0, 0, 0], "x_dir": [1, 0, 0], "y_dir": [0, 0, 1]}, "name": "Shafts"}))["sketch"]
+            .as_u64()
+            .unwrap();
     run(&mut s, "sketch.line", json!({"points": [[0, -40], [0, 40]], "ids": ["s1"]}));
     run(&mut s, "sketch.line", json!({"points": [[50, -40], [50, 40]], "ids": ["s2"]}));
     run(&mut s, "sketch.point", json!({"point": [0, -25], "id": "p1"}));
@@ -790,7 +823,13 @@ fn bearing_points_on_shaft_lines_are_the_housing_cutouts_seats() {
     // Each point a seat: where they are along their shafts, from the facts.
     let seats = |s: &mut Session| -> Vec<f64> {
         let r = run(s, "gear.calculate", request(s));
-        r["facts"].as_array().into_iter().flatten().filter(|f| f["label"].as_str().is_some_and(|l| l.contains("bearing seat"))).filter_map(|f| f["value"].as_f64()).collect()
+        r["facts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|f| f["label"].as_str().is_some_and(|l| l.contains("bearing seat")))
+            .filter_map(|f| f["value"].as_f64())
+            .collect()
     };
     let before = seats(&mut s);
     assert_eq!(before.len(), 2, "two seats");
@@ -915,7 +954,11 @@ fn a_bored_gear_on_a_shaft_line_gets_no_stub() {
     let (_, plan) = super::ask(&s, "gear.calculate", &compound).unwrap();
     assert!(plan.shafts.is_empty(), "{:?}", plan.shafts);
     let body = &plan.bodies[0];
-    let sleeve = body.steps.iter().filter(|st| matches!(st, solidcraft_gear::plan::Step::Prism { op: solidcraft_gear::plan::Op::Join, z0, .. } if *z0 > 1e-6)).count();
+    let sleeve = body
+        .steps
+        .iter()
+        .filter(|st| matches!(st, solidcraft_gear::plan::Step::Prism { op: solidcraft_gear::plan::Op::Join, z0, .. } if *z0 > 1e-6))
+        .count();
     assert!(sleeve >= 1, "a sleeve between the layers: {:?}", body.steps.len());
 }
 
@@ -934,11 +977,15 @@ fn tangent_pair(s: &mut Session) {
     run(s, "sketch.constraint.tangent", json!({"a": "a", "b": "b"}));
     run(s, "sketch.dimension", json!({"entities": ["origin", "b.center"], "type": "vertical", "value": "0 mm"}));
     run(s, "sketch.finish", json!({}));
-    run(s, "gear.create", json!({"assembly": true, "items": [
+    run(
+        s,
+        "gear.create",
+        json!({"assembly": true, "items": [
         {"id": "A", "type": "spur", "components": [{"sketch": "Pitch", "curve": "a", "slot": "pitch"}]},
         {"id": "B", "type": "spur", "components": [{"sketch": "Pitch", "curve": "b", "slot": "pitch"}]}],
         "links": [{"a": {"item": "A"}, "b": {"item": "B"}, "kind": "mesh"}],
-        "module_blocks": [{"id": "M", "module": 2, "members": ["A", "B"]}], "drive": {"item": "A", "gear": 0}}));
+        "module_blocks": [{"id": "M", "module": 2, "members": ["A", "B"]}], "drive": {"item": "A", "gear": 0}}),
+    );
 }
 
 #[test]
@@ -958,9 +1005,18 @@ fn turned_gears_stay_in_mesh_after_a_tooth_count_changes() {
     let l = s.doc.assembly.links.first().unwrap().clone();
     assert!((l.ratio + 20.0 / 32.0).abs() < 1e-6, "the new ratio: {}", l.ratio);
     assert!((value(&mut s, "Gear A·1 shaft") - 17.0).abs() < 1e-9);
-    assert!((value(&mut s, "Gear B·1 shaft") - l.follow(17.0)).abs() < 1e-6, "B at the new ratio from the as-built mesh: {} vs {}", value(&mut s, "Gear B·1 shaft"), l.follow(17.0));
+    assert!(
+        (value(&mut s, "Gear B·1 shaft") - l.follow(17.0)).abs() < 1e-6,
+        "B at the new ratio from the as-built mesh: {} vs {}",
+        value(&mut s, "Gear B·1 shaft"),
+        l.follow(17.0)
+    );
     run(&mut s, "joint.drive", json!({"joint": "Gear A·1 shaft", "value": 0}));
-    assert!((value(&mut s, "Gear B·1 shaft") - l.offset).abs() < 1e-6 && l.offset.abs() < 1e-6, "back at 0 both at 0 (as built): {}", value(&mut s, "Gear B·1 shaft"));
+    assert!(
+        (value(&mut s, "Gear B·1 shaft") - l.offset).abs() < 1e-6 && l.offset.abs() < 1e-6,
+        "back at 0 both at 0 (as built): {}",
+        value(&mut s, "Gear B·1 shaft")
+    );
 }
 
 /// The trailer's edit: gear B's diameter stepped 60 → 84 mm while the pair stands at rest and

@@ -23,10 +23,10 @@
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
+use solidcraft_gear::V2;
 use solidcraft_gear::clearance::VertexFollow;
 use solidcraft_gear::equations::{Edge, End, Placing, Quantity, Repeat, TeethSource, ToothCell, Vars, cell_for, keys, literal, number, render};
 use solidcraft_gear::plan::{Body, Kind, Plan, Spec, Step};
-use solidcraft_gear::V2;
 use solidcraft_gear::{Outline, Region};
 use solidcraft_sketch::{Analysis, Sketch};
 
@@ -78,7 +78,10 @@ fn sanitize(name: &str) -> String {
 }
 
 fn valid_prefix(p: &str) -> bool {
-    !p.is_empty() && p.len() <= 40 && p.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    !p.is_empty()
+        && p.len() <= 40
+        && p.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// A prefix no parameter of the design uses yet.
@@ -132,7 +135,13 @@ fn fitted_why(spec: &Spec, plan: &Plan, src: &TeethSource) -> String {
     let teeth = match src.member {
         1 => spec.teeth,
         2 => spec.teeth2,
-        _ => if spec.teeth3 > 0 { spec.teeth3 } else { spec.teeth + 2 * spec.teeth2 },
+        _ => {
+            if spec.teeth3 > 0 {
+                spec.teeth3
+            } else {
+                spec.teeth + 2 * spec.teeth2
+            }
+        }
     };
     if teeth > 500 {
         why.push("over 500 teeth");
@@ -209,7 +218,8 @@ impl Mode {
         if !self.on {
             return None;
         }
-        let cells: Vec<(usize, ToothCell)> = region.outer.iter().chain(&region.holes).enumerate().filter_map(|(i, o)| cell_for(&self.sources, o).map(|c| (i, c))).collect();
+        let cells: Vec<(usize, ToothCell)> =
+            region.outer.iter().chain(&region.holes).enumerate().filter_map(|(i, o)| cell_for(&self.sources, o).map(|c| (i, c))).collect();
         (!cells.is_empty()).then(|| EqSketch { cells, prefix: self.prefix.clone(), path: None })
     }
 
@@ -223,7 +233,8 @@ impl Mode {
         let name = |k: &str| format!("{prefix}_{k}");
         let (ax, ay) = (body.frame.x, body.frame.y());
         let parts = |tpl: &str, at: f64, dir: [f64; 3], c: usize| {
-            (!keys(tpl).is_empty() && dir[c].abs() > 1e-12).then(|| format!("{} * ({} - {})", number(dir[c]), render(tpl, &name), literal(at, Quantity::Length)))
+            (!keys(tpl).is_empty() && dir[c].abs() > 1e-12)
+                .then(|| format!("{} * ({} - {})", number(dir[c]), render(tpl, &name), literal(at, Quantity::Length)))
         };
         Some([0, 1, 2].map(|c| {
             let both: Vec<String> = [parts(x.as_str(), xv, ax, c), parts(y.as_str(), yv, ay, c)].into_iter().flatten().collect();
@@ -258,7 +269,13 @@ impl Mode {
                     if !self.keys.contains(key) {
                         return None;
                     }
-                    json!(format!("{} + {} * ({} - {})", literal(z, Quantity::Length), number(*k), name(key.as_str()), literal(*face, Quantity::Length)))
+                    json!(format!(
+                        "{} + {} * ({} - {})",
+                        literal(z, Quantity::Length),
+                        number(*k),
+                        name(key.as_str()),
+                        literal(*face, Quantity::Length)
+                    ))
                 }
                 None => json!(z),
             };
@@ -358,7 +375,8 @@ pub(super) fn ensure_placing(s: &mut Session, mode: &Mode) -> Result<()> {
 pub(super) fn prune(s: &mut Session, prefix: &str) {
     let start = format!("{prefix}_");
     loop {
-        let names: Vec<String> = s.doc.params.iter().filter(|p| p.name.starts_with(&start) && p.comment.starts_with(MADE_BY)).map(|p| p.name.clone()).collect();
+        let names: Vec<String> =
+            s.doc.params.iter().filter(|p| p.name.starts_with(&start) && p.comment.starts_with(MADE_BY)).map(|p| p.name.clone()).collect();
         let mut removed = false;
         for n in names {
             if s.doc.param_users(&n).is_empty() && s.doc_mut().remove_param(&n).is_ok() {
@@ -385,7 +403,12 @@ fn id_of(r: &Value, key: &str, what: &str) -> Result<String> {
 }
 
 fn first_curve_of(r: &Value) -> Result<String> {
-    r.get("curves").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).map(str::to_string).ok_or_else(|| EngineError::Other("gear teeth: no curve drawn".into()))
+    r.get("curves")
+        .and_then(Value::as_array)
+        .and_then(|a| a.first())
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| EngineError::Other("gear teeth: no curve drawn".into()))
 }
 
 /// Draws one cell in the sketch being edited: what it has made so far.
@@ -460,11 +483,15 @@ impl Drawer<'_> {
 fn draw_cell(s: &mut Session, cell: &ToothCell, prefix: Option<&str>) -> Result<()> {
     // Parametric undercut teeth: formula ranges, so they still close after a parameter change
     // (numeric ones stop meeting once the tooth count changes).
-    let following = prefix.and(cell.following.as_ref()).map(|(curves, joins)| ToothCell { curves: curves.clone(), joins: joins.clone(), ..cell.clone() });
+    let following =
+        prefix.and(cell.following.as_ref()).map(|(curves, joins)| ToothCell { curves: curves.clone(), joins: joins.clone(), ..cell.clone() });
     let cell = following.as_ref().unwrap_or(cell);
     let mut d = Drawer { cell, prefix, curves: Vec::new(), points: vec![None; cell.points.len()] };
     for c in &cell.curves {
-        let r = s.execute("sketch.equation_curve", &json!({"x": d.text(&c.x), "y": d.text(&c.y), "start": d.text(&c.start), "end": d.text(&c.end), "tolerance": c.tolerance}))?;
+        let r = s.execute(
+            "sketch.equation_curve",
+            &json!({"x": d.text(&c.x), "y": d.text(&c.y), "start": d.text(&c.start), "end": d.text(&c.end), "tolerance": c.tolerance}),
+        )?;
         d.curves.push(id_of(&r, "curve", "equation curve")?);
     }
     let mut seeds = d.curves.clone();
@@ -480,7 +507,10 @@ fn draw_cell(s: &mut Session, cell: &ToothCell, prefix: Option<&str>) -> Result<
             s.execute("sketch.pattern.circular", &json!({"entities": seeds, "center": "origin", "count": d.amount(count, true)?}))?;
         }
         Repeat::Linear { count, spacing } => {
-            s.execute("sketch.pattern.rectangular", &json!({"entities": seeds, "count": d.amount(count, true)?, "spacing": d.amount(spacing, false)?, "dir": [1.0, 0.0]}))?;
+            s.execute(
+                "sketch.pattern.rectangular",
+                &json!({"entities": seeds, "count": d.amount(count, true)?, "spacing": d.amount(spacing, false)?, "dir": [1.0, 0.0]}),
+            )?;
         }
     }
     for e in &cell.closing {

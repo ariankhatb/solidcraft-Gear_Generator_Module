@@ -17,7 +17,7 @@ use solidcore_record::Vec3;
 use solidcraft_doc::{BodyName, FeatureKind, Operation, SketchId};
 use solidcraft_gear::plan::{Plan, solid};
 
-use super::{Asked, BodyRecord, Read, Reads, Record, RECORD_VERSION, ask_read, assembly, axis_of, facts, keep, notes, params_of, reply};
+use super::{Asked, BodyRecord, RECORD_VERSION, Read, Reads, Record, ask_read, assembly, axis_of, facts, keep, notes, params_of, reply};
 use crate::params::bad;
 use crate::schema::gear::{GearAxis, GearResult};
 use crate::{EngineError, Result, Session};
@@ -30,7 +30,8 @@ pub(crate) fn install() {
 /// Whether a request is made as one Gears feature: `build` (default `feature`), except teeth
 /// drawn as formulas, which are features driven by the design's parameters.
 pub(super) fn wanted(cmd: &str, request: &Value) -> Result<bool> {
-    let formulas = request.get("tooth_curves").and_then(Value::as_str) == Some("equations") || request.get("parametric").and_then(Value::as_bool) == Some(true);
+    let formulas =
+        request.get("tooth_curves").and_then(Value::as_str) == Some("equations") || request.get("parametric").and_then(Value::as_bool) == Some(true);
     match request.get("build").and_then(Value::as_str) {
         None | Some("feature") => Ok(!formulas),
         Some("features") => Ok(false),
@@ -178,8 +179,13 @@ fn tools_of(s: &Session, cmd: &str, request: &Value) -> Result<(Operation, Vec<B
     let state = s.model.state();
     let names = |key: &str| -> Result<Vec<BodyName>> {
         let Some(v) = request.get(key).filter(|v| !v.is_null()) else { return Ok(Vec::new()) };
-        let list: Vec<&str> = v.as_array().and_then(|a| a.iter().map(Value::as_str).collect()).ok_or_else(|| bad(cmd, format!("`{key}` must be a list of body names")))?;
-        list.iter().map(|n| if state.body(n).is_some() { Ok(BodyName(n.to_string())) } else { Err(bad(cmd, format!("`{key}`: no body `{n}`"))) }).collect()
+        let list: Vec<&str> = v
+            .as_array()
+            .and_then(|a| a.iter().map(Value::as_str).collect())
+            .ok_or_else(|| bad(cmd, format!("`{key}` must be a list of body names")))?;
+        list.iter()
+            .map(|n| if state.body(n).is_some() { Ok(BodyName(n.to_string())) } else { Err(bad(cmd, format!("`{key}`: no body `{n}`"))) })
+            .collect()
     };
     let (targets, cuts) = (names("targets")?, names("keep_out_cuts")?);
     if operation != Operation::NewBody && targets.is_empty() {
@@ -205,7 +211,8 @@ fn generated(plan: &Plan, operation: Operation, cuts: &[BodyName]) -> (Vec<Strin
 /// Names no body has yet for `base` names (`Gear z20 (2)` where `Gear z20` is taken), apart from
 /// the feature's own bodies (`own`).
 fn fresh(s: &Session, bases: &[String], own: Option<u64>) -> Vec<String> {
-    let mut taken: std::collections::BTreeSet<String> = s.model.state().bodies.iter().filter(|b| Some(b.feature) != own).map(|b| b.name.clone()).collect();
+    let mut taken: std::collections::BTreeSet<String> =
+        s.model.state().bodies.iter().filter(|b| Some(b.feature) != own).map(|b| b.name.clone()).collect();
     bases
         .iter()
         .map(|base| {
@@ -257,7 +264,16 @@ fn failed(s: &Session, id: u64) -> Option<EngineError> {
 
 /// `gear.create` as one Gears feature.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn create(s: &mut Session, cmd: &str, asked: &Asked, plan: &Plan, name: String, request: Value, mut warnings: Vec<String>, sketch_print: Option<String>) -> Result<Value> {
+pub(super) fn create(
+    s: &mut Session,
+    cmd: &str,
+    asked: &Asked,
+    plan: &Plan,
+    name: String,
+    request: Value,
+    mut warnings: Vec<String>,
+    sketch_print: Option<String>,
+) -> Result<Value> {
     let (mut request, sketches) = frozen(s, cmd, request)?;
     let (operation, targets, cuts) = tools_of(s, cmd, &request)?;
     let (members, keep_out) = generated(plan, operation, &cuts);
@@ -281,11 +297,32 @@ pub(super) fn create(s: &mut Session, cmd: &str, asked: &Asked, plan: &Plan, nam
         let folder = assembly_folder(s, &name, id)?;
         group = folder;
         let (rigid, driver) = assembly_plan(asked, plan, &request);
-        built = Some(assembly::sync(s, &rigid, asked.spec.kind, &name, &member_names, keep_out_component(&request, keep_out_name.as_deref()), Some(folder), None, driver, &mut warnings)?);
+        built = Some(assembly::sync(
+            s,
+            &rigid,
+            asked.spec.kind,
+            &name,
+            &member_names,
+            keep_out_component(&request, keep_out_name.as_deref()),
+            Some(folder),
+            None,
+            driver,
+            &mut warnings,
+        )?);
     }
     let (assembly_record, assembly_made) = built.map_or((None, None), |(r, m)| (Some(r), Some(m)));
     let bodies = names.iter().map(|n| BodyRecord { name: n.clone(), steps: Vec::new(), auto: Some(n.clone()) }).collect();
-    let rec = Record { version: RECORD_VERSION, group, name, request, params: params_of(&asked.spec), bodies, assembly: assembly_record, sketch_print, feature: Some(id) };
+    let rec = Record {
+        version: RECORD_VERSION,
+        group,
+        name,
+        request,
+        params: params_of(&asked.spec),
+        bodies,
+        assembly: assembly_record,
+        sketch_print,
+        feature: Some(id),
+    };
     keep(s, &rec, &mut warnings);
     let mut r = GearResult {
         bodies: names.clone(),
@@ -321,7 +358,13 @@ fn convert(s: &mut Session, cmd: &str, rec: &Record) -> Result<u64> {
     let rest: Vec<u64> = own.into_iter().filter(|f| *f != first && s.doc.feature(*f).is_some()).collect();
     let name = rec.name.clone();
     if let Some(f) = s.doc_mut().feature_mut(first) {
-        f.kind = FeatureKind::Gears { params: json!({}), sketches: Vec::new(), operation: Operation::NewBody, targets: Vec::new(), keep_out_cuts: Vec::new() };
+        f.kind = FeatureKind::Gears {
+            params: json!({}),
+            sketches: Vec::new(),
+            operation: Operation::NewBody,
+            targets: Vec::new(),
+            keep_out_cuts: Vec::new(),
+        };
         f.name = name;
         f.body_names.clear();
         f.suppressed = false;
@@ -352,7 +395,16 @@ fn sketches_first(s: &mut Session, cmd: &str, id: u64, sketches: &[SketchId]) ->
 /// as many, those still called what the generator named them follow the new set's names, and
 /// the assembly is brought up to date where it stands.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn update(s: &mut Session, cmd: &str, mut rec: Record, request: Value, asked: &Asked, plan: &Plan, mut warnings: Vec<String>, sketch_print: Option<String>) -> Result<Value> {
+pub(super) fn update(
+    s: &mut Session,
+    cmd: &str,
+    mut rec: Record,
+    request: Value,
+    asked: &Asked,
+    plan: &Plan,
+    mut warnings: Vec<String>,
+    sketch_print: Option<String>,
+) -> Result<Value> {
     if !wanted(cmd, &request)? {
         return Err(bad(cmd, "this set is one Gears feature: its teeth can't be drawn as formulas, and it can't go back to a folder of features"));
     }
@@ -421,7 +473,18 @@ pub(super) fn update(s: &mut Session, cmd: &str, mut rec: Record, request: Value
         };
         group = Some(folder);
         let (rigid, driver) = assembly_plan(asked, plan, &request);
-        let (made, out) = assembly::sync(s, &rigid, asked.spec.kind, &rec.name, &member_names, keep_out_component(&request, keep_out_name.as_deref()), Some(folder), old_assembly, driver, &mut warnings)?;
+        let (made, out) = assembly::sync(
+            s,
+            &rigid,
+            asked.spec.kind,
+            &rec.name,
+            &member_names,
+            keep_out_component(&request, keep_out_name.as_deref()),
+            Some(folder),
+            old_assembly,
+            driver,
+            &mut warnings,
+        )?;
         rec.assembly = Some(made);
         assembly_made = Some(out);
     } else if let Some(old) = old_assembly {

@@ -5,8 +5,8 @@
 use serde_json::{Value, json};
 use solidcraft_doc::FeatureKind;
 
-use crate::Session;
 use super::super::test_util::{circle, gears_features, line, no_errors, run, volume};
+use crate::Session;
 
 fn sketches(s: &Session) -> usize {
     s.doc.features.iter().filter(|f| matches!(f.kind, FeatureKind::Sketch { .. })).count()
@@ -210,7 +210,11 @@ fn mixed(s: &mut Session) -> Mixed {
     let s3 = sketch_on(s, plane([0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]), &[line([-50.0, -35.0], [-50.0, 10.0], "shaft_e")]);
     let s4 = sketch_on(s, plane([0.0, 0.0, 40.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]), &[circle(50.0, 0.0, 15.0, "c1")]);
     let s5 = sketch_on(s, plane([65.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), &[circle(0.0, 60.0, 20.0, "c2")]);
-    let s6 = sketch_on(s, plane([110.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), &[circle(0.0, 60.0, 30.0, "d1"), line([-40.0, 98.0], [40.0, 98.0], "worm")]);
+    let s6 = sketch_on(
+        s,
+        plane([110.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+        &[circle(0.0, 60.0, 30.0, "d1"), line([-40.0, 98.0], [40.0, 98.0], "worm")],
+    );
     let items = json!([
         {"id": "A", "type": "spur", "components": [pick(s1, "a")], "gears": [{"gear": 0, "face": {"a": null, "b": null}, "profile_shift": "auto", "bore": "auto"}]},
         {"id": "B", "type": "spur", "components": [pick(s1, "b")]},
@@ -223,7 +227,12 @@ fn mixed(s: &mut Session) -> Mixed {
 }
 
 fn components_of(r: &Value) -> Vec<(String, u64, Option<u64>)> {
-    r["assembly"]["members"].as_array().unwrap().iter().map(|m| (m["body"].as_str().unwrap().to_string(), m["component"].as_u64().unwrap(), m["joint"].as_u64())).collect()
+    r["assembly"]["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| (m["body"].as_str().unwrap().to_string(), m["component"].as_u64().unwrap(), m["joint"].as_u64()))
+        .collect()
 }
 
 #[test]
@@ -245,14 +254,18 @@ fn an_items_request_reads_back_as_it_was_sent() {
     assert_eq!(p.links.as_ref().unwrap()[0].b.gear, 1, "`port` is the gear");
     let back: crate::schema::gear::GearParams = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
     assert_eq!(back, p);
-    assert!(serde_json::from_value::<crate::schema::gear::GearParams>(json!({"items": [{"type": "spur", "colour": 1}]})).is_err(), "unknown fields are refused");
+    assert!(
+        serde_json::from_value::<crate::schema::gear::GearParams>(json!({"items": [{"type": "spur", "colour": 1}]})).is_err(),
+        "unknown fields are refused"
+    );
 }
 
 #[test]
 fn a_mixed_drivetrain_is_one_feature_with_components_joints_and_links_kept_by_item() {
     let mut s = Session::default();
     let m = mixed(&mut s);
-    let calc = run(&mut s, "gear.calculate", json!({"items": m.items, "links": m.links, "drive": {"item": "A", "gear": 0, "rpm": 1000.0, "torque": 2.0}}));
+    let calc =
+        run(&mut s, "gear.calculate", json!({"items": m.items, "links": m.links, "drive": {"item": "A", "gear": 0, "rpm": 1000.0, "torque": 2.0}}));
     assert!(calc.get("error").is_none(), "{calc}");
     let gears = calc["gears"].as_array().unwrap().clone();
     assert_eq!(gears.len(), 8, "A, B, C×2, D×2, E×2: {calc}");
@@ -261,7 +274,8 @@ fn a_mixed_drivetrain_is_one_feature_with_components_joints_and_links_kept_by_it
     assert!(calc["links"].as_array().unwrap().iter().all(|l| l.get("error").is_none() && l["ratio"].is_number()), "{calc}");
     assert!(calc["outlines"].as_array().is_some_and(|o| !o.is_empty()), "an outline per gear for the preview");
 
-    let r = run(&mut s, "gear.create", json!({"items": m.items, "links": m.links, "drive": {"item": "A", "gear": 0}, "assembly": true, "name": "Box"}));
+    let r =
+        run(&mut s, "gear.create", json!({"items": m.items, "links": m.links, "drive": {"item": "A", "gear": 0}, "assembly": true, "name": "Box"}));
     no_errors(&s);
     assert_eq!(gears_features(&s).len(), 1, "{r}");
     let bodies: Vec<String> = r["bodies"].as_array().unwrap().iter().map(|b| b.as_str().unwrap().to_string()).collect();
@@ -299,7 +313,11 @@ fn a_mixed_drivetrain_is_one_feature_with_components_joints_and_links_kept_by_it
     // The path names both of the compound's gears: along its shaft from gear 2 to gear 1,
     // which meshes A.
     let p0 = &q["path"][0];
-    assert_eq!((p0["kind"].as_str(), p0["from_gear"].clone(), p0["to_gear"].clone()), (Some("shaft"), json!({"item": "E", "gear": 1}), json!({"item": "E", "gear": 0})), "{q}");
+    assert_eq!(
+        (p0["kind"].as_str(), p0["from_gear"].clone(), p0["to_gear"].clone()),
+        (Some("shaft"), json!({"item": "E", "gear": 1}), json!({"item": "E", "gear": 0})),
+        "{q}"
+    );
     assert_eq!(q["path"][1]["from_gear"], json!({"item": "E", "gear": 0}), "{q}");
     // The worm stage is a worm (its lead-angle efficiency), not a crossed helical pair.
     let wq = run(&mut s, "gear.ratio", json!({"a": {"item": "A", "gear": 0}, "b": {"item": "D", "gear": 1}}));
@@ -310,7 +328,8 @@ fn a_mixed_drivetrain_is_one_feature_with_components_joints_and_links_kept_by_it
     let a_reply = r["gears"].as_array().unwrap().iter().find(|g| g["item"] == "A").unwrap();
     assert!(a_reply["contact_ratio"].as_f64().is_some_and(|c| c > 1.0), "{a_reply}");
     // Its sketch isn't dimensioned: the item says so (once, on its first gear).
-    let loose = |g: &Value| g["warnings"].as_array().unwrap().iter().filter(|w| w.as_str().unwrap_or_default().contains("isn't fully defined")).count();
+    let loose =
+        |g: &Value| g["warnings"].as_array().unwrap().iter().filter(|w| w.as_str().unwrap_or_default().contains("isn't fully defined")).count();
     assert_eq!(loose(a_reply), 1, "{a_reply}");
     let w = run(&mut s, "gear.ratio", json!({"group": group, "a": a_member, "b": {"item": "D", "gear": 0}}));
     let want = t("A", 0) / t("B", 0) * t("C", 0) / t("C", 1);
@@ -444,7 +463,12 @@ fn a_bevel_pair_from_a_side_view_sketch() {
     let sk = sketch_on(
         &mut s,
         plane([0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
-        &[("sketch.point", json!({"point": [0, 0], "id": "apex"})), line([0.0, 0.0], [0.0, 60.0], "s1"), line([0.0, 0.0], [60.0, 0.0], "s2"), line([0.0, 0.0], c, "k")],
+        &[
+            ("sketch.point", json!({"point": [0, 0], "id": "apex"})),
+            line([0.0, 0.0], [0.0, 60.0], "s1"),
+            line([0.0, 0.0], [60.0, 0.0], "s2"),
+            line([0.0, 0.0], c, "k"),
+        ],
     );
     let items = json!([{"id": "C", "type": "bevel", "components": [{"sketch": sk, "point": "apex"}, pick(sk, "s1"), pick(sk, "s2"), pick(sk, "k")]}]);
     let r = run(&mut s, "gear.calculate", json!({"items": items}));

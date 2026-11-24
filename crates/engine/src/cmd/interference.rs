@@ -225,8 +225,9 @@ fn check(job: &Job) -> Done {
 
 fn check_pair(a: &Body, b: &Body, (na, nb): &(String, String), size: f64, envelope: bool) -> Outcome {
     let threshold = 1e-9 * size.max(1.0).powi(3);
-    // A pair whose shared part can't be worked out is reported, not passed as clear.
-    let shared = match shared_part(a, b) {
+    // A pair whose shared part can't be worked out is reported, not passed as clear. SMLib's
+    // check of the shared part runs here: a part it refuses is reported, not measured.
+    let shared = match solidcraft_kernel::validating(solidcraft_kernel::Validation::EachStep, || shared_part(a, b)).0 {
         Ok(Some(o)) => o,
         Ok(None) => return Outcome::Clear,
         Err(e) => return Outcome::Unchecked(e.to_string()),
@@ -338,7 +339,9 @@ fn clipped_to_overlap(a: &Body, b: &Body) -> Option<Option<(Body, Body)>> {
         // A piece is only intersected with the other, never kept or measured: SMLib's full check of
         // it (on a gear cluster of a thousand faces, minutes) is left out. The intersection of the
         // pieces is checked as any boolean is.
-        let (piece, _) = solidcraft_kernel::validating(solidcraft_kernel::Validation::Off, || solidcraft_kernel::boolean(x, &tool, solidcraft_kernel::BoolOp::Intersect));
+        let (piece, _) = solidcraft_kernel::validating(solidcraft_kernel::Validation::Off, || {
+            solidcraft_kernel::boolean(x, &tool, solidcraft_kernel::BoolOp::Intersect)
+        });
         piece.ok()
     };
     let ca = cut(a, &ba)?;

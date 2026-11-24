@@ -3583,6 +3583,9 @@ fn step_def(body: &Body, i: usize, step: &Step, nudge: f64, mode: &equations::Mo
             def.shape = format!("placed {}", def.shape);
             def
         }
+        // A solid of its own (V bevel teeth's half) has no one feature: [`build_set`] refuses a
+        // plan with one, so this is only its name (an update tells it apart from the steps before).
+        Step::Group { op, .. } => StepDef::new(Vec::new(), "solid.group", format!("group ({})", op_name(*op)), false),
         Step::Prism { region, z0, height, twist, op } => {
             let mut profile = sketch("profile".into(), f.world([0.0, 0.0, *z0]), x, y, region_loops(region));
             // Teeth from their formulas: the profile's toothed loops, and with parameters the
@@ -3679,6 +3682,7 @@ fn step_params(s: &Session, body: &Body, step: &Step, sketches: &[u64], target: 
             let inner = Body { name: body.name.clone(), frame: body.frame.compose(frame), steps: Vec::new() };
             return step_params(s, &inner, step, sketches, target, body_name);
         }
+        Step::Group { .. } => return Err(EngineError::Other(GROUP_AS_FEATURES.into())),
         Step::Prism { region, height, twist, op, .. } => {
             let mut pick = json!({"sketch": id(0)?});
             if let Some(p) = profiles_of(region) {
@@ -3718,7 +3722,15 @@ fn step_params(s: &Session, body: &Body, step: &Step, sketches: &[u64], target: 
 
 /// Builds every body of the plan, each under its name in `names` where there is one (an
 /// update keeps the names the bodies had).
+/// Why a plan with a [`Step::Group`] (V bevel teeth, each half trimmed on its own) can't be built
+/// as plain timeline features.
+const GROUP_AS_FEATURES: &str =
+    "V (chevron) bevel teeth are built as one Gears feature, not as separate timeline features: leave `build` out, or use plain spiral teeth";
+
 fn build_set(s: &mut Session, plan: &Plan, names: &[String], warnings: &mut Vec<String>, mode: &equations::Mode) -> Result<Vec<BodyRecord>> {
+    if plan.bodies.iter().any(|b| b.steps.iter().any(|st| matches!(st, Step::Group { .. }))) {
+        return Err(EngineError::Other(GROUP_AS_FEATURES.into()));
+    }
     // A gear's teeth are hundreds of faces: the kernel's full check of them takes about as long
     // as making them (a spiral bevel's twisted lofts 7 s of 13, a planetary set 3 s of 5, a
     // hypoid's minutes for the ring gear), so the set is built without it. The check still runs whenever the features are computed

@@ -798,6 +798,12 @@ fn tool(f: &Frame, step: &Step, nudge: f64) -> Result<Body> {
     };
     match step {
         Step::Placed { frame, step } => tool(&f.compose(frame), step, nudge),
+        // A solid of its own (one hand of V bevel teeth, trimmed to its half): its steps built as
+        // a body's, the result the tool.
+        Step::Group { steps, .. } => {
+            let part = Planned { name: "group".into(), frame: *f, steps: steps.clone() };
+            run_steps(&part, 0, None, &mut Vec::new())
+        }
         Step::Prism { region, z0, height, twist, .. } => {
             let plane = plane_at(f, *z0);
             let regions = regions_of(region);

@@ -1890,6 +1890,7 @@ fn mirror_step(st: &mut Step) {
             *frame = Frame { origin: m(frame.origin), x: m(frame.x), z: m(frame.z) };
             mirror_step(step);
         }
+        Step::Group { steps, .. } => steps.iter_mut().for_each(mirror_step),
     }
 }
 

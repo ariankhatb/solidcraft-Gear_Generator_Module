@@ -3,12 +3,15 @@
 //!
 //! It goes on the gears with flat end faces: spur, helical and herringbone gears (a herringbone's
 //! two outer ends and, where its halves meet at mid-face, both halves' inner ends), each layer of a compound (not an end that sits against a bigger layer), an
-//! internal ring's inner tip edge, and the pinion of an internal or rack item. Bevel, hypoid,
-//! worm, crossed helical, rack and planetary gears are left plain, each with a note naming it.
+//! internal ring's inner tip edge, and the pinion of an internal or rack item. A bevel gear's
+//! goes round its tips where they end at the large and the small end (and, on V teeth, either
+//! side of the relief groove). Hypoid, worm, crossed helical, rack and planetary gears are left
+//! plain, each with a note naming it.
 //! A size that would take the whole tooth tip (the addendum) or half the face is refused, naming
 //! the gear. Off (size 0) it changes nothing.
 
 use crate::axes::{dot, len, num, sub};
+use crate::geom::V2;
 use crate::items::{GearItem, GearRef, ItemKind, face_extent, gear_geoms, who};
 use crate::plan::system::SystemPlan;
 use crate::plan::{Frame, Op, Step};
@@ -51,11 +54,15 @@ pub struct ToothChamfer {
 /// Why a kind of item keeps its teeth plain ("worm"), or None when its gears take the chamfer.
 fn left_plain(kind: ItemKind) -> Option<&'static str> {
     match kind {
-        ItemKind::Spur | ItemKind::Helical | ItemKind::Herringbone | ItemKind::Compound | ItemKind::Internal | ItemKind::Rack | ItemKind::Shaft => {
-            None
-        }
+        ItemKind::Spur
+        | ItemKind::Helical
+        | ItemKind::Herringbone
+        | ItemKind::Compound
+        | ItemKind::Internal
+        | ItemKind::Rack
+        | ItemKind::Shaft
+        | ItemKind::Bevel => None,
         ItemKind::Planetary => Some("planetary set"),
-        ItemKind::Bevel => Some("bevel"),
         ItemKind::Hypoid => Some("hypoid"),
         ItemKind::Worm => Some("worm"),
         ItemKind::CrossedHelical => Some("crossed helical"),
@@ -90,6 +97,8 @@ pub fn tooth_chamfer(items: &[GearItem], sp: &mut SystemPlan, c: ToothChamfer) -
     }
     let mut notes = Vec::new();
     let mut ends = Vec::new();
+    // Bevel gears' cuts: the body, the gear's frame (centre and axis, world), the profiles.
+    let mut cones: Vec<(usize, [f64; 3], [f64; 3], Vec<Vec<V2>>)> = Vec::new();
     for (i, it) in items.iter().enumerate() {
         let geoms = gear_geoms(it);
         if let Some(why) = left_plain(it.kind) {
@@ -119,6 +128,12 @@ pub fn tooth_chamfer(items: &[GearItem], sp: &mut SystemPlan, c: ToothChamfer) -
             else {
                 continue;
             };
+            if let Some(bv) = shape.bevel {
+                let cuts = bevel_cuts(&bv, c.size, c.faces)
+                    .map_err(|why| format!("Tooth chamfer {} mm is too big for {} ({why})", num(c.size), who(items, r)))?;
+                cones.push((body, shape.center, shape.axis, cuts));
+                continue;
+            }
             let module = sp.gears.iter().find(|x| x.item == i && x.gear == g).map_or(1.0, |x| x.module);
             let (mut a, mut b) = face_extent(&it.settings(g), module);
             if shape.face > 0.0 && a + b > 0.0 {
@@ -217,12 +232,98 @@ pub fn tooth_chamfer(items: &[GearItem], sp: &mut SystemPlan, c: ToothChamfer) -
             sp.plan.bodies[e.body].steps.push(Step::Placed { frame, step: Box::new(Step::Revolve { profile, op: Op::Cut }) });
         }
     }
+    for (body, centre, axis, cuts) in cones {
+        let Some(frame) = gear_frame(&sp.plan.bodies[body].frame, centre, axis) else { continue };
+        for profile in cuts {
+            sp.plan.bodies[body].steps.push(Step::Placed { frame, step: Box::new(Step::Revolve { profile, op: Op::Cut }) });
+        }
+    }
     for n in notes {
         if !sp.notes.contains(&n) {
             sp.notes.push(n);
         }
     }
     Ok(())
+}
+
+/// A gear's own frame in its body's (`f`): origin at `centre`, z along `axis` (both world).
+fn gear_frame(f: &Frame, centre: [f64; 3], axis: [f64; 3]) -> Option<Frame> {
+    let fy = f.y();
+    let local = |p: [f64; 3]| [dot(p, f.x), dot(p, fy), dot(p, f.z)];
+    let z = local(axis);
+    let n = len(z);
+    if !(n > 1e-9) {
+        return None;
+    }
+    let z = z.map(|v| v / n);
+    let pick = if z[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+    let d = dot(pick, z);
+    let x = [pick[0] - z[0] * d, pick[1] - z[1] * d, pick[2] - z[2] * d];
+    let xn = len(x);
+    Some(Frame { origin: local(sub(centre, f.origin)), x: x.map(|v| v / xn), z })
+}
+
+/// A bevel gear's tooth chamfer: 45° triangles round its tips where they end, as profiles to
+/// revolve in its own (radius, z) half plane (the apex at z = `apex_z`). The large end (heel)
+/// is side B, the small end (toe, towards the apex) side A; V teeth's relief groove has both
+/// its edges chamfered whichever side is asked. `Err`: why `c` is too big (the tooth's
+/// addendum at the small end, or the run of the teeth).
+fn bevel_cuts(b: &crate::plan::BevelShape, c: f64, faces: ChamferFaces) -> Result<Vec<Vec<V2>>, String> {
+    let (sd, cd) = b.delta.sin_cos();
+    let apex = V2::new(0.0, b.apex_z);
+    let pitch = |d: f64| V2::new(d * sd, b.apex_z - d * cd);
+    // Where the teeth end at cone distance d: a point and the line's direction out from the axis.
+    let dir = if b.cone_ends { V2::new(cd, sd) } else { V2::new(1.0, 0.0) };
+    let (ph, pt) = (pitch(b.heel), pitch(b.toe));
+    if !(dir.x > 1e-9) || !(b.tip_heel > ph.x) {
+        return Err("its tips are not where they should be".into());
+    }
+    let heel = ph + dir * ((b.tip_heel - ph.x) / dir.x);
+    let t = (heel - apex).norm();
+    // The tip line from the apex meets the small end's line.
+    let den = t.x * dir.y - t.y * dir.x;
+    if den.abs() < 1e-12 {
+        return Err("its tips run along its small end".into());
+    }
+    let q = pt - apex;
+    let toe = apex + t * ((q.x * dir.y - q.y * dir.x) / den);
+    let addendum = (toe - pt).len();
+    if c >= 0.9 * addendum {
+        return Err(format!("addendum at its small end {} mm", num(addendum)));
+    }
+    let runs: Vec<f64> = match b.v_groove {
+        Some((g0, g1)) => vec![g0 - b.toe, b.heel - g1],
+        None => vec![b.heel - b.toe],
+    };
+    if runs.iter().any(|r| 2.0 * c >= *r - 1e-9) {
+        return Err(format!("its teeth run {} mm along the cone between chamfered ends", num(runs.iter().copied().fold(f64::INFINITY, f64::min))));
+    }
+    // The cut at corner `k`: `end` into the material along the end, `tip` along the tips into the
+    // teeth; reaching past the corner, four points (not three: never read as a spur's end pair).
+    let cut = |k: V2, end: V2, tip: V2| {
+        let (a, bb) = (k + end * c, k + tip * c);
+        let u = (bb - a).norm();
+        let e = 0.1 * c;
+        let out = k - (end + tip).norm() * (2.0 * c);
+        let (a2, b2) = (a - u * e, bb + u * e);
+        let mid = (a2 + b2) * 0.5;
+        vec![a2, out, b2, mid + (out - mid) * 0.05]
+    };
+    let inward = dir * -1.0;
+    let mut out = Vec::new();
+    if faces != ChamferFaces::A {
+        out.push(cut(heel, inward, t * -1.0));
+    }
+    if faces != ChamferFaces::B {
+        out.push(cut(toe, inward, t));
+    }
+    if let Some((g0, g1)) = b.v_groove {
+        // The groove's ends are the sphere about the apex: square to the tips there.
+        let down = V2::new(t.y, -t.x);
+        out.push(cut(apex + t * g0, down, t * -1.0));
+        out.push(cut(apex + t * g1, down, t));
+    }
+    Ok(out)
 }
 
 /// The two chamfer cuts at `body.steps[i]` and `body.steps[i + 1]`, both ends of one outside

@@ -600,6 +600,51 @@ fn a_tooth_chamfer_on_v_teeth_chamfers_both_ends_of_each_half() {
     }
 }
 
+/// A bevel pair takes the tooth chamfer round its tips where they end, at the large and the small
+/// end of each gear (two cuts a gear), and on V teeth either side of the relief groove too (four):
+/// each a little material off the tips, none of the body.
+#[test]
+fn a_tooth_chamfer_goes_round_a_bevel_pairs_tips() {
+    use crate::items::{BlockSettings, ModuleBlock};
+    use crate::mesh3d::{Solid, overlap};
+    use crate::plan::chamfer::{ChamferFaces, ToothChamfer, tooth_chamfer};
+    // Apex at (0, 0, 20): gear 1 r 15 about z, gear 2 r 20 about x, cone distance 25 both.
+    let items = vec![item("C", ItemKind::Bevel, vec![circ([0.0; 3], Z, 15.0), circ([15.0, 0.0, 20.0], X, 20.0)])];
+    for v in [false, true] {
+        let blocks = if v {
+            vec![ModuleBlock {
+                id: "M".into(),
+                module: None,
+                members: vec![0],
+                settings: BlockSettings { helix: Some(20.0), herringbone: true, ..Default::default() },
+            }]
+        } else {
+            Vec::new()
+        };
+        let e = crate::blocks::expand_blocks(&items, &[], &blocks);
+        let plain = plan_items(&e.items, &e.links, &blocks, None, &Spec::default()).unwrap_or_else(|e| panic!("{e}"));
+        assert!(plain.error.is_none(), "{:?}", plain.error);
+        let module = plain.gears[0].module;
+        let mut sp = plain.clone();
+        tooth_chamfer(&e.items, &mut sp, ToothChamfer { size: 0.3 * module, faces: ChamferFaces::Both }).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!sp.notes.iter().any(|n| n.contains("not applied")), "{:?}", sp.notes);
+        let count = |x: &SystemPlan| x.plan.bodies.iter().map(|b| b.steps.len()).sum::<usize>();
+        assert_eq!(count(&sp), count(&plain) + if v { 8 } else { 4 }, "V {v}");
+        for (a, b) in plain.plan.bodies.iter().zip(&sp.plan.bodies) {
+            let vol = |x: &crate::plan::Body| {
+                let s = Solid::new(x, 0.03);
+                overlap(&s, &s, 0.06)
+            };
+            let (before, after) = (vol(a), vol(b));
+            assert!(after < before && after > 0.97 * before, "V {v} {}: {before:.1} -> {after:.1} mm³", a.name);
+        }
+        // Too big for the teeth at the small end: named.
+        let mut big = plain.clone();
+        let err = tooth_chamfer(&e.items, &mut big, ToothChamfer { size: 2.0 * module, faces: ChamferFaces::Both }).unwrap_err();
+        assert!(err.starts_with("Tooth chamfer") && err.contains("too big for Gear C"), "{err}");
+    }
+}
+
 /// A worm pair keeps its teeth plain, with a note naming it; a compound's layers are chamfered
 /// except where the smaller layer meets the bigger one.
 #[test]

@@ -270,16 +270,26 @@ fn installed(_s: &Session, _id: &str) -> Option<craft_plugin::Manifest> {
     None
 }
 
+/// Plugin-data folders kept by SolidCraft's own commands, not by a plugin, with the name to show:
+/// the Gear Generator keeps its sets in `gear-generator/sets/` (see `cmd::gear`). Their data can
+/// always be changed here, so a design holding it never says a plugin is missing.
+pub(crate) const BUILT_IN: &[(&str, &str)] = &[("gear-generator", "Gear Generator")];
+
 /// The plugins that keep data in the open design, and whether each can change it here.
 pub fn list(s: &Session) -> Vec<StoredPlugin> {
     let data = &s.doc.plugin_data;
     plugin_data::plugins(data)
         .into_iter()
         .map(|id| {
-            let meta = plugin_data::meta(data, &id);
+            let mut meta = plugin_data::meta(data, &id);
+            let built_in = BUILT_IN.iter().find(|(owner, _)| *owner == id).map(|(_, name)| *name);
+            if let Some(name) = built_in {
+                meta.name = name.to_string();
+            }
             let manifest = installed(s, &id);
             let writes = manifest.as_ref().and_then(|m| m.runtime.as_ref()).and_then(|runtime| runtime.data_format);
             let status = match (&manifest, writes) {
+                (None, _) if built_in.is_some() => DataStatus::Ready,
                 (None, _) => DataStatus::Missing,
                 (Some(_), _) if s.disabled_plugins.contains(&id) => DataStatus::Disabled,
                 (Some(_), None) => DataStatus::Older,

@@ -2120,3 +2120,16 @@ fn a_shaft_drawn_short_of_a_bevel_in_its_block_runs_into_it() {
         assert!(inside(&s, &e[0], [0.0, y, 0.0]), "the pinion's axis at y {y} is in its body {}", e[0]);
     }
 }
+
+/// A design holding gear sets keeps them as SolidCraft's own data, not a missing plugin's: opening
+/// it doesn't ask for a plugin to be installed, and the sets can still be changed.
+#[test]
+fn gear_sets_are_built_in_data_not_a_missing_plugin() {
+    let owner = super::STORE.split('/').next().unwrap_or_default();
+    assert!(crate::plugin::storage::BUILT_IN.iter().any(|(id, _)| *id == owner), "{owner}");
+    let mut s = Session::default();
+    run(&mut s, "gear.create", json!({"type": "spur", "module": 2, "teeth": 20, "face_width": 10}));
+    let listed = run(&mut s, "storage.list", json!({}));
+    let gears = listed["plugins"].as_array().unwrap().iter().find(|p| p["plugin"] == owner).cloned().unwrap_or_default();
+    assert_eq!((&gears["status"], &gears["read_only"], &gears["name"]), (&json!("ready"), &json!(false), &json!("Gear Generator")), "{listed}");
+}

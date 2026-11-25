@@ -38,7 +38,7 @@ use crate::SolveApp;
 use crate::dialogs::OP_LABELS;
 use crate::dialogs_gear::{self as dg, Gear, Msg, Tab};
 use crate::dialogs_gear_items::{DiffForm, FACE_PRESETS};
-use crate::dialogs_gear_links::{GearSettings, item_id};
+use crate::dialogs_gear_links::{Block, GearSettings, item_id};
 use crate::selection::SelInput;
 use crate::ui_kit::{self, BackingTooltipExt as _, choice_row, hint_row};
 
@@ -1032,6 +1032,46 @@ fn item_picker(ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], input: 
     a
 }
 
+/// What a bevel pair's block makes of its teeth, said under its Style: the note, and the block's
+/// helix as typed (the spiral angle's hint).
+#[derive(Debug, PartialEq)]
+pub(crate) struct BlockBevel {
+    pub text: String,
+    pub helix: String,
+}
+
+/// A bevel pair's teeth when its block decides them, as the planner does
+/// ([`solidcraft_gear::blocks::block_spiral`]): with no spiral angle of its own, a block with a
+/// helix makes a Straight pair Spiral (Chevron when the block's teeth are herringbone) and gives a
+/// Spiral or Chevron pair the block's angle. `None`: the pair's own style and angle stand (its
+/// own spiral angle given, or the block's helix empty or 0). `style` is the Style row's index,
+/// `n` the block's place (its title).
+pub(crate) fn block_bevel(b: &Block, n: usize, style: usize, spiral: &str) -> Option<BlockBevel> {
+    let helix = b.helix.trim();
+    if helix.is_empty() || !spiral.trim().is_empty() {
+        return None;
+    }
+    // A plain number (degrees, with or without "deg"): 0 changes nothing, and it is shown rounded.
+    // Anything else (an expression) is taken as an angle and shown as typed.
+    let shown = match helix.trim_end_matches("deg").trim().parse::<f64>() {
+        Ok(v) if v.abs() < 1e-9 => return None,
+        Ok(v) => format!("{} deg", dg::fmt((v * 1000.0).round() / 1000.0)),
+        Err(_) => helix.to_string(),
+    };
+    let made = match style {
+        0 if b.herringbone => "chevron (V)",
+        0 | 1 => "spiral",
+        _ => "chevron (V)",
+    };
+    let title = b.title(n);
+    let text = if style == 0 {
+        format!("{title}'s helix makes these teeth {made} at {shown}, not straight. Give a spiral angle of 0 to keep them straight.")
+    } else {
+        format!("Spiral angle from {title}'s helix: {shown}. Give one here to use your own.")
+    };
+    Some(BlockBevel { text, helix: shown })
+}
+
 /// Teeth: the selected gear's helix (or a bevel's style and spiral) and profile shift; the tooth
 /// form every gear takes; the tooth chamfer.
 fn teeth_tab(ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], input: &mut usize) -> bool {
@@ -1046,11 +1086,17 @@ fn teeth_tab(ui: &mut egui::Ui, k: &mut Gear, inputs: &mut [SelInput], input: &m
                 return;
             }
             if matches!(kind, ItemKind::Bevel | ItemKind::Hypoid) {
+                let block = k.links.block_of(a).and_then(|b| Some((k.links.blocks().get(b)?, b)));
                 let it = &mut k.items[a];
                 choice_row(ui, "Style", &format!("gear_bevel_{a}"), &mut it.bevel_style, &["Straight", "Spiral", "Chevron"])
                     .backing_on_hover_text(TIP_V_BEVEL);
-                if it.bevel_style > 0 || kind == ItemKind::Hypoid {
-                    enter |= field(ui, "Spiral angle", &mut it.spiral, "35 deg", TIP_SPIRAL);
+                let from_block = if kind == ItemKind::Bevel { block.and_then(|(b, n)| block_bevel(b, n, it.bevel_style, &it.spiral)) } else { None };
+                if let Some(note) = &from_block {
+                    ui_kit::text(ui, &note.text, ui_kit::Text::Note("gear_bevel_block"));
+                }
+                if it.bevel_style > 0 || kind == ItemKind::Hypoid || from_block.is_some() {
+                    let hint = from_block.as_ref().map_or("35 deg", |n| n.helix.as_str());
+                    enter |= field(ui, "Spiral angle", &mut it.spiral, hint, TIP_SPIRAL);
                 }
             }
             let g = gear_switch(ui, k, a);

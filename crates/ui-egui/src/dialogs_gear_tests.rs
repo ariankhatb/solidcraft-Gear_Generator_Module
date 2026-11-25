@@ -1154,6 +1154,7 @@ fn round_two_fixes_wording_and_new_circles_on_edit() {
 /// apex), a click there picks the point, not the line; a point on no line (a free point, a
 /// circle's centre) leaves the click to the curve under it.
 #[test]
+#[allow(clippy::unreachable)]
 fn points_on_lines_win_over_the_line_in_picking() {
     use crate::viewport::Hit;
     use solidcore_record::{Vec2, Vec3};
@@ -1655,4 +1656,28 @@ fn a_blocks_teeth_toggle_sends_helical_or_herringbone() {
     set_teeth_style(&mut b.helix, &mut b.herringbone, 0);
     let p = request(&app, &g, &inputs).unwrap();
     assert!(p["module_blocks"][0].get("helix_angle").is_none() && p["module_blocks"][0].get("herringbone").is_none(), "{p}");
+}
+
+/// A bevel pair in a block with a helix says what the block makes of its teeth: a Straight pair
+/// is built spiral (chevron in a herringbone block) at the block's angle, unless the pair gives its
+/// own spiral angle; a block helix of 0 or none says nothing.
+#[test]
+fn a_bevel_pair_says_when_its_block_makes_it_spiral() {
+    use crate::dialogs_gear_links::Block;
+    use crate::dialogs_gear_view::block_bevel;
+    let b = Block { helix: "14.999999999999998".into(), ..Block::default() };
+    let n = block_bevel(&b, 1, 0, "").expect("a straight pair in a helix block is spiral");
+    assert_eq!(n.helix, "15 deg");
+    assert!(n.text.contains("Block 2") && n.text.contains("spiral at 15 deg") && n.text.contains("spiral angle of 0"), "{}", n.text);
+    let v = Block { helix: "20 deg".into(), herringbone: true, ..Block::default() };
+    assert!(block_bevel(&v, 0, 0, "").unwrap().text.contains("chevron (V) at 20 deg"));
+    // A spiral pair takes the block's angle; its own angle (0 included) wins.
+    assert!(block_bevel(&b, 0, 1, "").unwrap().text.starts_with("Spiral angle from Block 1"));
+    assert_eq!(block_bevel(&b, 0, 0, "0"), None);
+    assert_eq!(block_bevel(&b, 0, 1, "35 deg"), None);
+    // No helix, or 0: the pair's own style stands.
+    assert_eq!(block_bevel(&Block::default(), 0, 0, ""), None);
+    assert_eq!(block_bevel(&Block { helix: "0 deg".into(), ..Block::default() }, 0, 0, ""), None);
+    // An expression is shown as typed.
+    assert_eq!(block_bevel(&Block { helix: "d9 / 2".into(), ..Block::default() }, 0, 0, "").unwrap().helix, "d9 / 2");
 }

@@ -140,13 +140,19 @@ fn polyline_samples_arcs_the_right_way() {
     assert!(pts.iter().all(|p| p.x >= -1e-9 && p.y >= -1e-9));
     // From (1, 0) to (0, 1), every point on the unit circle, with points between the ends.
     let on = |p: &V2, q: V2| (p.x - q.x).abs() < 1e-12 && (p.y - q.y).abs() < 1e-12;
-    assert!(pts.len() >= 3 && pts.first().is_some_and(|p| on(p, V2::new(1.0, 0.0))) && pts.last().is_some_and(|p| on(p, V2::new(0.0, 1.0))), "{pts:?}");
+    assert!(
+        pts.len() >= 3 && pts.first().is_some_and(|p| on(p, V2::new(1.0, 0.0))) && pts.last().is_some_and(|p| on(p, V2::new(0.0, 1.0))),
+        "{pts:?}"
+    );
     assert!(pts.iter().all(|p| (p.len() - 1.0).abs() < 1e-12));
     let back = seg.reversed();
     let mut pts = Vec::new();
     back.sample(0.001, &mut pts);
     assert!(pts.iter().all(|p| p.x >= -1e-9 && p.y >= -1e-9));
-    assert!(pts.len() >= 3 && pts.first().is_some_and(|p| on(p, V2::new(0.0, 1.0))) && pts.last().is_some_and(|p| on(p, V2::new(1.0, 0.0))), "{pts:?}");
+    assert!(
+        pts.len() >= 3 && pts.first().is_some_and(|p| on(p, V2::new(0.0, 1.0))) && pts.last().is_some_and(|p| on(p, V2::new(1.0, 0.0))),
+        "{pts:?}"
+    );
     assert!(pts.iter().all(|p| (p.len() - 1.0).abs() < 1e-12));
     assert!(close(TAU, TAU, 0.0));
 }
@@ -240,4 +246,21 @@ fn no_shaft_is_offered_when_none_fits_inside_the_roots() {
     let bore = crate::hub::Bore { on_shaft: true, diameter: 3.0, ..crate::hub::Bore::default() };
     let w = crate::hub::root_words(&bore, 2.2, 1.0);
     assert!(w.contains("no shaft fits") && !w.contains("at most"), "{w}");
+}
+
+#[test]
+fn sampled_arcs_and_circles_end_exactly_where_they_end() {
+    // A quarter arc from (1, 0) to (0, 1): cos(π/2) is 6e-17, not 0, so its end recomputed from
+    // its angle missed (0, 1); a circle's last point recomputed at 2π missed its first.
+    let mut pts = Vec::new();
+    Seg::Arc { c: V2::ZERO, a: V2::new(1.0, 0.0), b: V2::new(0.0, 1.0), ccw: true }.sample(0.001, &mut pts);
+    assert_eq!((pts.first().copied(), pts.last().copied()), (Some(V2::new(1.0, 0.0)), Some(V2::new(0.0, 1.0))));
+    let mut ring = Vec::new();
+    Seg::Circle(V2::new(3.0, 4.0), 2.5).sample(0.001, &mut ring);
+    assert!(ring.len() > 3);
+    assert_eq!(ring.first(), ring.last());
+    // The chord cap: a circle needing more than MOST_ARC_STEPS chords gets that many.
+    let mut big = Vec::new();
+    Seg::Circle(V2::ZERO, 1e4).sample(1e-6, &mut big);
+    assert_eq!(big.len(), crate::geom::MOST_ARC_STEPS + 1);
 }

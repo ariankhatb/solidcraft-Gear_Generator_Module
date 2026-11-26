@@ -666,19 +666,6 @@ pub fn recognize(d: &Drawn) -> Option<Kind> {
     })
 }
 
-/// Whether two modes are the same family for a hint (spur, helical, herringbone; straight and
-/// spiral bevels; rack and worm share a picture).
-pub fn same_family(a: Kind, b: Kind) -> bool {
-    let fam = |k: Kind| match k {
-        Kind::Spur | Kind::Helical | Kind::Herringbone => 0,
-        Kind::Bevel | Kind::SpiralBevel | Kind::FaceGear | Kind::BevelPlanetary => 1,
-        Kind::Rack | Kind::Worm => 2,
-        Kind::Pair | Kind::Cycloidal => 3,
-        k => 10 + k as i32,
-    };
-    fam(a) == fam(b)
-}
-
 /// The module and tooth counts that give the diameters `ds` (each with its factor: pitch Ø =
 /// module × teeth × factor, e.g. 1 / cos β): the largest standard module (ISO 54 series I,
 /// then II) that gives each within half a percent with at least `zmin` teeth; otherwise the

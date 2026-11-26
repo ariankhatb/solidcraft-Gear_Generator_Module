@@ -17,7 +17,7 @@
 
 use std::f64::consts::PI;
 
-use crate::geom::{Outline, Seg, V2};
+use crate::geom::{Outline, V2};
 use crate::involute::{FILLET_TOLERANCE, Internal, Involute, PROFILE_TOLERANCE, ToothFlank, rack_outline, teeth_outline};
 
 // ---------------------------------------------------------------------------------------------
@@ -1164,16 +1164,4 @@ pub fn cell_of(src: &TeethSource, phase: f64) -> Result<ToothCell, String> {
         Form::Internal { ring, f } => internal(src, ring, f, phase),
         Form::Rack { g, count, below } => rack(src, g, *count, *below),
     }
-}
-
-/// The edges of a cell as plain segments (tooth 0), for checks.
-pub fn cell_segments(cell: &ToothCell) -> Result<Vec<Seg>, String> {
-    let mut out = Vec::new();
-    for e in cell.edges.iter().chain(&cell.closing) {
-        match e {
-            Edge::Line(a, b) => out.push(Seg::Line(cell.end(a)?, cell.end(b)?)),
-            Edge::Arc(a, b) => out.push(Seg::Arc { c: V2::ZERO, a: cell.end(a)?, b: cell.end(b)?, ccw: true }),
-        }
-    }
-    Ok(out)
 }

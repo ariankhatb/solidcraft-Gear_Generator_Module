@@ -420,18 +420,6 @@ impl Simple {
     pub fn relation(&self) -> Relation {
         relation_of(self.shaft_angle.unwrap_or(0.0), self.offset.or(self.center_distance).unwrap_or(0.0))
     }
-
-    /// Takes the shafts' angle and offset from a relation (as [`axes::relate`] gives).
-    pub fn set_relation(&mut self, rel: &Relation) {
-        let (a, e) = match *rel {
-            Relation::Coincident => (0.0, 0.0),
-            Relation::Parallel { distance, .. } => (0.0, distance),
-            Relation::Intersecting { angle, .. } => (angle, 0.0),
-            Relation::Skew { angle, offset, .. } => (angle, offset),
-        };
-        self.shaft_angle = Some(a);
-        self.offset = Some(e);
-    }
 }
 
 /// Two shafts from numbers: the angle between them (degrees) and the shortest distance between

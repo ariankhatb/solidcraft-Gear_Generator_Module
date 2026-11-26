@@ -204,3 +204,15 @@ fn a_shaft_item_that_cant_be_used_is_said_never_dropped() {
     assert!(sp.notes.iter().any(|n| n.contains("Shaft S runs on past its line to") && n.contains("Gear M")), "{:?}", sp.notes);
     assert!(shaft_length(&sp, 4) > 100.0, "{}", shaft_length(&sp, 4));
 }
+
+#[test]
+fn a_shaft_carrying_gears_each_side_of_one_in_its_way_is_not_cut_between_them() {
+    // Shaft S along the x axis from −80 to 80 carries both bevels' first gears (KB0 at −80, KF0
+    // at +80, each its own body) but not M at the origin, which is in its way between them. No
+    // stretch clear of M reaches both: cutting S to one side used to leave the other bevel on no
+    // shaft. The stretch between them stays, and M in it is a collision.
+    let items = drawing(None, vec![shaft_item("S", [-80.0, 0.0, 0.0], [80.0, 0.0, 0.0])]);
+    let links = vec![mesh(g(0, 0), g(1, 0)), shaft(g(4, 0), g(2, 0)), shaft(g(4, 0), g(3, 0))];
+    let sp = plan_items(&items, &links, &[], None, &Spec::default()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(sp.error.as_deref().is_some_and(|e| e.contains("collide")), "{:?}\nnotes {:?}", sp.error, sp.notes);
+}

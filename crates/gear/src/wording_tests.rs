@@ -110,6 +110,7 @@ fn a_flat_cones_refusal_names_the_fewest_teeth_at_any_module() {
         };
         let few = block(22);
         assert!(few.contains("needs at least 23 teeth, it has 22") && few.contains("module doesn't change this"), "m{m}: {few}");
-        assert!(!block(23).contains("too tall"), "m{m}: {}", block(23));
+        // 23 teeth pass: planned with no error at all, not merely without this one.
+        assert!(block(23).is_empty(), "m{m}: {}", block(23));
     }
 }

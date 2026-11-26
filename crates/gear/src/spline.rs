@@ -145,8 +145,9 @@ impl Spline {
     fn hub_gear(&self) -> Involute {
         Involute { backlash: -self.clearance / 2.0, ..self.shaft() }
     }
-    /// Space width on the pitch circle of the hub (= the shaft's tooth thickness without clearance,
-    /// plus the clearance).
+    /// Space width on the pitch circle of the hub: the shaft's nominal tooth thickness plus half the
+    /// clearance (the other half comes off the shaft's teeth), so the shaft's teeth as cut sit in
+    /// it with the whole clearance between them.
     pub fn hub_space(&self) -> f64 {
         self.hub_gear().thickness()
     }

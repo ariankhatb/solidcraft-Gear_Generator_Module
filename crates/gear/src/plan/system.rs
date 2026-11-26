@@ -1934,10 +1934,17 @@ fn trim_shafts(items: &[GearItem], out: &mut SystemPlan, sweeps: &mut Sweeps) {
             else {
                 continue;
             };
-            if reaches((from_band, to_band)) < anchors.len() && anchors.iter().any(|(lo, hi)| lo == hi) {
-                // A gear on the shaft's own body is in the way's stretch: a collision, said there.
-                continue;
-            }
+            // No free run reaches every gear it carries (on its own body or another of its rigid
+            // member): the whole stretch between them stays, what is in the way there being a
+            // collision said by `collisions`, and only the ends past them are cut.
+            let (from_band, to_band) = if reaches((from_band, to_band)) < anchors.len() {
+                let band = |z: f64| (((z - z0) / dz).floor().max(0.0) as usize).min(n - 1);
+                let lo = anchors.iter().map(|a| a.0).fold(f64::INFINITY, f64::min);
+                let hi = anchors.iter().map(|a| a.1).fold(f64::NEG_INFINITY, f64::max);
+                (band(lo), band(hi))
+            } else {
+                (from_band, to_band)
+            };
             let below = (0..from_band).rev().find(|i| blocked[*i].is_some());
             let above = (to_band + 1..n).find(|i| blocked[*i].is_some());
             let from = below.map_or(z0, |i| z0 + dz * (i + 1) as f64 + GAP);

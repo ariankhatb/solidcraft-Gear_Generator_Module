@@ -45,11 +45,9 @@ fn fact(p: &Plan, label: &str) -> f64 {
 fn assembly_matches_preview(p: &Plan) {
     assert_eq!(p.assembly.members.len(), p.bodies.len());
     for (k, g) in p.preview.iter().enumerate() {
-        let r = p.assembly.ratio(0, k);
-        if g.speed != 0.0
-            && k > 0
-            && let Some(r) = r
-        {
+        if g.speed != 0.0 && k > 0 {
+            // A gear the preview turns is linked to gear 1: no ratio is a missing link, not a pass.
+            let r = p.assembly.ratio(0, k).unwrap_or_else(|| panic!("gear {}: no assembly ratio from gear 1", k + 1));
             assert!((r - g.speed).abs() < 1e-9, "gear {}: assembly {r}, preview {}", k + 1, g.speed);
         }
     }
@@ -91,11 +89,15 @@ fn every_gear_meshes_at_any_angle_round_its_driver() {
     // Gear 3 at several angles round gear 2: the phasing follows the line of centres.
     for deg in [20.0f64, 75.0, 110.0, 160.0, 230.0, 300.0] {
         let a = deg.to_radians();
-        let c = vec![circle(0.0, 0.0, 20.0), circle(50.0, 0.0, 30.0), circle(50.0 + 45.0 * a.cos(), 45.0 * a.sin(), 15.0)];
+        let (x3, y3) = (50.0 + 45.0 * a.cos(), 45.0 * a.sin());
+        let c = vec![circle(0.0, 0.0, 20.0), circle(50.0, 0.0, 30.0), circle(x3, y3, 15.0)];
+        // Gear 3's centre over 50 mm from gear 1's (15 mm more than their two pitch radii, far
+        // more than two addenda of any module these circles take) is clear of it: it must build.
+        let clear = x3.hypot(y3) > 50.0;
         match train(Kind::Spur, c, Simple::default()) {
             Ok((_, p, _)) => meshes_clean(&p, 2),
             // Round towards gear 1, gear 3 runs into it (or its circle crosses): refused, not built.
-            Err(e) => assert!(e.contains("gears 1 and 3"), "{deg}: {e}"),
+            Err(e) => assert!(!clear && e.contains("gears 1 and 3"), "{deg}: {e}"),
         }
     }
 }

@@ -31,6 +31,15 @@ fn lofted(step: &Step) -> Option<Vec<Outline>> {
     }
 }
 
+/// Every loft in a step, the steps of a group included (a group's lofts were skipped).
+fn lofts(step: &Step) -> Vec<Vec<Outline>> {
+    match step {
+        Step::Group { steps, .. } => steps.iter().flat_map(lofts).collect(),
+        Step::Placed { step, .. } => lofts(step),
+        _ => lofted(step).into_iter().collect(),
+    }
+}
+
 /// The tooth count a loft's outline repeats with: the first of the set's counts that divides
 /// its corner count (whole-tooth restarts are harmless), else none (any restart must be 0).
 fn teeth_of(s: &Spec, sections: &[Outline], body: &str) -> usize {
@@ -52,28 +61,34 @@ fn teeth_of(s: &Spec, sections: &[Outline], body: &str) -> usize {
 }
 
 fn check(s: &Spec, label: &str, bad: &mut Vec<String>) {
-    let Ok(p) = plan(s) else { return };
+    // Every set checked here is one that builds: a refusal is recorded, not skipped.
+    let p = match plan(s) {
+        Ok(p) => p,
+        Err(e) => {
+            bad.push(format!("{label}: doesn't plan: {e}"));
+            return;
+        }
+    };
     for b in p.bodies.iter().chain(p.clearance.iter()) {
         for (i, st) in b.steps.iter().enumerate() {
             // The kernel's loft limit, counted as its spans (a 4-start z40 worm wheel once came
             // to 19200 and the kernel refused it).
-            if let Some(sections) = lofted(st)
-                && sections.iter().map(crate::plan::loft_curves).sum::<usize>() > crate::plan::LOFT_CURVE_LIMIT
-            {
-                bad.push(format!(
-                    "{label}: {} step {} has {} curves in {} sections: over the kernel's loft limit of 16384",
-                    b.name,
-                    i + 1,
-                    sections.iter().map(crate::plan::loft_curves).sum::<usize>(),
-                    sections.len()
-                ));
-            }
-            if let Some(sections) = lofted(st)
-                && sections.len() >= 2
-                && sections.iter().all(|o| o.segs.len() == sections[0].segs.len())
-                && crate::hypoid::slips(&sections, teeth_of(s, &sections, &b.name))
-            {
-                bad.push(format!("{label}: {} step {} ({} sections)", b.name, i + 1, sections.len()));
+            for sections in lofts(st) {
+                if sections.iter().map(crate::plan::loft_curves).sum::<usize>() > crate::plan::LOFT_CURVE_LIMIT {
+                    bad.push(format!(
+                        "{label}: {} step {} has {} curves in {} sections: over the kernel's loft limit of 16384",
+                        b.name,
+                        i + 1,
+                        sections.iter().map(crate::plan::loft_curves).sum::<usize>(),
+                        sections.len()
+                    ));
+                }
+                if sections.len() >= 2
+                    && sections.iter().all(|o| o.segs.len() == sections[0].segs.len())
+                    && crate::hypoid::slips(&sections, teeth_of(s, &sections, &b.name))
+                {
+                    bad.push(format!("{label}: {} step {} ({} sections)", b.name, i + 1, sections.len()));
+                }
             }
         }
     }
@@ -180,6 +195,9 @@ fn a_pair_can_be_herringbone() {
             })
             .count();
         assert!(twisted >= 1, "{}: {:?}", b.name, b.steps.len());
+        // Both hands: a half twisting one way and a half twisting back.
+        let turns = |sign: f64| b.steps.iter().any(|st| matches!(st, Step::Prism { twist, .. } if *twist * sign > 0.0));
+        assert!(turns(1.0) && turns(-1.0), "{}: one hand only", b.name);
     }
     let simple = crate::simple::outputs_of(&s);
     assert!(simple.herringbone);

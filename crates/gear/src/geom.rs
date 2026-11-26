@@ -138,17 +138,25 @@ impl Seg {
                     }
                 }
                 let n = arc_steps(r, sweep.abs(), tol);
-                for i in 0..=n {
+                // The ends exactly (not recomputed from their angles), so pieces sampled end to
+                // end close up.
+                out.push(*a);
+                for i in 1..n {
                     let t = a0 + sweep * i as f64 / n as f64;
                     out.push(*c + V2::polar(r, t));
                 }
+                out.push(*b);
             }
             Seg::Spline(p) => natural_spline(p, 6, out),
             Seg::Circle(c, r) => {
                 let n = arc_steps(*r, TAU, tol);
-                for i in 0..=n {
+                let first = *c + V2::polar(*r, 0.0);
+                out.push(first);
+                for i in 1..n {
                     out.push(*c + V2::polar(*r, TAU * i as f64 / n as f64));
                 }
+                // Closed exactly: the last point is the first.
+                out.push(first);
             }
         }
     }
@@ -176,10 +184,16 @@ impl Seg {
     }
 }
 
+/// The most chords [`Seg::sample`] puts on one arc or circle. It bounds the work on a huge
+/// circle at a fine tolerance, and there wins over `tol`: a whole circle of radius `r` is then
+/// within r·(1 − cos(π / 720)) ≈ 9.5e-6 · r of its chords, which is under `tol` for every circle
+/// up to `tol` / 9.5e-6 (about 105 mm at a tolerance of 1 µm).
+pub const MOST_ARC_STEPS: usize = 720;
+
 fn arc_steps(r: f64, sweep: f64, tol: f64) -> usize {
     let tol = tol.max(1e-6);
     let step = if r > tol { 2.0 * (1.0 - tol / r).clamp(-1.0, 1.0).acos() } else { PI };
-    ((sweep / step.max(1e-3)).ceil() as usize).clamp(1, 720)
+    ((sweep / step.max(1e-3)).ceil() as usize).clamp(1, MOST_ARC_STEPS)
 }
 
 /// The curve a sketch's fit point spline makes through `p`: a natural cubic (zero curvature at

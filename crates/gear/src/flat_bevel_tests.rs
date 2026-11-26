@@ -289,7 +289,8 @@ fn dump_trim_scripts() {
             outline.clone()
         };
         let n = if twist.abs() < 1e-12 {
-            std::env::var("FLAT_N").ok().and_then(|v| v.parse().ok()).unwrap_or(2)
+            // (At least two: one section is no loft, and k / (n − 1) would be 0 / 0.)
+            std::env::var("FLAT_N").ok().and_then(|v| v.parse::<usize>().ok()).filter(|n| *n >= 2).unwrap_or(2)
         } else {
             taper_sections(outline, *twist, *scale)
         };

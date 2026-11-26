@@ -112,7 +112,12 @@ const fn slot(label: &'static str, role: Role, optional: bool, hint: &'static st
 /// before there is a sketch, and `gear.sketch` draws it as a native sketch): the origin dot at gear 1's centre
 /// (a bevel's apex), and the circles and lines its rule wants.
 pub fn template(k: Kind, s: &Spec) -> Drawn {
-    let r = |z: u32| s.module * f64::from(z) / 2.0;
+    // Helical teeth draw their transverse pitch circles, m·z / (2 cos β), as the drawing is read
+    // back (a worm's helix is its hand, a spur's is unused).
+    let helical = matches!(k, Kind::Helical | Kind::Herringbone | Kind::Pair | Kind::Internal | Kind::Planetary | Kind::Rack);
+    let cb = if helical { s.helix.to_radians().cos() } else { 1.0 };
+    let cb = if cb.is_finite() && cb > 1e-6 { cb } else { 1.0 };
+    let r = |z: u32| s.module * f64::from(z) / (2.0 * cb);
     let c = |x: f64, y: f64, r: f64| Circle { c: V2::new(x, y), r };
     let l = |ax: f64, ay: f64, bx: f64, by: f64| Line { a: V2::new(ax, ay), b: V2::new(bx, by) };
     let mut d = Drawn { points: vec![V2::ZERO], ..Drawn::default() };
@@ -1665,8 +1670,16 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
     use crate::plan::{LinkKind, SetMember, Train, TrainGear, TrainLink};
     let n = circles.len();
     let mut out = Sized { errors: vec![None; n], ..Sized::default() };
+    // A refusal of the whole train still gives a row per circle (as `errors` has), so callers
+    // that walk the circles can index them.
     let whole = |out: &mut Sized, e: String| {
         out.error = Some(e);
+        if out.members.len() < n {
+            out.members = (0..n).map(|i| SetMember { source: i, ..SetMember::default() }).collect();
+        }
+        if out.shifts.len() < n {
+            out.shifts = vec![0.0; n];
+        }
     };
     if n == 0 {
         whole(&mut out, "draw the gears' pitch circles".into());
@@ -2241,8 +2254,9 @@ pub fn size_train(circles: &[TrainCircle], style: Kind, settings: &crate::simple
         let (from, to) = on
             .iter()
             .filter_map(|j| circles[*j].shaft_span)
-            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
+            // Each span in order first: a line drawn either way round keeps both its ends.
             .map(|(a, b)| (a.min(b), a.max(b)))
+            .reduce(|a, b| (a.0.min(b.0), a.1.max(b.1)))
             .unwrap_or((lo - ext, hi + ext));
         if to - from > 1e-6 {
             shafts.push(crate::plan::TrainShaft { center: c[i].c, from, to, diameter: d, gears: on });

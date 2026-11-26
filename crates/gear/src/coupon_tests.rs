@@ -277,10 +277,12 @@ fn coupons_of_random_sets_are_buildable_and_mesh_like_the_set() {
         // Where the whole set meshes cleanly, so does a coupon with teeth enough to carry the
         // contact through a pitch.
         let whole: Vec<Verdict> = check_mesh(&full).iter().take(2).map(|x| x.verdict).collect();
+        // (A pair or planetary set always has a mesh to check: an empty list is not a pass.)
+        assert!(!whole.is_empty(), "case {i}: the whole set has no mesh to check\n{s:?}");
         if s.coupon_teeth >= 5 && whole.iter().all(|v| *v == Verdict::Ok) {
             compared += 1;
             let got = check_mesh(&p);
-            assert!(got.iter().all(|x| x.verdict == Verdict::Ok), "case {i}: {got:?}\n{s:?}");
+            assert!(!got.is_empty() && got.iter().all(|x| x.verdict == Verdict::Ok), "case {i}: {got:?}\n{s:?}");
         }
     }
     eprintln!("coupons: {made} made, {refused} refused, {compared} mesh-checked against the whole set");

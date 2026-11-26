@@ -24,7 +24,9 @@ pub fn belt_length(r1: f64, r2: f64, a: f64) -> f64 {
 
 /// The closed path of an open belt (its pitch line moved outwards by `off`), counter-clockwise:
 /// round wheel 2 on the right, along the top, round wheel 1 on the left, back along the bottom.
-/// None when the wheels overlap.
+/// None when one wheel's pitch circle lies inside the other's or the offset leaves a wheel no
+/// radius; nothing else is checked (wheels closer than their radii' sum, and whether their rims
+/// or teeth clear each other, are the caller's).
 pub fn belt_path(r1: f64, r2: f64, a: f64, off: f64) -> Option<Outline> {
     if a <= (r1 - r2).abs() || r1 + off <= 0.0 || r2 + off <= 0.0 {
         return None;

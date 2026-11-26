@@ -482,7 +482,8 @@ fn design_with(s: &Spec, fix: Option<(f64, f64)>) -> Result<Design, String> {
         z1,
         z2,
         sigma,
-        offset: e,
+        // The offset built: under 1 µm the set is solved as a spiral bevel pair (no offset).
+        offset: if e < 1e-3 { 0.0 } else { e },
         delta1,
         delta2: d2,
         beta1,
@@ -2097,6 +2098,15 @@ mod tests {
         let e = design(&Spec { spiral_angle: 8.0, offset: 5.0, ..spec() }).unwrap_err();
         assert!(e.contains("leaves no room for an offset"), "{e}");
         assert!(design(&Spec { spiral_angle: 8.0, offset: 0.0, ..spec() }).is_ok());
+    }
+
+    #[test]
+    fn an_offset_too_small_to_build_is_recorded_as_none() {
+        // Under 1 µm the set is solved as a spiral bevel pair: its pinion axis is on the ring
+        // gear's (o1's y is 0), so the design's offset is 0, not the 0.5 µm asked.
+        let d = design(&Spec { offset: 5e-4, ..spec() }).unwrap();
+        assert_eq!(d.offset, 0.0);
+        assert!(d.o1[1].abs() < 1e-9, "{:?}", d.o1);
     }
 
     // -----------------------------------------------------------------------------------------

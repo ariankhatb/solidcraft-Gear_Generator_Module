@@ -192,3 +192,35 @@ fn every_set_can_have_its_keep_out_body() {
         assert_eq!(p.assembly.members.len(), p.bodies.len(), "{label}: the keep-out body is not a member");
     }
 }
+
+/// Gears rigid on one shaft turn the same way in the world even when one body faces the other
+/// way: A (z up) and B (z down) clustered on the z axis, B meshing C (z up) 50 mm off. A at +1
+/// about +z carries B at +1 about +z, and C turns −30/30 = −1 about +z (an outside mesh).
+#[test]
+fn a_cluster_member_facing_the_other_way_turns_with_its_cluster() {
+    use crate::plan::{Body, SetMember, assembly::from_members};
+    let body = |origin: [f64; 3], z: [f64; 3]| Body { name: String::new(), frame: Frame { origin, x: [1.0, 0.0, 0.0], z }, steps: Vec::new() };
+    let p = Plan {
+        bodies: vec![body([0.0; 3], [0.0, 0.0, 1.0]), body([0.0, 0.0, 10.0], [0.0, 0.0, -1.0]), body([50.0, 0.0, 10.0], [0.0, 0.0, 1.0])],
+        members: vec![
+            SetMember { teeth: 20, cluster: Some(0), body: Some(0), ..SetMember::default() },
+            SetMember { teeth: 30, meshes_with: vec![2], cluster: Some(0), body: Some(1), ..SetMember::default() },
+            SetMember { teeth: 30, meshes_with: vec![1], body: Some(2), ..SetMember::default() },
+        ],
+        clusters: vec![vec![0, 1]],
+        ..Plan::default()
+    };
+    let (a, issues) = from_members(&p).unwrap();
+    assert!(issues.is_empty(), "{issues:?}");
+    // Each member's turn about its own axis, down the tree from member 0.
+    let mut speed = [None, None, None];
+    speed[0] = Some(1.0);
+    for l in &a.links {
+        let (x, y) = l.members();
+        if let Some(s) = speed[x] {
+            speed[y] = Some(s * l.ratio());
+        }
+    }
+    let world: Vec<f64> = (0..3).map(|i| speed[i].unwrap() * a.members[i].axis.dir[2]).collect();
+    assert_eq!(world, vec![1.0, 1.0, -1.0], "{:?}", a.links);
+}

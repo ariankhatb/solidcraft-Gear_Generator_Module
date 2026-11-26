@@ -370,6 +370,9 @@ impl Parser<'_> {
                 while self.i < self.s.len() && self.s[self.i] != b'}' {
                     self.i += 1;
                 }
+                if self.i >= self.s.len() {
+                    return Err("missing }".into());
+                }
                 let key = String::from_utf8_lossy(&self.s[start..self.i]).into_owned();
                 self.i += 1;
                 (self.look)(&key).ok_or_else(|| format!("unknown `{key}`"))
@@ -413,7 +416,13 @@ impl Parser<'_> {
                     }
                     self.i += 1;
                     let a = args[0];
-                    let b = args.get(1).copied();
+                    // One argument, or exactly two; only min and max take more.
+                    let b = match args.len() {
+                        1 => None,
+                        2 => args.get(1).copied(),
+                        _ if id == "min" || id == "max" => Some(0.0),
+                        n => return Err(format!("`{id}` takes at most 2 arguments, not {n}")),
+                    };
                     return Ok(match (id.as_str(), b) {
                         ("sin", None) => a.sin(),
                         ("cos", None) => a.cos(),

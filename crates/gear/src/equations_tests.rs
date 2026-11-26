@@ -86,6 +86,21 @@ fn the_template_evaluator_reads_the_expression_language() {
 }
 
 #[test]
+fn the_template_evaluator_refuses_an_open_brace_and_extra_arguments() {
+    let vars = |k: &str| (k == "m").then_some(2.0);
+    // `{m` with no `}` used to read to the end of the text and find `m`.
+    assert!(eval("{m", &vars).is_err());
+    assert!(eval("3 * {m", &vars).is_err());
+    // Two-argument functions take exactly two; min and max take any number.
+    for bad in ["atan2(1, 2, 3)", "hypot(3, 4, 12)", "mod(7, 3, 2)"] {
+        assert!(eval(bad, &vars).is_err(), "{bad}");
+    }
+    assert!((eval("hypot(3, 4)", &vars).unwrap() - 5.0).abs() < 1e-12);
+    assert!((eval("mod(7, 3)", &vars).unwrap() - 1.0).abs() < 1e-12);
+    assert!((eval("max(1, 5, 2, {m})", &vars).unwrap() - 5.0).abs() < 1e-12);
+}
+
+#[test]
 fn a_spur_gears_formulas_are_its_generated_flank_and_fillet() {
     let src = source(&Spec::default(), "gear");
     let cell = check_external(&src);

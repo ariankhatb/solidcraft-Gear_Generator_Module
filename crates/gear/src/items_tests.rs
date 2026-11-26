@@ -675,3 +675,42 @@ fn two_shaft_lines_meeting_are_a_bevel_side_view() {
     let apart = [line([0.0; 3], [0.0, 0.0, 60.0]), line([5.0, 0.0, 0.0], [60.0, 0.0, 0.0])];
     assert_eq!(next_slot(ItemKind::Bevel, &apart), Some("pitch circle"));
 }
+
+#[test]
+fn item_numbers_past_the_index_range_are_no_item() {
+    // (round − 1) · 26 past usize overflowed (on wasm32 at a round of about 165 million).
+    assert_eq!(item_number(&format!("B{}", u64::MAX)), None);
+    assert_eq!(item_number(&format!("Z{}", usize::MAX)), None);
+    assert_eq!(item_number("C2"), Some(28));
+}
+
+#[test]
+fn shaft_lines_far_from_the_origin_meet_only_where_they_meet() {
+    // A side view's two 100 mm shaft lines, 10 km out, their ends 2 mm apart: by their length
+    // (0.5 % = 0.5 mm) they don't meet, though 0.5 % of their distance from the origin is 50 m.
+    let o = [10_000_000.0, 0.0, 0.0];
+    let at = |d: V| [o[0] + d[0], o[1] + d[1], o[2] + d[2]];
+    let side = |l2: Thing| gear_geoms(&GearItem::new("A", ItemKind::Bevel).with(vec![line(at([0.0; 3]), at([0.0, 0.0, 100.0])), l2])).len();
+    assert_eq!(side(line(at([0.0; 3]), at([100.0, 0.0, 0.0]))), 2);
+    assert_ne!(side(line(at([2.0, 0.0, 0.0]), at([102.0, 0.0, 0.0]))), 2);
+}
+
+#[test]
+fn bevel_circles_the_same_cone_distance_out_must_still_touch() {
+    // Both 36.06 mm from the apex, but each with a half cone angle of atan(20/30) = 33.69°:
+    // 67.38° together against the shafts' 90°, so they are (90° − 67.38°) · 36.06 mm = 14.2 mm
+    // apart along the cone.
+    let c1 = circ([0.0, 0.0, 30.0], Z, 20.0);
+    refused(ItemKind::Bevel, std::slice::from_ref(&c1), circ([30.0, 0.0, 0.0], X, 20.0), "are apart");
+}
+
+#[test]
+fn two_rings_linked_by_a_mesh_are_refused() {
+    // Ring A (Ø100 at the origin) and ring B (Ø80, 10 mm off): ring radius − ring radius = 10 mm
+    // passed as "a gear inside a ring", but a ring meshes only with a gear.
+    let a = item("A", ItemKind::Internal, vec![circ([30.0, 0.0, 0.0], Z, 20.0), circ([0.0; 3], Z, 50.0)]);
+    let b = item("B", ItemKind::Internal, vec![circ([30.0, 0.0, 0.0], Z, 20.0), circ([10.0, 0.0, 0.0], Z, 40.0)]);
+    assert!(gear_geoms(&a)[0].ring && gear_geoms(&b)[0].ring);
+    let st = stages(&[a, b], &[mesh((0, 0), (1, 0))]);
+    assert!(st.iter().any(|s| s.error.as_deref().is_some_and(|e| e.contains("both rings"))), "{st:?}");
+}

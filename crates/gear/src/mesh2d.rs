@@ -569,6 +569,7 @@ fn check_mesh_2d(plan: &Plan) -> Vec<MeshResult> {
         .enumerate()
         .map(|(k, &(m, _, _))| {
             let mine = &probes[k * CHECK_STEPS..(k + 1) * CHECK_STEPS];
+            let lost = out_of_reach(mine);
             let mut s = mine[0];
             for p in &mine[1..] {
                 s.merge(p);
@@ -579,6 +580,8 @@ fn check_mesh_2d(plan: &Plan) -> Vec<MeshResult> {
             let gap_max = if s.gap_max.is_finite() { s.gap_max } else { gap_min };
             let (verdict, message) = if depth > CHECK_DEPTH * m.scale {
                 (Verdict::Interferes, format!("{na} and {nb} interfere: they overlap by {depth:.3} mm"))
+            } else if lost {
+                (Verdict::NoContact, format!("{na} and {nb} lose contact: at some positions no flank is within reach of the other"))
             } else if gap_max > m.slack + CHECK_GAP * m.scale {
                 (Verdict::NoContact, format!("{na} and {nb} lose contact: up to {gap_max:.3} mm apart"))
             } else if m.slack > 0.0 {
@@ -589,6 +592,13 @@ fn check_mesh_2d(plan: &Plan) -> Vec<MeshResult> {
             MeshResult { a: m.a, b: m.b, penetration_mm: depth, gap_min_mm: gap_min, gap_max_mm: gap_max, verdict, message }
         })
         .collect()
+}
+
+/// Whether at some driver angle neither boundary came within the grid's reach of the other
+/// and they didn't overlap: no gap was measured there (an infinite one), which is lost contact,
+/// not a gap of 0.
+pub(crate) fn out_of_reach(probes: &[Stat]) -> bool {
+    probes.iter().any(|p| !p.gap_min.is_finite() && !(p.depth > 0.0))
 }
 
 /// The worst verdict of a plan's meshes (interference before lost contact), or none when the

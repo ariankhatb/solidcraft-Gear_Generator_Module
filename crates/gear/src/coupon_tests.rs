@@ -286,3 +286,30 @@ fn coupons_of_random_sets_are_buildable_and_mesh_like_the_set() {
     eprintln!("coupons: {made} made, {refused} refused, {compared} mesh-checked against the whole set");
     assert!(made > 100 && compared > 40);
 }
+
+#[test]
+fn a_helical_ring_coupon_reaches_its_locating_flat() {
+    // The default rim is 3 modules, which ends exactly at the flat (3 modules past the roots):
+    // the piece is filled out to the flat before it is cut to the block.
+    let s = Spec { helix: 15.0, ..Spec::defaults_for(Kind::Planetary) };
+    let p = plan(&coupon(s)).unwrap();
+    check_plan(&p).unwrap();
+    let ring = p.bodies.iter().find(|b| b.name.starts_with("Coupon ring")).unwrap();
+    let at = fact(&p, "coupon ring: flat edge to the gear's centre");
+    let fill = ring.steps.iter().find_map(|st| match st {
+        Step::Prism { region, op: Op::Join, twist, .. } if *twist == 0.0 => Some(region),
+        _ => None,
+    });
+    let fill = fill.unwrap_or_else(|| panic!("no fill: {:?}", ring.steps.len()));
+    assert!(fill.outer[0].max_radius() >= at - 1e-9, "{} vs {at}", fill.outer[0].max_radius());
+    assert!(matches!(ring.steps.last(), Some(Step::Prism { op: Op::Intersect, .. })));
+}
+
+#[test]
+fn a_coupon_leaves_the_sets_clearance_body_off() {
+    let s = Spec::defaults_for(Kind::Pair);
+    let plain = plan(&coupon(s.clone())).unwrap();
+    let with = plan(&coupon(Spec { clearance_body: Some(crate::clearance::Clearance::default()), ..s })).unwrap();
+    let names = |p: &Plan| p.bodies.iter().map(|b| b.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&plain), names(&with));
+}

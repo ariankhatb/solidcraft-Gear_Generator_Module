@@ -220,3 +220,14 @@ fn a_tiny_cycloidal_gears_dedendum_stays_radial() {
         }
     }
 }
+
+#[test]
+fn no_shaft_is_offered_when_none_fits_inside_the_roots() {
+    // Roots of Ø2.5 at module 1: Ø2.5 − 2 × 1 = Ø0.5 just fits; Ø2.2 leaves Ø0.2, under the
+    // smallest step, so no shaft fits (not a Ø0.5 that doesn't).
+    assert_eq!(crate::hub::largest_shaft(2.5, 1.0), 0.5);
+    assert_eq!(crate::hub::largest_shaft(2.2, 1.0), 0.0);
+    let bore = crate::hub::Bore { on_shaft: true, diameter: 3.0, ..crate::hub::Bore::default() };
+    let w = crate::hub::root_words(&bore, 2.2, 1.0);
+    assert!(w.contains("no shaft fits") && !w.contains("at most"), "{w}");
+}

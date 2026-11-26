@@ -435,3 +435,13 @@ fn mesh_phase_holds_in_every_direction() {
     let stat = probe(&m1, &m2, 0.0);
     assert!(stat.depth > 0.05 && stat.area > 0.1, "{stat:?}");
 }
+
+#[test]
+fn a_probe_with_no_flank_in_reach_is_lost_contact_not_a_zero_gap() {
+    use crate::mesh2d::out_of_reach;
+    let at = |depth: f64, gap: f64| Stat { area: 0.0, area_at: 0.0, depth, gap_min: gap, gap_max: gap };
+    // Every probe measured a gap, or overlapped: in reach.
+    assert!(!out_of_reach(&[at(0.0, 0.05), at(0.0, 0.0), at(0.01, f64::INFINITY)]));
+    // One probe found nothing within reach and no overlap: it used to read as a 0 mm gap.
+    assert!(out_of_reach(&[at(0.0, 0.05), at(0.0, f64::INFINITY)]));
+}

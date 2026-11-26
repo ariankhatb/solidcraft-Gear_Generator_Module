@@ -1139,3 +1139,41 @@ fn the_print_preset_sets_nothing_a_type_leaves_out() {
         assert!(!p.warnings.iter().any(|w| w.contains("left out (") || w.contains("don't apply")), "{k:?}: {:?}", p.warnings);
     }
 }
+
+#[test]
+fn shaft_ends_too_wide_to_shape_the_shaft_say_so() {
+    // A hexagon 9 across flats is 9 / cos 30° = 10.39 across corners: past a Ø10 shaft, so its
+    // corners stay round; it is still cut, and said.
+    let hex = Shaft { diameter: 10.0, length: 12.0, end: ShaftEnd::Hex, end_size: 9.0, ..Shaft::default() };
+    let p = planned(&Spec { shaft_front: hex, ..Spec::default() });
+    assert!(warned(&p, "corners stay round"), "{:?}", p.warnings);
+    assert_eq!(p.bodies[0].steps.iter().filter(|st| matches!(st, Step::Prism { op: Op::Cut, .. })).count(), 1);
+    // A cross with arms 7.5 wide: its corner cuts start at (3.75, 3.75), 3.75 · √2 = 5.30 from
+    // the axis, outside the Ø10 shaft, so they cut nothing: left plain, and said.
+    let cross = Shaft { diameter: 10.0, length: 12.0, end: ShaftEnd::Cross, end_size: 7.5, ..Shaft::default() };
+    let p = planned(&Spec { shaft_front: cross, ..Spec::default() });
+    assert!(warned(&p, "left plain"), "{:?}", p.warnings);
+    assert!(!p.bodies[0].steps.iter().any(|st| matches!(st, Step::Prism { op: Op::Cut, .. })));
+}
+
+#[test]
+fn a_bearing_pocket_counts_only_a_hub_wider_than_itself() {
+    // A 608 (Ø22 × 7) in a 5 mm gear: only a hub wider than Ø22 gives it the depth; a Ø16 hub
+    // would have the pocket cut through its wall.
+    let mut h = Hardware::default();
+    assert!(h.set_bearing("608"));
+    let s = Spec { teeth: 30, face_width: 5.0, hub_length: 10.0, hardware: h, ..Spec::default() };
+    let thin = planned(&Spec { hub_diameter: 16.0, ..s.clone() });
+    assert!(warned(&thin, "doesn't fit"), "{:?}", thin.warnings);
+    let wide = planned(&Spec { hub_diameter: 30.0, ..s });
+    assert!(!wide.warnings.iter().any(|w| w.contains("bearing")), "{:?}", wide.warnings);
+}
+
+#[test]
+fn a_rings_tooth_chamfer_cut_down_is_said() {
+    // An 80° chamfer 3 wide wants 3 · tan 80° = 17 mm of depth: more than half the ring's
+    // 0.9 × face to share between its two faces.
+    let c = Chamfer { size: 3.0, angle: 80.0 };
+    let p = planned(&Spec { tooth_chamfer_front: c, ..Spec::defaults_for(Kind::Internal) });
+    assert!(warned(&p, "more than the ring has room for"), "{:?}", p.warnings);
+}

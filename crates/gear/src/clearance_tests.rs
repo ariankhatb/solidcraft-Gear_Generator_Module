@@ -758,3 +758,35 @@ fn a_bearing_with_no_seats_makes_nothing_and_says_what_to_do() {
     assert!(w[0].contains("608 has nowhere to sit: put bearing points on a shaft line (Shafts & Bores tab), or turn bearings off"), "{}", w[0]);
     assert!(p.facts.iter().all(|f| !f.label.contains("clearance bearing")), "no bearing facts");
 }
+
+#[test]
+fn a_bearing_seat_with_no_size_is_refused() {
+    // A Ø0.8 bearing with a fit of −1 mm: a seat of Ø−0.2, which is no seat.
+    let c = Clearance {
+        bearing_size: Some(crate::clearance::BearingSize { bore: 0.0, od: 0.8, width: 1.0 }),
+        bearing_fit: -1.0,
+        seats: vec![Seat::Along { member: 1, along: -30.0 }],
+        ..Clearance::default()
+    };
+    let e = plan(&Spec { clearance_body: Some(c), ..Spec::defaults_for(Kind::Spur) }).unwrap_err();
+    assert!(e.contains("has no size"), "{e}");
+}
+
+#[test]
+fn a_bearing_is_checked_against_the_shaft_section_it_sits_on() {
+    // An integral front shaft Ø10 for 10 mm, then Ø8 for 20 mm. A 608 (8 mm bore) on the step
+    // fits; on the Ø10 part it doesn't.
+    use crate::hub::Shaft;
+    let shaft = Shaft { diameter: 10.0, length: 10.0, step_diameter: 8.0, step_length: 20.0, ..Shaft::default() };
+    let s0 = Spec { shaft_front: shaft, ..Spec::defaults_for(Kind::Spur) };
+    let mid = s0.face_width / 2.0;
+    let at = |along: f64| {
+        let c = Clearance { bearing: Some("608".into()), seats: vec![Seat::Along { member: 1, along }], ..Clearance::default() };
+        planned(&Spec { clearance_body: Some(c), ..s0.clone() })
+    };
+    let mismatch = |p: &Plan| p.warnings.iter().any(|w| w.contains("has a 8 mm bore but"));
+    let on_step = at(mid + 10.0 + 10.0);
+    assert!(!mismatch(&on_step), "{:?}", on_step.warnings);
+    let on_base = at(mid + 5.0);
+    assert!(mismatch(&on_base) && on_base.warnings.iter().any(|w| w.contains("Ø10")), "{:?}", on_base.warnings);
+}

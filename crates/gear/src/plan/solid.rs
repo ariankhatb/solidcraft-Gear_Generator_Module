@@ -114,10 +114,11 @@ pub fn assembly(p: &Plan, rigid: &[Rigid]) -> Assembly {
 pub const NUDGES: [f64; 4] = [0.0, 0.0137, -0.0213, 0.0391];
 
 /// Whether a step trims a body made already (a revolved blank cut or intersected): tried at each
-/// of [`NUDGES`]. A revolve joined on (a hub) is material of the body itself: moved along the
-/// axis it would sit in the wrong place, so it gets the one try at its own place.
+/// of [`NUDGES`] (a joined revolve too: the nudges are far under any print or machining
+/// tolerance, and they let a hub flush with the teeth's face join where the kernel can't join it
+/// exactly in place).
 pub fn trims(step: &Step) -> bool {
-    matches!(step, Step::Revolve { op: Op::Cut | Op::Intersect, .. })
+    matches!(step, Step::Revolve { op, .. } if *op != Op::New)
 }
 
 /// What a step does to its body.

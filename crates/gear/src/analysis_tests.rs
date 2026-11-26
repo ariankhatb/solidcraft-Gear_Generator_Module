@@ -323,3 +323,61 @@ fn styles_follow_the_spec() {
     assert_eq!(r.path[0].kind, StepKind::Mesh(MeshKind::CrossedHelical));
     assert!(close(r.efficiency, 0.9));
 }
+
+#[test]
+fn opposite_tiny_speeds_round_a_loop_disagree() {
+    // 1:10⁶ twice (member 2 at +10⁻¹²) and 1:10¹² straight across (member 2 at −10⁻¹²): the
+    // loop's two answers turn opposite ways. A tolerance floored at 1 took 2·10⁻¹² as agreeing.
+    let z = [0.0, 0.0, 1.0];
+    let members: Vec<AssemblyMember> = (0..3).map(|i| member(i, [40.0 * i as f64, 0.0, 0.0], z)).collect();
+    let ext = |a, b, ra, rb| AssemblyLink::Gear { a, b, ra, rb, internal: false, reverse: false };
+    let asm = Assembly { members, links: vec![ext(0, 1, 1.0, 1e6), ext(1, 2, 1.0, 1e6), ext(0, 2, 1.0, 1e12)] };
+    assert!(ratio_between(&asm, 0, 2).unwrap_err().contains("can't turn"));
+}
+
+#[test]
+fn a_held_member_anywhere_on_fixed_axes_holds_the_rest() {
+    // 0 → 1 → 2 with 2 held: 0 and 1 can't turn either, though 2 is off their path.
+    let z = [0.0, 0.0, 1.0];
+    let mut members: Vec<AssemblyMember> = (0..3).map(|i| member(i, [40.0 * i as f64, 0.0, 0.0], z)).collect();
+    members[2].grounded = true;
+    let ext = |a, b, ra, rb| AssemblyLink::Gear { a, b, ra, rb, internal: false, reverse: false };
+    let asm = Assembly { members, links: vec![ext(0, 1, 10.0, 20.0), ext(1, 2, 20.0, 15.0)] };
+    let err = ratio_between(&asm, 0, 1).unwrap_err();
+    assert!(err.contains("member 3 is held"), "{err}");
+    let t = drive_table(&asm, 0, 60.0, 1.0, &Efficiencies::default());
+    assert!(t[1].locked && t[1].rpm == 0.0, "{:?}", t[1]);
+}
+
+#[test]
+fn an_efficiency_override_does_not_make_a_self_locking_worm_turn_back() {
+    // μ 0.15, one start, q 10: tan λ = 0.1 < μ / cos 20° = 0.16, self-locking. A 50% override on
+    // the link is how it turns from the worm; from its wheel it still won't.
+    let z = [0.0, 0.0, 1.0];
+    let members = vec![member(0, [0.0; 3], z), member(1, [0.0, 40.0, 0.0], [1.0, 0.0, 0.0])];
+    let asm = Assembly { members, links: vec![AssemblyLink::Worm { worm: 1, wheel: 0, starts: 1, wheel_teeth: 30 }] };
+    let e = Efficiencies { worm_friction: 0.15, per_link: vec![(0, 0.5)], ..Efficiencies::default() };
+    assert!(e.worm(1).self_locking);
+    let back = drive_table(&asm, 0, 60.0, 1.0, &e);
+    assert!(back[1].locked, "{:?}", back[1]);
+    let forward = drive_table(&asm, 1, 60.0, 1.0, &e);
+    assert!(!forward[0].locked && (forward[0].efficiency - 0.5).abs() < 1e-12, "{:?}", forward[0]);
+}
+
+#[test]
+fn a_trains_meshes_each_take_their_own_gears_style() {
+    // Gears 1–2 helical, 3–4 spur: the train's style is helical, but 3–4 is a spur mesh.
+    let (mut s, p) = ten();
+    if let Some(t) = &mut s.train {
+        t.gears[0].helix = 15.0;
+        t.gears[1].helix = -15.0;
+    }
+    let e = Efficiencies::for_plan(&s, &p);
+    assert_eq!(e.parallel, MeshKind::Helical);
+    let kind = |a: usize, b: usize| {
+        let k = train_link(&p, a, b).unwrap_or_else(|| panic!("no link {a}–{b}"));
+        e.kinds.iter().rev().find(|(i, _)| *i == k).map(|(_, m)| *m)
+    };
+    assert_eq!(kind(0, 1), Some(MeshKind::Helical));
+    assert_eq!(kind(2, 3), Some(MeshKind::Spur));
+}

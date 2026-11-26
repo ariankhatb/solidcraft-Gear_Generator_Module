@@ -21,11 +21,15 @@ fn generated_flank_is_the_involute_above_the_form_circle() {
     assert!(close(f.rf, g.rf(), 1e-9));
     assert!(close(f.ra, g.ra(), 1e-9));
     // On the involute part the generated half angle matches the exact formula.
+    let mut checked = 0;
     for (rr, h) in &f.flank {
         if *rr > g.rb() * 1.02 {
             assert!(close(*h, g.half_angle_at(*rr), 2e-4), "r {rr}: {h} vs {}", g.half_angle_at(*rr));
+            checked += 1;
         }
     }
+    // The tip (Ø52) is past 1.02 × the base circle (Ø45.1 · 1.02 = Ø46.0): at least it is checked.
+    assert!(checked > 0, "no flank point above 1.02 × the base radius");
     // Pitch circle tooth thickness is half the pitch.
     let r = g.r();
     assert!(close(g.thickness_at(r), PI * 2.0 / 2.0, 1e-9));
@@ -134,10 +138,16 @@ fn polyline_samples_arcs_the_right_way() {
     let mut pts = Vec::new();
     seg.sample(0.001, &mut pts);
     assert!(pts.iter().all(|p| p.x >= -1e-9 && p.y >= -1e-9));
+    // From (1, 0) to (0, 1), every point on the unit circle, with points between the ends.
+    let on = |p: &V2, q: V2| (p.x - q.x).abs() < 1e-12 && (p.y - q.y).abs() < 1e-12;
+    assert!(pts.len() >= 3 && pts.first().is_some_and(|p| on(p, V2::new(1.0, 0.0))) && pts.last().is_some_and(|p| on(p, V2::new(0.0, 1.0))), "{pts:?}");
+    assert!(pts.iter().all(|p| (p.len() - 1.0).abs() < 1e-12));
     let back = seg.reversed();
     let mut pts = Vec::new();
     back.sample(0.001, &mut pts);
     assert!(pts.iter().all(|p| p.x >= -1e-9 && p.y >= -1e-9));
+    assert!(pts.len() >= 3 && pts.first().is_some_and(|p| on(p, V2::new(0.0, 1.0))) && pts.last().is_some_and(|p| on(p, V2::new(1.0, 0.0))), "{pts:?}");
+    assert!(pts.iter().all(|p| (p.len() - 1.0).abs() < 1e-12));
     assert!(close(TAU, TAU, 0.0));
 }
 

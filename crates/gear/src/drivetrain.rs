@@ -229,7 +229,9 @@ fn sized_gear(it: &Item) -> Option<Circle3> {
 /// carries a gear already, or is asked to be only a shaft, stays as it is. The notes say what
 /// was filled ("member 2: Ø60 fills the spacing to member 1").
 pub fn fill_unsized_shafts(items: &mut [Item]) -> Vec<String> {
-    let gears: Vec<(usize, Circle3)> = items.iter().enumerate().filter_map(|(i, it)| Some((i, sized_gear(it)?))).collect();
+    // The gears read, and each gear filled in as it is: a later fill keeps clear of the earlier
+    // ones' pitch circles too.
+    let mut gears: Vec<(usize, Circle3)> = items.iter().enumerate().filter_map(|(i, it)| Some((i, sized_gear(it)?))).collect();
     let mut notes = Vec::new();
     for (i, slot) in items.iter_mut().enumerate() {
         let it = *slot;
@@ -252,6 +254,7 @@ pub fn fill_unsized_shafts(items: &mut [Item]) -> Vec<String> {
         if it.ask.along.is_none() {
             slot.ask.along = Some(dot(sub(c.c, l.a), u));
         }
+        gears.push((i, Circle3 { c: add(l.a, mul(u, slot.ask.along.unwrap_or(0.0))), n: u, r }));
         notes.push(format!("member {}: Ø{} fills the spacing to member {}", i + 1, num(2.0 * r), j + 1));
     }
     notes
@@ -639,6 +642,20 @@ fn crossed(
             });
             return;
         }
+        // Crossed gears touch where the shafts pass closest: each circle centred at its shaft's
+        // end of the common perpendicular.
+        crate::axes::Relation::Skew { foot1, foot2, .. } if !matches!(family, Some(Kind::Worm | Kind::Hypoid | Kind::FaceGear)) => {
+            let t = 1e-6 + TOLERANCE * g1.1.r.min(g2.1.r);
+            for (g, f) in [(g1, foot1), (g2, foot2)] {
+                let off = len(sub(g.1.c, f));
+                if off > t {
+                    err[g.0].get_or_insert_with(|| {
+                        format!("{} is {} mm along its shaft from where the shafts pass closest: move it there", who(items, g.0), num(off))
+                    });
+                    return;
+                }
+            }
+        }
         _ => {}
     }
     let ask = |i: usize| items[i].ask;
@@ -659,7 +676,10 @@ fn crossed(
         Shaft { axis: a1, pitch_diameter: Some(2.0 * g1.1.r), teeth: ask(g1.0).teeth },
         Shaft { axis: a2, pitch_diameter: Some(2.0 * g2.1.r), teeth: ask(g2.0).teeth },
     ];
-    let helical = matches!(role[g1.0], Some(Role::Gear(Kind::Helical | Kind::Herringbone))) || matches!(style, Kind::Helical | Kind::Herringbone);
+    // Helical asked of either member (not only the first read): the pair's style does not hang
+    // on the order the circles were drawn in.
+    let helical = [g1.0, g2.0].iter().any(|i| matches!(role.get(*i), Some(Some(Role::Gear(Kind::Helical | Kind::Herringbone)))))
+        || matches!(style, Kind::Helical | Kind::Herringbone);
     let kind = family.or(helical.then_some(Kind::Helical)).or(Some(style));
     let sa = ShaftAsk {
         kind,

@@ -27,6 +27,10 @@ fn set(mode: BevelPlanetMode, sigma: f64, zs: u32, zp: u32, n: u32) -> Spec {
 /// The worst of every mesh of a plan, checked as `mesh3d_tests` does.
 pub(crate) fn prove(label: &str, s: &Spec) -> Plan {
     let p = plan(s).unwrap_or_else(|e| panic!("{label}: {e}"));
+    // Every planet meshes with the sun, and with the far member (second sun or ring) where
+    // there is one: none missing, or the checks below would prove nothing about it.
+    let per_planet = if s.bevel_planet_mode == BevelPlanetMode::Single { 1 } else { 2 };
+    assert_eq!(p.meshes3d.len(), s.planets.max(1) as usize * per_planet, "{label}: meshes");
     let m = s.module;
     let t = std::time::Instant::now();
     let (mut pen, mut gmin, mut gmax, mut off_min) = (0.0f64, f64::MAX, 0.0f64, f64::MAX);
@@ -459,4 +463,22 @@ fn the_whole_set_has_a_carrier_that_touches_no_gear() {
         }
         assert!(plan(&Spec { only: 2, ..s.clone() }).unwrap().bodies.iter().all(|b| !b.name.starts_with("Carrier")), "{label}");
     }
+}
+
+#[test]
+fn long_shaft_directions_give_the_same_placement_as_short_ones() {
+    // The sun down −y and a planet at 80° from it, as directions 1e200 long: their squares
+    // overflow, which left a zero axis. Scaled first, they place the set as unit ones do.
+    let a = 80f64.to_radians();
+    let (sun, planet) = ([0.0, -1.0, 0.0], [a.sin(), -a.cos(), 0.0]);
+    let (want, ws) = placement_from_shafts([5.0, 5.0, 0.0], sun, planet).unwrap();
+    let (got, gs) = placement_from_shafts([5.0, 5.0, 0.0], sun.map(|v| v * 1e200), planet.map(|v| v * 1e200)).unwrap();
+    assert!((gs - ws).abs() < 1e-9, "{gs} vs {ws}");
+    for k in 0..3 {
+        assert!((got.z[k] - want.z[k]).abs() < 1e-12 && (got.x[k] - want.x[k]).abs() < 1e-12, "{got:?} vs {want:?}");
+    }
+    // Directions with no length, or not finite, still have none.
+    assert!(placement_from_shafts([0.0; 3], [0.0; 3], planet).is_err());
+    assert!(placement_from_shafts([0.0; 3], [f64::INFINITY, 0.0, 0.0], planet).is_err());
+    assert!(placement_from_shafts([0.0; 3], [f64::NAN, 0.0, 0.0], planet).is_err());
 }

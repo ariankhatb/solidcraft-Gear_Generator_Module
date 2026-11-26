@@ -36,6 +36,15 @@ fn simple(o: &Outline) {
         let d4 = (d - c).cross(b - c);
         d1 * d2 < -1e-18 && d3 * d4 < -1e-18
     };
+    // Two segments that share no end but touch (an end on the other, or collinear and
+    // overlapping) are as wrong as two that cross; `cross` alone misses them.
+    let to_seg = |q: V2, a: V2, b: V2| -> f64 {
+        let ab = b - a;
+        let l = ab.dot(ab);
+        let t = if l > 0.0 { ((q - a).dot(ab) / l).clamp(0.0, 1.0) } else { 0.0 };
+        (a + ab * t - q).len()
+    };
+    let touch = |a: V2, b: V2, c: V2, d: V2| -> bool { to_seg(a, c, d).min(to_seg(b, c, d)).min(to_seg(c, a, b)).min(to_seg(d, a, b)) < 1e-9 };
     for i in 0..n {
         for j in i + 2..n {
             if i == 0 && j == n - 1 {
@@ -43,6 +52,7 @@ fn simple(o: &Outline) {
             }
             let (a, b, c, d) = (p[i], p[(i + 1) % n], p[j], p[(j + 1) % n]);
             assert!(!cross(a, b, c, d), "self-intersection near {a:?} and {c:?}");
+            assert!(!touch(a, b, c, d), "the outline touches itself near {a:?} and {c:?}");
         }
     }
 }
@@ -113,7 +123,12 @@ fn chain_length_and_centre_distance_agree() {
     assert!(close(belt_length(10.0, 10.0, 100.0), 200.0 + 20.0 * PI, 1e-9));
     let o = belt_path(10.0, 25.0, 120.0, 0.0).unwrap();
     closed(&o);
-    assert!(close(o.area(), (belt_length(10.0, 25.0, 120.0) - 0.0) * 0.0 + o.area(), 0.0));
+    // Its length is the belt's: chords at 1e-6 mm (at most 720 to an arc, under 5e-3 rad each)
+    // fall short of the arcs by r·θ²/24 of each arc's length, under 1e-4 mm in all.
+    let pts = o.polyline(1e-6);
+    let around: f64 = pts.windows(2).map(|w| w[0].dist(w[1])).sum::<f64>() + pts.last().zip(pts.first()).map_or(0.0, |(a, b)| a.dist(*b));
+    let want = belt_length(10.0, 25.0, 120.0);
+    assert!(around <= want + 1e-9 && want - around < 1e-3, "{around} vs {want}");
     assert!(o.area() > 0.0);
 }
 

@@ -15,7 +15,9 @@ use crate::geom::{Region, V2};
 /// already; a plan that keeps them apart has them joined here.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Rigid {
+    /// The member's name: its bodies' names joined with " + ".
     pub name: String,
+    /// Its bodies, indices into [`Plan::bodies`], in the order they are unioned.
     pub bodies: Vec<usize>,
 }
 
@@ -112,9 +114,10 @@ pub fn assembly(p: &Plan, rigid: &[Rigid]) -> Assembly {
 pub const NUDGES: [f64; 4] = [0.0, 0.0137, -0.0213, 0.0391];
 
 /// Whether a step trims a body made already (a revolved blank cut or intersected): tried at each
-/// of [`NUDGES`].
+/// of [`NUDGES`]. A revolve joined on (a hub) is material of the body itself: moved along the
+/// axis it would sit in the wrong place, so it gets the one try at its own place.
 pub fn trims(step: &Step) -> bool {
-    matches!(step, Step::Revolve { op, .. } if *op != Op::New)
+    matches!(step, Step::Revolve { op: Op::Cut | Op::Intersect, .. })
 }
 
 /// What a step does to its body.

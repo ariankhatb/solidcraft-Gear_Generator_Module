@@ -190,3 +190,16 @@ fn gears_on_one_shaft_whose_faces_overlap_are_refused() {
     let e = crate::plan(&spec).unwrap_err();
     assert!(e.contains("gears 2 and 3 share a shaft but their faces overlap along it by 6 mm"), "{e}");
 }
+
+#[test]
+fn a_revolve_joined_on_is_tried_once_where_it_is() {
+    // Cut and intersected blanks trim and are nudged; a joined revolve (a hub) is the body's own
+    // material, and moved along the axis it would be in the wrong place.
+    let profile = vec![V2::new(0.0, 0.0), V2::new(1.0, 0.0), V2::new(1.0, 1.0)];
+    for op in [Op::Cut, Op::Intersect] {
+        let s = Step::Revolve { profile: profile.clone(), op };
+        assert_eq!(attempts(&s).iter().map(|(_, n)| *n).collect::<Vec<_>>(), NUDGES.to_vec(), "{op:?}");
+    }
+    let join = Step::Revolve { profile, op: Op::Join };
+    assert_eq!(attempts(&join).iter().map(|(_, n)| *n).collect::<Vec<_>>(), vec![0.0]);
+}

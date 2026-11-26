@@ -13,35 +13,57 @@ use super::{Kind, Plan, Spec};
 /// One option (or a few fields that go together) that a type may leave out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Opt {
+    /// `tip_round`: the tip corners rounded.
     TipRound,
+    /// `xy_compensation`: the printer's horizontal expansion made up for.
     XyCompensation,
+    /// `elephant_foot`: the first layers drawn inside the rest (elephant-foot relief).
     ElephantFoot,
+    /// `nozzle`: the printing nozzle's width (narrow tip lands are warned about).
     Nozzle,
+    /// `clearance`: the tip clearance coefficient c*.
     Clearance,
+    /// `tip_shortening`: the tips cut down.
     TipShortening,
+    /// `tip_diameter`: gear 1's tip diameter asked for.
     TipDiameter,
+    /// `tip_diameter2`: gear 2's tip diameter asked for.
     TipDiameter2,
+    /// `tip_relief`: the flanks eased near the tips.
     TipRelief,
+    /// `crowning`: the teeth crowned along the face.
     Crowning,
+    /// `backlash2`: gear 2's own backlash.
     Backlash2,
     /// `face_width2` and `face_offset2`.
     Face2,
+    /// `bore`: gear 1's bore.
     Bore,
+    /// `hub_diameter`.
     HubDiameter,
+    /// `hub_length`.
     HubLength,
     /// `holes` (and `hole_diameter` with them).
     Holes,
+    /// `shaft_front`: gear 1's integral front shaft.
     FrontShaft,
+    /// `shaft_back`: gear 1's integral back shaft.
     BackShaft,
     /// `hardware`: set screws, nut traps, inserts, clamp slit and screw, bearing pocket.
     Hardware,
+    /// `bore2`: gear 2's bore.
     Bore2,
+    /// `shaft2_front`: gear 2's integral front shaft.
     FrontShaft2,
+    /// `shaft2_back`: gear 2's integral back shaft.
     BackShaft2,
+    /// `hardware2`: gear 2's hub hardware, as `hardware` is gear 1's.
     Hardware2,
     /// `tooth_chamfer_front` and `tooth_chamfer_back`.
     ToothChamfers,
+    /// `bore_chamfer`.
     BoreChamfer,
+    /// `hub_chamfer`.
     HubChamfer,
 }
 
@@ -168,7 +190,9 @@ impl Opt {
 /// ("… left out (why)").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Why {
+    /// The reason, in the warning's brackets.
     pub reason: &'static str,
+    /// Whether the option doesn't apply to the type's teeth (else: it is left out of the body).
     pub teeth: bool,
 }
 

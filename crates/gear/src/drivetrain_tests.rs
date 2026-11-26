@@ -404,3 +404,47 @@ fn an_unsized_shaft_between_two_gears_gets_the_gear_that_fills_the_spacing() {
     let mut tight = vec![circle([0.0; 3], Z, 20.0), line([15.0, 0.0, 0.0], [15.0, 0.0, 1.0])];
     assert!(crate::drivetrain::fill_unsized_shafts(&mut tight).is_empty());
 }
+
+/// Unsized shafts filled one after another keep clear of the gears filled before them: a Ø40
+/// gear, a shaft 50 mm off (Ø60, touching it) and one 150 mm off, 100 mm past the Ø60: it gets
+/// Ø2 × (100 − 30) = Ø140, touching the Ø60, not Ø2 × (150 − 20) = Ø260 across it.
+#[test]
+fn unsized_shafts_filled_in_turn_keep_clear_of_the_earlier_fills() {
+    let mut items = vec![circle([0.0; 3], Z, 20.0), line([50.0, 0.0, 0.0], [50.0, 0.0, 1.0]), line([150.0, 0.0, 0.0], [150.0, 0.0, 1.0])];
+    let notes = crate::drivetrain::fill_unsized_shafts(&mut items);
+    assert_eq!(items[1].ask.pitch_diameter, Some(60.0));
+    assert_eq!(items[2].ask.pitch_diameter, Some(140.0), "{notes:?}");
+    assert_eq!(notes[1], "member 3: Ø140 fills the spacing to member 2");
+}
+
+/// Helical teeth asked of either member of a bevel pair make spiral bevels, whichever circle was
+/// drawn first (only the first one read used to count).
+#[test]
+fn helical_asked_of_either_bevel_member_makes_spiral_bevels() {
+    let items = vec![
+        line([0.0; 3], [0.0, 0.0, -60.0]),
+        line([0.0; 3], [60.0, 0.0, 0.0]),
+        circle([0.0, 0.0, -30.0], Z, 20.0),
+        circle([20.0, 0.0, 0.0], [1.0, 0.0, 0.0], 30.0),
+    ];
+    for k in [2, 3] {
+        let mut asked = items.clone();
+        asked[k].ask.role = Some(Role::Gear(Kind::Helical));
+        let o = read(&asked, None, &Simple::default(), &Spec::default());
+        assert_eq!(o.solved.as_ref().map(|s| s.spec.kind), Some(Kind::SpiralBevel), "member {}: {:?}", k + 1, o.members);
+    }
+}
+
+/// Crossed gears touch where their shafts pass closest: gear 1 on the z axis, gear 2's shaft
+/// along x through (0, 30, 0), the common perpendicular the y axis from (0, 0, 0) to (0, 30, 0).
+/// Radii 20 + 10 = 30 fit the offset; gear 2 centred 6 mm along its shaft from (0, 30, 0)
+/// meets gear 1 nowhere.
+#[test]
+fn crossed_gears_must_sit_where_their_shafts_pass_closest() {
+    let at = |x: f64| vec![circle([0.0; 3], Z, 20.0), circle([x, 30.0, 0.0], [1.0, 0.0, 0.0], 10.0)];
+    let o = read(&at(0.0), None, &Simple::default(), &Spec::default());
+    assert!(o.members.iter().all(|m| m.error.is_none()), "{:?}", o.members);
+    let o = read(&at(6.0), None, &Simple::default(), &Spec::default());
+    let e = o.members[1].error.as_deref().unwrap_or_default();
+    assert!(e.contains("member 2 is 6 mm along its shaft from where the shafts pass closest"), "{:?}", o.members);
+}

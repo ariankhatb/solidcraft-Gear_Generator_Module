@@ -304,6 +304,23 @@ impl Efficiencies {
         e
     }
 
+    /// [`Efficiencies::for_spec`] for a planned set: a train's outside meshes each tagged by
+    /// its own two gears (a spur stage beside a helical one is a spur mesh, not the train's
+    /// style), as [`Efficiencies::kinds`] for the plan's assembly links.
+    pub fn for_plan(s: &Spec, p: &Plan) -> Efficiencies {
+        let mut e = Efficiencies::for_spec(s);
+        if let Some(t) = &s.train {
+            use crate::plan::train::LinkKind;
+            for l in t.links.iter().filter(|l| l.kind == LinkKind::External) {
+                let (Some(ga), Some(gb)) = (t.gears.get(l.a), t.gears.get(l.b)) else { continue };
+                if let Some(k) = train_link(p, l.a, l.b) {
+                    e.kinds.push((k, train_mesh_kind(ga, gb)));
+                }
+            }
+        }
+        e
+    }
+
     /// The efficiency of a kind of mesh (a worm's driven from its worm).
     pub fn of(&self, kind: MeshKind, starts: u32) -> f64 {
         match kind {
@@ -373,6 +390,29 @@ pub fn common_factor(a: u32, b: u32) -> u32 {
 /// The member gear `k` of a set read from a sketch or a selection is ([`Plan::members`]).
 pub fn member_of_gear(p: &Plan, k: usize) -> Option<usize> {
     p.members.get(k)?.body
+}
+
+/// The kind of an outside mesh between two of a train's gears, by their own teeth.
+pub(crate) fn train_mesh_kind(a: &crate::plan::train::TrainGear, b: &crate::plan::train::TrainGear) -> MeshKind {
+    if a.herringbone || b.herringbone {
+        MeshKind::Herringbone
+    } else if a.helix.abs() > 1e-9 || b.helix.abs() > 1e-9 {
+        MeshKind::Helical
+    } else {
+        MeshKind::Spur
+    }
+}
+
+/// The plan's assembly link (a gear mesh) between train gears `a` and `b`.
+pub(crate) fn train_link(p: &Plan, a: usize, b: usize) -> Option<usize> {
+    let member = |g: usize| member_of_gear(p, g).unwrap_or(g);
+    let members = (member(a), member(b));
+    p.assembly.links.iter().position(|x| {
+        matches!(x, AssemblyLink::Gear { .. }) && {
+            let (a, b) = x.members();
+            (a, b) == members || (b, a) == members
+        }
+    })
 }
 
 /// A size that is a whole tooth count.
@@ -445,8 +485,16 @@ fn step(asm: &Assembly, k: usize, from: usize, e: &Efficiencies) -> Option<Step>
         (StepKind::Mesh(MeshKind::Worm), Some(w)) => {
             let starts = teeth.map(|(x, y)| x.min(y)).unwrap_or(1);
             let we = e.worm_of(Some(k), starts);
-            let eff = if from == w { we.forward } else { we.back };
-            (override_eff.unwrap_or(eff), we.self_locking)
+            // An override sets the efficiency it turns with; it can't make a self-locking worm
+            // turn from its wheel.
+            let eff = if from == w {
+                override_eff.unwrap_or(we.forward)
+            } else if we.self_locking {
+                0.0
+            } else {
+                override_eff.unwrap_or(we.back)
+            };
+            (eff, we.self_locking)
         }
         (StepKind::Mesh(m), _) => (override_eff.unwrap_or_else(|| e.of(m, 1)), false),
     };
@@ -459,6 +507,19 @@ struct Walk {
     speed: Vec<Option<f64>>,
     via: Vec<Option<Step>>,
     conflict: Option<String>,
+}
+
+impl Walk {
+    /// A held (grounded) member the walk reached where every reached member turns about a fixed
+    /// axis (none rides a carrier): joined by fixed ratios, it holds all of them, on the path
+    /// asked about or not. (With a carrier, a held member is how a planetary set works.)
+    fn held(&self, asm: &Assembly) -> Option<usize> {
+        let reached = || (0..asm.members.len()).filter(|&x| self.speed.get(x).is_some_and(Option::is_some));
+        if reached().any(|x| asm.members[x].carrier.is_some()) {
+            return None;
+        }
+        reached().find(|&x| asm.members[x].grounded)
+    }
 }
 
 fn walk(asm: &Assembly, root: usize, e: &Efficiencies) -> Walk {
@@ -487,7 +548,9 @@ fn walk(asm: &Assembly, root: usize, e: &Efficiencies) -> Walk {
                     w.via[to] = Some(s);
                     queue.push_back(to);
                 }
-                Some(have) if (have - across).abs() > 1e-9 * have.abs().max(across.abs()).max(1.0) => {
+                // Relative, with no floor: after a large reduction the speeds are tiny, and a
+                // floor of 1 let opposite directions (±1e-10) pass as agreeing.
+                Some(have) if (have - across).abs() > 1e-9 * have.abs().max(across.abs()).max(f64::MIN_POSITIVE) => {
                     if w.conflict.is_none() {
                         w.conflict = Some(format!(
                             "the drivetrain can't turn: a loop of meshes through members {} and {} doesn't agree (member {} would turn {:.6} one way round and {:.6} the other)",
@@ -553,6 +616,9 @@ pub fn ratio_between_with(asm: &Assembly, a: usize, b: usize, e: &Efficiencies) 
             notes.push(format!("member {} turns relative to its carrier (member {}); the carrier is taken as held", x + 1, c + 1));
         }
     }
+    if let Some(x) = w.held(asm) {
+        return Err(format!("member {} is held (grounded) and joined to these: none of them turns", x + 1));
+    }
     for s in &path {
         if s.self_locking {
             let w = if s.efficiency == 0.0 {
@@ -575,7 +641,7 @@ pub fn ratio_between_with(asm: &Assembly, a: usize, b: usize, e: &Efficiencies) 
 /// loop whose ratios don't agree joined to `a` ([`Plan::assembly_issues`]; the assembly leaves
 /// its closing mesh out, so the links alone would hide it).
 pub fn plan_ratio_between(spec: &Spec, p: &Plan, a: usize, b: usize) -> Result<RatioReport, String> {
-    plan_ratio_between_with(p, a, b, &Efficiencies::for_spec(spec))
+    plan_ratio_between_with(p, a, b, &Efficiencies::for_plan(spec, p))
 }
 
 /// [`plan_ratio_between`] with the styles and efficiencies of `e` (for a drivetrain of items,
@@ -598,6 +664,7 @@ pub fn drive_table(asm: &Assembly, driver: usize, rpm: f64, torque: f64, e: &Eff
     let n = asm.members.len();
     let linear = linear_members(asm);
     let w = walk(asm, driver, e);
+    let held = w.held(asm);
     // The driver's speed (rad/s, or mm/s for a rack) and power (W).
     let (w_in, p_in) = if driver < n && linear[driver] { (rpm, torque * rpm / 1000.0) } else { (rpm * TAU / 60.0, torque * rpm * TAU / 60.0) };
     (0..n)
@@ -639,7 +706,7 @@ pub fn drive_table(asm: &Assembly, driver: usize, rpm: f64, torque: f64, e: &Eff
             if let Some(c) = &w.conflict {
                 st.locked = true;
                 st.note = Some(c.clone());
-            } else if let Some(x) = std::iter::once(i).chain(st.path.iter().map(|s| s.from)).find(|x| asm.members[*x].grounded) {
+            } else if let Some(x) = std::iter::once(i).chain(st.path.iter().map(|s| s.from)).find(|x| asm.members[*x].grounded).or(held) {
                 st.locked = true;
                 st.note = Some(format!("member {} is held (grounded): nothing it joins turns", x + 1));
             } else if let Some(sl) = st.path.iter().find(|s| s.self_locking && s.efficiency == 0.0) {
@@ -758,7 +825,7 @@ fn fact(p: &Plan, label: &str) -> Option<f64> {
 /// that closes a loop, which isn't an assembly link), a pair's, a planetary set's (sun–planet,
 /// planet–ring); other sets as [`mesh_checks`] with the plan's "contact ratio" where it has one.
 pub fn plan_mesh_checks(spec: &Spec, p: &Plan) -> Vec<MeshCheck> {
-    let e = Efficiencies::for_spec(spec);
+    let e = Efficiencies::for_plan(spec, p);
     if let Some(t) = &spec.train {
         use crate::plan::train::LinkKind;
         let mut v = Vec::new();
@@ -766,13 +833,8 @@ pub fn plan_mesh_checks(spec: &Spec, p: &Plan) -> Vec<MeshCheck> {
             let (Some(ga), Some(gb)) = (t.gears.get(l.a), t.gears.get(l.b)) else { continue };
             let member = |g: usize| member_of_gear(p, g).unwrap_or(g);
             let members = (member(l.a), member(l.b));
-            let link = p.assembly.links.iter().position(|x| {
-                matches!(x, AssemblyLink::Gear { .. }) && {
-                    let (a, b) = x.members();
-                    (a, b) == members || (b, a) == members
-                }
-            });
-            let kind = if l.kind == LinkKind::Internal { MeshKind::Internal } else { e.parallel };
+            let link = train_link(p, l.a, l.b);
+            let kind = if l.kind == LinkKind::Internal { MeshKind::Internal } else { train_mesh_kind(ga, gb) };
             let pair = format!("gears {}–{}", l.a + 1, l.b + 1);
             let contact = fact(p, &format!("{pair} contact ratio"));
             let total = fact(p, &format!("{pair} total contact ratio")).or(contact);

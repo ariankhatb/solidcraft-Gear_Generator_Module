@@ -198,8 +198,23 @@ pub(crate) fn from_members(p: &Plan) -> Option<(Assembly, Vec<AssemblyIssue>)> {
     if body.iter().any(|b| *b >= p.bodies.len()) {
         return None;
     }
-    let members: Vec<AssemblyMember> =
+    let mut members: Vec<AssemblyMember> =
         p.bodies.iter().enumerate().map(|(i, b)| AssemblyMember { body: i, axis: turning(&b.frame), grounded: false, carrier: None }).collect();
+    // Gears rigid on one shaft turn together in the world: a cluster member whose body faces the
+    // other way turns about its axis turned round, as its cluster's first does (a rigid link
+    // keeps their turns about their own axes equal). Before the meshes' signs, which follow it.
+    for c in &p.clusters {
+        let Some((&first, rest)) = c.split_first() else { continue };
+        let Some(d0) = body.get(first).and_then(|b| members.get(*b)).map(|m| m.axis.dir) else { continue };
+        for &k in rest {
+            if let Some(m) = body.get(k).copied().and_then(|b| members.get_mut(b)) {
+                let d = m.axis.dir;
+                if d[0] * d0[0] + d[1] * d0[1] + d[2] * d0[2] < 0.0 {
+                    m.axis.dir = neg(d);
+                }
+            }
+        }
+    }
     let mut edges = Vec::new();
     for (i, m) in p.members.iter().enumerate() {
         for &j in m.meshes_with.iter().filter(|j| **j > i && **j < p.members.len()) {

@@ -235,8 +235,10 @@ fn through_holes(c: &Step, teeth: &[Step], blank: &[Step]) -> Option<Vec<(usize,
             continue;
         }
         let Step::Prism { region, twist: t, .. } = s else { return None };
-        // Every outline one of its holes already (a bore cut again): nothing to take.
-        if cut.outer.iter().all(|o| region.holes.contains(o)) {
+        // Every outline one of its holes already (a bore cut again): nothing to take. Only on an
+        // untwisted solid: a twisted one's holes turn along its height, so the straight cut
+        // still takes material away from them.
+        if t.abs() <= 1e-12 && cut.outer.iter().all(|o| region.holes.contains(o)) {
             continue;
         }
         if t.abs() > 1e-12 || !(cz.0 <= b.z.0 + EPS && cz.1 >= b.z.1 - EPS) {

@@ -289,6 +289,15 @@ pub fn expected_gap(s: &Spec) -> (f64, f64) {
 /// (degrees) and `first_azimuth` 0: the first planet then lies in the sketch's plane.
 pub fn placement_from_shafts(apex: [f64; 3], sun_dir: [f64; 3], planet_dir: [f64; 3]) -> Result<(Frame, f64), String> {
     let len = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    // Each direction scaled by its largest component first: a long one's squares would
+    // overflow to infinity and leave a zero axis.
+    let scaled = |v: [f64; 3]| {
+        let big = v.iter().fold(0.0f64, |a, c| a.max(c.abs()));
+        (big.is_finite() && big > 0.0).then(|| v.map(|c| c / big))
+    };
+    let (Some(sun_dir), Some(planet_dir)) = (scaled(sun_dir), scaled(planet_dir)) else {
+        return Err("the shafts need a direction".into());
+    };
     let (ls, lp) = (len(sun_dir), len(planet_dir));
     if !(ls > 1e-12 && lp > 1e-12) {
         return Err("the shafts need a direction".into());

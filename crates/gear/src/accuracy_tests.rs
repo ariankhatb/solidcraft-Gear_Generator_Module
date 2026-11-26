@@ -155,6 +155,7 @@ fn flank_deviation(g: &Involute) -> (f64, usize, usize) {
     natural_spline(&pts, 40, &mut curve);
     let rb = g.rb();
     let mut worst: f64 = 0.0;
+    let mut measured = 0usize;
     for q in &curve {
         let rr = q.len();
         if rr <= rb {
@@ -163,8 +164,10 @@ fn flank_deviation(g: &Involute) -> (f64, usize, usize) {
         // Off the involute round the circle, turned to the involute's normal.
         let off = (q.angle() - g.half_angle_at(rr)) * rr * (rb / rr);
         worst = worst.max(off.abs());
+        measured += 1;
     }
-    (worst, f.fillet.len(), f.flank.len())
+    // No point above the base circle measures nothing: NaN, which no bound passes.
+    (if measured > 0 { worst } else { f64::NAN }, f.fillet.len(), f.flank.len())
 }
 
 #[test]
@@ -195,8 +198,10 @@ fn fitted_flanks_stay_within_a_micron_per_module_of_the_involute() {
     }
     let (dev, nf, nk) = flank_deviation(&spur(20, 1.0, 0.0));
     eprintln!("fit z20: fillet {nf} flank {nk} points, deviation {dev:.2e} modules; most points on a side {most_points}");
+    assert!(dev < 1e-3, "z20: {dev:.2e}");
     let (dev, nf, nk) = flank_deviation(&spur(400, 1.0, 0.0));
     eprintln!("fit z400: fillet {nf} flank {nk} points, deviation {dev:.2e} modules");
+    assert!(dev < 1e-3, "z400: {dev:.2e}");
 }
 
 #[test]

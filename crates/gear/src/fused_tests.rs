@@ -172,3 +172,29 @@ fn a_compounds_bores_are_holes_in_each_layer() {
     let (n, before, after) = same_bodies(p);
     assert!(n >= 1 && after < before, "{n} fused, {before} -> {after}");
 }
+
+#[test]
+fn a_straight_cut_on_a_twisted_solids_own_hole_is_kept() {
+    // A Ø40 disc twisted 0.5 rad over its 8 mm, with a Ø4 hole at (10, 0) that turns with it; a
+    // straight Ø4 cut at (10, 0) is that hole's outline, but only at z = 0: at the top the hole has
+    // turned to (10 cos 0.5, 10 sin 0.5) = (8.78, 4.79), 4.9 mm away, so the cut still takes
+    // the disc's material at (10, 0, 7.9).
+    use crate::geom::{Outline, Region, V2};
+    let of = plan(&spur()).unwrap().bodies[0].clone();
+    let hole = Outline::circle(V2::new(10.0, 0.0), 2.0);
+    let disc = Step::Prism {
+        region: Region { outer: vec![Outline::circle(V2::ZERO, 20.0)], holes: vec![hole.clone()] },
+        z0: 0.0,
+        height: 8.0,
+        twist: 0.5,
+        op: Op::New,
+    };
+    let cut = Step::Prism { region: Region { outer: vec![hole], holes: vec![] }, z0: -1.0, height: 10.0, twist: 0.0, op: Op::Cut };
+    let b = body(vec![disc, cut], &of);
+    let whole = Solid::new(&b, 0.05);
+    let q = [10.0, 0.0, 7.9];
+    assert!(!whole.contains(q), "the planned steps cut it");
+    if let Some(f) = fused(&b) {
+        assert!(!holds(q, &solids(&f, &b)), "the fused build lost the cut: {f:#?}");
+    }
+}

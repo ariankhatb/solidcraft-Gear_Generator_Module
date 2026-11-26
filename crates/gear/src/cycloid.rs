@@ -65,7 +65,9 @@ pub fn cycloidal_outline(c: &Cycloidal, phase: f64) -> (Outline, ToothFlank) {
     let (ra_full, rf) = (r + c.addendum * c.module, r - c.dedendum * c.module);
     let a_add = c.rolling_radius_addendum.max(1e-6);
     // Not clamp: at a tiny module r * 0.999 is below 1e-6 (and clamp panics when min > max).
-    let a_ded = c.rolling_radius_dedendum.min(r * 0.999).max(1e-6);
+    // The floor stays below the pitch radius too: a rolling circle bigger than it traces no
+    // hypocycloid inside it.
+    let a_ded = c.rolling_radius_dedendum.min(r * 0.999).max(1e-6f64.min(0.5 * r));
     // Highest radius the epicycloid reaches: r + 2a.
     let mut ra = ra_full.min(r + 2.0 * a_add * 0.999);
     let half = |rr: f64| -> f64 {

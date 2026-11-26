@@ -320,7 +320,8 @@ pub fn item_number(id: &str) -> Option<usize> {
     let mut c = id.chars();
     let letter = c.next().filter(char::is_ascii_uppercase)?;
     let round: usize = c.as_str().parse().unwrap_or(1);
-    Some(round.checked_sub(1)? * 26 + usize::from(letter as u8 - b'A'))
+    // Checked: a round past usize / 26 (easily reached on wasm32) overflowed.
+    round.checked_sub(1)?.checked_mul(26)?.checked_add(usize::from(letter as u8 - b'A'))
 }
 
 /// A gear's bore.
@@ -726,7 +727,9 @@ fn first_fit(kind: ItemKind, things: &[Thing]) -> Option<(usize, Vec<SlotIndex>)
 /// Where the first two lines meet, end to end (within the tolerance): a side view's apex.
 fn lines_meet(things: &[Thing]) -> Option<V> {
     let (a, b) = (line_ends(things, 0)?, line_ends(things, 1)?);
-    let scale = [a.0, a.1, b.0, b.1].iter().map(|p| len(*p)).fold(1.0f64, f64::max).max(len(sub(a.1, a.0))).max(len(sub(b.1, b.0)));
+    // Scaled by the shafts' own lengths, not by how far they are from the origin (which made
+    // the ends of lines a long way out count as meeting several millimetres apart).
+    let scale = len(sub(a.1, a.0)).max(len(sub(b.1, b.0))).max(1.0);
     [a.0, a.1].into_iter().find_map(|p| [b.0, b.1].into_iter().find(|q| len(sub(p, *q)) <= tol(scale)).map(|_| p))
 }
 
@@ -1173,6 +1176,20 @@ fn bevel_geometry(cs: &[Circ], ls: &[Ln]) -> Result<(), String> {
             for c in [a, b] {
                 if len(sub(c.c, apex)) <= t {
                     return Err("a circle is centred where the shafts meet: move it along its shaft".into());
+                }
+            }
+            // On one sphere about the apex, the circles touch when the angle between the
+            // directions to their centres is the sum of their half cone angles.
+            if let (Some(ua), Some(ub)) = (unit(sub(a.c, apex)), unit(sub(b.c, apex))) {
+                let half = |c: &Circ| (c.r / cone(c, apex)).clamp(-1.0, 1.0).asin();
+                let between = dot(ua, ub).clamp(-1.0, 1.0).acos();
+                let gap = (between - half(a) - half(b)) * r1;
+                if gap.abs() > t {
+                    let what = if gap < 0.0 { "cross each other" } else { "are apart" };
+                    return Err(format!(
+                        "the pitch circles {what} ({} mm along the cone): a bevel pair's circles meet at one point; move or resize one",
+                        num(gap.abs())
+                    ));
                 }
             }
         }
@@ -2083,6 +2100,9 @@ fn classify(items: &[GearItem], ra: GearRef, rb: GearRef, a: &GearGeom, b: &Gear
         Lie::Coaxial => (StageKind::Parallel, Some(format!("{} are on one axis, so they can't mesh: link them by Shaft instead", names()))),
         Lie::Parallel { distance } => {
             let (Some(r1), Some(r2)) = (a.radius, b.radius) else { return (StageKind::Parallel, None) };
+            if a.ring && b.ring {
+                return (StageKind::Internal, Some(format!("{} are both rings: a ring meshes with a gear inside it", names())));
+            }
             if a.ring || b.ring {
                 let want = (r1 - r2).abs();
                 let err = ((distance - want).abs() > t).then(|| {

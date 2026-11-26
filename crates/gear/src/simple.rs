@@ -1207,7 +1207,21 @@ fn pair_at(c: &mut Ctx, ratio: f64, a: f64, helix: f64) -> Result<(), String> {
         let m = (d1 + d2) * cb / f64::from(z1 + z2);
         (c.spec.module, c.spec.teeth, c.spec.teeth2, c.spec.shift, c.spec.shift2) = (m, z1, z2, 0.0, 0.0);
         c.spec.center_distance = if ((d1 + d2) / 2.0 - a).abs() > 1e-9 { a } else { 0.0 };
-        c.note(format!("non-standard module {} draws the circles exactly", num(m)));
+        // The module makes the sum exact; each circle is only exact when the tooth counts are in
+        // the circles' own ratio.
+        let (got1, got2) = (m * f64::from(z1) / cb, m * f64::from(z2) / cb);
+        if (got1 - d1).abs() > 1e-6 || (got2 - d2).abs() > 1e-6 {
+            c.note(format!(
+                "non-standard module {} keeps the centre distance; the circles come out Ø{} and Ø{} (Ø{} and Ø{} asked): no whole tooth counts draw both exactly",
+                num(m),
+                num(got1),
+                num(got2),
+                num(d1),
+                num(d2)
+            ));
+        } else {
+            c.note(format!("non-standard module {} draws the circles exactly", num(m)));
+        }
         return Ok(());
     }
     let base = c.same.then_some((c.base.module, c.base.teeth, c.base.teeth2));
@@ -1321,7 +1335,8 @@ fn internal(c: &mut Ctx) -> Result<(), String> {
         (_, Some(r)) if r > 1.0 => Some((f64::from(c.spec.teeth) / r).round() as u32),
         _ => None,
     };
-    if let Some(zp) = zp.filter(|z| *z >= 3 && *z + 3 <= c.spec.teeth) {
+    // (`checked_sub`: a huge drawn pinion saturates to u32::MAX, which `z + 3` overflowed.)
+    if let Some(zp) = zp.filter(|z| *z >= 3 && c.spec.teeth.checked_sub(3).is_some_and(|t| *z <= t)) {
         let pin = Spec { kind: if c.spec.helix != 0.0 { Kind::Helical } else { Kind::Spur }, teeth: zp, helix: c.spec.helix, ..c.spec.clone() };
         let a = m / cb * f64::from(c.spec.teeth - zp) / 2.0;
         c.row("pinion teeth", f64::from(zp), Unit::None);
@@ -1397,6 +1412,11 @@ fn planetary(c: &mut Ctx) -> Result<(), String> {
         };
         for zs in zs_range {
             let zr_t = (ratio - 1.0) * f64::from(zs);
+            // Past the 2000-tooth bound (or not a number) nothing fits, and the offsets below
+            // would overflow a saturated i64.
+            if !(zr_t.is_finite() && zr_t <= 2001.0) {
+                continue;
+            }
             for zr in [zr_t.floor() as i64 - 1, zr_t.floor() as i64, zr_t.ceil() as i64, zr_t.ceil() as i64 + 1] {
                 if zr <= i64::from(zs) || (zr - i64::from(zs)) % 2 != 0 || zr > 2000 {
                     continue;
@@ -2015,7 +2035,9 @@ fn worm(c: &mut Ctx) -> Result<(), String> {
         _ if keep => c.spec.worm_diameter,
         _ => 0.0,
     };
-    let d1 = if c.spec.worm_diameter > 0.0 { c.spec.worm_diameter } else { 10.0 * m };
+    // With a centre distance the worm is what is left of it: none left is no worm (not the default
+    // 10 modules, which would miss the distance).
+    let d1 = if c.spec.worm_diameter > 0.0 || a.is_some() { c.spec.worm_diameter } else { 10.0 * m };
     if d1 <= 2.0 * c.spec.rack.dedendum * m + 0.5 * m {
         return Err(format!(
             "the wheel (Ø{}) leaves no room for a worm across {} mm: use a smaller wheel or a larger distance",
@@ -2051,8 +2073,10 @@ fn cycloidal(c: &mut Ctx) -> Result<(), String> {
             c.spec.teeth2 = ((f64::from(c.spec.teeth) / r).round() as u32).max(6);
         }
     }
+    // Tooth sums in f64: a tiny ratio's pinion saturates to u32::MAX.
+    let z_sum = f64::from(c.spec.teeth) + f64::from(c.spec.teeth2);
     if let Some(a) = s.center_distance.or(s.offset).filter(|a| *a > 0.0).filter(|_| !single_only) {
-        c.spec.module = 2.0 * a / f64::from(c.spec.teeth + c.spec.teeth2);
+        c.spec.module = 2.0 * a / z_sum;
         c.note(format!("cycloidal teeth take no shift: module {} gives the distance exactly", num(c.spec.module)));
     } else if let Some(d) = s.pitch_diameter.filter(|d| *d > 0.0) {
         c.spec.module = d / f64::from(c.spec.teeth);
@@ -2067,7 +2091,7 @@ fn cycloidal(c: &mut Ctx) -> Result<(), String> {
     if c.spec.teeth2 > 0 {
         c.row("pinion teeth", f64::from(c.spec.teeth2), Unit::None);
         ratio_rows(c, s.ratio.unwrap_or(f64::from(c.spec.teeth) / f64::from(c.spec.teeth2)), f64::from(c.spec.teeth) / f64::from(c.spec.teeth2));
-        c.row("centre distance", m * f64::from(c.spec.teeth + c.spec.teeth2) / 2.0, Unit::Mm);
+        c.row("centre distance", m * z_sum / 2.0, Unit::Mm);
     }
     c.row("face width", c.spec.face_width, Unit::Mm);
     Ok(())
@@ -2076,8 +2100,18 @@ fn cycloidal(c: &mut Ctx) -> Result<(), String> {
 fn drive(c: &mut Ctx) -> Result<(), String> {
     use crate::cycloid::CycloidalDrive;
     let s = c.s;
-    let pins = s.ratio.map_or(c.spec.pins, |r| (r.round() as u32 + 1).clamp(3, 200));
-    let pc = s.pitch_diameter.filter(|d| *d > 0.0).or(s.outer_diameter.filter(|d| *d > 0.0).map(|d| d / (1.0 + 0.382 * PI / f64::from(pins))));
+    // (In f64: a huge ratio saturated to u32::MAX, and the + 1 overflowed.)
+    let pins = s.ratio.map_or(c.spec.pins, |r| {
+        let n = r.round() + 1.0;
+        if n.is_nan() { 3 } else { n.clamp(3.0, 200.0) as u32 }
+    });
+    // An outer diameter that is the design's own (pin circle + pin diameter, as `outputs_of`
+    // gives it) keeps its pin circle; another is taken as over pins of the usual size.
+    let own_outer = |d: f64| pins == c.spec.pins && (d - (c.spec.pin_circle + c.spec.pin_diameter)).abs() <= 1e-9;
+    let pc = s.pitch_diameter.filter(|d| *d > 0.0).or(s
+        .outer_diameter
+        .filter(|d| *d > 0.0)
+        .map(|d| if own_outer(d) { c.spec.pin_circle } else { d / (1.0 + 0.382 * PI / f64::from(pins)) }));
     let changed = pins != c.spec.pins || pc.is_some_and(|p| (p - c.spec.pin_circle).abs() > 1e-9) || !c.same;
     c.spec.pins = pins;
     if let Some(p) = pc {
@@ -2510,7 +2544,7 @@ pub fn measures(spec: &Spec) -> Simple {
             if s.teeth2 > 0 {
                 o.ratio = Some(f64::from(s.teeth) / f64::from(s.teeth2));
                 o.pitch_diameter2 = Some(s.module * f64::from(s.teeth2));
-                let a = s.module * f64::from(s.teeth + s.teeth2) / 2.0;
+                let a = s.module * (f64::from(s.teeth) + f64::from(s.teeth2)) / 2.0;
                 o.center_distance = Some(a);
                 o.offset = Some(a);
                 o.shaft_angle = Some(0.0);

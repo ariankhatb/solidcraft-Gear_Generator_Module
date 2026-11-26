@@ -102,6 +102,9 @@ impl EllipticPair {
     /// lengths `first_space` + k·pitch from the curve's first point.
     pub fn teeth(&self, curve: &[V2], first_space: f64) -> Outline {
         let n = curve.len();
+        if n < 3 {
+            return Outline { segs: Vec::new() };
+        }
         let mut s = vec![0.0; n + 1];
         for i in 0..n {
             s[i + 1] = s[i] + curve[i].dist(curve[(i + 1) % n]);
@@ -115,7 +118,10 @@ impl EllipticPair {
         // Rays from the pivot, and positions of the cutter, per tooth (fewer for many teeth, whose
         // flanks are nearly straight).
         let (rays_per_tooth, steps_per_tooth) = if self.teeth <= 80 { (48, 32) } else { (32, 16) };
-        let rays = (self.teeth.max(3) as usize) * rays_per_tooth;
+        // Capped: a hostile tooth count times the rays per tooth overflows a 32-bit usize (wasm)
+        // and would ask for gigabytes; past the cap the teeth are drawn with fewer rays.
+        let zt = usize::try_from(self.teeth.max(3)).unwrap_or(usize::MAX);
+        let rays = zt.saturating_mul(rays_per_tooth).min(MOST_RAYS);
         let ray_angle = |k: usize| TAU * k as f64 / rays as f64;
         // The tip curve: the pitch radius along each ray plus the addendum.
         // The curve point whose polar angle is nearest (the curves are star-shaped).
@@ -144,7 +150,7 @@ impl EllipticPair {
             let t = (q1 - q0).norm();
             (q0.lerp(q1, (sv - s[i]) / seg), t)
         };
-        let total_steps = self.teeth.max(3) as usize * steps_per_tooth;
+        let total_steps = zt.saturating_mul(steps_per_tooth).min(MOST_RAYS);
         let backlash = self.backlash / 2.0;
         for j in 0..total_steps {
             let sc = total * j as f64 / total_steps as f64;
@@ -196,6 +202,9 @@ impl EllipticPair {
         Outline { segs }
     }
 }
+
+/// The most rays (and cutter positions) [`EllipticPair::teeth`] takes round a gear.
+pub const MOST_RAYS: usize = 1 << 20;
 
 /// Drops points that lie within `tol` of the line through their neighbours (closed polyline).
 fn simplify_closed(p: &[V2], tol: f64) -> Vec<V2> {

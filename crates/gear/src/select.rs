@@ -111,8 +111,13 @@ pub fn set_on_shafts(shafts: &[Shaft], ask: &Ask, base: &Spec) -> Result<Solved,
     }
     let style = ask.kind.filter(|k| is_style(*k));
     let family = ask.kind.filter(|k| !is_style(*k));
+    // Helical teeth: gear 1's hand is the helix's sign (left: negative), as the train's
+    // settings take it from `left_hand`.
     let helix = match style {
-        Some(Kind::Helical | Kind::Herringbone) => ask.helix.map(f64::abs).filter(|h| *h > 0.0).unwrap_or(20.0),
+        Some(Kind::Helical | Kind::Herringbone) => {
+            let h = ask.helix.map(f64::abs).filter(|h| *h > 0.0).unwrap_or(20.0);
+            if ask.left_hand { -h } else { h }
+        }
         _ if family.is_some() => ask.helix.unwrap_or(base.helix),
         _ => 0.0,
     };

@@ -378,6 +378,9 @@ pub fn solve(axis1: &Axis, axis2: Option<&Axis>, kind: Option<Kind>, base: &Spec
     {
         return Err("the ratio must be greater than 0".into());
     }
+    if !drive.along.is_finite() {
+        return Err("`along` must be a finite distance".into());
+    }
     let relation = a2.as_ref().map(|a2| relate(&a1, a2));
     let kind = kind.unwrap_or_else(|| natural(relation.as_ref()));
     let c = candidate(kind, relation.as_ref());
@@ -690,7 +693,7 @@ fn pair(a: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) -> Result<(), 
             let f = (ideal + 1e-9).floor();
             [f, f - 1.0].into_iter().filter(|s| *s >= 2.0 && *s < 4001.0).map(|s| s as u32).collect()
         } else {
-            vec![spec.teeth + spec.teeth2]
+            vec![spec.teeth.saturating_add(spec.teeth2)]
         };
         for sum in sums {
             let firsts: Vec<u32> = match (free1, free2) {
@@ -707,7 +710,7 @@ fn pair(a: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) -> Result<(), 
                 if small < 6 {
                     continue;
                 }
-                let gap = (a - m * f64::from(z1 + z2) / (2.0 * cb)) / m;
+                let gap = (a - m * (f64::from(z1) + f64::from(z2)) / (2.0 * cb)) / m;
                 let searched = drive.module_free || free1 || free2;
                 if searched && !(-1e-9..=0.8).contains(&gap) {
                     continue;
@@ -728,7 +731,7 @@ fn pair(a: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) -> Result<(), 
         Some((_, m, z1, z2)) => (m, z1, z2),
         // Fixed teeth that no standard module brings near the distance: the exact module.
         None if drive.module_free && !free1 && !free2 => {
-            let m = 2.0 * a * cb / f64::from(spec.teeth + spec.teeth2);
+            let m = 2.0 * a * cb / (f64::from(spec.teeth) + f64::from(spec.teeth2));
             out.notes.push(format!(
                 "no standard module brings {} + {} teeth to {} mm: using the exact module {}",
                 spec.teeth,
@@ -807,7 +810,7 @@ fn cycloidal(a: f64, spec: &mut Spec, drive: &Drive, out: &mut Solved) {
         out.derived.teeth2 = drive.teeth2_free;
         (spec.teeth, spec.teeth2) = (z1, z2);
     }
-    spec.module = 2.0 * a / f64::from(spec.teeth + spec.teeth2);
+    spec.module = 2.0 * a / (f64::from(spec.teeth) + f64::from(spec.teeth2));
     out.derived.module = true;
     out.derived.center_distance = true;
     out.facts.push(fact("module (from the distance)", spec.module, Unit::None));

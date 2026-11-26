@@ -304,6 +304,10 @@ fn safeties(c: &Candidate, load: &Load) -> (f64, f64) {
 /// Most candidates rated in full in one call (each takes a few milliseconds).
 const MOST_RATED: usize = 48;
 
+/// Most candidate pairs gathered in one call: a wide ratio tolerance over the whole tooth and
+/// module range would otherwise gather tens of millions (gigabytes, and far too long on wasm).
+const MOST_CANDIDATES: usize = 50_000;
+
 /// A quick estimate of the safeties: the rating's contact stress without its dynamic and
 /// single-pair factors, and a root stress with a typical form factor (YF·YS = 4.4) in place of
 /// the measured one. Within a third or so of the rating: enough to put candidates in order.
@@ -334,7 +338,7 @@ pub fn suggest(goal: &Goal) -> Vec<Suggestion> {
     let beta = goal.helix.to_radians();
     let tol = goal.ratio_tolerance + 1e-12;
     let mut found: Vec<Candidate> = Vec::new();
-    for m in standard_modules(goal.min_module, goal.max_module, goal.second_choice_modules) {
+    'modules: for m in standard_modules(goal.min_module, goal.max_module, goal.second_choice_modules) {
         if goal.backlash >= PI * m / 4.0 {
             continue;
         }
@@ -401,6 +405,9 @@ pub fn suggest(goal: &Goal) -> Vec<Suggestion> {
                     continue;
                 }
                 found.push(c);
+                if found.len() >= MOST_CANDIDATES {
+                    break 'modules;
+                }
             }
         }
     }
@@ -533,7 +540,14 @@ pub struct Split {
 /// hunting-toothed, then the most accurate. Empty when the limits can't reach the total.
 pub fn split_ratio(total: f64, stages: u32, limits: &StageLimits) -> Vec<Split> {
     let l = limits;
-    if !(total.is_finite() && total > 0.0) || stages == 0 || stages > 8 || l.min_teeth < 3 || l.max_teeth < l.min_teeth || !(l.max_stage_ratio >= 1.0)
+    // (At most 2000 teeth, as for a pair: the searches below run over every tooth count.)
+    if !(total.is_finite() && total > 0.0)
+        || stages == 0
+        || stages > 8
+        || l.min_teeth < 3
+        || l.max_teeth < l.min_teeth
+        || l.max_teeth > 2000
+        || !(l.max_stage_ratio >= 1.0)
     {
         return Vec::new();
     }
@@ -560,7 +574,7 @@ pub fn split_ratio(total: f64, stages: u32, limits: &StageLimits) -> Vec<Split> 
     // and for size.
     let cost = |z1: u32, z2: u32| -> f64 {
         let r = f64::from(z2) / f64::from(z1);
-        (r / even).ln().abs() + if gcd(z1, z2) == 1 { 0.0 } else { 0.05 } + 2e-5 * f64::from(z1 + z2)
+        (r / even).ln().abs() + if gcd(z1, z2) == 1 { 0.0 } else { 0.05 } + 2e-5 * (f64::from(z1) + f64::from(z2))
     };
     // Stage choices near the even ratio (within about a quarter either way), smaller pinions
     // first: plenty for all but the last stage, which then closes the total.
@@ -601,11 +615,14 @@ pub fn split_ratio(total: f64, stages: u32, limits: &StageLimits) -> Vec<Split> 
     let mut out: Vec<(Split, f64)> = Vec::new();
     for (st, prod, c) in &beam {
         let need = total / prod;
-        if need > cap * 1.02 || need < 1.0 / 1.02 {
+        // The last stage may be off by as much as the tolerance (2% at least); past the cap it
+        // is taken at the cap, the nearest it can come.
+        let slack = 1.0 + l.tolerance.max(0.02);
+        if need > cap * slack || need < 1.0 / slack {
             continue;
         }
         for z1 in l.min_teeth..=l.max_teeth {
-            let ideal = need * f64::from(z1);
+            let ideal = need.min(cap) * f64::from(z1);
             for z2 in [ideal.floor() as u32, ideal.ceil() as u32] {
                 if z2 < z1.max(l.min_teeth) || z2 > l.max_teeth || f64::from(z2) / f64::from(z1) > cap + 1e-9 {
                     continue;

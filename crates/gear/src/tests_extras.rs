@@ -816,3 +816,25 @@ fn face_gear_plan_limits_and_refusals() {
         assert!(e.contains("no room") || e.contains("more teeth"), "{e}");
     }
 }
+
+#[test]
+fn elliptical_teeth_with_a_hostile_tooth_count_stay_bounded() {
+    use crate::elliptic::{EllipticPair, MOST_RAYS};
+    // u32::MAX teeth × 32 rays each is past a 32-bit usize and gigabytes of rays: the rays are
+    // capped, so the outline is bounded (and still finite).
+    let e = EllipticPair {
+        teeth: u32::MAX,
+        module: 2.0,
+        eccentricity: 0.3,
+        pressure_angle: 20f64.to_radians(),
+        addendum: 1.0,
+        dedendum: 1.25,
+        backlash: 0.0,
+    };
+    let circle: Vec<V2> = (0..360).map(|i| V2::polar(50.0, PI * 2.0 * f64::from(i) / 360.0)).collect();
+    let o = e.teeth(&circle, 0.0);
+    assert!(o.segs.len() <= MOST_RAYS, "{}", o.segs.len());
+    assert!(o.segs.iter().all(|s| s.start().x.is_finite() && s.start().y.is_finite()));
+    // No pitch curve, no teeth (it used to divide by its zero length of points).
+    assert!(e.teeth(&[], 0.0).segs.is_empty());
+}

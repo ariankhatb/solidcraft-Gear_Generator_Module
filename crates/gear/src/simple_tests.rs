@@ -703,3 +703,54 @@ fn bevel_planetary_sets_by_their_outputs() {
     let bad = solve(&Simple { bevel_planet_mode: Some(Ring), shaft_angle: Some(120.0), ratio: Some(0.6), ..of(Kind::BevelPlanetary) }, &base);
     assert!(bad.error.is_some());
 }
+
+#[test]
+fn exact_circles_say_exactly_only_when_both_are_hit() {
+    // The non-standard module makes d1 + d2 exact; each circle is only exact when z2 / z1 is
+    // d2 / d1. 40 and 80 (ratio 2) can be; 41 and 97 (a prime over another) need z1 = 41k.
+    let base = Spec::defaults_for(Kind::Pair);
+    for (d1, d2) in [(40.0, 80.0), (41.0, 97.0)] {
+        let e = solved(&Simple { pitch_diameter: Some(d1), pitch_diameter2: Some(d2), exact: true, ..of(Kind::Pair) }, &base);
+        let (g1, g2) = (e.spec.module * f64::from(e.spec.teeth), e.spec.module * f64::from(e.spec.teeth2));
+        let hit = (g1 - d1).abs() <= 1e-6 && (g2 - d2).abs() <= 1e-6;
+        let says = e.notes.iter().any(|n| n.contains("draws the circles exactly"));
+        assert_eq!(hit, says, "{d1}/{d2}: Ø{g1} Ø{g2}, notes {:?}", e.notes);
+    }
+}
+
+#[test]
+fn huge_drawn_sizes_and_ratios_never_overflow_tooth_counts() {
+    // Each of these saturated a tooth or pin count to u32::MAX and then added to it.
+    for x in [
+        Simple { pitch_diameter: Some(1e300), ..of(Kind::Internal) },
+        Simple { ratio: Some(1e300), ..of(Kind::Planetary) },
+        Simple { ratio: Some(1e300), ..of(Kind::CycloidalDrive) },
+        Simple { ratio: Some(1e-300), center_distance: Some(40.0), ..of(Kind::Cycloidal) },
+    ] {
+        let k = x.kind.unwrap();
+        let r = std::panic::catch_unwind(|| solve(&x, &Spec::defaults_for(k)));
+        assert!(r.is_ok(), "{k:?} panicked");
+    }
+}
+
+#[test]
+fn a_worm_with_no_room_left_by_the_centre_distance_is_refused() {
+    // Wheel Ø = m · z; across a distance under half of it the worm's diameter 2a − m·z is
+    // negative: there is no worm, not a default 10-module one that misses the distance.
+    let x = Simple { ratio: Some(40.0), center_distance: Some(5.0), module: Some(1.0), ..of(Kind::Worm) };
+    let s = solve(&x, &Spec::defaults_for(Kind::Worm));
+    assert!(s.error.as_deref().is_some_and(|e| e.contains("no room for a worm")), "{:?} {:?}", s.error, s.notes);
+}
+
+#[test]
+fn a_cycloidal_drive_opened_in_simple_mode_keeps_its_pins() {
+    // Its outputs give the outer diameter as pin circle + pin diameter; solving them again must
+    // not re-derive the pin circle as if the pins were exactly 0.382 × the pitch (they are that
+    // rounded to 0.1 mm, so the circle moved by the rounding).
+    let spec = solved(&Simple { ratio: Some(15.0), outer_diameter: Some(80.0), ..of(Kind::CycloidalDrive) }, &Spec::defaults_for(Kind::CycloidalDrive)).spec;
+    let again = solved(&outputs_of(&spec), &spec).spec;
+    assert_eq!(
+        (again.pins, again.pin_circle, again.pin_diameter, again.eccentricity),
+        (spec.pins, spec.pin_circle, spec.pin_diameter, spec.eccentricity)
+    );
+}

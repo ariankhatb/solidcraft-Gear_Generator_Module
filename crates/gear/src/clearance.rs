@@ -157,7 +157,15 @@ pub fn check(c: &Clearance) -> Result<(), String> {
             return Err("clearance: a bearing needs an outside diameter and a width over 0 (and a bore under the outside diameter)".into());
         }
     }
-    c.chosen_bearing()?;
+    if let Some((name, b)) = c.chosen_bearing()?
+        && !(b.od + c.bearing_fit > 0.0)
+    {
+        return Err(format!(
+            "clearance: bearing {name}'s seat (its Ø{} outside diameter with a fit of {} mm) has no size: make the fit smaller",
+            num(b.od),
+            num(c.bearing_fit)
+        ));
+    }
     if c.seats.len() > 64 {
         return Err("clearance: 64 bearing seats at most".into());
     }
@@ -434,6 +442,25 @@ fn set_name(s: &Spec) -> String {
 fn who_of(s: &Spec, body: &Body) -> String {
     let pre = format!("{} ", s.name.trim());
     if s.name.trim().is_empty() { body.name.clone() } else { body.name.strip_prefix(&pre).unwrap_or(&body.name).to_string() }
+}
+
+/// The diameter of a member's shaft at `z` along its own axis: for an integral shaft, the
+/// section there (the front shaft past the teeth, the back one before them, each its base
+/// diameter and then its step); otherwise the member's one shaft diameter.
+fn shaft_d_at(s: &Spec, m: &Member, z: f64) -> Option<f64> {
+    let (front, back) = match m.role {
+        1 => (s.shaft_front, s.shaft_back),
+        2 => (s.shaft2_front, s.shaft2_back),
+        _ => return m.shaft_d,
+    };
+    let section = |sh: &crate::hub::Shaft, dist: f64| if sh.stepped() && dist > sh.length { sh.step_diameter } else { sh.diameter };
+    if z > m.teeth.1 && front.exists() {
+        Some(section(&front, z - m.teeth.1))
+    } else if z < m.teeth.0 && back.exists() {
+        Some(section(&back, m.teeth.0 - z))
+    } else {
+        m.shaft_d
+    }
 }
 
 fn bore_of(s: &Spec, role: u8) -> (Bore, bool, f64) {
@@ -817,7 +844,7 @@ fn build(
                 ));
             }
             if b.bore > 0.0
-                && let Some(d) = m.shaft_d
+                && let Some(d) = shaft_d_at(s, m, m.mid + along)
                 && (d - b.bore).abs() > 1e-6
                 && !mismatched.contains(&mi)
             {

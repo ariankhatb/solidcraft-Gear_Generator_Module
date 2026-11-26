@@ -395,3 +395,24 @@ fn a_wide_hypoid_keeps_the_face_width_asked() {
     }
     assert!(cut.is_none(), "{cut:?}");
 }
+
+#[test]
+fn a_non_finite_along_is_refused() {
+    let (a1, a2) = (axis([0.0; 3], [0.0, 0.0, 1.0]), axis([50.0, 0.0, 0.0], [0.0, 0.0, 1.0]));
+    for along in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let e = solve(&a1, Some(&a2), Some(Kind::Pair), &Spec::defaults_for(Kind::Pair), &Drive { along, ..free(2.0) }).unwrap_err();
+        assert!(e.contains("finite"), "{e}");
+        assert!(solve(&a1, None, Some(Kind::Spur), &Spec::default(), &Drive { along, ..Drive::default() }).is_err());
+    }
+}
+
+#[test]
+fn fixed_tooth_counts_past_u32_are_refused_not_overflowed() {
+    // u32::MAX − 1 + 10 teeth overflowed the tooth sum; saturated, the counts fit no centre
+    // distance and the solve says so.
+    let (a1, a2) = (axis([0.0; 3], [0.0, 0.0, 1.0]), axis([50.0, 0.0, 0.0], [0.0, 0.0, 1.0]));
+    let base = Spec { teeth: u32::MAX - 1, teeth2: 10, ..Spec::defaults_for(Kind::Pair) };
+    assert!(solve(&a1, Some(&a2), Some(Kind::Pair), &base, &Drive::default()).is_err());
+    let cyc = Spec { teeth: u32::MAX - 1, teeth2: 10, ..Spec::defaults_for(Kind::Cycloidal) };
+    let _ = solve(&a1, Some(&a2), Some(Kind::Cycloidal), &cyc, &Drive::default());
+}

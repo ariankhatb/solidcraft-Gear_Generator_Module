@@ -165,3 +165,58 @@ fn a_face_gear_with_tens_of_thousands_of_teeth_gives_sections_not_a_panic() {
     let r = 0.005 * 30_000.0;
     let _ = g.sections(&[0.0, 0.01], r, r + 1.0);
 }
+
+#[test]
+fn an_envelope_reports_no_crossing_where_its_curve_is_not_finite() {
+    // r = 1 + t, angle t, but no value for 0.4 < t < 0.6. Sampled only at its ends, the bracket
+    // for r = 1.5 refines straight into the gap: it used to report the bracket's start (angle
+    // 0, at r = 1) as the crossing.
+    use crate::worm::Envelope;
+    let f = |_: usize, t: f64| if t > 0.4 && t < 0.6 { (f64::NAN, f64::NAN) } else { (1.0 + t, t) };
+    assert_eq!(Envelope::new(f, &[1]).extreme(1.5), None);
+    // Where the curve has values, the crossing is found: angle 0.25 at r = 1.25.
+    let (a, _) = Envelope::new(f, &[10]).extreme(1.25).unwrap();
+    assert!((a - 0.25).abs() < 1e-9, "{a}");
+}
+
+#[test]
+fn a_worm_wheel_tooth_with_no_flank_spans_is_drawn_with_one() {
+    // A module 1, single start ZA worm (reference radius 5, 20° axial pressure angle) on a
+    // 30-tooth wheel (pitch radius 15, centre distance 20), the hob as the planner makes it.
+    let a20 = 20f64.to_radians().tan();
+    let hob = crate::worm::Hob {
+        centre: 20.0,
+        wheel_pitch: 15.0,
+        reference: 5.0,
+        tip: 6.25f64.min(5.0 + (PI / 4.0 - 0.02) / a20),
+        corner: 0.38,
+        low: 3.25,
+        half: PI / 4.0,
+        tan_axial: a20,
+        screw: PI / TAU,
+    };
+    // 0 flank spans used to make every flank point 0 / 0 = NaN.
+    let none = hob.tooth_with(0.0, 16.0, 30, 1.0, 6, 0);
+    assert_eq!(none, hob.tooth_with(0.0, 16.0, 30, 1.0, 6, 1));
+    if let Some(t) = none {
+        assert!(t.lower.iter().chain(&t.upper).flatten().all(|p| p.0.is_finite() && p.1.is_finite()));
+    }
+}
+
+#[test]
+fn a_tiny_cycloidal_gears_dedendum_stays_radial() {
+    // Rolling circles half the pitch radius make the hypocycloid a diameter: below the pitch
+    // circle each side runs at the half pitch angle π / (2 z). At module 1e-8 (pitch radius
+    // 1e-7) the rolling circle's 1e-6 floor used to exceed the pitch radius and bend it.
+    use crate::cycloid::{Cycloidal, cycloidal_outline};
+    for m in [1.0, 1e-8] {
+        let c = Cycloidal::with_defaults(20, m);
+        let (_, f) = cycloidal_outline(&c, 0.0);
+        let want = PI / 40.0;
+        let below: Vec<_> = f.fillet.iter().chain(&f.flank).filter(|q| q.0 < c.r() * (1.0 - 1e-6)).collect();
+        assert!(!below.is_empty(), "module {m}");
+        for q in below {
+            assert!((q.1 - want).abs() < 1e-9, "module {m}: angle {} at r {}", q.1, q.0);
+        }
+    }
+}

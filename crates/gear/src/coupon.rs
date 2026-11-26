@@ -235,6 +235,7 @@ fn plain_set(s: &Spec) -> Spec {
         shaft2_back: Shaft::default(),
         hardware: Hardware::default(),
         hardware2: Hardware::default(),
+        clearance_body: None,
         ..s.clone()
     }
 }
@@ -310,6 +311,13 @@ fn piece(s: &Spec, src: &Source, n: u32) -> Piece {
             let (a, b) = (w.start * (inner / w.start.len()), w.end * (inner / w.end.len()));
             let mask = ring_block(&[arc(a, b)], a, b, dir, at);
             let mut steps = src.body.steps.clone();
+            // The ring's rim may stop short of the flat (a rim of three modules or less ends
+            // at or inside it): fill the block out to the flat from halfway through the rim,
+            // clear of the tooth spaces, so the piece has its flat to locate on.
+            let rim = if s.rim > 0.0 { s.rim } else { 3.0 * m };
+            let fill_r = far + 0.5 * rim;
+            let (fa, fb) = (w.start * (fill_r / w.start.len()), w.end * (fill_r / w.end.len()));
+            steps.push(prism(vec![ring_block(&[arc(fa, fb)], fa, fb, dir, at)], 0.0, face, Op::Join));
             steps.push(prism(vec![mask], -1.0, face + 2.0, Op::Intersect));
             steps
         } else {

@@ -131,3 +131,17 @@ fn bearings_on_a_selected_shaft_are_seats_and_bodies() {
     assert!(p.clearance.is_some());
     assert!(p.facts.iter().any(|f| f.label.starts_with("clearance: bearing seat 2")));
 }
+
+#[test]
+fn a_left_hand_asked_is_gear_1s_hand_on_one_shaft_and_on_two() {
+    // Gear 1's hand is the sign of its helix: left is negative.
+    let left = Ask { kind: Some(Kind::Helical), left_hand: true, ..Ask::default() };
+    let one = [shaft([0.0; 3], [0.0, 0.0, 1.0], Some(40.0))];
+    let out = set_on_shafts(&one, &left, &Spec::default()).unwrap();
+    assert_eq!(out.spec.helix, -20.0);
+    let two = [one[0], shaft([50.0, 0.0, 0.0], [0.0, 0.0, 1.0], None)];
+    let out = set_on_shafts(&two, &left, &Spec::default()).unwrap();
+    assert_eq!((out.spec.kind, out.spec.helix), (Kind::Pair, -20.0));
+    let right = set_on_shafts(&two, &Ask { left_hand: false, ..left }, &Spec::default()).unwrap();
+    assert_eq!(right.spec.helix, 20.0);
+}

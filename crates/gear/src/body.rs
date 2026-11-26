@@ -633,6 +633,14 @@ fn shaft_end(sh: &Shaft, base: f64, dir: f64, buried: f64, reach: f64, steps: &m
             match hex.outline() {
                 Some(o) if af < 0.999 * d && af / 2.0 > 1.05 * reach && af > 0.3 * d => {
                     let corner = af / 2.0 / (PI / 6.0).cos();
+                    if corner > r + 1e-9 {
+                        p.warn(format!(
+                            "{who}: the {side} shaft's hexagon ({} across flats, Ø{} across corners) is wider across its corners than the Ø{} shaft: its corners stay round",
+                            num(af),
+                            num(2.0 * corner),
+                            num(d)
+                        ));
+                    }
                     let (z0, h) = span(len);
                     steps.push(cut(Region { outer: vec![Outline::circle(V2::ZERO, 1.2 * r.max(corner) + 0.1)], holes: vec![o] }, z0, h));
                 }
@@ -641,7 +649,9 @@ fn shaft_end(sh: &Shaft, base: f64, dir: f64, buried: f64, reach: f64, steps: &m
         }
         ShaftEnd::Cross => {
             let w = if sh.end_size > 0.0 { sh.end_size } else { d / 3.0 };
-            if w >= 0.9 * d || w <= 0.05 * d || reach > 0.0 {
+            // The corner cuts start at (w/2, w/2): from w = √2 · r on they miss the shaft
+            // altogether and nothing would be cut.
+            if w >= 0.95 * std::f64::consts::SQRT_2 * r || w <= 0.05 * d || reach > 0.0 {
                 left_out(
                     p,
                     &format!("a cross with arms {} wide doesn't fit a Ø{} shaft{}", num(w), num(d), if reach > 0.0 { " with a bore" } else { "" }),
@@ -730,7 +740,9 @@ pub(crate) fn pocket(s: &Spec, m: &Member) -> Option<(f64, f64)> {
         return None;
     }
     let r = (h.bearing_od + h.bearing_fit) / 2.0;
-    let deep = m.face + hub_of(s).map_or(0.0, |(_, l)| l);
+    // The hub's length counts only when the hub is wider than the pocket: a narrower hub has no
+    // wall round a pocket that reaches into it.
+    let deep = m.face + hub_of(s).filter(|(hr, _)| *hr > r).map_or(0.0, |(_, l)| l);
     (r < m.root - s.module && h.bearing_width < deep - 0.2 * s.module.min(deep)).then_some((r, h.bearing_width))
 }
 
@@ -941,6 +953,16 @@ pub(crate) fn ring_chamfers(s: &Spec, tip: f64, outer: f64, face: f64, steps: &m
         if !(size > 1e-6 && depth > 1e-6 && tip > 0.0) {
             p.warn(format!("{who}: no room for the {side} tooth chamfer; left out"));
             continue;
+        }
+        let asked = c.size * c.angle.to_radians().tan();
+        if size < c.size - 1e-9 || depth < asked - 1e-9 {
+            p.warn(format!(
+                "{who}: the {side} tooth chamfer ({} × {}°) is more than the ring has room for; made {} wide and {} deep",
+                num(c.size),
+                num(c.angle),
+                num(size),
+                num(depth)
+            ));
         }
         depth_left -= depth;
         steps.push(revolve_cut(corner_cut(tip, z, 1.0, dz, size, depth)));

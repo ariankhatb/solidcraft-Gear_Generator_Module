@@ -131,12 +131,19 @@ impl Bore {
 /// of at most Ø9 or a bigger gear". Starts after the gear's name: "{who}{words}".
 pub fn root_words(bore: &Bore, root: f64, module: f64) -> String {
     let one = |v: f64| crate::axes::num((v * 10.0).round() / 10.0);
-    if bore.on_shaft {
+    let most = largest_shaft(root, module);
+    if bore.on_shaft && most <= 0.0 {
+        format!(
+            " sits on a shaft (Ø{}), which is wider than its tooth roots (Ø{}): no shaft fits inside them; use a bigger gear",
+            one(bore.diameter),
+            one(root)
+        )
+    } else if bore.on_shaft {
         format!(
             " sits on a shaft (Ø{}), which is wider than its tooth roots (Ø{}): use a shaft of at most Ø{} or a bigger gear",
             one(bore.diameter),
             one(root),
-            crate::axes::num(largest_shaft(root, module))
+            crate::axes::num(most)
         )
     } else {
         format!(": the bore (reaching Ø{}) cuts into the tooth roots (Ø{}); use a smaller bore", one(2.0 * bore.reach()), one(root))
@@ -144,11 +151,13 @@ pub fn root_words(bore: &Bore, root: f64, module: f64) -> String {
 }
 
 /// The widest shaft (Ø, mm) a gear with tooth roots of Ø`root` takes: a wall of a module (at
-/// least 1 mm) each side under the roots, rounded down to a whole mm (half a mm under Ø3).
+/// least 1 mm) each side under the roots, rounded down to a whole mm (half a mm under Ø3); 0
+/// when not even a Ø0.5 shaft fits.
 pub fn largest_shaft(root: f64, module: f64) -> f64 {
     let d = root - 2.0 * module.max(1.0);
     let step = if d < 3.0 { 0.5 } else { 1.0 };
-    ((d / step).floor() * step).max(0.5)
+    let most = (d / step).floor() * step;
+    if most >= 0.5 { most } else { 0.0 }
 }
 
 /// Round lightening holes on a circle between the hub and the rim.

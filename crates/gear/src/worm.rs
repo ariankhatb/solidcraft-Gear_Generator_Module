@@ -34,7 +34,7 @@ impl<F: Fn(usize, f64) -> (f64, f64)> Envelope<F> {
     pub fn extreme(&self, rr: f64) -> Option<(f64, usize)> {
         let mut best: Option<(f64, usize)> = None;
         for (k, c) in self.curves.iter().enumerate() {
-            let n = c.len() - 1;
+            let n = c.len().saturating_sub(1);
             for i in 0..n {
                 let (ra, rb) = (c[i].0, c[i + 1].0);
                 if !(ra.is_finite() && rb.is_finite() && c[i].1.is_finite() && c[i + 1].1.is_finite())
@@ -46,10 +46,14 @@ impl<F: Fn(usize, f64) -> (f64, f64)> Envelope<F> {
                 let up = rb > ra;
                 let (mut lo, mut hi) = (i as f64 / n as f64, (i + 1) as f64 / n as f64);
                 let mut p = c[i];
+                // A curve that stops being finite inside the bracket gives no crossing there (the
+                // bracket's end is not one).
+                let mut lost = false;
                 for _ in 0..34 {
                     let mid = 0.5 * (lo + hi);
                     let q = (self.eval)(k, mid);
-                    if !q.0.is_finite() {
+                    if !(q.0.is_finite() && q.1.is_finite()) {
+                        lost = true;
                         break;
                     }
                     p = q;
@@ -61,6 +65,9 @@ impl<F: Fn(usize, f64) -> (f64, f64)> Envelope<F> {
                     if hi - lo < 1e-15 {
                         break;
                     }
+                }
+                if lost {
+                    continue;
                 }
                 if best.is_none_or(|(b, _)| p.1 > b) {
                     best = Some((p.1, k));
@@ -182,6 +189,8 @@ impl Hob {
     /// each flank: fewer for a big, steep wheel, whose loft needs many sections within the
     /// kernel's curve limit.
     pub fn tooth_with(&self, w: f64, tip_radius: f64, teeth: u32, m: f64, fillet_points: usize, flank_points: usize) -> Option<ToothSides> {
+        // At least one span on a flank (0 would put its points at 0 / 0).
+        let flank_points = flank_points.max(1);
         let rf = self.root_radius(w);
         let pitch_half = PI / f64::from(teeth);
         let (_, _, zc, _) = self.corner_arc();

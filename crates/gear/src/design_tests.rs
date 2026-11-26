@@ -273,3 +273,41 @@ fn ratios_split_into_even_hunting_stages() {
     let s = &split_ratio(30.0, 3, &tight)[0];
     assert!(s.error.abs() <= 0.01 && s.stages.iter().all(|st| st.teeth >= 12 && st.teeth2 <= 60 && st.ratio <= 4.0));
 }
+
+#[test]
+fn a_stage_just_past_the_cap_is_taken_at_the_cap_within_the_tolerance() {
+    // 6.2:1 in one stage of at most 6:1 with 5% allowed: 6:1 (17:102) is 3.2% short, inside it,
+    // so a split exists. The last stage's fixed 2% window (6.12) used to drop it and return
+    // nothing.
+    let l = StageLimits { tolerance: 0.05, ..StageLimits::default() };
+    let out = split_ratio(6.2, 1, &l);
+    let s = out.first().unwrap_or_else(|| panic!("no split"));
+    assert!(s.ratio <= 6.0 + 1e-12 && s.error.abs() <= l.tolerance, "{s:?}");
+}
+
+#[test]
+fn stage_limits_past_2000_teeth_are_refused() {
+    // The searches run over every tooth count (and add pairs of them): a limit of u32::MAX would
+    // run for ever and overflow.
+    let l = StageLimits { max_teeth: u32::MAX, ..StageLimits::default() };
+    assert!(split_ratio(20.0, 2, &l).is_empty());
+    assert!(!split_ratio(20.0, 2, &StageLimits { max_teeth: 2000, ..StageLimits::default() }).is_empty());
+}
+
+#[test]
+fn the_widest_goal_gathers_a_bounded_number_of_candidates() {
+    // Ratio 1 ± 50%, 3 to 2000 teeth, every module: tens of millions of pairs without the cap.
+    let goal = Goal {
+        ratio: 1.0,
+        ratio_tolerance: 0.5,
+        min_module: 0.2,
+        max_module: 50.0,
+        second_choice_modules: true,
+        allow_shift: true,
+        min_teeth: 3,
+        max_teeth: 2000,
+        ..Goal::default()
+    };
+    let out = suggest(&goal);
+    assert!(!out.is_empty() && out.len() <= goal.limit);
+}

@@ -333,6 +333,9 @@ pub fn check(l: &Load) -> Result<(), String> {
     if l.power > 0.0 && l.torque <= 0.0 && l.speed <= 0.0 {
         return Err("a power needs a speed to give a torque".into());
     }
+    if !l.torque_nm().is_finite() {
+        return Err("the power and speed give a torque too large to rate: raise the speed or give the torque".into());
+    }
     if !l.application_factor.is_finite() || !(0.5..=5.0).contains(&l.application_factor) {
         return Err("application factor KA must be between 0.5 and 5".into());
     }
@@ -790,7 +793,8 @@ pub(crate) fn rate(s: &Spec, p: &mut Plan) {
             let r = rate_mesh(&ml);
             mesh_facts(p, "", &ml, &r);
             if herring {
-                f(p, "axial force per half, cancelling (N)", ml.ft * g1.helix.tan().abs());
+                // Each half carries half the tangential load, so half the axial force.
+                f(p, "axial force per half, cancelling (N)", 0.5 * ml.ft * g1.helix.tan().abs());
             }
             summary(p, &[r], &[l.material, l.material2]);
         }
@@ -853,8 +857,12 @@ fn planetary(s: &Spec, p: &mut Plan) {
     let np = s.planets.max(1);
     let sun = s.involute(zs, s.shift, s.helix);
     let planet = s.involute(zp, s.shift2, -s.helix);
-    let ring = s.involute(zr, 0.0, -s.helix);
+    let mut ring = s.involute(zr, 0.0, -s.helix);
     let m_sp = mesh_external(&sun, &planet, s.face_width);
+    // The ring is rated with the profile shift the plan gives it to reach the planets.
+    if let Some(x) = crate::plan::ring_shift_for_center(&planet, &ring, m_sp.center_distance) {
+        ring.shift = x;
+    }
     let m_pr = mesh_internal(&planet, &Internal { gear: ring }, s.face_width);
     let kg = planet_load_factor(np);
     // Ring fixed, sun in, carrier out: speeds relative to the carrier.
@@ -908,8 +916,11 @@ fn bevel(s: &Spec, p: &mut Plan) {
     let d2 = sigma - d1;
     let bm = if s.kind == Kind::SpiralBevel { s.spiral_angle.to_radians() } else { 0.0 };
     let re = s.module * z1 / 2.0 / d1.sin();
-    let b = s.face_width.min(re * 0.45);
-    let mt = s.module * (1.0 - 0.5 * b / re);
+    // Rated on the part of the face both members have teeth on (gear 2 may have its own face
+    // width and heel offset), at that part's mean cone distance.
+    let (toe, heel) = crate::plan::faces_overlap(s, re);
+    let b = (heel - toe).max(0.0);
+    let mt = s.module * 0.5 * (toe + heel) / re;
     let dm1 = mt * z1;
     let virt = |z: u32, delta: f64, helix: f64, shift: f64| Involute {
         teeth: z,

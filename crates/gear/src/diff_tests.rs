@@ -350,3 +350,27 @@ fn each_part_alone_builds_its_bodies() {
     let k = plan(&spec(Diff { keep_out: true, parts: Parts { case: true, ..none }, ..Diff::defaults_for(Style::Open) })).unwrap();
     assert!(k.clearance.is_some());
 }
+
+#[test]
+fn simple_mode_without_a_drive_sizes_the_set_for_the_torque_it_is_given() {
+    // With no final drive there is no ratio between the given torque and the case: the set is
+    // the same whatever ratio the goal carries.
+    let base = Spec::defaults_for(Kind::Differential);
+    let goal = |ratio: f64| Goal { drive: DriveKind::None, axle_diameter: 16.0, ratio, torque: 60.0, ..Goal::default() };
+    let (a, b) = (solve(&goal(2.0), &base).unwrap(), solve(&goal(6.0), &base).unwrap());
+    assert_eq!(a.spec.diff.module, b.spec.diff.module, "{:?} / {:?}", a.notes, b.notes);
+}
+
+#[test]
+fn simple_mode_gives_a_helical_ring_the_diameter_asked() {
+    // A helical ring's pitch diameter is m·z / cos β; asking for one back from a planned design
+    // (`goal_of`) gives the same ring.
+    let base = Spec::defaults_for(Kind::Differential);
+    let g = Goal { style: Style::TorsenB, drive: DriveKind::Helical, axle_diameter: 16.0, ratio: 3.5, bias: 2.5, ..Goal::default() };
+    let first = solve(&g, &base).unwrap();
+    let asked = crate::diff::goal_of(&first.spec).ring_diameter;
+    let again = solve(&Goal { ring_diameter: asked, ..g }, &base).unwrap();
+    assert!(!again.notes.iter().any(|n| n.contains("doesn't fit")), "{:?}", again.notes);
+    let got = crate::diff::goal_of(&again.spec).ring_diameter;
+    assert!((got - asked).abs() < 1e-9, "{got} vs {asked}");
+}

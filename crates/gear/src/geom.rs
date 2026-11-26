@@ -104,7 +104,7 @@ impl Seg {
         match self {
             Seg::Line(a, _) => *a,
             Seg::Arc { a, .. } => *a,
-            Seg::Spline(p) => p[0],
+            Seg::Spline(p) => p.first().copied().unwrap_or(V2::ZERO),
             Seg::Circle(c, r) => *c + V2::new(*r, 0.0),
         }
     }
@@ -112,7 +112,7 @@ impl Seg {
         match self {
             Seg::Line(_, b) => *b,
             Seg::Arc { b, .. } => *b,
-            Seg::Spline(p) => p[p.len() - 1],
+            Seg::Spline(p) => p.last().copied().unwrap_or(V2::ZERO),
             Seg::Circle(c, r) => *c + V2::new(*r, 0.0),
         }
     }

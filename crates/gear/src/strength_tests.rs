@@ -246,3 +246,57 @@ fn worm_efficiency_and_self_locking() {
     let e2 = fact(&p, "efficiency, worm driving");
     assert!(e1 > 0.5 && e2 > e1 && e2 < 0.95, "{e1} {e2}");
 }
+
+#[test]
+fn a_herringbone_reports_each_halfs_own_axial_force() {
+    // The two halves share the tangential load, so each pushes with Ft/2 · tan β.
+    let mut s = Spec::defaults_for(Kind::Herringbone);
+    s.load = Load { torque: 10.0, speed: 1000.0, ..Load::default() };
+    let p = plan(&s).unwrap();
+    let ft = fact(&p, "tangential force Ft (N)");
+    let want = 0.5 * ft * s.helix.to_radians().tan().abs();
+    assert!(want > 0.0);
+    assert!((fact(&p, "axial force per half, cancelling (N)") - want).abs() < 1e-9 * want);
+}
+
+#[test]
+fn a_planetary_ring_is_rated_with_the_shift_that_reaches_the_planets() {
+    // 20/16/53, unshifted sun and planet: the planets sit at m·(20 + 16)/2 = 18 m, the ring's
+    // unshifted mesh at m·(53 − 16)/2 = 18.5 m. Shifted to 18 m, the ring meshes at the working
+    // pressure angle cos α′ = 18.5 m · cos α / (18 m), and Fr = Ft · tan α′ (not tan α).
+    let mut s = Spec::defaults_for(Kind::Planetary);
+    (s.teeth, s.teeth2, s.teeth3, s.planets, s.shift, s.shift2, s.helix) = (20, 16, 53, 1, 0.0, 0.0, 0.0);
+    s.load = Load { torque: 10.0, speed: 1000.0, ..Load::default() };
+    let p = plan(&s).unwrap();
+    let a = (18.5 * s.pressure_angle.to_radians().cos() / 18.0).acos();
+    let ft = fact(&p, "planet–ring: tangential force Ft (N)");
+    let fr = fact(&p, "planet–ring: radial force Fr (N)");
+    assert!((fr / ft - a.tan()).abs() < 1e-6, "{} vs {}", fr / ft, a.tan());
+}
+
+#[test]
+fn a_bevel_is_rated_on_the_face_both_members_share() {
+    // Gear 2's narrower face (8 mm, heel on gear 1's): the overlap is 8 mm wide, its middle
+    // 4 mm in from the cone distance Re, so the mean pitch diameter is m·z1·(Re − 4)/Re.
+    let mut s = Spec::defaults_for(Kind::Bevel);
+    s.face_width2 = 8.0;
+    s.load = Load { torque: 5.0, speed: 1000.0, ..Load::default() };
+    let p = plan(&s).unwrap();
+    let sigma = s.shaft_angle.to_radians();
+    let (z1, z2) = (f64::from(s.teeth), f64::from(s.teeth2));
+    let d1 = sigma.sin().atan2(z2 / z1 + sigma.cos());
+    let re = s.module * z1 / 2.0 / d1.sin();
+    assert!(s.face_width.min(0.45 * re) > 8.0, "gear 1's face must be the wider one");
+    let want = s.module * z1 * (re - 4.0) / re;
+    assert!((fact(&p, "mean pitch diameter gear 1") - want).abs() < 1e-9, "{} vs {want}", fact(&p, "mean pitch diameter gear 1"));
+}
+
+#[test]
+fn a_power_at_a_crawling_speed_is_refused_not_rated_at_infinity() {
+    // 1 kW at 1e-310 rpm is 6e4 / (2π · 1e-310) N·m: past f64, so no rating can be given.
+    let mut s = rated_pair(0.0, Material::SteelThroughHardened);
+    s.load.power = 1.0;
+    s.load.speed = 1e-310;
+    let e = plan(&s).unwrap_err();
+    assert!(e.contains("too large"), "{e}");
+}

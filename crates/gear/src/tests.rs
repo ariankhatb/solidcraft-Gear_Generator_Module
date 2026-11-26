@@ -140,3 +140,28 @@ fn polyline_samples_arcs_the_right_way() {
     assert!(pts.iter().all(|p| p.x >= -1e-9 && p.y >= -1e-9));
     assert!(close(TAU, TAU, 0.0));
 }
+
+#[test]
+fn tooth_sides_with_an_empty_fit_piece_still_make_an_outline() {
+    // An empty piece used to reach the corner joining as a spline with no first point and panic.
+    use crate::involute::{ToothSides, sided_outline};
+    let side = |s: f64| vec![vec![], vec![(10.0, 0.1 * s), (12.0, 0.05 * s)], vec![]];
+    let t = ToothSides { rf: 10.0, ra: 12.0, lower: side(-1.0), upper: side(1.0) };
+    let o = sided_outline(&t, 12, 0.0);
+    assert!(o.segs.iter().all(|s| !matches!(s, Seg::Spline(p) if p.is_empty())));
+    let n = o.segs.len();
+    for i in 0..n {
+        let (end, start) = (o.segs[(i + n - 1) % n].end(), o.segs[i].start());
+        assert!((end.x - start.x).abs() < 1e-12 && (end.y - start.y).abs() < 1e-12, "gap at segment {i}");
+    }
+    assert_eq!(Seg::Spline(vec![]).start(), V2::ZERO);
+}
+
+#[test]
+fn a_face_gear_with_tens_of_thousands_of_teeth_gives_sections_not_a_panic() {
+    // π / 30 000 · 0.85 is below the 1e-4 rad floor on a tooth's half width: the clamp's bounds
+    // crossed and it panicked.
+    let g = crate::face_gear::FaceGear::new(Involute { teeth: 18, module: 0.01, ..Involute::default() }, 30_000, 0.0);
+    let r = 0.005 * 30_000.0;
+    let _ = g.sections(&[0.0, 0.01], r, r + 1.0);
+}

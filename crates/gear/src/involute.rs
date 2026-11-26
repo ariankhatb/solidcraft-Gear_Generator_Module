@@ -608,14 +608,15 @@ pub fn sided_outline(t: &ToothSides, n: u32, phase: f64) -> Outline {
     for k in 0..n {
         let a = phase + pitch * f64::from(k);
         let at = |q: &(f64, f64)| V2::polar(q.0, a + q.1);
-        for piece in &t.lower {
+        // An empty fit piece adds nothing (and has no ends to join).
+        for piece in t.lower.iter().filter(|p| !p.is_empty()) {
             segs.push(Seg::Spline(piece.iter().map(at).collect()));
         }
         let (lo, hi) = (end_of(&t.lower, true), end_of(&t.upper, true));
         if (hi.1 - lo.1) * t.ra > 1e-9 {
             segs.push(Seg::Arc { c: V2::ZERO, a: V2::polar(t.ra, a + lo.1), b: V2::polar(t.ra, a + hi.1), ccw: true });
         }
-        for piece in t.upper.iter().rev() {
+        for piece in t.upper.iter().rev().filter(|p| !p.is_empty()) {
             segs.push(Seg::Spline(piece.iter().rev().map(at).collect()));
         }
         let (from, to) = (end_of(&t.upper, false), end_of(&t.lower, false));
@@ -765,7 +766,11 @@ pub(crate) fn join_ends(segs: &mut [Seg]) {
         match &mut segs[i] {
             Seg::Line(a, _) => *a = prev_end,
             Seg::Arc { a, .. } => *a = prev_end,
-            Seg::Spline(p) => p[0] = prev_end,
+            Seg::Spline(p) => {
+                if let Some(first) = p.first_mut() {
+                    *first = prev_end;
+                }
+            }
             Seg::Circle(..) => {}
         }
     }

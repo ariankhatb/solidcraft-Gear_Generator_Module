@@ -2423,8 +2423,10 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
         t.drive = DriveKind::None;
         t.keep_out = false;
         let s = Spec { kind: Kind::Differential, diff: t.clone(), load: load.clone(), only: 0, clearance_body: None, ..base.clone() };
-        // The ring gear's torque reaches the set multiplied by the ratio.
-        let s = Spec { load: crate::strength::Load { torque: goal.torque * ratio, ..load.clone() }, ..s };
+        // With a final drive, the pinion's torque reaches the set multiplied by the ratio;
+        // without one, the goal's torque is the case's own.
+        let set_torque = if d.drive == DriveKind::None { goal.torque } else { goal.torque * ratio };
+        let s = Spec { load: crate::strength::Load { torque: set_torque, ..load.clone() }, ..s };
         let p = match crate::plan::plan(&s) {
             Ok(p) => p,
             Err(e) => {
@@ -2492,8 +2494,10 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
             }
             r
         };
+        // A helical ring's pitch diameter is its transverse one: m·z / cos β (as `goal_of` gives it).
+        let helix_cos = if d.drive == DriveKind::Helical { d.drive_helix.to_radians().cos() } else { 1.0 };
         let found = if goal.ring_diameter > 0.0 {
-            let dm = goal.ring_diameter / f64::from(zr);
+            let dm = goal.ring_diameter * helix_cos / f64::from(zr);
             match try_m(dm) {
                 Some(x) => Some((dm, x)),
                 None => {
@@ -2509,7 +2513,7 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
         };
         let Some((dm, (s, _))) = found else { return Err("no ring gear size fits round the case and carries the load".into()) };
         d.drive_module = dm;
-        notes.push(format!("ring gear Ø{} (module {})", num(dm * f64::from(zr)), num(dm)));
+        notes.push(format!("ring gear Ø{} (module {})", num(dm * f64::from(zr) / helix_cos), num(dm)));
         let _ = s;
     }
     d.keep_out = true;

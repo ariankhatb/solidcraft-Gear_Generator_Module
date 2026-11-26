@@ -194,7 +194,9 @@ impl FaceGear {
         // Five points a side: the side bows gently, and few points keep the loft quick. A tooth
         // never takes more than 85% of the pitch.
         let n = 4;
-        let max_half = PI / self.z2() * 0.85;
+        // (Kept above the floor below: with tens of thousands of teeth the pitch is smaller than it,
+        // and a clamp with its bounds the wrong way round panics.)
+        let max_half = (PI / self.z2() * 0.85).max(1e-4);
         let radii: Vec<f64> = (0..=n).map(|i| ri + (ro - ri) * f64::from(i) / f64::from(n)).collect();
         let widths: Vec<Vec<f64>> = radii.iter().map(|r| self.half_widths(*r, heights)).collect();
         (0..heights.len())

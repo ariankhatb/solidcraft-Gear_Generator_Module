@@ -1537,10 +1537,14 @@ struct Layout {
 
 /// The most radius about an axis of a cloud of points (z, r), per band `dz` wide from `z0`,
 /// each band taking the points within `reach` of it, grown by `grow`: (band low edge, radius).
-fn bands(pts: &[(f64, f64)], dz: f64, reach: f64, grow: f64) -> Vec<(f64, f64)> {
+pub(crate) fn bands(pts: &[(f64, f64)], dz: f64, reach: f64, grow: f64) -> Vec<(f64, f64)> {
     let (lo, hi) = pts.iter().fold((f64::MAX, f64::MIN), |a, q| (a.0.min(q.0), a.1.max(q.0)));
     let (lo, hi) = (lo - reach, hi + reach);
-    let n = (((hi - lo) / dz).ceil() as usize).max(1);
+    // At most MAX_BANDS bands (a far-flung point or a tiny `dz` asked for a vast allocation):
+    // past it the bands widen.
+    const MAX_BANDS: f64 = 100_000.0;
+    let dz = if (hi - lo).is_finite() && dz > 0.0 { dz.max((hi - lo) / MAX_BANDS) } else { dz };
+    let n = (((hi - lo) / dz).ceil().clamp(1.0, MAX_BANDS) as usize).max(1);
     let mut own = vec![0.0f64; n];
     for (z, r) in pts {
         let k = (((z - lo) / dz).floor() as usize).min(n - 1);
@@ -1549,7 +1553,7 @@ fn bands(pts: &[(f64, f64)], dz: f64, reach: f64, grow: f64) -> Vec<(f64, f64)> 
     let w = (reach / dz).ceil() as usize;
     (0..n)
         .map(|k| {
-            let r = own[k.saturating_sub(w)..(k + w + 1).min(n)].iter().fold(0.0f64, |a, b| a.max(*b));
+            let r = own[k.saturating_sub(w)..k.saturating_add(w).saturating_add(1).min(n)].iter().fold(0.0f64, |a, b| a.max(*b));
             (lo + dz * k as f64, if r > 0.0 { r + grow } else { 0.0 })
         })
         .collect()
@@ -2338,7 +2342,12 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
             let mut best: Option<(f64, u32, u32, u32)> = None;
             for za in 10..=24u32 {
                 for zp in 9..=16u32 {
-                    let zb = (f64::from(za) * want).round() as u32;
+                    // (A huge split saturated zb to u32::MAX, and za + zb overflowed.)
+                    let zb_f = (f64::from(za) * want).round();
+                    if !(zb_f <= 2000.0) {
+                        continue;
+                    }
+                    let zb = zb_f as u32;
                     if zb <= za || !(za + zb).is_multiple_of(n) {
                         continue;
                     }
@@ -2434,7 +2443,13 @@ pub fn solve(goal: &Goal, base: &Spec) -> Result<Solved, String> {
                 continue;
             }
         };
+        // A set the plan doesn't rate (no bending safety at all) passes on the axle alone: said so,
+        // not taken for a pass at the torque.
+        let rated = p.facts.iter().any(|f| f.label.ends_with("bending safety SF"));
         if goal.torque <= 0.0 || min_sf(&p) >= crate::strength::SF_MIN {
+            if goal.torque > 0.0 && !rated {
+                notes.push("this differential's gears aren't load rated: sized by the axle only, check them for the torque".into());
+            }
             let od = p.facts.iter().find(|f| f.label == "case outside diameter").map_or(0.0, |f| f.value);
             chosen = Some((m, od));
             break;

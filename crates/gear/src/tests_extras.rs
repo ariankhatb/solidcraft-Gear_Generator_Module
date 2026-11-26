@@ -838,3 +838,16 @@ fn elliptical_teeth_with_a_hostile_tooth_count_stay_bounded() {
     // No pitch curve, no teeth (it used to divide by its zero length of points).
     assert!(e.teeth(&[], 0.0).segs.is_empty());
 }
+
+#[test]
+fn a_pulley_under_three_teeth_is_sized_as_the_three_grooves_it_draws() {
+    // The outline cuts at least 3 grooves; its pitch diameter is then 3·p/π, not z·p/π.
+    let gt2 = belt_by_id("gt2_2").unwrap();
+    for z in [0, 1, 2] {
+        let pu = Pulley { belt: *gt2, teeth: z };
+        assert!(close(pu.pitch_diameter(), 3.0 * gt2.pitch / PI, 1e-12), "{z}");
+        let three = Pulley { belt: *gt2, teeth: 3 };
+        assert!(close(pu.land(), three.land(), 1e-12), "{z}");
+        assert_eq!(pu.outline(0.0), three.outline(0.0));
+    }
+}

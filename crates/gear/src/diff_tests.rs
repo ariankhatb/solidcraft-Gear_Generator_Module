@@ -374,3 +374,31 @@ fn simple_mode_gives_a_helical_ring_the_diameter_asked() {
     let got = crate::diff::goal_of(&again.spec).ring_diameter;
     assert!((got - asked).abs() < 1e-9, "{got} vs {asked}");
 }
+
+#[test]
+fn case_envelope_bands_stay_bounded() {
+    // Points 1e12 mm apart in 0.01 mm bands asked for 1e14 of them.
+    let b = crate::diff::bands(&[(0.0, 1.0), (1e12, 2.0)], 0.01, 0.0, 0.5);
+    assert!(!b.is_empty() && b.len() <= 100_000, "{}", b.len());
+    assert!(b.iter().any(|(_, r)| (*r - 2.5).abs() < 1e-12));
+}
+
+#[test]
+fn a_huge_torque_split_is_refused_not_overflowed() {
+    let base = Spec::defaults_for(Kind::Differential);
+    let e = solve(&Goal { style: Style::Biased, bias: 1e300, ..Goal::default() }, &base).unwrap_err();
+    assert!(e.contains("no tooth counts"), "{e}");
+}
+
+#[test]
+fn simple_mode_says_when_the_torque_goes_unrated() {
+    // A style the plan rates must not carry the note; one it doesn't must.
+    let base = Spec::defaults_for(Kind::Differential);
+    for style in [Style::Open, Style::TorsenA] {
+        let Ok(sol) = solve(&Goal { style, drive: DriveKind::None, axle_diameter: 16.0, torque: 40.0, ..Goal::default() }, &base) else { continue };
+        let p = plan(&sol.spec).unwrap();
+        let rated = p.facts.iter().any(|f| f.label.ends_with("bending safety SF"));
+        let noted = sol.notes.iter().any(|n| n.contains("aren't load rated"));
+        assert_eq!(rated, !noted, "{style:?}: {:?}", sol.notes);
+    }
+}

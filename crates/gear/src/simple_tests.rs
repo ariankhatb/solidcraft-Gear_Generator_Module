@@ -728,7 +728,7 @@ fn huge_drawn_sizes_and_ratios_never_overflow_tooth_counts() {
         Simple { ratio: Some(1e-300), center_distance: Some(40.0), ..of(Kind::Cycloidal) },
     ] {
         let k = x.kind.unwrap();
-        let r = std::panic::catch_unwind(|| solve(&x, &Spec::defaults_for(k)));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| solve(&x, &Spec::defaults_for(k))));
         assert!(r.is_ok(), "{k:?} panicked");
     }
 }
@@ -747,7 +747,8 @@ fn a_cycloidal_drive_opened_in_simple_mode_keeps_its_pins() {
     // Its outputs give the outer diameter as pin circle + pin diameter; solving them again must
     // not re-derive the pin circle as if the pins were exactly 0.382 × the pitch (they are that
     // rounded to 0.1 mm, so the circle moved by the rounding).
-    let spec = solved(&Simple { ratio: Some(15.0), outer_diameter: Some(80.0), ..of(Kind::CycloidalDrive) }, &Spec::defaults_for(Kind::CycloidalDrive)).spec;
+    let spec =
+        solved(&Simple { ratio: Some(15.0), outer_diameter: Some(80.0), ..of(Kind::CycloidalDrive) }, &Spec::defaults_for(Kind::CycloidalDrive)).spec;
     let again = solved(&outputs_of(&spec), &spec).spec;
     assert_eq!(
         (again.pins, again.pin_circle, again.pin_diameter, again.eccentricity),

@@ -144,8 +144,12 @@ pub struct Pulley {
 }
 
 impl Pulley {
+    /// The grooves cut: at least 3 (what [`Pulley::outline`] draws), so the sizes match it.
+    pub fn grooves(&self) -> u32 {
+        self.teeth.max(3)
+    }
     pub fn pitch_diameter(&self) -> f64 {
-        self.belt.pitch * f64::from(self.teeth) / PI
+        self.belt.pitch * f64::from(self.grooves()) / PI
     }
     pub fn outside_diameter(&self) -> f64 {
         self.pitch_diameter() - 2.0 * self.belt.pld
@@ -153,7 +157,7 @@ impl Pulley {
     /// The land left between grooves on the outside circle (arc length; negative when grooves overlap).
     pub fn land(&self) -> f64 {
         let ro = self.outside_diameter() / 2.0;
-        TAU * ro / f64::from(self.teeth) - 2.0 * self.belt.groove.half_width()
+        TAU * ro / f64::from(self.grooves()) - 2.0 * self.belt.groove.half_width()
     }
     /// The grooved outline, counter-clockwise, groove 0 centred at `phase`.
     pub fn outline(&self, phase: f64) -> Outline {
@@ -167,7 +171,7 @@ impl Pulley {
             .map(|(i, _)| i)
             .unwrap_or(prof.len() / 2)
             .clamp(1, prof.len().saturating_sub(2).max(1));
-        let n = self.teeth.max(3);
+        let n = self.grooves();
         let step = TAU / f64::from(n);
         let wrap = |q: V2, at: f64| V2::polar(ro + q.y, at + q.x / ro);
         let mut segs = Vec::new();

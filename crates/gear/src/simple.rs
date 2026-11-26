@@ -2108,10 +2108,10 @@ fn drive(c: &mut Ctx) -> Result<(), String> {
     // An outer diameter that is the design's own (pin circle + pin diameter, as `outputs_of`
     // gives it) keeps its pin circle; another is taken as over pins of the usual size.
     let own_outer = |d: f64| pins == c.spec.pins && (d - (c.spec.pin_circle + c.spec.pin_diameter)).abs() <= 1e-9;
-    let pc = s.pitch_diameter.filter(|d| *d > 0.0).or(s
-        .outer_diameter
+    let pc = s
+        .pitch_diameter
         .filter(|d| *d > 0.0)
-        .map(|d| if own_outer(d) { c.spec.pin_circle } else { d / (1.0 + 0.382 * PI / f64::from(pins)) }));
+        .or(s.outer_diameter.filter(|d| *d > 0.0).map(|d| if own_outer(d) { c.spec.pin_circle } else { d / (1.0 + 0.382 * PI / f64::from(pins)) }));
     let changed = pins != c.spec.pins || pc.is_some_and(|p| (p - c.spec.pin_circle).abs() > 1e-9) || !c.same;
     c.spec.pins = pins;
     if let Some(p) = pc {

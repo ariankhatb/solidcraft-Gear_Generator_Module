@@ -1141,7 +1141,7 @@ impl Stat {
 }
 
 /// Each query sample against the target body: (deepest inside, nearest outside, shared volume).
-fn one_way(queries: &[Sample], target: &Solid, ts: &[Sample], cell: f64) -> (f64, f64, f64, P3) {
+pub(crate) fn one_way(queries: &[Sample], target: &Solid, ts: &[Sample], cell: f64) -> (f64, f64, f64, P3) {
     if queries.is_empty() {
         return (0.0, Stat::FAR, 0.0, [0.0; 3]);
     }
@@ -1157,8 +1157,26 @@ fn one_way(queries: &[Sample], target: &Solid, ts: &[Sample], cell: f64) -> (f64
         lo = [0.0; 3];
         hi = [0.0; 3];
     }
-    let dims = if ts.is_empty() { [1usize; 3] } else { [0, 1, 2].map(|k| ((hi[k] - lo[k]) / cell).floor() as usize + 1) };
-    let index = |p: P3| -> [i64; 3] { [0, 1, 2].map(|k| ((p[k] - lo[k]) / cell).floor() as i64) };
+    // The grid's cells are `cell` wide, or wider where the samples spread so far that the grid
+    // would take more than MOST_CELLS (a long worm's box at a fine cell was gigabytes): a cell
+    // at least `cell` wide still holds every sample within `cell` of a query in the query's
+    // cell and its neighbours.
+    let dims_at = |g: f64| [0, 1, 2].map(|k| (((hi[k] - lo[k]) / g).floor() as usize).saturating_add(1));
+    let count = |d: [usize; 3]| d[0].saturating_mul(d[1]).saturating_mul(d[2]);
+    let mut g = cell;
+    let mut dims = if ts.is_empty() { [1usize; 3] } else { dims_at(g) };
+    for _ in 0..64 {
+        if count(dims) <= MOST_CELLS {
+            break;
+        }
+        g *= 2.0;
+        dims = dims_at(g);
+    }
+    if count(dims) > MOST_CELLS {
+        // Samples not all finite: nothing sensible to measure against.
+        return (0.0, Stat::FAR, 0.0, [0.0; 3]);
+    }
+    let index = |p: P3| -> [i64; 3] { [0, 1, 2].map(|k| ((p[k] - lo[k]) / g).floor() as i64) };
     let flat = |c: [i64; 3]| -> Option<usize> {
         if (0..3).all(|k| c[k] >= 0 && (c[k] as usize) < dims[k]) {
             Some((c[0] as usize * dims[1] + c[1] as usize) * dims[2] + c[2] as usize)
@@ -1200,15 +1218,10 @@ fn one_way(queries: &[Sample], target: &Solid, ts: &[Sample], cell: f64) -> (f64
                         if dot(d, d) > cell * cell {
                             continue;
                         }
-                        let (uu, uv, vv) = (dot(t.hu, t.hu), dot(t.hu, t.hv), dot(t.hv, t.hv));
-                        let (du, dv) = (dot(d, t.hu), dot(d, t.hv));
-                        let det = (uu * vv - uv * uv).max(1e-300);
-                        let (a, b) = ((du * vv - dv * uv) / det, (dv * uu - du * uv) / det);
-                        let (ac, bc) = (a.clamp(-1.0, 1.0), b.clamp(-1.0, 1.0));
-                        let r = [0, 1, 2].map(|k| d[k] - ac * t.hu[k] - bc * t.hv[k]);
+                        let (r, within) = patch_offset(d, t.hu, t.hv);
                         let dist = dot(r, r).sqrt();
                         if best.is_none_or(|x| dist < x.0) {
-                            best = Some((dist, dot(d, t.n), a == ac && b == bc));
+                            best = Some((dist, dot(d, t.n), within));
                         }
                     }
                 }
@@ -1225,7 +1238,9 @@ fn one_way(queries: &[Sample], target: &Solid, ts: &[Sample], cell: f64) -> (f64
             // Nearest a patch's border (past an edge of the body, or of the sampled zone): the
             // body itself says which side, asked only when it could matter.
             Some((dist, along, false)) => {
-                if dist >= near && dist < 0.5 * cell {
+                // Skipped only where neither answer counts: no nearer than the nearest gap, and
+                // inside no deeper (at most `dist`) than the deepest point found.
+                if dist >= near && dist <= deep && dist < 0.5 * cell {
                     continue;
                 } else if target.contains(q.p) {
                     // Inside, past the border of the nearest patch: as deep as it is behind
@@ -1257,6 +1272,38 @@ fn one_way(queries: &[Sample], target: &Solid, ts: &[Sample], cell: f64) -> (f64
         }
     }
     (deep, near, volume, if deep > 0.0 { at_deep } else { at_near })
+}
+
+/// The most grid cells [`one_way`] makes.
+const MOST_CELLS: usize = 1 << 22;
+
+/// The offset from the nearest point of the patch p ± hu ± hv to the point `d` (taken from p),
+/// and whether that nearest point is within the patch (not on its border). On a skewed patch
+/// the border's nearest point is on one of its four sides, not where the two parameters are
+/// clamped each on its own.
+pub(crate) fn patch_offset(d: P3, hu: P3, hv: P3) -> (P3, bool) {
+    let (uu, uv, vv) = (dot(hu, hu), dot(hu, hv), dot(hv, hv));
+    let (du, dv) = (dot(d, hu), dot(d, hv));
+    let det = (uu * vv - uv * uv).max(1e-300);
+    let (a, b) = ((du * vv - dv * uv) / det, (dv * uu - du * uv) / det);
+    let at = |a: f64, b: f64| -> P3 { [0, 1, 2].map(|k| d[k] - a * hu[k] - b * hv[k]) };
+    if (-1.0..=1.0).contains(&a) && (-1.0..=1.0).contains(&b) {
+        return (at(a, b), true);
+    }
+    let side = |x: f64| if x.is_finite() { x.clamp(-1.0, 1.0) } else { 0.0 };
+    let mut best: Option<(f64, P3)> = None;
+    for s in [-1.0, 1.0] {
+        // The side a = s at its nearest b, and the side b = s at its nearest a.
+        let b_s = if vv > 0.0 { side((dv - s * uv) / vv) } else { 0.0 };
+        let a_s = if uu > 0.0 { side((du - s * uv) / uu) } else { 0.0 };
+        for r in [at(s, b_s), at(a_s, s)] {
+            let l = dot(r, r);
+            if best.is_none_or(|x| l < x.0) {
+                best = Some((l, r));
+            }
+        }
+    }
+    (best.map_or(d, |x| x.1), false)
 }
 
 /// How the two bodies sit against each other as they are turned now.
@@ -1498,6 +1545,13 @@ pub fn topology(s: &Spec, planned: &[Body], whole: Option<Vec<Body>>) -> Vec<Mes
     vec![MeshPair3 { a: 0, b: 1, bodies, ratio, period, gap: expected_gap(s), scale: s.module, labels: None }]
 }
 
+/// Whether a run's largest gap is [`Stat::FAR`], the one reported where nothing was within
+/// reach: no gap was measured there, so it is lost contact whatever gap the backlash allows
+/// (a backlash allowance over 1 mm used to let it pass as a measured gap).
+pub(crate) fn out_of_reach(gap_max: f64) -> bool {
+    !(gap_max < Stat::FAR)
+}
+
 /// Driver angles [`check`] probes over one tooth pitch.
 pub const CHECK_STEPS: usize = 6;
 
@@ -1522,6 +1576,8 @@ pub fn check(plan: &Plan, m: &MeshPair3) -> MeshResult {
     let (depth, gap_min, gap_max) = (r.penetration, if r.gap_min.is_finite() { r.gap_min } else { 0.0 }, r.gap_max);
     let (verdict, message) = if depth > CHECK_DEPTH * m.scale {
         (Verdict::Interferes, format!("{na} and {nb} interfere: they overlap by {depth:.3} mm"))
+    } else if out_of_reach(gap_max) {
+        (Verdict::NoContact, format!("{na} and {nb} lose contact: at some positions no flank is within {} mm of the other", Stat::FAR))
     } else if gap_max > m.gap.1 + CHECK_GAP * m.scale {
         (Verdict::NoContact, format!("{na} and {nb} lose contact: up to {gap_max:.3} mm apart"))
     } else if m.gap.1 > 0.0 {

@@ -337,3 +337,41 @@ fn the_farthest_point_per_row_is_that_of_every_material_point() {
         }
     }
 }
+
+#[test]
+fn a_skewed_patchs_nearest_point_is_on_its_border_not_at_the_clamped_parameters() {
+    use crate::mesh3d::patch_offset;
+    // The patch ± (1, 0, 0) ± (1, 1, 0) has corners (2, 1), (0, −1), (−2, −1), (0, 1). From
+    // (2.5, −1) the clamped parameters (a = 1, b = −1) give the corner (0, −1), 2.5 away; the
+    // nearest point is on the side a = 1 (from (0, −1) to (2, 1)), 2.5 / √2 away.
+    let (r, within) = patch_offset([2.5, -1.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]);
+    assert!(!within);
+    let d = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt();
+    assert!((d - 2.5 / 2f64.sqrt()).abs() < 1e-12, "{d}");
+    // Inside the patch: its plane's distance, and within.
+    let (r, within) = patch_offset([0.5, 0.2, 0.3], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]);
+    assert!(within && r[0].abs() < 1e-12 && r[1].abs() < 1e-12 && (r[2] - 0.3).abs() < 1e-12, "{r:?}");
+}
+
+#[test]
+fn nothing_within_reach_is_lost_contact_whatever_the_backlash_allows() {
+    use crate::mesh3d::out_of_reach;
+    // Stat::FAR is what a run reports where no flank was in reach: never a measured gap.
+    assert!(out_of_reach(Stat::FAR));
+    assert!(out_of_reach(f64::NAN));
+    assert!(!out_of_reach(0.0) && !out_of_reach(0.99 * Stat::FAR));
+}
+
+#[test]
+fn samples_spread_far_apart_make_a_bounded_grid() {
+    use crate::mesh3d::{Sample, Solid, one_way};
+    // Two target samples 1e5 mm apart on every axis at a 0.3 mm cell: a grid of (1e5 / 0.3)³
+    // ≈ 4e16 cells, which could not be allocated. The cell widens instead, and a query far from
+    // both finds nothing.
+    let p = plan(&Spec::default()).unwrap();
+    let target = Solid::new(&p.bodies[0], 0.5);
+    let at = |p: [f64; 3]| Sample { p, n: [0.0, 0.0, 1.0], hu: [0.1, 0.0, 0.0], hv: [0.0, 0.1, 0.0], area: 0.04 };
+    let ts = [at([0.0; 3]), at([1e5; 3])];
+    let (deep, near, volume, _) = one_way(&[at([1e9, 0.0, 0.0])], &target, &ts, 0.3);
+    assert_eq!((deep, near, volume), (0.0, Stat::FAR, 0.0));
+}

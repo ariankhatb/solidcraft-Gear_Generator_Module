@@ -2679,4 +2679,43 @@ mod tests {
         assert!(!std);
         assert!((m * f64::from(z[0]) - 9.1).abs() < 1e-9);
     }
+
+    #[test]
+    fn a_helical_template_draws_transverse_pitch_circles() {
+        // 20 teeth of module 2 at 30°: Ø 2 · 20 / cos 30° = 46.19, read back as the same gear.
+        let s = Spec { module: 2.0, teeth: 20, helix: 30.0, ..Spec::defaults_for(Kind::Helical) };
+        let d = template(Kind::Helical, &s);
+        assert!((d.circles[0].r - 20.0 / 30f64.to_radians().cos()).abs() < 1e-9, "{}", d.circles[0].r);
+        // A worm's helix is its hand: its wheel's circle stays m · z / 2.
+        let w = Spec { module: 2.0, teeth: 30, helix: -5.0, ..Spec::defaults_for(Kind::Worm) };
+        assert!((template(Kind::Worm, &w).circles[0].r - 30.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_whole_train_refusal_still_gives_a_row_per_circle() {
+        // An 85° helix refuses the whole train; callers walk `members` and `shifts` by circle.
+        let cs = [circle(0.0, 0.0, 20.0), circle(50.0, 0.0, 30.0)];
+        let tc: Vec<TrainCircle> = cs.iter().map(|c| TrainCircle::of(*c)).collect();
+        let settings = crate::simple::Simple { module: Some(2.0), helix: Some(85.0), ..crate::simple::Simple::default() };
+        let sized = size_train(&tc, Kind::Helical, &settings, &Spec::defaults_for(Kind::Helical));
+        assert!(sized.spec.is_none() && sized.error.as_deref().is_some_and(|e| e.contains("under 80")), "{:?}", sized.error);
+        assert_eq!((sized.members.len(), sized.shifts.len(), sized.errors.len()), (2, 2, 2));
+        assert_eq!(sized.members[1].source, 1);
+    }
+
+    #[test]
+    fn a_shaft_takes_the_whole_of_every_span_drawn_either_way_round() {
+        // Gears 2 and 3 share a shaft at (50, 0); their spans are drawn as 30 → 0 and −10 → 5:
+        // the shaft runs −10 to 30 (taking the larger end before ordering lost the 30).
+        let cs = [circle(0.0, 0.0, 20.0), circle(50.0, 0.0, 30.0), circle(50.0, 0.0, 15.0), circle(50.0, 35.0, 20.0)];
+        let mut tc: Vec<TrainCircle> = cs.iter().map(|c| TrainCircle::of(*c)).collect();
+        tc[1].shaft = true;
+        tc[1].shaft_span = Some((30.0, 0.0));
+        tc[2].shaft_span = Some((-10.0, 5.0));
+        let settings = crate::simple::Simple { module: Some(2.0), ..crate::simple::Simple::default() };
+        let sized = size_train(&tc, Kind::Spur, &settings, &Spec::defaults_for(Kind::Spur));
+        let t = sized.spec.as_ref().and_then(|s| s.train.as_ref()).unwrap_or_else(|| panic!("{:?}", sized.error));
+        let sh = t.shafts.iter().find(|s| s.center.dist(V2::new(50.0, 0.0)) < 1e-9).unwrap_or_else(|| panic!("{:?}", t.shafts));
+        assert_eq!((sh.from, sh.to), (-10.0, 30.0));
+    }
 }

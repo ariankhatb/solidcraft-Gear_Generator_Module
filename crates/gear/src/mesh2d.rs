@@ -569,7 +569,10 @@ fn check_mesh_2d(plan: &Plan) -> Vec<MeshResult> {
         .enumerate()
         .map(|(k, &(m, _, _))| {
             let mine = &probes[k * CHECK_STEPS..(k + 1) * CHECK_STEPS];
-            let lost = out_of_reach(mine);
+            // (Only where the gap the backlash allows is within the grid's reach, a cell of a
+            // quarter module: a wider allowed gap can leave the flanks out of reach without
+            // losing contact.)
+            let lost = out_of_reach(mine) && m.slack + CHECK_GAP * m.scale < 0.25 * m.scale;
             let mut s = mine[0];
             for p in &mine[1..] {
                 s.merge(p);
